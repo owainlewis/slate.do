@@ -19,6 +19,8 @@
     --accent:  #1f7a55;
     --accent-w:#e8f2ec;
     --nav-w:   222px;
+    --board-bg: none;
+    --grid-gap: 12px;
 
     /* type scale — one source of truth */
     --fs-title: 18px;   /* brand · list headers · detail title */
@@ -74,8 +76,14 @@
   .nav-note { margin: 10px 10px 0; padding: 0; font-size: var(--fs-meta); color: var(--faint); }
 
   /* ───────────── main ───────────── */
-  .app { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  header { display: flex; align-items: center; gap: 18px; padding: 0 28px; height: 60px; }
+  .app {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    background-image: var(--board-bg);
+    background-size: cover;
+    background-position: center;
+    transition: background-image .2s ease;
+  }
+  header { display: flex; align-items: center; gap: 18px; padding: 0 28px; height: 60px; transition: background .16s, color .16s; }
   .burger { border: 0; background: none; cursor: pointer; font-size: 17px; color: var(--soft); padding: 6px; margin-left: -6px; border-radius: 7px; line-height: 1; }
   .burger:hover { background: var(--panel); color: var(--ink); }
   .pagetitle { font-size: var(--fs-body); font-weight: 700; letter-spacing: var(--track-title); }
@@ -86,15 +94,71 @@
   .filters button.on { color: var(--ink); border-color: var(--ink); }
   .addlist { display: inline-flex; align-items: center; gap: 6px; border: 0; background: rgba(24,24,26,.06); color: var(--ink); font: inherit; font-size: var(--fs-ui); font-weight: 600; padding: 6px 13px 6px 10px; border-radius: 8px; cursor: pointer; transition: background .12s; }
   .addlist:hover { background: rgba(24,24,26,.11); }
+
+  .backgrounds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin: 0 2px; }
+  .bg-choice {
+    aspect-ratio: 1; border: 1px solid rgba(24,24,26,.12); border-radius: 8px;
+    background: #fff; background-size: cover; background-position: center; cursor: pointer;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.24);
+  }
+  .bg-choice:hover { border-color: rgba(24,24,26,.32); }
+  .bg-choice.on { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .bg-choice[data-bg="plain"] { background: linear-gradient(135deg, #fff, #f2f2ef); }
+
+  body.has-bg header { background: transparent; color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,.35); }
+  body.has-bg .burger,
+  body.has-bg .week,
+  body.has-bg .filters button { color: rgba(255,255,255,.72); }
+  body.has-bg .burger:hover { background: rgba(255,255,255,.16); color: #fff; }
+  body.has-bg .filters button:hover,
+  body.has-bg .filters button.on { color: #fff; }
+  body.has-bg .filters button.on { border-color: #fff; }
+  body.has-bg .addlist { background: rgba(255,255,255,.82); }
+  body.has-bg .addlist:hover { background: rgba(255,255,255,.95); }
+  body.has-bg .grid {
+    border-top-color: rgba(255,255,255,.86);
+    border-left-color: rgba(255,255,255,.34);
+  }
+  body.has-bg .cell {
+    background: rgba(16,19,20,.72);
+    border-color: rgba(255,255,255,.18);
+    color: rgba(255,255,255,.9);
+    backdrop-filter: blur(8px);
+  }
+  body.has-bg .cell.ph { background: rgba(16,19,20,.45); }
+  body.has-bg .cell-h h2,
+  body.has-bg .cell.inbox h2,
+  body.has-bg .t,
+  body.has-bg .addinput { color: rgba(255,255,255,.9); }
+  body.has-bg .t { border-bottom-color: rgba(255,255,255,.16); }
+  body.has-bg .t:hover { background: rgba(255,255,255,.08); }
+  body.has-bg .tasks.over { background: rgba(255,255,255,.1); }
+  body.has-bg .idx,
+  body.has-bg .due,
+  body.has-bg .who,
+  body.has-bg .lmenu-btn { color: rgba(255,255,255,.54); }
+  body.has-bg .lmenu-btn:hover { color: #fff; }
+  body.has-bg .addinput::placeholder { color: rgba(255,255,255,.46); }
+  body.has-bg .t.done .tx {
+    color: rgba(255,255,255,.42);
+    text-decoration-color: rgba(255,255,255,.3);
+  }
+  body.has-bg .t.done .chk { background: #fff; border-color: #fff; }
+  body.has-bg .t.done .chk svg { stroke: #18181a; }
+  body.has-bg footer {
+    color: rgba(255,255,255,.72);
+    background: rgba(0,0,0,.26);
+    backdrop-filter: blur(14px);
+  }
   .addlist .pl { font-size: var(--fs-body); line-height: 1; }
 
   /* grid — always 3×2 */
   .grid {
-    flex: 1; min-height: 0; margin: 0 28px 0;
+    flex: 1; min-height: 0; margin: var(--grid-gap) 28px;
     display: grid;
     grid-template-columns: repeat(3, minmax(0,1fr));
     grid-auto-rows: 1fr;
-    border-top: 1.5px solid var(--ink); border-left: 1px solid var(--line);
+    gap: var(--grid-gap);
     overflow-x: hidden; overflow-y: auto;
   }
   .grid::-webkit-scrollbar { width: 13px; }
@@ -102,7 +166,7 @@
   .grid::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 99px; border: 5px solid transparent; background-clip: padding-box; }
   .grid::-webkit-scrollbar-thumb:hover { background: #c2c2bd; }
   .cell {
-    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    border: 1px solid var(--line);
     padding: 20px 24px 14px; display: flex; flex-direction: column; min-height: 0; min-width: 0; cursor: text;
   }
   .cell-h { display: flex; align-items: baseline; gap: 9px; margin-bottom: 12px; cursor: default; }
@@ -223,8 +287,8 @@
     .app { width: 100%; }
     header { padding: 0 16px; gap: 12px; height: 56px; }
     .week, .filters { display: none; }
-    .grid { display: flex; flex-direction: column; margin: 0 16px 24px; border-left: 0; border-top: 1.5px solid var(--ink); overflow: visible; }
-    .cell { display: block; border-right: 0 !important; min-height: auto; padding: 18px 8px 16px; }
+    .grid { display: flex; flex-direction: column; margin: var(--grid-gap) 16px 24px; overflow: visible; }
+    .cell { display: block; min-height: auto; padding: 18px 14px 16px; }
     .cell.ph { display: none !important; }
     .lmenu-btn { opacity: 1; }
     .tasks { overflow: visible; flex: none; }
@@ -251,6 +315,10 @@
         <button data-s="6">Six</button>
       </div>
       <p class="nav-note">Three or six in view. The rest scroll.</p>
+    </div>
+    <div class="nav-sec">
+      <h3>Background</h3>
+      <div class="backgrounds" id="backgrounds"></div>
     </div>
   </aside>
 
@@ -317,16 +385,22 @@
 <script>
   const grid = document.getElementById('grid');
   const pagesBox = document.getElementById('pages');
-  const COLORS = ['#1f7a55','#3f7d6e','#3f6bb5','#b08440','#8a7ca8','#b0566a'];
   const CHECK = '<svg viewBox="0 0 12 12" fill="none"><path d="M2 6.5L4.7 9 10 3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const thumbUrl = url => url.replace('w=1800', 'w=240');
+  const BACKGROUNDS = [
+    { id: 'plain', name: 'Plain', image: '' },
+    { id: 'mountain', name: 'Mountain', image: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1800&q=80' },
+    { id: 'forest', name: 'Forest', image: 'https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=1800&q=80' },
+    { id: 'night', name: 'Night', image: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=1800&q=80' },
+  ];
   let dragged = null, active = null, currentLi = null;
   const esc = s => String(s).replace(/</g,'&lt;');
   const fmtDue = v => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v||''); return m ? (+m[3]) + ' ' + MONTHS[+m[2]-1] : (v||''); };
 
   /* ───────── sample data ───────── */
   const DATA = [
-    { name: 'Studio', size: 6, lists: [
+    { name: 'Studio', size: 6, background: 'mountain', lists: [
       { inbox: true, items: [ {t:'Idea: short video on prompt-caching'}, {t:'Ask agent to find 3 collab guests'}, {t:'Renew domain before July', due:'2026-06-30'} ] },
       { name:'YouTube', items: [
         {t:'Record “Agents that ship code” walkthrough', focus:true, owner:'OL', due:'2026-07-03', desc:'Three demos: agent writes a failing test, fixes it, opens a PR. Keep it under 12 minutes.'},
@@ -349,7 +423,7 @@
         {t:'Repurpose last video into a thread', agent:true, agentName:'Scribe', status:'Queued'},
         {t:'Schedule Monday newsletter', done:true} ] },
     ]},
-    { name: 'Personal', size: 3, lists: [
+    { name: 'Personal', size: 3, background: 'plain', lists: [
       { inbox: true, items: [ {t:'Call the dentist'}, {t:'Birthday gift for mum', due:'2026-07-05'}, {t:'Review subscriptions', agent:true, agentName:'Ledger', status:'Working', desc:'Agent found 4 to cancel — review and confirm.'} ] },
       { name:'Health', items: [ {t:'3 gym sessions this week', focus:true, owner:'OL'}, {t:'Meal prep on Sunday'}, {t:'8h sleep — no late screens'} ] },
       { name:'Home', items: [ {t:'Fix the kitchen tap', focus:true}, {t:'Book a cleaner', agent:true, agentName:'Errand', status:'Queued'}, {t:'Plan weekend trip'} ] },
@@ -446,6 +520,14 @@
     const size = pages[active].size;
     document.querySelectorAll('#sizes button').forEach(b => b.classList.toggle('on', +b.dataset.s === size));
   }
+  function applyBackground() {
+    const current = pages[active].background || 'plain';
+    const bg = BACKGROUNDS.find(x => x.id === current) || BACKGROUNDS[0];
+    const value = bg.image ? `linear-gradient(rgba(0,0,0,.5), rgba(0,0,0,.5)), url("${bg.image}")` : 'none';
+    document.documentElement.style.setProperty('--board-bg', value);
+    document.body.classList.toggle('has-bg', !!bg.image);
+    document.querySelectorAll('#backgrounds button').forEach(b => b.classList.toggle('on', b.dataset.bg === bg.id));
+  }
   function relayout() {
     const size = pages[active].size;                 // 3 or 6 = lists in view
     grid.querySelectorAll('.cell.ph').forEach(e => e.remove());
@@ -457,7 +539,8 @@
       grid.appendChild(d);
     }
     grid.style.gridTemplateRows = 'none';
-    grid.style.gridAutoRows = `calc(100% / ${size / 3})`;   // each visible row fills its share of the height
+    const rows = size / 3;
+    grid.style.gridAutoRows = `calc((100% - ${(rows - 1)} * var(--grid-gap)) / ${rows})`;
     renumber(); updateSizes();
   }
   function createList(name) {
@@ -499,7 +582,7 @@
   }
 
   /* ───────── boards ───────── */
-  const pages = DATA.map(spec => ({ name: spec.name, size: spec.size || (spec.lists.length > 3 ? 6 : 3), cells: spec.lists.map(buildCell) }));
+  const pages = DATA.map(spec => ({ name: spec.name, size: spec.size || (spec.lists.length > 3 ? 6 : 3), background: spec.background || 'plain', cells: spec.lists.map(buildCell) }));
   function renderPages() {
     pagesBox.innerHTML = '';
     pages.forEach((p, i) => {
@@ -518,9 +601,10 @@
     active = i;
     document.getElementById('pagetitle').textContent = pages[i].name;
     relayout(); renderPages();
+    applyBackground();
     if (window.matchMedia('(max-width: 760px)').matches) document.body.classList.add('nav-closed');
   }
-  function addPage(name) { pages.push({ name, size: 3, cells: [ buildCell({ inbox: true, items: [] }) ] }); showPage(pages.length - 1); }
+  function addPage(name) { pages.push({ name, size: 3, background: 'plain', cells: [ buildCell({ inbox: true, items: [] }) ] }); showPage(pages.length - 1); }
 
   /* ───────── detail panel ───────── */
   const dTitle = document.getElementById('dTitle'), dCheck = document.getElementById('dCheck');
@@ -585,6 +669,23 @@
   document.querySelectorAll('#sizes button').forEach(b => b.addEventListener('click', () => {
     pages[active].size = +b.dataset.s; relayout();
   }));
+  function renderBackgrounds() {
+    const wrap = document.getElementById('backgrounds');
+    wrap.innerHTML = '';
+    BACKGROUNDS.forEach(bg => {
+      const btn = document.createElement('button');
+      btn.className = 'bg-choice';
+      btn.dataset.bg = bg.id;
+      btn.title = bg.name;
+      btn.setAttribute('aria-label', bg.name + ' background');
+      if (bg.image) btn.style.backgroundImage = `url("${thumbUrl(bg.image)}")`;
+      btn.addEventListener('click', () => {
+        pages[active].background = bg.id;
+        applyBackground();
+      });
+      wrap.appendChild(btn);
+    });
+  }
 
   /* ───────── sidebar toggle ───────── */
   if (window.matchMedia('(max-width: 760px)').matches) document.body.classList.add('nav-closed');
@@ -605,6 +706,7 @@
     });
   });
 
+  renderBackgrounds();
   showPage(0);
 </script>
 </body>
