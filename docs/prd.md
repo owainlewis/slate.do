@@ -4,156 +4,182 @@ Status: Draft.
 
 ## Summary
 
-Slate is a minimal visual task manager for humans and agents.
+Slate is a minimal list-first planning app.
 
-It helps people stay organised by showing the work that matters now and hiding everything else.
+The product is one slate: a visual grid of lists.
 
-The core idea is simple:
+Each list has:
 
-> Lists should have limits.
+- A title.
+- A hard item limit.
+- A small set of item titles.
 
-Most task managers make it easy to collect too much.
+That is the core model.
 
-Slate should make it easy to choose, focus, and finish.
+Slate should help people choose what matters, see it clearly, and avoid task sprawl.
 
-## Problem
+## Product Bet
 
-People and agents create too much work.
+Most task tools reward capture.
 
-Tasks, notes, issues, ideas, and reminders spread across tools.
+Slate should reward focus.
 
-The result feels productive at first, then becomes confusing.
+The default behavior should be:
 
-Agents make this worse because they can create hundreds of tasks, docs, and plans quickly.
+- Keep lists short.
+- Make limits visible.
+- Show the whole plan at a glance.
+- Hide lower-priority work in a bottom layer.
+- Let agents maintain context without flooding the human with noise.
 
-Slate exists to protect attention.
+## Why Lists
+
+Lists work because they reduce mental load and turn vague work into visible work.
+
+Research and writing on list-making point to a few useful ideas:
+
+- Written lists reduce the need to remember everything.
+- Ordered tasks lower anxiety because the work has shape.
+- Completion gives people visible proof of progress.
+- Small, achievable tasks help people stay motivated.
+- Checklists can help professionals in complex fields avoid missed steps.
+
+Product implication: Slate should stay close to the psychology of simple lists, not drift into complex project management.
+
+References:
+
+- https://niche.org.uk/psychology-list-making-productivity
+- https://www.theguardian.com/lifeandstyle/2017/may/10/the-psychology-of-the-to-do-list-why-your-brain-loves-ordered-tasks
+- https://www.atlassian.com/blog/productivity/the-psychology-of-checklists-why-setting-small-goals-motivates-us-to-accomplish-bigger-things
+- The Checklist Manifesto by Atul Gawande
 
 ## Audience
 
-Slate is for builders, founders, operators, and agent-heavy teams who need a simple place to coordinate work.
+Slate is for people who think visually and get overwhelmed by large task systems.
 
-The first user is Owain.
+The first user is a solo builder working with agents.
 
-The product should support a solo builder working with Codex, Claude Code, Hermes, and other agents.
+The product should also work for founders, creators, operators, and small teams who need a calmer planning surface.
 
 ## Positioning
 
-Slate is a task operating system for humans and agents.
+Slate is not Trello.
 
-It is visual, minimal, and opinionated.
+Slate is not Notion.
 
-It is not project management software for big teams.
+Slate is not a second brain.
 
-It is not a second brain.
+Slate is a small visual surface for deciding what gets attention.
 
-It is not a document database.
+## Core Model
 
-## Core Jobs
+There is one slate.
 
-Slate should help a user:
+A slate contains lists.
 
-- Capture work without losing focus.
-- Decide what matters this week.
-- Keep today small.
-- Assign work to a human or agent.
-- Link tasks to source material.
-- Define what done means.
-- Track blocked and waiting work.
-- Kill low-value work.
+A list contains items.
 
-## Task Model
+An item starts as a title.
 
-Each task should have:
+Optional item detail can come later, but only if the title-only model is not enough.
 
-- Title.
-- Outcome.
-- Area.
-- Priority.
-- Status.
+Possible later item details:
+
+- Label.
+- Due date.
+- Comment.
+- Link.
 - Owner.
-- Next action.
-- Due date, optional.
-- Source link.
-- Definition of done.
-- Blocker.
 
-## Lists
+These are not MVP requirements.
 
-The default lists are:
+## List Limits
 
-- Inbox.
+Every list has a limit.
+
+The default limit is 3 items.
+
+When a list is full, the user must finish, move, remove, or defer an item before adding more.
+
+Limits are not a power-user setting.
+
+Limits are the product.
+
+## Default Layout
+
+The app uses a grid layout inspired by TeuxDeux.
+
+Top layer:
+
 - Today.
 - This Week.
+- Content.
+- Product.
 - Waiting.
-- Blocked.
+
+Bottom layer:
+
+- Someday.
 - Done.
-- Not Now.
+- Archive.
 
-Each list can have a limit.
-
-Useful defaults:
-
-- Today: 3 tasks.
-- This Week: 7 tasks.
-- Active goals: 3 goals.
-- Back-pocket videos: 3 ideas.
-
-When a list is full, the user must move, finish, kill, or defer something before adding more.
+The exact list names can change, but the layout should stay simple.
 
 ## Agent Collaboration
 
-Agents should not create clutter by default.
+Agents should work underneath the slate.
 
-Agent permissions should be explicit:
+The human sees a small set of lists.
 
-- Suggest: propose tasks or changes.
-- Draft: draft inside an existing task or linked doc.
-- Execute: work on approved tasks.
-- Maintain: update status, blockers, and links.
-- Create: create new tasks or docs only when explicitly allowed.
+Agents can:
 
-Every agent action should attach to an existing task, goal, doc, issue, or source.
+- Suggest items.
+- Update item status.
+- Add context inside an item if detail exists.
+- Maintain linked work elsewhere.
+- Point out stale or overloaded lists.
 
-If it cannot attach to something, it becomes a suggestion.
+Agents should not create lots of visible items by default.
 
-## Visual Planning
+If an agent finds ten possible tasks, Slate should help reduce them to one to three useful items.
 
-Slate should make work easy to scan.
+## MVP
 
-The first version can be a simple board.
+The MVP should include:
 
-Later versions can add:
+- One slate.
+- Grid layout.
+- Create, rename, reorder, and delete lists.
+- Set a list limit.
+- Create, edit, move, complete, and delete items.
+- Show item count against limit, for example 2/3.
+- Bottom layer for lower-priority lists.
+- Local-first or simple account-based persistence.
 
-- Goal lanes.
-- Calendar blocks.
-- Capacity indicators.
-- Drag and drop.
-- Linked GitHub issues.
-- Linked Passage docs.
-- Linked Airtable content records.
+Out of scope for MVP:
 
-The interface should stay calm and sparse.
+- Rich task fields.
+- Complex statuses.
+- Subtasks.
+- Project templates.
+- Team permissions.
+- Automations.
+- Calendar sync.
+- AI features beyond a simple import or suggestion path.
 
-## Product Boundaries
+## UX Principles
 
-Slate owns tasks and active work.
-
-It does not own writing.
-
-It does not own source code.
-
-It does not own content metadata.
-
-It should integrate with:
-
-- Passage for writing.
-- GitHub for code and issues.
-- Airtable for content records.
-- Business OS for strategy and offer context.
+- The board is the interface.
+- Avoid dashboards.
+- Avoid explanatory UI.
+- Avoid nested task structures.
+- Prefer empty lines over empty panels.
+- Make the limit visible.
+- Make overload impossible or uncomfortable.
+- Keep typography strong but not title-heavy.
+- The user should understand the app in five seconds.
 
 ## Business Model
-
-Slate should be paid software.
 
 Working assumption:
 
@@ -162,36 +188,21 @@ Working assumption:
 
 Pricing is not final.
 
-The product should prove value through focus, limits, and agent collaboration rather than feature count.
-
-## MVP
-
-The MVP should include:
-
-- User account.
-- Board with default lists.
-- List limits.
-- Task create, edit, move, complete, and kill.
-- Task fields for owner, next action, definition of done, blocker, and source link.
-- Simple agent-friendly API or structured import path.
-- Clean visual design.
+The product should prove value through calm planning, hard limits, and agent-compatible simplicity.
 
 ## Success Criteria
 
 Slate is working when:
 
-- Owain knows what to work on today.
-- Agents can pick up approved work without asking for missing context.
-- The system prevents task sprawl.
-- The user can maintain focus with less effort than GitHub Issues, Notion, or a generic task app.
+- The user knows what deserves attention today.
+- The user can see all active work without scrolling through a huge backlog.
+- Lists stay small because limits are built into the product.
+- Agents can help without making the human UI messy.
+- The product feels easier than GitHub Issues, Notion, Trello, or a generic task app.
 
-## Non-Goals
+## Open Questions
 
-- Full project management.
-- Team chat.
-- Long-form docs.
-- CRM.
-- Content calendar.
-- Knowledge base.
-- Enterprise permissions.
-- Complex automation before the manual loop works.
+- Should every list default to 3 items, or should some lists allow 5?
+- Should item detail exist in v1, or should v1 be title-only?
+- Should bottom-layer lists behave exactly like top-layer lists?
+- Should agents create suggested items in a hidden queue before the user accepts them?
