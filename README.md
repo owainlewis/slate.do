@@ -19,9 +19,10 @@ Agents can suggest, update, and execute work, but Slate should make it hard to c
 ## Docs
 
 - [PRD](docs/prd.md)
+- [Initial static prototype](list-app-mockup.html)
 
 ## Repository Status
 
-This repo is a product shell.
+This repo is a product shell with an initial static HTML prototype.
 
-No implementation has started yet.
+No app implementation has started yet.

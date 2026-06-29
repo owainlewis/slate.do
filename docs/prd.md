@@ -1,208 +1,297 @@
 # Slate PRD
 
-Status: Draft.
+Status: Draft v1.
 
 ## Summary
 
-Slate is a minimal list-first planning app.
+Slate is a minimal list app for managing work with humans and agents.
 
-The product is one slate: a visual grid of lists.
+It is based on buckets.
 
-Each list has:
+A bucket is a simple list with a name, a limit, and a small set of tasks.
 
-- A title.
-- A hard item limit.
-- A small set of item titles.
+Slate helps the user think clearly by grouping work into visible buckets and keeping each bucket small.
 
-That is the core model.
+## Product Principle
 
-Slate should help people choose what matters, see it clearly, and avoid task sprawl.
+Simplicity is the product.
+
+Slate should use the simplest thing that works. Every feature must protect clarity. If a feature makes the board feel heavier, it should be removed, delayed, or hidden.
+
+The app should feel calm enough to use every day.
 
 ## Product Bet
 
-Most task tools reward capture.
+Most task tools collect work.
 
-Slate should reward focus.
+Slate should help the user choose work.
 
-The default behavior should be:
+The main behavior should be:
 
-- Keep lists short.
-- Make limits visible.
-- Show the whole plan at a glance.
-- Hide lower-priority work in a bottom layer.
-- Let agents maintain context without flooding the human with noise.
-
-## Why Lists
-
-Lists work because they reduce mental load and turn vague work into visible work.
-
-Research and writing on list-making point to a few useful ideas:
-
-- Written lists reduce the need to remember everything.
-- Ordered tasks lower anxiety because the work has shape.
-- Completion gives people visible proof of progress.
-- Small, achievable tasks help people stay motivated.
-- Checklists can help professionals in complex fields avoid missed steps.
-
-Product implication: Slate should stay close to the psychology of simple lists, not drift into complex project management.
-
-References:
-
-- https://niche.org.uk/psychology-list-making-productivity
-- https://www.theguardian.com/lifeandstyle/2017/may/10/the-psychology-of-the-to-do-list-why-your-brain-loves-ordered-tasks
-- https://www.atlassian.com/blog/productivity/the-psychology-of-checklists-why-setting-small-goals-motivates-us-to-accomplish-bigger-things
-- The Checklist Manifesto by Atul Gawande
+- Capture tasks quickly.
+- Put tasks into clear buckets.
+- Limit each bucket.
+- Mark a few tasks as focus.
+- Assign some tasks to humans or agents.
+- Review agent work without making the board noisy.
 
 ## Audience
 
-Slate is for people who think visually and get overwhelmed by large task systems.
+The first user is a solo builder or manager working with agents.
 
-The first user is a solo builder working with agents.
-
-The product should also work for founders, creators, operators, and small teams who need a calmer planning surface.
+Slate should also work for creators, founders, operators, and small teams who want a clear planning surface without a full project management system.
 
 ## Positioning
 
-Slate is not Trello.
-
-Slate is not Notion.
+Slate is not a traditional kanban app.
 
 Slate is not a second brain.
 
+Slate is not a project management suite.
+
 Slate is a small visual surface for deciding what gets attention.
+
+It is inspired by:
+
+- TeuxDeux for simple lists.
+- Trello for visual buckets.
+- Plain to-do lists for speed and clarity.
 
 ## Core Model
 
-There is one slate.
+Slate has boards.
 
-A slate contains lists.
+A board has buckets.
 
-A list contains items.
+A bucket has tasks.
 
-An item starts as a title.
+A task has a title.
 
-Optional item detail can come later, but only if the title-only model is not enough.
+Optional task detail can exist, but the list item should stay simple.
 
-Possible later item details:
+Core fields:
 
-- Label.
-- Due date.
-- Comment.
-- Link.
-- Owner.
+- `id`
+- `title`
+- `boardId`
+- `bucketId`
+- `done`
+- `focus`
+- `assignee`
+- `status`
+- `dueDate`
+- `notes`
 
-These are not MVP requirements.
+## Buckets
 
-## List Limits
+Buckets are the main thinking tool.
 
-Every list has a limit.
+Examples:
 
-The default limit is 3 items.
+- High priority
+- Medium priority
+- Low priority
+- Inbox
+- Waiting
+- Writing
+- Product
+- Personal
+- Agent work
 
-When a list is full, the user must finish, move, remove, or defer an item before adding more.
+The app should not force one bucket style. Users should be able to bucket by priority, project, energy, time, person, or status.
 
-Limits are not a power-user setting.
+## Bucket Limits
 
-Limits are the product.
+Every bucket should have a visible limit.
 
-## Default Layout
+Example:
 
-The app uses a grid layout inspired by TeuxDeux.
+```text
+Product 3/5
+```
 
-Top layer:
+The limit is not decoration. It is part of the product.
 
-- Today.
-- This Week.
-- Content.
-- Product.
-- Waiting.
+When a bucket is full, adding more work should feel constrained. The user should finish, move, delete, or defer something before adding more.
 
-Bottom layer:
+Default limit:
 
-- Someday.
+- 5 for normal buckets.
+- 3 for focus buckets.
+
+This can change after testing.
+
+## Tasks
+
+A task should look like one clean line in the bucket.
+
+List item display should include:
+
+- Checkbox.
+- Title.
+- Small due date if present.
+- Small assignee label if present.
+- Small status only when useful.
+
+The full task detail view should include:
+
+- Title.
 - Done.
-- Archive.
+- Focus.
+- Assignee.
+- Due date.
+- Notes.
+- Agent brief when assigned to an agent.
+- Status.
 
-The exact list names can change, but the layout should stay simple.
+## Agents
 
-## Agent Collaboration
+Agents are first-class assignees.
 
-Agents should work underneath the slate.
+An agent does not need a login.
 
-The human sees a small set of lists.
+An agent is just a name string.
 
-Agents can:
+Examples:
 
-- Suggest items.
-- Update item status.
-- Add context inside an item if detail exists.
-- Maintain linked work elsewhere.
-- Point out stale or overloaded lists.
+- `claude-code-123`
+- `scribe`
+- `analyst`
+- `coder`
 
-Agents should not create lots of visible items by default.
+The app should not treat agent names as secure identity. They are routing keys.
 
-If an agent finds ten possible tasks, Slate should help reduce them to one to three useful items.
+Authentication and identity are separate:
+
+- Authentication: a valid workspace API token can access the workspace.
+- Identity: the caller asks for tasks assigned to an assignee string.
+
+Example CLI flow:
+
+```bash
+SLATE_API_TOKEN=...
+slate pull --assignee "claude-code-123"
+```
+
+The API returns open tasks assigned to that string.
+
+Example query:
+
+```text
+workspace token is valid
+assignee = "claude-code-123"
+done = false
+status = "queued"
+```
+
+This keeps agent collaboration simple.
+
+## Agent Status
+
+Use a small status set:
+
+- `queued`
+- `working`
+- `needs_review`
+- `done`
+
+Do not add complex workflow states in v1.
+
+## API Principle
+
+The API should be boring and clear.
+
+Core agent operations:
+
+- Pull assigned tasks.
+- Claim or mark a task as working.
+- Add notes or result text.
+- Mark a task as needs review.
+- Mark a task as done.
+
+The API should not require an agent account.
 
 ## MVP
 
-The MVP should include:
+The first app version should include:
 
-- One slate.
-- Grid layout.
-- Create, rename, reorder, and delete lists.
-- Set a list limit.
-- Create, edit, move, complete, and delete items.
-- Show item count against limit, for example 2/3.
-- Bottom layer for lower-priority lists.
-- Local-first or simple account-based persistence.
+- Boards.
+- Buckets.
+- Bucket limits.
+- Create, rename, reorder, and delete buckets.
+- Create, edit, move, complete, and delete tasks.
+- Task detail panel.
+- Focus flag.
+- Assignee string.
+- Agent status.
+- Local persistence or simple database persistence.
+- Global workspace API token.
+- CLI pull by assignee.
 
-Out of scope for MVP:
+Out of scope:
 
-- Rich task fields.
-- Complex statuses.
-- Subtasks.
-- Project templates.
+- User roles.
+- Agent accounts.
+- Per-agent tokens.
 - Team permissions.
-- Automations.
+- Subtasks.
+- Comments.
+- Rich labels.
 - Calendar sync.
-- AI features beyond a simple import or suggestion path.
+- Automation builder.
+- Reports.
+- Notifications.
 
 ## UX Principles
 
 - The board is the interface.
+- Keep list items compact.
 - Avoid dashboards.
-- Avoid explanatory UI.
 - Avoid nested task structures.
-- Prefer empty lines over empty panels.
-- Make the limit visible.
-- Make overload impossible or uncomfortable.
-- Keep typography strong but not title-heavy.
-- The user should understand the app in five seconds.
+- Avoid heavy metadata.
+- Prefer text over configuration.
+- Make limits visible.
+- Make overload obvious.
+- Keep agent detail in the panel, not on the board.
+- Make capture fast.
+- Make review calm.
 
-## Business Model
+## Initial Prototype
 
-Working assumption:
+The first static prototype is:
 
-- 7-day free trial.
-- Paid plan after trial.
+- `list-app-mockup.html`
 
-Pricing is not final.
+It shows:
 
-The product should prove value through calm planning, hard limits, and agent-compatible simplicity.
+- Sidebar boards.
+- List grid.
+- Three or six list layout.
+- Task add flow.
+- Task drag flow.
+- Detail panel.
+- Human or agent assignee.
+- Agent brief.
+- Agent status.
+- Due date.
+- Focus flag.
 
 ## Success Criteria
 
 Slate is working when:
 
-- The user knows what deserves attention today.
-- The user can see all active work without scrolling through a huge backlog.
-- Lists stay small because limits are built into the product.
-- Agents can help without making the human UI messy.
-- The product feels easier than GitHub Issues, Notion, Trello, or a generic task app.
+- The user can see active work at a glance.
+- Buckets stay small.
+- The user knows what matters this week.
+- Agents can find assigned work by name.
+- Agent work can be reviewed without clutter.
+- The product feels lighter than Trello, Notion, GitHub Issues, or a normal task app.
 
 ## Open Questions
 
-- Should every list default to 3 items, or should some lists allow 5?
-- Should item detail exist in v1, or should v1 be title-only?
-- Should bottom-layer lists behave exactly like top-layer lists?
-- Should agents create suggested items in a hidden queue before the user accepts them?
+- Should the default bucket limit be 3 or 5?
+- Should focus be a flag, a view, or both?
+- Should Inbox have a limit?
+- Should agent results live in notes or a separate result field?
+- Should the CLI be part of v1 or come right after the web app?
+- Should tasks assigned to agents appear differently from human tasks?

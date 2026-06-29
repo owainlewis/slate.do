@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>slate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:      #ffffff;
+    --panel:   #fafaf9;
+    --ink:     #18181a;
+    --soft:    #66666b;
+    --faint:   #a2a2a6;
+    --line:    #e1e1dd;
+    --line-2:  #ececea;
+    --accent:  #1f7a55;
+    --accent-w:#e8f2ec;
+    --nav-w:   222px;
+
+    /* type scale — one source of truth */
+    --fs-title: 18px;   /* brand · list headers · detail title */
+    --fs-body:  14px;   /* items · inputs · nav rows */
+    --fs-ui:    13px;   /* buttons · menu items */
+    --fs-meta:  11px;   /* week · filters · due · idx · status · note */
+    --fs-micro: 10px;   /* uppercase section / field labels · crumb · footer */
+    --lh-tight: 1.15;   /* headings */
+    --lh-body:  1.45;   /* running text */
+    --track-caps:  .12em;
+    --track-title: -.02em;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Hanken Grotesk", sans-serif;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    display: flex; height: 100vh; overflow: hidden; font-size: var(--fs-body);
+  }
+  [hidden] { display: none !important; }
+
+  /* ───────────── sidebar ───────────── */
+  .sidebar {
+    width: var(--nav-w); flex: 0 0 var(--nav-w); background: var(--panel);
+    border-right: 1px solid var(--line); padding: 20px 16px; overflow: hidden;
+    display: flex; flex-direction: column; gap: 24px;
+    transition: width .26s cubic-bezier(.4,0,.2,1), flex-basis .26s cubic-bezier(.4,0,.2,1), padding .26s, opacity .2s;
+  }
+  body.nav-closed .sidebar { width: 0; flex-basis: 0; padding-left: 0; padding-right: 0; opacity: 0; border-right-color: transparent; }
+
+  .nav-brand { font-weight: 700; font-size: var(--fs-title); letter-spacing: var(--track-title); padding: 0 10px; margin-bottom: 2px; }
+  .nav-brand i { color: var(--faint); font-style: normal; font-weight: 600; }
+  .nav-sec h3 { margin: 0 0 8px; padding: 0 10px; font-size: var(--fs-micro); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--faint); font-weight: 600; }
+
+  /* one calm treatment for every nav row */
+  .pages { display: flex; flex-direction: column; }
+  .page-row { padding: 7px 10px; border-radius: 7px; font-size: var(--fs-body); font-weight: 500; color: var(--soft); cursor: pointer; transition: background .12s, color .12s; }
+  .page-row:hover { background: rgba(24,24,26,.045); color: var(--ink); }
+  .page-row.on { background: rgba(24,24,26,.07); color: var(--ink); font-weight: 600; }
+
+  .newpage { margin-top: 2px; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--fs-ui); font-weight: 500; color: var(--faint); text-align: left; padding: 7px 10px; border-radius: 7px; transition: .12s; }
+  .newpage:hover { background: rgba(24,24,26,.045); color: var(--ink); }
+  .newpage input { border: 0; background: none; outline: none; font: inherit; font-size: var(--fs-ui); font-weight: 500; color: var(--ink); width: 100%; }
+
+  /* segmented layout control — one unit, not loose buttons */
+  .sizes { display: flex; gap: 3px; margin: 0 2px; background: rgba(24,24,26,.05); border-radius: 9px; padding: 3px; }
+  .sizes button { flex: 1; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--fs-ui); font-weight: 600; color: var(--soft); padding: 7px 0; border-radius: 6px; transition: .14s; }
+  .sizes button:hover:not(.on):not(:disabled) { color: var(--ink); }
+  .sizes button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .sizes button:disabled { opacity: .4; cursor: not-allowed; }
+
+  .nav-note { margin: 10px 10px 0; padding: 0; font-size: var(--fs-meta); color: var(--faint); }
+
+  /* ───────────── main ───────────── */
+  .app { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 18px; padding: 0 28px; height: 60px; }
+  .burger { border: 0; background: none; cursor: pointer; font-size: 17px; color: var(--soft); padding: 6px; margin-left: -6px; border-radius: 7px; line-height: 1; }
+  .burger:hover { background: var(--panel); color: var(--ink); }
+  .pagetitle { font-size: var(--fs-body); font-weight: 700; letter-spacing: var(--track-title); }
+  .week { font-size: var(--fs-meta); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--faint); }
+  .filters { margin-left: auto; display: flex; align-items: center; gap: 18px; }
+  .filters button { border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--fs-meta); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--faint); padding: 3px 0; border-bottom: 1.5px solid transparent; transition: .15s; }
+  .filters button:hover { color: var(--soft); }
+  .filters button.on { color: var(--ink); border-color: var(--ink); }
+  .addlist { display: inline-flex; align-items: center; gap: 6px; border: 0; background: rgba(24,24,26,.06); color: var(--ink); font: inherit; font-size: var(--fs-ui); font-weight: 600; padding: 6px 13px 6px 10px; border-radius: 8px; cursor: pointer; transition: background .12s; }
+  .addlist:hover { background: rgba(24,24,26,.11); }
+  .addlist .pl { font-size: var(--fs-body); line-height: 1; }
+
+  /* grid — always 3×2 */
+  .grid {
+    flex: 1; min-height: 0; margin: 0 28px 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0,1fr));
+    grid-auto-rows: 1fr;
+    border-top: 1.5px solid var(--ink); border-left: 1px solid var(--line);
+    overflow-x: hidden; overflow-y: auto;
+  }
+  .grid::-webkit-scrollbar { width: 13px; }
+  .grid::-webkit-scrollbar-track { background: transparent; }
+  .grid::-webkit-scrollbar-thumb { background: #d6d6d2; border-radius: 99px; border: 5px solid transparent; background-clip: padding-box; }
+  .grid::-webkit-scrollbar-thumb:hover { background: #c2c2bd; }
+  .cell {
+    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    padding: 20px 24px 14px; display: flex; flex-direction: column; min-height: 0; min-width: 0; cursor: text;
+  }
+  .cell-h { display: flex; align-items: baseline; gap: 9px; margin-bottom: 12px; cursor: default; }
+  .idx { font-size: var(--fs-meta); font-weight: 600; color: var(--faint); letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+  .cell-h h2 { margin: 0; font-weight: 700; font-size: var(--fs-title); letter-spacing: var(--track-title); line-height: var(--lh-tight); }
+  .cell.inbox h2 { color: var(--soft); }
+  .cell-h h2 input { border: 0; background: none; outline: none; font: inherit; color: inherit; letter-spacing: inherit; width: 100%; padding: 0; }
+  .lmenu-btn { margin-left: auto; align-self: center; border: 0; background: none; cursor: pointer; color: var(--faint); font-size: 16px; line-height: 1; padding: 0 4px; border-radius: 5px; opacity: 0; transition: opacity .12s, color .12s; }
+  .cell:hover .lmenu-btn { opacity: 1; }
+  .lmenu-btn:hover { color: var(--ink); }
+  .lmenu { position: fixed; z-index: 90; min-width: 168px; background: #fff; border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 18px 44px -20px rgba(0,0,0,.4); padding: 5px; }
+  .lmenu button { display: block; width: 100%; border: 0; background: none; font: inherit; font-size: var(--fs-ui); color: var(--ink); padding: 8px 10px; border-radius: 7px; cursor: pointer; text-align: left; }
+  .lmenu button:hover { background: rgba(24,24,26,.05); }
+  .lmenu button.danger { color: #b3261e; }
+  .lmenu button.danger:hover { background: #fbecec; }
+  .lmenu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+
+  .tasks { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+  .tasks::-webkit-scrollbar { width: 6px; }
+  .tasks::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; }
+
+  .t {
+    font-size: var(--fs-body); line-height: var(--lh-body); color: var(--ink);
+    padding: 8px 0; border-bottom: 1px solid var(--line-2);
+    cursor: pointer; display: flex; align-items: flex-start; gap: 11px; transition: color .14s, background .14s;
+  }
+  .t:hover { background: #fcfcfb; }
+  .t.focus { font-weight: 600; }
+  .t.dragging { opacity: .3; }
+  .tasks.over { background: #f5f5f4; box-shadow: inset 0 0 0 1.5px #d4d4d0; border-radius: 9px; }
+
+  .chk { flex: 0 0 auto; width: 16px; height: 16px; margin-top: 1px; border: 1.5px solid var(--line); border-radius: 5px; background: #fff; display: grid; place-items: center; cursor: pointer; transition: .14s; }
+  .t:hover .chk { border-color: var(--soft); }
+  .chk svg { width: 10px; height: 10px; opacity: 0; stroke: #fff; }
+  .t.done .chk { background: var(--ink); border-color: var(--ink); }
+  .t.done .chk svg { opacity: 1; }
+  .tx { flex: 1; min-width: 0; cursor: pointer; }
+  .t.done .tx { color: var(--faint); text-decoration: line-through; text-decoration-color: var(--line); }
+  .meta { flex: 0 0 auto; display: flex; align-items: center; gap: 9px; padding-top: 2px; }
+  .due { font-size: var(--fs-meta); color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .agent { font-size: 8px; color: var(--faint); line-height: 1.9; }
+  .who { font-size: var(--fs-meta); letter-spacing: .04em; color: var(--faint); }
+
+  /* the always-there "click to type" line */
+  .addrow { display: flex; align-items: center; gap: 11px; padding: 8px 0; }
+  .addrow .chk-space { width: 16px; flex: 0 0 auto; }
+  .addinput { flex: 1; min-width: 0; border: 0; background: none; outline: none; font: inherit; font-size: var(--fs-body); line-height: var(--lh-body); color: var(--ink); padding: 0; }
+  .addinput::placeholder { color: var(--faint); }
+
+  .cell.ph { display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .cell.ph .ph-add { font-size: var(--fs-ui); color: var(--faint); letter-spacing: .04em; opacity: .5; transition: .15s; }
+  .cell.ph:hover .ph-add { opacity: 1; color: var(--ink); }
+
+  footer { display: flex; align-items: center; gap: 24px; padding: 10px 30px 13px; font-size: var(--fs-micro); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--faint); }
+  footer .k { display: flex; align-items: center; gap: 7px; }
+  footer .k b { width: 6px; height: 6px; border-radius: 1.5px; background: var(--accent); display: inline-block; }
+  footer .k i { color: var(--faint); font-style: normal; font-size: 8px; }
+  footer .r { margin-left: auto; }
+
+  /* ───────────── detail panel ───────────── */
+  .detail {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 400px; max-width: 92vw; background: #fff;
+    border-left: 1px solid var(--line); box-shadow: -24px 0 60px -36px rgba(0,0,0,.4);
+    transform: translateX(100%); transition: transform .28s cubic-bezier(.4,0,.2,1);
+    z-index: 80; display: flex; flex-direction: column;
+  }
+  body.detail-open .detail { transform: translateX(0); }
+  .detail-scrim { position: fixed; inset: 0; background: rgba(20,20,20,.16); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 70; }
+  body.detail-open .detail-scrim { opacity: 1; pointer-events: auto; }
+
+  .detail-head { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .crumb { font-size: var(--fs-micro); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--faint); }
+  .dclose { margin-left: auto; border: 0; background: none; font-size: 20px; color: var(--faint); cursor: pointer; line-height: 1; padding: 0 4px; }
+  .dclose:hover { color: var(--ink); }
+  .detail-body { padding: 22px 22px 32px; overflow-y: auto; }
+
+  .d-title-row { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 24px; }
+  .d-check { flex: 0 0 auto; width: 21px; height: 21px; margin-top: 3px; border: 1.6px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; display: grid; place-items: center; transition: .14s; }
+  .d-check:hover { border-color: var(--ink); }
+  .d-check svg { width: 13px; height: 13px; opacity: 0; stroke: #fff; }
+  .d-check.on { background: var(--ink); border-color: var(--ink); }
+  .d-check.on svg { opacity: 1; }
+  .d-title { flex: 1; border: 0; outline: none; resize: none; font: inherit; font-size: var(--fs-title); font-weight: 700; letter-spacing: var(--track-title); line-height: var(--lh-tight); color: var(--ink); padding: 0; overflow: hidden; }
+
+  .d-fields { display: flex; flex-direction: column; gap: 20px; }
+  .d-field > label { display: block; font-size: var(--fs-micro); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--faint); margin-bottom: 8px; font-weight: 600; }
+  .d-row { display: flex; align-items: center; }
+  .d-row label { margin: 0; }
+
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .seg button { border: 0; background: #fff; font: inherit; font-size: var(--fs-ui); font-weight: 600; padding: 7px 15px; cursor: pointer; color: var(--soft); transition: .14s; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--ink); color: #fff; }
+
+  .field-line { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: none; outline: none; font: inherit; font-size: var(--fs-body); color: var(--ink); padding: 5px 0; }
+  .field-line:focus { border-color: var(--soft); }
+  textarea.field-box { width: 100%; border: 1px solid var(--line); border-radius: 11px; background: none; outline: none; font: inherit; font-size: var(--fs-body); line-height: var(--lh-body); color: var(--ink); padding: 11px 13px; resize: none; min-height: 92px; }
+  textarea.field-box:focus { border-color: var(--soft); }
+  .d-agent { background: #f6f6f5; border-radius: 12px; padding: 14px; }
+  .d-agent label { color: var(--faint); }
+  .d-agent textarea { background: #fff; }
+  .d-status { margin-top: 10px; font-size: var(--fs-meta); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--soft); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .d-status .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--soft); }
+
+  .toggle { width: 40px; height: 23px; border-radius: 99px; border: 1px solid var(--line); background: #fff; position: relative; cursor: pointer; flex: 0 0 auto; transition: .15s; }
+  .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: var(--faint); transition: .18s; }
+  .toggle.on { background: var(--accent); border-color: var(--accent); }
+  .toggle.on::after { left: 19px; background: #fff; }
+  .d-row { justify-content: space-between; }
+
+  /* ───────────── mobile ───────────── */
+  @media (max-width: 760px) {
+    body { overflow-x: hidden; overflow-y: auto; }
+    .sidebar { position: fixed; z-index: 60; top: 0; left: 0; bottom: 0; width: 250px; flex-basis: 250px; padding: 20px 16px; transform: translateX(0); opacity: 1 !important; box-shadow: 0 0 40px rgba(0,0,0,.18); transition: transform .26s cubic-bezier(.4,0,.2,1); }
+    body.nav-closed .sidebar { width: 250px; flex-basis: 250px; padding: 20px 16px; opacity: 1 !important; transform: translateX(-100%); border-right-color: var(--line); }
+    .detail-scrim { display: block; }
+    body:not(.nav-closed) .detail-scrim { opacity: 1; pointer-events: auto; }
+    .app { width: 100%; }
+    header { padding: 0 16px; gap: 12px; height: 56px; }
+    .week, .filters { display: none; }
+    .grid { display: flex; flex-direction: column; margin: 0 16px 24px; border-left: 0; border-top: 1.5px solid var(--ink); overflow: visible; }
+    .cell { display: block; border-right: 0 !important; min-height: auto; padding: 18px 8px 16px; }
+    .cell.ph { display: none !important; }
+    .lmenu-btn { opacity: 1; }
+    .tasks { overflow: visible; flex: none; }
+    .cell-h h2 { font-size: 21px; }
+    .t { font-size: 15px; padding: 10px 0; }
+    .detail { width: 100%; max-width: 100%; }
+    footer { display: none; }
+  }
+</style>
+</head>
+<body>
+
+  <aside class="sidebar">
+    <div class="nav-brand">slate<i>.do</i></div>
+    <div class="nav-sec">
+      <h3>Boards</h3>
+      <div class="pages" id="pages"></div>
+      <button class="newpage" id="newpage">+ New board</button>
+    </div>
+    <div class="nav-sec">
+      <h3>Layout</h3>
+      <div class="sizes" id="sizes">
+        <button data-s="3">Three</button>
+        <button data-s="6">Six</button>
+      </div>
+      <p class="nav-note">Three or six in view. The rest scroll.</p>
+    </div>
+  </aside>
+
+  <div class="app">
+    <header>
+      <button class="burger" id="burger" title="Toggle sidebar">☰</button>
+      <span class="pagetitle" id="pagetitle">Studio</span>
+      <span class="week">Mon 29 Jun – Sun 5 Jul</span>
+      <div class="filters" id="filters">
+        <button class="on" data-f="all">All</button>
+        <button data-f="mine">Mine</button>
+        <button data-f="agents">Agents</button>
+      </div>
+      <button class="addlist" id="addlist" title="Add a list"><span class="pl">+</span> List</button>
+    </header>
+    <div class="grid" id="grid"></div>
+    <footer>
+      <span class="k">Bold = focus</span>
+      <span class="r">click an item to open it · drag between lists</span>
+    </footer>
+  </div>
+
+  <!-- detail panel -->
+  <aside class="detail" id="detail" aria-hidden="true">
+    <div class="detail-head">
+      <span class="crumb" id="crumb"></span>
+      <button class="dclose" id="dclose" title="Close">×</button>
+    </div>
+    <div class="detail-body">
+      <div class="d-title-row">
+        <button class="d-check" id="dCheck"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.5L4.7 9 10 3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <textarea class="d-title" id="dTitle" rows="1" placeholder="Untitled"></textarea>
+      </div>
+      <div class="d-fields">
+        <div class="d-field">
+          <label>Assignee</label>
+          <div class="seg" id="dAssignee">
+            <button data-a="you" class="on">You</button>
+            <button data-a="agent">Agent</button>
+          </div>
+        </div>
+        <div class="d-field d-agent" id="dAgentWrap" hidden>
+          <label>Agent brief</label>
+          <textarea class="field-box" id="dBrief" placeholder="What should the agent do?"></textarea>
+          <div class="d-status" id="dStatus"><span class="pip"></span> Queued</div>
+        </div>
+        <div class="d-field">
+          <label>Due</label>
+          <input type="date" class="field-line" id="dDue" />
+        </div>
+        <div class="d-field">
+          <div class="d-row"><label>Focus this week</label><button class="toggle" id="dFocus"></button></div>
+        </div>
+        <div class="d-field">
+          <label>Notes</label>
+          <textarea class="field-box" id="dDesc" placeholder="Add detail…"></textarea>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="detail-scrim" id="dscrim"></div>
+
+<script>
+  const grid = document.getElementById('grid');
+  const pagesBox = document.getElementById('pages');
+  const COLORS = ['#1f7a55','#3f7d6e','#3f6bb5','#b08440','#8a7ca8','#b0566a'];
+  const CHECK = '<svg viewBox="0 0 12 12" fill="none"><path d="M2 6.5L4.7 9 10 3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let dragged = null, active = null, currentLi = null;
+  const esc = s => String(s).replace(/</g,'&lt;');
+  const fmtDue = v => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v||''); return m ? (+m[3]) + ' ' + MONTHS[+m[2]-1] : (v||''); };
+
+  /* ───────── sample data ───────── */
+  const DATA = [
+    { name: 'Studio', size: 6, lists: [
+      { inbox: true, items: [ {t:'Idea: short video on prompt-caching'}, {t:'Ask agent to find 3 collab guests'}, {t:'Renew domain before July', due:'2026-06-30'} ] },
+      { name:'YouTube', items: [
+        {t:'Record “Agents that ship code” walkthrough', focus:true, owner:'OL', due:'2026-07-03', desc:'Three demos: agent writes a failing test, fixes it, opens a PR. Keep it under 12 minutes.'},
+        {t:'Draft 5 thumbnail concepts + title A/B set', focus:true, agent:true, agentName:'Studio', status:'Working', brief:'Generate 5 thumbnail concepts in the channel style — 2 bold-text, 3 face-driven. Return as a board.'},
+        {t:'Pull retention graph from last 3 uploads', agent:true, agentName:'Analyst', status:'Queued'},
+        {t:'Outline “build vs buy” series'},
+        {t:'Publish newsletter cross-post', done:true} ] },
+      { name:'Community', items: [
+        {t:'Run live build session — Thursday 6pm', focus:true, owner:'OL', due:'2026-07-02', desc:'Topic still open — decide by Tuesday.'},
+        {t:'Summarise this week’s top 5 forum threads', agent:true, agentName:'Scribe', status:'Working'},
+        {t:'Welcome 12 new members in #intros'},
+        {t:'Post monthly challenge prompt', done:true} ] },
+      { name:'Product', items: [
+        {t:'Fix flaky auth tests blocking deploy', focus:true, agent:true, agentName:'Coder', status:'Working', desc:'Branch fix/auth-flake. One review left before merge.'},
+        {t:'Design empty-state for first-run dashboard', focus:true, owner:'OL'},
+        {t:'Write changelog for 2.1 release', agent:true, agentName:'Scribe', status:'Queued'},
+        {t:'Triage 8 new bug reports'} ] },
+      { name:'Writing', items: [
+        {t:'Finish “Agents change the unit of work” draft', focus:true, owner:'OL', desc:'Halfway. Core argument: the unit of work moves from task to outcome.'},
+        {t:'Repurpose last video into a thread', agent:true, agentName:'Scribe', status:'Queued'},
+        {t:'Schedule Monday newsletter', done:true} ] },
+    ]},
+    { name: 'Personal', size: 3, lists: [
+      { inbox: true, items: [ {t:'Call the dentist'}, {t:'Birthday gift for mum', due:'2026-07-05'}, {t:'Review subscriptions', agent:true, agentName:'Ledger', status:'Working', desc:'Agent found 4 to cancel — review and confirm.'} ] },
+      { name:'Health', items: [ {t:'3 gym sessions this week', focus:true, owner:'OL'}, {t:'Meal prep on Sunday'}, {t:'8h sleep — no late screens'} ] },
+      { name:'Home', items: [ {t:'Fix the kitchen tap', focus:true}, {t:'Book a cleaner', agent:true, agentName:'Errand', status:'Queued'}, {t:'Plan weekend trip'} ] },
+    ]},
+  ];
+
+  /* ───────── items ───────── */
+  function renderItem(li) {
+    const d = li._data;
+    li.className = 't' + (d.focus ? ' focus' : '') + (d.done ? ' done' : '');
+    const meta = d.due ? `<span class="due">${fmtDue(d.due)}</span>` : '';
+    li.innerHTML = `<span class="chk">${CHECK}</span><span class="tx">${esc(d.t)}</span><span class="meta">${meta}</span>`;
+  }
+  function buildItem(it) {
+    const li = document.createElement('li');
+    li._data = Object.assign({ t:'', focus:false, done:false, owner:null, agent:false, agentName:'Agent', brief:'', status:'Queued', due:'', desc:'' }, it);
+    li.setAttribute('draggable', 'true');
+    li.addEventListener('click', e => {
+      if (li.dataset.moved) { delete li.dataset.moved; return; }
+      if (e.target.closest('.chk')) { li._data.done = !li._data.done; renderItem(li); if (li === currentLi) fillPanel(); return; }
+      openDetail(li);
+    });
+    li.addEventListener('dragstart', e => { dragged = li; li.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+    li.addEventListener('dragend', () => { li.classList.remove('dragging'); dragged = null; document.querySelectorAll('.over').forEach(x => x.classList.remove('over')); });
+    renderItem(li);
+    return li;
+  }
+
+  /* ───────── lists (cells) ───────── */
+  function buildCell(list) {
+    const cell = document.createElement('section');
+    cell.className = 'cell' + (list.inbox ? ' inbox' : '');
+    cell.dataset.list = list.inbox ? 'Inbox' : list.name;
+    cell.innerHTML = (list.inbox
+        ? `<div class="cell-h"><h2>Inbox</h2></div>`
+        : `<div class="cell-h"><span class="idx"></span><h2>${esc(list.name)}</h2><button class="lmenu-btn" title="List options">⋮</button></div>`)
+      + `<ul class="tasks"></ul>`;
+    const ul = cell.querySelector('.tasks');
+    (list.items || []).forEach(it => ul.appendChild(buildItem(it)));
+    const addrow = document.createElement('li');
+    addrow.className = 'addrow';
+    addrow.innerHTML = `<span class="chk-space"></span><input class="addinput" placeholder="Add a task…" />`;
+    ul.appendChild(addrow);
+    wireDrop(cell); wireAdd(cell);
+    const mb = cell.querySelector('.lmenu-btn');
+    if (mb) mb.addEventListener('click', e => { e.stopPropagation(); openListMenu(cell, mb); });
+    return cell;
+  }
+  function wireDrop(cell) {
+    const list = cell.querySelector('.tasks');
+    cell.addEventListener('dragover', e => {
+      if (!dragged) return;
+      e.preventDefault();
+      list.classList.add('over');
+      const addrow = list.querySelector('.addrow');
+      const after = afterElement(list, e.clientY);
+      if (after && after !== addrow) list.insertBefore(dragged, after); else list.insertBefore(dragged, addrow);
+      dragged.dataset.moved = '1';
+    });
+    cell.addEventListener('dragleave', e => { if (!cell.contains(e.relatedTarget)) list.classList.remove('over'); });
+    cell.addEventListener('drop', e => { e.preventDefault(); list.classList.remove('over'); });
+  }
+  function afterElement(list, y) {
+    const els = [...list.querySelectorAll('.t:not(.dragging)')];
+    return els.reduce((closest, el) => {
+      const box = el.getBoundingClientRect(); const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) return { offset, el };
+      return closest;
+    }, { offset: -Infinity, el: null }).el;
+  }
+  function wireAdd(cell) {
+    const ul = cell.querySelector('.tasks');
+    const addrow = cell.querySelector('.addrow');
+    const inp = addrow.querySelector('.addinput');
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && inp.value.trim()) { ul.insertBefore(buildItem({ t: inp.value }), addrow); inp.value = ''; }
+      else if (e.key === 'Escape') inp.blur();
+    });
+    cell.addEventListener('click', e => {
+      if (e.target.closest('.t') || e.target.closest('.cell-h') || e.target.closest('input')) return;
+      inp.focus();
+    });
+  }
+
+  /* ───────── layout (3 or 6) ───────── */
+  function renumber() {
+    let i = 0;
+    grid.querySelectorAll('.cell[data-list]').forEach(cell => {
+      if (cell.classList.contains('inbox')) return;
+      i++; const el = cell.querySelector('.idx'); if (el) el.textContent = String(i).padStart(2, '0');
+    });
+  }
+  function updateSizes() {
+    const size = pages[active].size;
+    document.querySelectorAll('#sizes button').forEach(b => b.classList.toggle('on', +b.dataset.s === size));
+  }
+  function relayout() {
+    const size = pages[active].size;                 // 3 or 6 = lists in view
+    grid.querySelectorAll('.cell.ph').forEach(e => e.remove());
+    const n = grid.querySelectorAll('.cell[data-list]').length;
+    const rem = n % 3, pad = rem === 0 ? 0 : 3 - rem; // blank cells to complete a partial row
+    for (let i = 0; i < pad; i++) {
+      const d = document.createElement('section');
+      d.className = 'cell ph';
+      grid.appendChild(d);
+    }
+    grid.style.gridTemplateRows = 'none';
+    grid.style.gridAutoRows = `calc(100% / ${size / 3})`;   // each visible row fills its share of the height
+    renumber(); updateSizes();
+  }
+  function createList(name) {
+    const cell = buildCell({ name });
+    grid.insertBefore(cell, grid.querySelector('.cell.ph'));
+    relayout();
+    return cell;
+  }
+
+  /* ───────── per-list menu (rename · add · delete) ───────── */
+  let openMenu = null;
+  function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; document.removeEventListener('click', onDocClick, true); } }
+  function onDocClick(e) { if (openMenu && !openMenu.contains(e.target)) closeMenu(); }
+  function openListMenu(cell, btn) {
+    closeMenu();
+    const m = document.createElement('div'); m.className = 'lmenu';
+    m.innerHTML = `<button data-act="rename">Rename</button><button data-act="add">Add list</button><hr><button data-act="del" class="danger">Delete list</button>`;
+    document.body.appendChild(m); openMenu = m;
+    const r = btn.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + 'px';
+    m.style.left = Math.min(r.left - 130, window.innerWidth - 180) + 'px';
+    m.querySelector('[data-act=rename]').onclick = () => { closeMenu(); renameList(cell); };
+    m.querySelector('[data-act=add]').onclick = () => { closeMenu(); addListAfter(cell); };
+    m.querySelector('[data-act=del]').onclick = () => { closeMenu(); cell.remove(); relayout(); };
+    setTimeout(() => document.addEventListener('click', onDocClick, true), 0);
+  }
+  function renameList(cell) {
+    const h2 = cell.querySelector('h2'), old = cell.dataset.list;
+    h2.innerHTML = `<input value="${esc(old)}" />`;
+    const inp = h2.querySelector('input'); inp.focus(); inp.select();
+    let fired = false;
+    const finish = commit => { if (fired) return; fired = true; const v = inp.value.trim(); const name = (commit && v) ? v : old; cell.dataset.list = name; h2.textContent = name; };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false); });
+    inp.addEventListener('blur', () => finish(true));
+  }
+  function addListAfter(cell) {
+    const nc = buildCell({ name: 'Untitled' });
+    cell.after(nc); relayout(); renameList(nc);
+  }
+
+  /* ───────── boards ───────── */
+  const pages = DATA.map(spec => ({ name: spec.name, size: spec.size || (spec.lists.length > 3 ? 6 : 3), cells: spec.lists.map(buildCell) }));
+  function renderPages() {
+    pagesBox.innerHTML = '';
+    pages.forEach((p, i) => {
+      const row = document.createElement('div');
+      row.className = 'page-row' + (i === active ? ' on' : '');
+      row.textContent = p.name;
+      row.addEventListener('click', () => showPage(i));
+      pagesBox.appendChild(row);
+    });
+  }
+  function showPage(i) {
+    if (active != null) pages[active].cells = [...grid.querySelectorAll('.cell[data-list]')];
+    closeDetail();
+    grid.innerHTML = '';
+    pages[i].cells.forEach(c => grid.appendChild(c));
+    active = i;
+    document.getElementById('pagetitle').textContent = pages[i].name;
+    relayout(); renderPages();
+    if (window.matchMedia('(max-width: 760px)').matches) document.body.classList.add('nav-closed');
+  }
+  function addPage(name) { pages.push({ name, size: 3, cells: [ buildCell({ inbox: true, items: [] }) ] }); showPage(pages.length - 1); }
+
+  /* ───────── detail panel ───────── */
+  const dTitle = document.getElementById('dTitle'), dCheck = document.getElementById('dCheck');
+  const dAssignee = document.getElementById('dAssignee'), dAgentWrap = document.getElementById('dAgentWrap');
+  const dBrief = document.getElementById('dBrief'), dStatus = document.getElementById('dStatus');
+  const dDue = document.getElementById('dDue'), dFocus = document.getElementById('dFocus'), dDesc = document.getElementById('dDesc');
+
+  function fillPanel() {
+    const d = currentLi._data;
+    document.getElementById('crumb').textContent = pages[active].name + '  ›  ' + currentLi.closest('.cell').dataset.list;
+    dTitle.value = d.t; autosize(dTitle);
+    dCheck.classList.toggle('on', d.done);
+    dAssignee.querySelectorAll('button').forEach(b => b.classList.toggle('on', (b.dataset.a === 'you') === !d.agent));
+    dAgentWrap.hidden = !d.agent;
+    dBrief.value = d.brief || '';
+    dStatus.innerHTML = `<span class="pip"></span> ${esc(d.status || 'Queued')}`;
+    dDue.value = /^\d{4}-\d{2}-\d{2}$/.test(d.due || '') ? d.due : '';
+    dFocus.classList.toggle('on', d.focus);
+    dDesc.value = d.desc || '';
+  }
+  function openDetail(li) { currentLi = li; fillPanel(); document.body.classList.add('detail-open'); }
+  function closeDetail() { document.body.classList.remove('detail-open'); currentLi = null; }
+  function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+
+  dTitle.addEventListener('input', () => { if (currentLi) { currentLi._data.t = dTitle.value; autosize(dTitle); renderItem(currentLi); } });
+  dCheck.addEventListener('click', () => { if (!currentLi) return; currentLi._data.done = !currentLi._data.done; dCheck.classList.toggle('on'); renderItem(currentLi); });
+  dAssignee.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    if (!currentLi) return; const d = currentLi._data, you = b.dataset.a === 'you';
+    d.agent = !you; d.owner = you ? 'OL' : null;
+    fillPanel(); renderItem(currentLi);
+  }));
+  dBrief.addEventListener('input', () => { if (currentLi) currentLi._data.brief = dBrief.value; });
+  dStatus.addEventListener('click', () => {
+    if (!currentLi) return; const s = ['Queued','Working','Done'], d = currentLi._data;
+    d.status = s[(s.indexOf(d.status) + 1) % 3];
+    dStatus.innerHTML = `<span class="pip"></span> ${d.status}`;
+  });
+  dDue.addEventListener('change', () => { if (currentLi) { currentLi._data.due = dDue.value; renderItem(currentLi); } });
+  dFocus.addEventListener('click', () => { if (!currentLi) return; currentLi._data.focus = !currentLi._data.focus; dFocus.classList.toggle('on'); renderItem(currentLi); });
+  dDesc.addEventListener('input', () => { if (currentLi) currentLi._data.desc = dDesc.value; });
+  document.getElementById('dclose').addEventListener('click', closeDetail);
+  document.getElementById('dscrim').addEventListener('click', closeDetail);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('detail-open')) closeDetail(); });
+
+  /* ───────── sidebar buttons ───────── */
+  function inlineName(btn, label, onName) {
+    if (btn.dataset.editing) return; btn.dataset.editing = '1';
+    btn.innerHTML = '<input placeholder="Name…" />';
+    const inp = btn.querySelector('input'); inp.focus();
+    let fired = false;
+    const reset = () => { btn.textContent = label; delete btn.dataset.editing; };
+    const done = () => { if (fired) return; fired = true; const v = inp.value.trim(); reset(); if (v) onName(v); };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') done(); else if (e.key === 'Escape') { fired = true; reset(); } });
+    inp.addEventListener('blur', done);
+  }
+  document.getElementById('newpage').addEventListener('click', function () { inlineName(this, '+ New board', addPage); });
+  document.getElementById('addlist').addEventListener('click', () => {
+    const nc = createList('Untitled');
+    nc.scrollIntoView({ block: 'nearest' });
+    renameList(nc);
+  });
+  document.querySelectorAll('#sizes button').forEach(b => b.addEventListener('click', () => {
+    pages[active].size = +b.dataset.s; relayout();
+  }));
+
+  /* ───────── sidebar toggle ───────── */
+  if (window.matchMedia('(max-width: 760px)').matches) document.body.classList.add('nav-closed');
+  document.getElementById('burger').addEventListener('click', () => document.body.classList.toggle('nav-closed'));
+
+  /* ───────── filters ───────── */
+  document.querySelectorAll('#filters button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#filters button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on'); const f = b.dataset.f;
+      grid.querySelectorAll('.cell[data-list]:not(.inbox) .t').forEach(t => {
+        const agent = t._data.agent, mine = !!t._data.owner;
+        let show = true;
+        if (f === 'agents') show = agent;
+        if (f === 'mine') show = mine;
+        t.style.display = show ? '' : 'none';
+      });
+    });
+  });
+
+  showPage(0);
+</script>
+</body>
+</html>
