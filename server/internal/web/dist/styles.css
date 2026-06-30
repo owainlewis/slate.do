@@ -24,7 +24,16 @@ button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 [hidden] { display: none !important; }
 
-.shell { min-height: 100%; display: flex; }
+.shell, .settings-page { min-height: 100%; display: flex; }
+.theme-dark {
+  --bg: #171819;
+  --panel: #202123;
+  --ink: #f4f1ea;
+  --soft: #c7c0b5;
+  --faint: #8d887f;
+  --line: #333538;
+  --line-2: #2b2d30;
+}
 .sidebar {
   width: var(--nav-w);
   flex: 0 0 var(--nav-w);
@@ -45,7 +54,7 @@ button { cursor: pointer; }
   text-transform: uppercase;
   color: var(--faint);
 }
-.page-row, .plain-btn {
+.page-row, .plain-btn, .board-select, .board-delete {
   width: 100%;
   border: 0;
   background: transparent;
@@ -55,18 +64,19 @@ button { cursor: pointer; }
   color: var(--soft);
   font-weight: 500;
 }
-.page-row:hover, .plain-btn:hover { background: rgba(24,24,26,.045); color: var(--ink); }
-.page-row.on { background: rgba(24,24,26,.07); color: var(--ink); font-weight: 700; }
-.seg { display: flex; gap: 3px; background: rgba(24,24,26,.05); border-radius: 9px; padding: 3px; }
+.page-row:hover, .plain-btn:hover, .board-row:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.page-row.on { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); font-weight: 700; }
+.pages { display: flex; flex-direction: column; gap: 2px; }
+.board-row { display: flex; align-items: center; border-radius: 7px; }
+.board-row.on { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.board-select { flex: 1; min-width: 0; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-row.on .board-select { color: var(--ink); font-weight: 700; }
+.board-delete { width: 28px; flex: 0 0 28px; text-align: center; padding: 7px 0; opacity: 0; color: var(--faint); }
+.board-row:hover .board-delete { opacity: 1; }
+.board-delete:hover { color: var(--danger); }
+.seg { display: flex; gap: 3px; background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: 9px; padding: 3px; }
 .seg button { flex: 1; border: 0; background: none; border-radius: 6px; padding: 7px 0; color: var(--soft); font-weight: 700; }
-.seg button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-.swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
-.swatch { aspect-ratio: 1; border: 1px solid rgba(24,24,26,.16); border-radius: 8px; background-size: cover; background-position: center; }
-.swatch.on { outline: 2px solid var(--ink); outline-offset: 2px; }
-.swatch[data-bg="plain"] { background: linear-gradient(135deg, #fff, #f2f2ef); }
-.swatch[data-bg="green"] { background: linear-gradient(135deg, #dfeee4, #f8fbf5); }
-.swatch[data-bg="blue"] { background: linear-gradient(135deg, #dceaf2, #fbfcff); }
-.swatch[data-bg="charcoal"] { background: linear-gradient(135deg, #24282a, #61686a); }
+.seg button.on { background: var(--bg); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
 
 .main {
   flex: 1;
@@ -76,10 +86,7 @@ button { cursor: pointer; }
   background-size: cover;
   background-position: center;
 }
-.main.green { background: linear-gradient(135deg, #f6faf3, #dfeee4); }
-.main.blue { background: linear-gradient(135deg, #f8fbff, #dceaf2); }
-.main.charcoal { background: linear-gradient(135deg, #24282a, #61686a); }
-.main.charcoal, .main.charcoal .topbar, .main.charcoal .week { color: white; }
+.main { background: var(--bg); }
 .topbar { height: 60px; display: flex; align-items: center; gap: 18px; padding: 0 28px; }
 .title-input {
   border: 0;
@@ -102,8 +109,9 @@ button { cursor: pointer; }
   padding: 7px 11px;
   font-weight: 700;
 }
-.icon-btn { background: rgba(24,24,26,.06); color: var(--ink); }
+.icon-btn { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--ink); }
 .primary { background: var(--ink); color: white; }
+.theme-dark .primary { background: #f4f1ea; color: #171819; }
 .danger { background: #fbecec; color: var(--danger); }
 
 .grid {
@@ -118,14 +126,14 @@ button { cursor: pointer; }
 }
 .bucket {
   border: 1px solid var(--line);
-  background: rgba(255,255,255,.86);
+  background: var(--bg);
   padding: 18px 20px 12px;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
 }
-.charcoal .bucket { background: rgba(18,22,23,.72); border-color: rgba(255,255,255,.18); }
+.theme-dark .bucket { background: #1b1c1e; border-color: var(--line); }
 .bucket.over-limit { box-shadow: inset 0 0 0 2px #d97706; }
 .bucket-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 10px; }
 .bucket-head input {
@@ -159,7 +167,7 @@ button { cursor: pointer; }
   margin-top: 2px;
   border: 1.5px solid var(--line);
   border-radius: 5px;
-  background: #fff;
+  background: var(--bg);
 }
 .task.done .check { background: var(--ink); border-color: var(--ink); }
 .task-body { flex: 1; min-width: 0; }
@@ -183,7 +191,7 @@ button { cursor: pointer; }
   inset: 0 0 0 auto;
   width: 410px;
   max-width: 94vw;
-  background: #fff;
+  background: var(--bg);
   border-left: 1px solid var(--line);
   box-shadow: -24px 0 60px -36px rgba(0,0,0,.4);
   display: flex;
@@ -207,7 +215,7 @@ button { cursor: pointer; }
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 9px 10px;
-  background: #fff;
+  background: var(--bg);
   color: var(--ink);
 }
 .field textarea { resize: vertical; min-height: 86px; }
@@ -220,23 +228,46 @@ button { cursor: pointer; }
   place-items: center;
   background: var(--panel);
 }
-.login form, .settings {
+.login form {
   width: min(420px, calc(100vw - 32px));
-  background: #fff;
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 24px;
 }
-.login h1, .settings h2 { margin: 0 0 6px; }
-.login p, .settings p { margin: 0 0 18px; color: var(--soft); line-height: 1.45; }
-.login input { width: 100%; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.login h1 { margin: 0 0 6px; }
+.login p { margin: 0 0 18px; color: var(--soft); line-height: 1.45; }
+.login input { width: 100%; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg); color: var(--ink); }
 .error { color: var(--danger); min-height: 20px; }
-.token-row { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding: 10px 0; }
+.settings-main { flex: 1; min-width: 0; background: var(--bg); padding: 32px; }
+.settings-panel { max-width: 720px; }
+.settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 24px; }
+.settings-head p { margin: 0 0 6px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.settings-head h1 { margin: 0; font-size: 24px; }
+.token-form { display: flex; gap: 8px; margin-bottom: 18px; }
+.token-form input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg);
+  color: var(--ink);
+}
+.new-token { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 18px; }
+.new-token label { display: block; margin-bottom: 6px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.new-token code { display: block; overflow-wrap: anywhere; }
+.token-list { border-top: 1px solid var(--line); }
+.token-row { display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line); padding: 10px 0; }
+.token-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .token-row code { font-size: 12px; overflow-wrap: anywhere; }
 
 @media (max-width: 900px) {
-  .shell { flex-direction: column; }
+  .shell, .settings-page { flex-direction: column; }
   .sidebar { width: 100%; flex-basis: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .board-delete { opacity: 1; }
   .grid { grid-template-columns: 1fr; margin: 10px 14px; }
   .topbar { padding: 0 14px; }
+  .settings-main { padding: 20px 14px; }
+  .token-form { flex-direction: column; }
 }

@@ -28,7 +28,7 @@ Slate now has an owner-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Owner sign in with a seeded owner.
-- Boards, buckets, limits, tasks, details, focus, assignee, due date, notes, agent brief, agent status, layout, and background.
+- Boards, lists, limits, tasks, details, focus, assignee, due date, notes, agent brief, agent status, layout, and theme.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.
@@ -53,7 +53,7 @@ Open `http://localhost:8080`.
 export SLATE_BASE_URL=http://localhost:8080
 export SLATE_API_TOKEN=slate_...
 go run ./cli/cmd/slate boards list
-go run ./cli/cmd/slate tasks create --bucket <bucket-id> --title "Draft launch note" --assignee coder
+go run ./cli/cmd/slate tasks create --list <list-id> --title "Draft launch note" --assignee coder
 go run ./cli/cmd/slate tasks pull --assignee coder
 go run ./cli/cmd/slate tasks status <task-id> working
 go run ./cli/cmd/slate tasks done <task-id>

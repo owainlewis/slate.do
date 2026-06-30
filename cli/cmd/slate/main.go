@@ -111,20 +111,22 @@ func tasksCmd(c client, args []string) error {
 	case "create":
 		fs := flag.NewFlagSet("tasks create", flag.ContinueOnError)
 		bucket := fs.String("bucket", "", "bucket id")
+		list := fs.String("list", "", "list id")
 		title := fs.String("title", "", "task title")
 		assignee := fs.String("assignee", "", "assignee")
 		due := fs.String("due", "", "due date YYYY-MM-DD")
 		brief := fs.String("brief", "", "agent brief")
-		override := fs.Bool("override-limit", false, "override bucket limit")
+		override := fs.Bool("override-limit", false, "override list limit")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		if *bucket == "" || *title == "" {
-			return errors.New("--bucket and --title are required")
+		targetList := firstNonEmpty(*list, *bucket)
+		if targetList == "" || *title == "" {
+			return errors.New("--list and --title are required")
 		}
 		body := map[string]any{"title": *title, "assignee": *assignee, "dueDate": *due, "agentBrief": *brief, "overrideLimit": *override}
 		var out any
-		if err := c.do(http.MethodPost, "/api/v1/buckets/"+url.PathEscape(*bucket)+"/tasks", body, &out); err != nil {
+		if err := c.do(http.MethodPost, "/api/v1/buckets/"+url.PathEscape(targetList)+"/tasks", body, &out); err != nil {
 			return err
 		}
 		return printJSON(out)
@@ -136,6 +138,7 @@ func tasksCmd(c client, args []string) error {
 		fs := flag.NewFlagSet("tasks update", flag.ContinueOnError)
 		title := fs.String("title", "", "title")
 		bucket := fs.String("bucket", "", "bucket id")
+		list := fs.String("list", "", "list id")
 		assignee := fs.String("assignee", "", "assignee")
 		due := fs.String("due", "", "due date")
 		notes := fs.String("notes", "", "notes")
@@ -148,8 +151,8 @@ func tasksCmd(c client, args []string) error {
 		if *title != "" {
 			body["title"] = *title
 		}
-		if *bucket != "" {
-			body["bucketId"] = *bucket
+		if targetList := firstNonEmpty(*list, *bucket); targetList != "" {
+			body["bucketId"] = targetList
 		}
 		if *assignee != "" {
 			body["assignee"] = *assignee
@@ -291,4 +294,13 @@ func env(key string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
