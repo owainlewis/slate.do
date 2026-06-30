@@ -289,7 +289,7 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, ErrLimitFull):
-		writeError(w, http.StatusConflict, "bucket limit reached")
+		writeError(w, http.StatusConflict, "list limit reached")
 	case errors.Is(err, ErrInvalidData):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:

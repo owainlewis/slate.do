@@ -14,7 +14,7 @@ import (
 
 var (
 	ErrNotFound    = errors.New("not found")
-	ErrLimitFull   = errors.New("bucket limit reached")
+	ErrLimitFull   = errors.New("list limit reached")
 	ErrInvalidData = errors.New("invalid data")
 )
 
@@ -39,11 +39,11 @@ func (s *Store) SeedDefaultBoard(ctx context.Context, userID string) error {
 		return err
 	}
 	defaults := []CreateBucketInput{
-		{Name: "Inbox", LimitCount: 5, IsInbox: true},
-		{Name: "Focus", LimitCount: 3},
-		{Name: "Waiting", LimitCount: 5},
-		{Name: "Agent work", LimitCount: 5},
-		{Name: "Later", LimitCount: 5},
+		{Name: "Inbox", LimitCount: 10, IsInbox: true},
+		{Name: "Focus", LimitCount: 10},
+		{Name: "Waiting", LimitCount: 10},
+		{Name: "Agent work", LimitCount: 10},
+		{Name: "Later", LimitCount: 10},
 		{Name: "Done", LimitCount: 10},
 	}
 	for _, bucket := range defaults {
@@ -56,7 +56,7 @@ func (s *Store) SeedDefaultBoard(ctx context.Context, userID string) error {
 
 func (s *Store) ListBoards(ctx context.Context, userID string) ([]Board, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id::text, name, background_kind, background_value, layout_size, sort_order, created_at, updated_at
+		SELECT id::text, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order, created_at, updated_at
 		FROM boards
 		WHERE user_id = $1
 		ORDER BY sort_order, created_at
@@ -79,7 +79,7 @@ func (s *Store) ListBoards(ctx context.Context, userID string) ([]Board, error) 
 
 func (s *Store) GetBoard(ctx context.Context, userID string, id string) (Board, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT id::text, name, background_kind, background_value, layout_size, sort_order, created_at, updated_at
+		SELECT id::text, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order, created_at, updated_at
 		FROM boards
 		WHERE user_id = $1 AND id = $2
 	`, userID, id)
@@ -117,21 +117,28 @@ func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoar
 	if layout != 3 && layout != 6 {
 		return Board{}, fmt.Errorf("%w: layout must be 3 or 6", ErrInvalidData)
 	}
+	maxTasksPerList := input.MaxTasksPerList
+	if maxTasksPerList == 0 {
+		maxTasksPerList = 10
+	}
+	if maxTasksPerList < 1 {
+		return Board{}, fmt.Errorf("%w: list limit must be positive", ErrInvalidData)
+	}
 	backgroundKind := clean(input.BackgroundKind)
 	if backgroundKind == "" {
 		backgroundKind = "plain"
 	}
 	var board Board
 	err := s.db.QueryRow(ctx, `
-		INSERT INTO boards (user_id, name, background_kind, background_value, layout_size, sort_order)
+		INSERT INTO boards (user_id, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order)
 		VALUES (
-			$1, $2, $3, $4, $5,
+			$1, $2, $3, $4, $5, $6,
 			COALESCE((SELECT max(sort_order) + 1 FROM boards WHERE user_id = $1), 0)
 		)
-		RETURNING id::text, name, background_kind, background_value, layout_size, sort_order, created_at, updated_at
-	`, userID, name, backgroundKind, input.BackgroundValue, layout).Scan(
+		RETURNING id::text, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order, created_at, updated_at
+	`, userID, name, backgroundKind, input.BackgroundValue, layout, maxTasksPerList).Scan(
 		&board.ID, &board.Name, &board.BackgroundKind, &board.BackgroundValue,
-		&board.LayoutSize, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
+		&board.LayoutSize, &board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
 	)
 	return board, err
 }
@@ -159,6 +166,12 @@ func (s *Store) UpdateBoard(ctx context.Context, userID string, id string, input
 		}
 		current.LayoutSize = *input.LayoutSize
 	}
+	if input.MaxTasksPerList != nil {
+		if *input.MaxTasksPerList < 1 {
+			return Board{}, fmt.Errorf("%w: list limit must be positive", ErrInvalidData)
+		}
+		current.MaxTasksPerList = *input.MaxTasksPerList
+	}
 	if input.SortOrder != nil {
 		current.SortOrder = *input.SortOrder
 	}
@@ -168,12 +181,12 @@ func (s *Store) UpdateBoard(ctx context.Context, userID string, id string, input
 	var board Board
 	err = s.db.QueryRow(ctx, `
 		UPDATE boards
-		SET name = $3, background_kind = $4, background_value = $5, layout_size = $6, sort_order = $7, updated_at = now()
+		SET name = $3, background_kind = $4, background_value = $5, layout_size = $6, max_tasks_per_list = $7, sort_order = $8, updated_at = now()
 		WHERE user_id = $1 AND id = $2
-		RETURNING id::text, name, background_kind, background_value, layout_size, sort_order, created_at, updated_at
-	`, userID, id, current.Name, current.BackgroundKind, current.BackgroundValue, current.LayoutSize, current.SortOrder).Scan(
+		RETURNING id::text, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order, created_at, updated_at
+	`, userID, id, current.Name, current.BackgroundKind, current.BackgroundValue, current.LayoutSize, current.MaxTasksPerList, current.SortOrder).Scan(
 		&board.ID, &board.Name, &board.BackgroundKind, &board.BackgroundValue,
-		&board.LayoutSize, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
+		&board.LayoutSize, &board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Board{}, ErrNotFound
@@ -511,14 +524,14 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 
 func (s *Store) listBuckets(ctx context.Context, userID string, boardID string) ([]Bucket, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT b.id::text, b.board_id::text, b.name, b.is_inbox, b.limit_count, b.sort_order,
+		SELECT b.id::text, b.board_id::text, b.name, b.is_inbox, bo.max_tasks_per_list, b.sort_order,
 			COUNT(t.id) FILTER (WHERE t.done = false)::int AS open_count,
 			b.created_at, b.updated_at
 		FROM buckets b
 		JOIN boards bo ON bo.id = b.board_id
 		LEFT JOIN tasks t ON t.bucket_id = b.id
 		WHERE bo.user_id = $1 AND b.board_id = $2
-		GROUP BY b.id
+		GROUP BY b.id, bo.max_tasks_per_list
 		ORDER BY b.sort_order, b.created_at
 	`, userID, boardID)
 	if err != nil {
@@ -539,14 +552,14 @@ func (s *Store) listBuckets(ctx context.Context, userID string, boardID string) 
 
 func (s *Store) getBucket(ctx context.Context, userID string, id string) (Bucket, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT b.id::text, b.board_id::text, b.name, b.is_inbox, b.limit_count, b.sort_order,
+		SELECT b.id::text, b.board_id::text, b.name, b.is_inbox, bo.max_tasks_per_list, b.sort_order,
 			COUNT(t.id) FILTER (WHERE t.done = false)::int AS open_count,
 			b.created_at, b.updated_at
 		FROM buckets b
 		JOIN boards bo ON bo.id = b.board_id
 		LEFT JOIN tasks t ON t.bucket_id = b.id
 		WHERE bo.user_id = $1 AND b.id = $2
-		GROUP BY b.id
+		GROUP BY b.id, bo.max_tasks_per_list
 	`, userID, id)
 	bucket, err := scanBucket(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -583,11 +596,12 @@ func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID str
 func (s *Store) bucketFull(ctx context.Context, bucketID string) (bool, error) {
 	var full bool
 	err := s.db.QueryRow(ctx, `
-		SELECT COUNT(t.id) FILTER (WHERE t.done = false) >= b.limit_count
+		SELECT COUNT(t.id) FILTER (WHERE t.done = false) >= bo.max_tasks_per_list
 		FROM buckets b
+		JOIN boards bo ON bo.id = b.board_id
 		LEFT JOIN tasks t ON t.bucket_id = b.id
 		WHERE b.id = $1
-		GROUP BY b.id
+		GROUP BY b.id, bo.max_tasks_per_list
 	`, bucketID).Scan(&full)
 	return full, err
 }
@@ -600,7 +614,7 @@ func scanBoard(row rowScanner) (Board, error) {
 	var board Board
 	err := row.Scan(
 		&board.ID, &board.Name, &board.BackgroundKind, &board.BackgroundValue,
-		&board.LayoutSize, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
+		&board.LayoutSize, &board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
 	)
 	return board, err
 }

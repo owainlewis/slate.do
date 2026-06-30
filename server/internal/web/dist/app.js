@@ -124,7 +124,7 @@ function landingHTML() {
         </section>
         <section class="landing-preview" aria-label="Slate preview">
           <div>
-            <span>0/3</span>
+            <span>0/10</span>
             <b>Focus</b>
           </div>
           <p>Draft launch note</p>
@@ -155,6 +155,12 @@ function appHTML() {
           <div class="seg">
             <button data-layout="3" class="${board?.layoutSize === 3 ? "on" : ""}">3</button>
             <button data-layout="6" class="${board?.layoutSize !== 3 ? "on" : ""}">6</button>
+          </div>
+        </section>
+        <section class="nav-sec">
+          <h3>List limit</h3>
+          <div class="limit-control">
+            <input id="list-limit" type="number" min="1" value="${board?.maxTasksPerList || 10}">
           </div>
         </section>
         <section class="nav-sec">
@@ -206,7 +212,6 @@ function listHTML(list) {
         <span class="count">${list.openCount}/${list.limitCount}</span>
         <input data-bucket-name="${list.id}" value="${escapeAttr(list.name)}">
         <div class="bucket-menu">
-          <input data-bucket-limit="${list.id}" type="number" min="1" value="${list.limitCount}" title="List limit">
           <button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list">×</button>
         </div>
       </div>
@@ -328,23 +333,27 @@ function bindApp() {
   document.querySelector("#settings").onclick = async () => { await openSettings(true); };
   document.querySelector("#logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.view = "home"; render(); };
   document.querySelector("#new-board").onclick = async () => {
-    const board = await api.post("/api/v1/boards", { name: "Untitled board", layoutSize: 6, backgroundKind: "theme", backgroundValue: themeFor(state.board?.backgroundValue) });
-    await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", limitCount: 5, isInbox: true });
-    await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Focus", limitCount: 3 });
+    const board = await api.post("/api/v1/boards", { name: "Untitled board", layoutSize: 6, maxTasksPerList: state.board?.maxTasksPerList || 10, backgroundKind: "theme", backgroundValue: themeFor(state.board?.backgroundValue) });
+    await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", isInbox: true });
+    await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Focus" });
     await loadBoards(board.id);
     render();
   };
   document.querySelector("#add-list").onclick = async () => {
-    const list = await api.post(`/api/v1/boards/${state.board.id}/buckets`, { name: "New list", limitCount: 5 });
+    const list = await api.post(`/api/v1/boards/${state.board.id}/buckets`, { name: "New list" });
     await loadBoards(state.board.id);
     render();
     document.querySelector(`[data-bucket="${list.id}"] input[data-bucket-name]`)?.focus();
   };
   document.querySelector("#board-title").addEventListener("change", async e => { await api.patch(`/api/v1/boards/${state.board.id}`, { name: e.target.value }); await reload(); });
+  document.querySelector("#list-limit").addEventListener("change", async e => {
+    const next = Math.max(1, Number(e.target.value) || 10);
+    await api.patch(`/api/v1/boards/${state.board.id}`, { maxTasksPerList: next });
+    await reload();
+  });
   document.querySelectorAll("[data-layout]").forEach(el => el.onclick = async () => { await api.patch(`/api/v1/boards/${state.board.id}`, { layoutSize: Number(el.dataset.layout) }); await reload(); });
   document.querySelectorAll("[data-theme]").forEach(el => el.onclick = async () => { await api.patch(`/api/v1/boards/${state.board.id}`, { backgroundKind: "theme", backgroundValue: el.dataset.theme }); await reload(); });
   document.querySelectorAll("[data-bucket-name]").forEach(el => el.addEventListener("change", async e => { await api.patch(`/api/v1/buckets/${el.dataset.bucketName}`, { name: e.target.value }); await reload(); }));
-  document.querySelectorAll("[data-bucket-limit]").forEach(el => el.addEventListener("change", async e => { await api.patch(`/api/v1/buckets/${el.dataset.bucketLimit}`, { limitCount: Number(e.target.value) }); await reload(); }));
   document.querySelectorAll("[data-delete-bucket]").forEach(el => el.onclick = async () => { if (confirm("Delete this list and its tasks?")) { await api.del(`/api/v1/buckets/${el.dataset.deleteBucket}`); await reload(); } });
   document.querySelectorAll("[data-add-task]").forEach(form => form.addEventListener("submit", addTask));
   document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => { state.selectedTask = findTask(el.dataset.openTask); render(); });
@@ -361,9 +370,9 @@ async function deleteBoard(id) {
   state.board = null;
   await loadBoards();
   if (!state.board) {
-    const next = await api.post("/api/v1/boards", { name: "Today", layoutSize: 6, backgroundKind: "theme", backgroundValue: "light" });
-    await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Inbox", limitCount: 5, isInbox: true });
-    await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Focus", limitCount: 3 });
+    const next = await api.post("/api/v1/boards", { name: "Today", layoutSize: 6, maxTasksPerList: 10, backgroundKind: "theme", backgroundValue: "light" });
+    await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Inbox", isInbox: true });
+    await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Focus" });
     await loadBoards(next.id);
   }
   render();
@@ -457,7 +466,7 @@ async function addTask(event) {
   try {
     await api.post(`/api/v1/buckets/${list.id}/tasks`, body);
   } catch (err) {
-    if (err.message.includes("limit") && confirm("This list is full. Add anyway?")) {
+    if (err.message.includes("limit") && confirm("This list is at the board limit. Add anyway?")) {
       await api.post(`/api/v1/buckets/${list.id}/tasks`, { ...body, overrideLimit: true });
     } else {
       throw err;

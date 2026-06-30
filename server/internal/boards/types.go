@@ -15,6 +15,7 @@ type Board struct {
 	BackgroundKind  string    `json:"backgroundKind"`
 	BackgroundValue string    `json:"backgroundValue"`
 	LayoutSize      int       `json:"layoutSize"`
+	MaxTasksPerList int       `json:"maxTasksPerList"`
 	SortOrder       int       `json:"sortOrder"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
@@ -56,6 +57,7 @@ type CreateBoardInput struct {
 	BackgroundKind  string `json:"backgroundKind"`
 	BackgroundValue string `json:"backgroundValue"`
 	LayoutSize      int    `json:"layoutSize"`
+	MaxTasksPerList int    `json:"maxTasksPerList"`
 }
 
 type UpdateBoardInput struct {
@@ -63,6 +65,7 @@ type UpdateBoardInput struct {
 	BackgroundKind  *string `json:"backgroundKind"`
 	BackgroundValue *string `json:"backgroundValue"`
 	LayoutSize      *int    `json:"layoutSize"`
+	MaxTasksPerList *int    `json:"maxTasksPerList"`
 	SortOrder       *int    `json:"sortOrder"`
 }
 
