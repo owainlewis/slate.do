@@ -22,6 +22,7 @@ const state = {
   board: null,
   selectedTask: null,
   settings: false,
+  view: "home",
   error: "",
   newToken: "",
   tokens: [],
@@ -67,6 +68,11 @@ async function loadBoard(id) {
 
 function render() {
   const root = document.querySelector("#app");
+  if (state.view === "home") {
+    root.innerHTML = landingHTML();
+    bindLanding();
+    return;
+  }
   if (!state.me) {
     root.innerHTML = loginHTML();
     bindLogin();
@@ -85,13 +91,47 @@ function loginHTML() {
   return `
     <section class="login">
       <form id="login-form">
-        <h1>Slate</h1>
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <h1>Sign in</h1>
         <p>Owner sign in.</p>
         <input name="email" type="email" autocomplete="email" placeholder="Email" required>
         <input name="password" type="password" autocomplete="current-password" placeholder="Password" required>
         <button class="primary" type="submit">Sign in</button>
         <p class="error">${escapeHTML(state.error)}</p>
       </form>
+    </section>`;
+}
+
+function landingHTML() {
+  const signedIn = Boolean(state.me);
+  return `
+    <section class="landing">
+      <nav class="landing-nav">
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <div>
+          ${signedIn ? `<button class="plain-btn nav-action" id="landing-open">Open app</button>` : `<button class="plain-btn nav-action" id="landing-login">Log in</button>`}
+        </div>
+      </nav>
+      <main class="landing-main">
+        <section class="landing-copy">
+          <p>Private beta</p>
+          <h1>Slate</h1>
+          <h2>A calm board for choosing what gets attention.</h2>
+          <div class="landing-actions">
+            ${signedIn ? `<button class="primary" id="open-app">Open app</button>` : `<button class="primary" id="hero-login">Log in</button>`}
+            <a class="secondary-link" href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>
+          </div>
+        </section>
+        <section class="landing-preview" aria-label="Slate preview">
+          <div>
+            <span>0/3</span>
+            <b>Focus</b>
+          </div>
+          <p>Draft launch note</p>
+          <p>Review agent work</p>
+          <p>Ship one small thing</p>
+        </section>
+      </main>
     </section>`;
 }
 
@@ -102,7 +142,7 @@ function appHTML() {
   return `
     <section class="shell theme-${theme}">
       <aside class="sidebar">
-        <div class="brand">slate<span>.do</span></div>
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         <section class="nav-sec">
           <h3>Boards</h3>
           <div class="pages">
@@ -222,10 +262,11 @@ function detailHTML(task) {
 }
 
 function settingsHTML() {
+  const theme = themeFor(state.board?.backgroundValue);
   return `
-    <section class="settings-page">
+    <section class="settings-page theme-${theme}">
       <aside class="sidebar">
-        <div class="brand">slate<span>.do</span></div>
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         <section class="nav-sec">
           <button class="page-row on" id="back">Board</button>
           <button class="plain-btn" id="settings-logout">Sign out</button>
@@ -254,6 +295,7 @@ function settingsHTML() {
 }
 
 function bindLogin() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -263,6 +305,7 @@ function bindLogin() {
       const me = await api.get("/api/v1/me");
       state.me = me.user;
       await loadBoards();
+      state.view = "app";
     } catch (err) {
       state.error = err.message;
     }
@@ -270,11 +313,20 @@ function bindLogin() {
   });
 }
 
+function bindLanding() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelector("#landing-login")?.addEventListener("click", showLogin);
+  document.querySelector("#hero-login")?.addEventListener("click", showLogin);
+  document.querySelector("#landing-open")?.addEventListener("click", openApp);
+  document.querySelector("#open-app")?.addEventListener("click", openApp);
+}
+
 function bindApp() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = async () => { await loadBoard(el.dataset.board); render(); });
   document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
   document.querySelector("#settings").onclick = async () => { await openSettings(true); };
-  document.querySelector("#logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; render(); };
+  document.querySelector("#logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.view = "home"; render(); };
   document.querySelector("#new-board").onclick = async () => {
     const board = await api.post("/api/v1/boards", { name: "Untitled board", layoutSize: 6, backgroundKind: "theme", backgroundValue: themeFor(state.board?.backgroundValue) });
     await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", limitCount: 5, isInbox: true });
@@ -340,9 +392,10 @@ function bindDetail() {
 }
 
 async function bindSettings() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#back").onclick = closeSettings;
   document.querySelector("#settings-back").onclick = closeSettings;
-  document.querySelector("#settings-logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.settings = false; render(); };
+  document.querySelector("#settings-logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.settings = false; state.view = "home"; render(); };
   document.querySelector("#token-form").addEventListener("submit", async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -356,6 +409,7 @@ async function bindSettings() {
 
 async function openSettings(pushHistory) {
   state.settings = true;
+  state.view = "app";
   await loadTokens();
   if (pushHistory && location.hash !== "#settings") history.pushState({ settings: true }, "", "#settings");
   render();
@@ -364,7 +418,32 @@ async function openSettings(pushHistory) {
 function closeSettings() {
   state.settings = false;
   state.newToken = "";
+  state.view = "app";
   if (location.hash === "#settings") history.replaceState({}, "", location.pathname);
+  render();
+}
+
+function showLogin() {
+  state.view = "login";
+  state.error = "";
+  render();
+}
+
+function openApp() {
+  if (!state.me) {
+    showLogin();
+    return;
+  }
+  state.view = "app";
+  state.settings = false;
+  render();
+}
+
+function goHome() {
+  state.view = "home";
+  state.settings = false;
+  state.selectedTask = null;
+  if (location.hash) history.replaceState({}, "", location.pathname);
   render();
 }
 
@@ -450,6 +529,7 @@ window.addEventListener("popstate", async () => {
   if (state.settings) {
     state.settings = false;
     state.newToken = "";
+    state.view = "app";
     render();
   }
 });
