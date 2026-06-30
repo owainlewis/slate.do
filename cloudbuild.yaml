@@ -1,0 +1,45 @@
+steps:
+  - name: golang:1.26
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        cd server
+        go test ./...
+        cd ../cli
+        go test ./...
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - slate
+      - --image
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
+      - --region
+      - $_REGION
+      - --platform
+      - managed
+      - --no-invoker-iam-check
+      - --add-cloudsql-instances
+      - $PROJECT_ID:$_REGION:slate-postgres
+      - --set-env-vars
+      - COOKIE_SECURE=true
+      - --set-secrets
+      - DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest
+images:
+  - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
+substitutions:
+  _REGION: europe-west2
+options:
+  logging: CLOUD_LOGGING_ONLY

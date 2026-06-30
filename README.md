@@ -21,8 +21,44 @@ Agents can suggest, update, and execute work, but Slate should make it hard to c
 - [PRD](docs/prd.md)
 - [Initial static prototype](list-app-mockup.html)
 
-## Repository Status
+## App
 
-This repo is a product shell with an initial static HTML prototype.
+Slate now has an owner-only MVP:
 
-No app implementation has started yet.
+- Go server and static JS frontend.
+- Postgres persistence.
+- Owner sign in with a seeded owner.
+- Boards, buckets, limits, tasks, details, focus, assignee, due date, notes, agent brief, agent status, layout, and background.
+- API tokens for CLI and agent workflows.
+- In-repo CLI at `cli/cmd/slate`.
+- Cloud Run and Cloud Build config.
+
+## Local start
+
+```bash
+createdb slate_dev
+export DATABASE_URL=postgres://localhost/slate_dev?sslmode=disable
+export OWNER_EMAIL=you@example.com
+export OWNER_PASSWORD='use-a-long-password'
+just migrate
+just seed-owner
+just serve
+```
+
+Open `http://localhost:8080`.
+
+## CLI
+
+```bash
+export SLATE_BASE_URL=http://localhost:8080
+export SLATE_API_TOKEN=slate_...
+go run ./cli/cmd/slate boards list
+go run ./cli/cmd/slate tasks create --bucket <bucket-id> --title "Draft launch note" --assignee coder
+go run ./cli/cmd/slate tasks pull --assignee coder
+go run ./cli/cmd/slate tasks status <task-id> working
+go run ./cli/cmd/slate tasks done <task-id>
+```
+
+## Deploy
+
+See [docs/deploy.md](docs/deploy.md).

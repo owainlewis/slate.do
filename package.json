@@ -1,0 +1,22 @@
+{
+  "name": "slate.do",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A minimal visual task manager for humans and agents.",
+  "scripts": {
+    "verify:browser": "playwright --version"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/owainlewis/slate.do.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/owainlewis/slate.do/issues"
+  },
+  "homepage": "https://github.com/owainlewis/slate.do#readme",
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}
