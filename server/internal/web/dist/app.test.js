@@ -35,3 +35,12 @@ test("neutral items have bullets while actions have checkboxes", () => {
   assert.doesNotMatch(itemHTML, /data-toggle-done/);
   assert.match(actionHTML, /data-toggle-done="record"/);
 });
+
+test("same-list drops produce the requested task order", () => {
+  const ids = ["one", "two", "three"];
+
+  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "three", "one")), ["three", "one", "two"]);
+  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "one", "two", true)), ["two", "one", "three"]);
+  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "one", "")), ["two", "three", "one"]);
+  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "two", "two")), ids);
+});
