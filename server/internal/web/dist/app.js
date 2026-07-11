@@ -250,7 +250,7 @@ function listHTML(list) {
       <input class="bucket-goal" data-bucket-goal="${list.id}" value="${escapeAttr(list.goal || "")}" placeholder="What matters in this bucket?" aria-label="Goal for ${escapeAttr(list.name)}">
       ${state.goalErrors[list.id] ? `<p class="error bucket-goal-error">${escapeHTML(state.goalErrors[list.id])}</p>` : ""}
       <ul class="tasks ${tasks.length ? "" : "empty"}" data-task-list="${list.id}">
-        ${tasks.length ? listItemsHTML(tasks) : `<li class="empty-state">${icon("inbox")}<p>No items yet</p></li>`}
+        ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state">${icon("inbox")}<p>No items yet</p></li>`}
       </ul>
       <form class="add-task" data-add-task="${list.id}">
         <button class="add-icon" type="submit" title="Add item">${icon("plus")}</button>
@@ -259,19 +259,11 @@ function listHTML(list) {
     </section>`;
 }
 
-function listItemsHTML(tasks) {
-  const roots = tasks.filter(task => !task.parentId);
-  return roots.map(task => {
-    const children = tasks.filter(child => child.parentId === task.id);
-    return taskHTML(task, false, children.length > 0) + children.map(child => taskHTML(child, true)).join("");
-  }).join("");
-}
-
-function taskHTML(task, child = false, hasChildren = false) {
+function taskHTML(task) {
   const action = task.kind === "action";
   return `
-    <li class="task ${child ? "child-item" : ""} ${action ? "action" : "item"} ${task.done ? "done" : ""}" draggable="${hasChildren ? "false" : "true"}" data-task="${task.id}">
-      <span class="grip" aria-hidden="true" ${hasChildren ? 'title="Move sub-items first"' : ""}>${icon("grip")}</span>
+    <li class="task ${action ? "action" : "item"} ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
+      <span class="grip" aria-hidden="true">${icon("grip")}</span>
       ${action ? `<button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>` : `<span class="item-dot" aria-hidden="true"></span>`}
       <button class="task-body task-open" type="button" data-open-task="${task.id}">
         <div class="task-title">${escapeHTML(task.title)}</div>
@@ -343,14 +335,11 @@ function todayHTML(board) {
 
 function detailHTML(task) {
   const action = task.kind === "action";
-  const parent = task.parentId ? findTask(task.parentId) : null;
-  const children = (state.board?.buckets || []).flatMap(list => list.tasks || []).filter(item => item.parentId === task.id);
   return `
     <aside class="detail">
       <div class="detail-head"><b>Item detail</b><button id="close-detail" title="Close">${icon("x")}</button></div>
       <form class="detail-body" id="detail-form">
         <div class="field"><label>Title</label><input name="title" type="text" value="${escapeAttr(task.title)}" placeholder="Item title" required></div>
-        ${parent ? `<p class="parent-context">Under ${escapeHTML(parent.title)}</p>` : ""}
         <div class="field"><label>Type</label><select name="kind">
           <option value="item" ${action ? "" : "selected"}>Item</option>
           <option value="action" ${action ? "selected" : ""}>Action</option>
@@ -365,11 +354,6 @@ function detailHTML(task) {
         <button class="primary" type="submit">Save</button>
         <button class="danger icon-label" type="button" id="delete-task">${icon("trash")}<span>Delete</span></button>
       </form>
-      ${task.parentId ? "" : `<section class="sub-items">
-        <label>Sub-items</label>
-        <div class="sub-item-list">${children.map(child => `<button type="button" data-open-task="${child.id}"><span>${escapeHTML(child.title)}</span><small>${child.kind === "action" ? "Action" : "Item"}</small></button>`).join("")}</div>
-        <form id="add-child-form"><input name="title" placeholder="Add sub-item" required><button type="submit" aria-label="Add sub-item">${icon("plus")}</button></form>
-      </section>`}
     </aside>`;
 }
 
@@ -557,7 +541,6 @@ function bindDetail() {
         kind: form.get("kind"),
         done: form.get("kind") === "action" && form.get("done") === "on",
         bucketId: form.get("bucketId"),
-        parentId: form.get("bucketId") === state.selectedTask.bucketId ? state.selectedTask.parentId : "",
       });
       state.error = "";
       await reload();
@@ -565,16 +548,6 @@ function bindDetail() {
       state.error = err.message;
       render();
     }
-  });
-  document.querySelector("#add-child-form")?.addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await api.post(`/api/v1/buckets/${state.selectedTask.bucketId}/tasks`, {
-      title: form.get("title"),
-      kind: "item",
-      parentId: state.selectedTask.id,
-    });
-    await reload();
   });
 }
 
@@ -658,7 +631,7 @@ function bindDrag() {
       event.preventDefault();
       const id = event.dataTransfer.getData("text/task-id");
       if (!id) return;
-      await api.patch(`/api/v1/tasks/${id}`, { bucketId: list.dataset.taskList, parentId: "" });
+      await api.patch(`/api/v1/tasks/${id}`, { bucketId: list.dataset.taskList });
       await reload();
     });
   });

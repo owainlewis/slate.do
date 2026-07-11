@@ -77,7 +77,7 @@ func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
 	}
 }
 
-func TestNeutralItemsNestingAndActionLimits(t *testing.T) {
+func TestNeutralItemsAndActionLimits(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -98,34 +98,24 @@ func TestNeutralItemsNestingAndActionLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Cameras I am considering"})
+	reference, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Cameras I am considering"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parent.Kind != KindItem {
-		t.Fatalf("default kind = %q, want item", parent.Kind)
+	if reference.Kind != KindItem {
+		t.Fatalf("default kind = %q, want item", reference.Kind)
 	}
-	child, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Sony FX3", ParentID: parent.ID})
+	camera, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Sony FX3"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if child.ParentID != parent.ID {
-		t.Fatalf("child parent = %q, want %q", child.ParentID, parent.ID)
+	if camera.Kind != KindItem {
+		t.Fatalf("camera kind = %q, want item", camera.Kind)
 	}
-	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Too deep", ParentID: child.ID}); !errors.Is(err, ErrInvalidData) {
-		t.Fatalf("nested child error = %v, want ErrInvalidData", err)
+	if _, err := store.UpdateTask(ctx, userID, camera.ID, UpdateTaskInput{BucketID: &otherBucket.ID}); err != nil {
+		t.Fatalf("move flat item: %v", err)
 	}
-	otherRoot, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Lenses"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.UpdateTask(ctx, userID, parent.ID, UpdateTaskInput{ParentID: &otherRoot.ID}); !errors.Is(err, ErrInvalidData) {
-		t.Fatalf("reparent item with children error = %v, want ErrInvalidData", err)
-	}
-	if _, err := store.UpdateTask(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &otherBucket.ID}); !errors.Is(err, ErrInvalidData) {
-		t.Fatalf("move item with children error = %v, want ErrInvalidData", err)
-	}
-	if err := store.ReorderTasks(ctx, userID, otherBucket.ID, []string{parent.ID}); !errors.Is(err, ErrNotFound) {
+	if err := store.ReorderTasks(ctx, userID, otherBucket.ID, []string{reference.ID}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-list reorder error = %v, want ErrNotFound", err)
 	}
 	action, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Record camera comparison", Kind: KindAction})
@@ -159,10 +149,10 @@ func TestNeutralItemsNestingAndActionLimits(t *testing.T) {
 		t.Fatalf("reopen action with capacity: %v", err)
 	}
 	done := true
-	if _, err := store.UpdateTask(ctx, userID, parent.ID, UpdateTaskInput{Done: &done}); !errors.Is(err, ErrInvalidData) {
+	if _, err := store.UpdateTask(ctx, userID, reference.ID, UpdateTaskInput{Done: &done}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("complete item error = %v, want ErrInvalidData", err)
 	}
-	if _, err := store.ClaimTask(ctx, userID, parent.ID); !errors.Is(err, ErrTaskUnavailable) {
+	if _, err := store.ClaimTask(ctx, userID, reference.ID); !errors.Is(err, ErrTaskUnavailable) {
 		t.Fatalf("claim item error = %v, want ErrTaskUnavailable", err)
 	}
 	actions, err := store.ListTasks(ctx, userID, TaskFilter{ActionsOnly: true})

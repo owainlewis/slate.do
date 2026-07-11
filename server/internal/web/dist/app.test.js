@@ -28,14 +28,10 @@ test("local date keys survive the spring DST boundary", () => {
 });
 
 test("neutral items have bullets while actions have checkboxes", () => {
-  const html = app.listItemsHTML([
-    { id: "reference", title: "Cameras", kind: "item", parentId: "", scheduledDate: "", done: false },
-    { id: "camera", title: "Sony FX3", kind: "item", parentId: "reference", scheduledDate: "", done: false },
-    { id: "record", title: "Record comparison", kind: "action", parentId: "", scheduledDate: "", done: false },
-  ]);
+  const itemHTML = app.taskHTML({ id: "camera", title: "Sony FX3", kind: "item", scheduledDate: "", done: false });
+  const actionHTML = app.taskHTML({ id: "record", title: "Record comparison", kind: "action", scheduledDate: "", done: false });
 
-  assert.match(html, /class="item-dot"/);
-  assert.match(html, /class="task child-item item/);
-  assert.match(html, /data-toggle-done="record"/);
-  assert.doesNotMatch(html, /data-toggle-done="reference"/);
+  assert.match(itemHTML, /class="item-dot"/);
+  assert.doesNotMatch(itemHTML, /data-toggle-done/);
+  assert.match(actionHTML, /data-toggle-done="record"/);
 });

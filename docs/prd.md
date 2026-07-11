@@ -66,9 +66,7 @@ A board has buckets.
 
 A bucket has items.
 
-An item has a title and can optionally become an action.
-
-Items can have one level of children. Optional detail can exist, but the list item should stay simple.
+An item has a title and can optionally become an action. Items stay flat inside a bucket. Separate buckets provide structure without nested lists.
 
 Core fields:
 
@@ -77,7 +75,6 @@ Core fields:
 - `description`
 - `scheduledDate`
 - `kind`
-- `parentId`
 - `boardId`
 - `bucketId`
 - `done`
@@ -203,7 +200,6 @@ The first app version should include:
 - Create, rename, reorder, and delete buckets.
 - Create, edit, move, and delete items.
 - Convert items into completable actions.
-- Add one level of child items.
 - Item detail panel.
 - Title and description.
 - Optional planned date and Monday-to-Sunday calendar view.
@@ -219,7 +215,7 @@ Out of scope:
 - Agent accounts.
 - Per-agent tokens.
 - Team permissions.
-- Deeper nesting.
+- Nested items.
 - Comments.
 - Rich labels.
 - Calendar sync.
@@ -232,7 +228,7 @@ Out of scope:
 - The board is the interface.
 - Keep list items compact.
 - Avoid dashboards.
-- Allow one useful level of hierarchy, but no deeper nesting.
+- Keep items flat and use buckets for structure.
 - Avoid heavy metadata.
 - Prefer text over configuration.
 - Make limits visible.

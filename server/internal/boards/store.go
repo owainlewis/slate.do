@@ -319,10 +319,6 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 	if !validKind(kind) {
 		return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 	}
-	parentID, err := s.validParent(ctx, userID, bucketID, input.ParentID, "")
-	if err != nil {
-		return Task{}, err
-	}
 	if kind == KindAction && !input.OverrideLimit {
 		full, err := s.bucketFull(ctx, bucketID)
 		if err != nil {
@@ -333,14 +329,14 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 		}
 	}
 	row := s.db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, parent_task_id, status, sort_order)
+		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, status, sort_order)
 		VALUES (
-			$1, $2, $3, $4, NULLIF($5, '')::date, $6, NULLIF($7, '')::uuid, $8,
+			$1, $2, $3, $4, NULLIF($5, '')::date, $6, $7,
 			COALESCE((SELECT max(sort_order) + 1 FROM tasks WHERE bucket_id = $2), 0)
 		)
 		RETURNING id::text, board_id::text, bucket_id::text, title, description,
-			COALESCE(scheduled_date::text, ''), kind, COALESCE(parent_task_id::text, ''), done, status, sort_order, created_at, updated_at
-	`, bucket.BoardID, bucketID, title, input.Description, scheduledDate, kind, parentID, StatusQueued)
+			COALESCE(scheduled_date::text, ''), kind, done, status, sort_order, created_at, updated_at
+	`, bucket.BoardID, bucketID, title, input.Description, scheduledDate, kind, StatusQueued)
 	return scanTask(row)
 }
 
@@ -384,18 +380,6 @@ func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input 
 		current.BoardID = bucket.BoardID
 		current.SortOrder = 0
 	}
-	if input.ParentID != nil {
-		current.ParentID = clean(*input.ParentID)
-	}
-	if current.BucketID != originalBucketID {
-		hasChildren, err := s.taskHasChildren(ctx, userID, current.ID)
-		if err != nil {
-			return Task{}, err
-		}
-		if hasChildren {
-			return Task{}, fmt.Errorf("%w: move sub-items before moving their parent", ErrInvalidData)
-		}
-	}
 	if input.Status != nil {
 		status := clean(*input.Status)
 		if !validStatus(status) {
@@ -427,11 +411,6 @@ func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input 
 	if current.Title == "" {
 		return Task{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
 	}
-	parentID, err := s.validParent(ctx, userID, current.BucketID, current.ParentID, current.ID)
-	if err != nil {
-		return Task{}, err
-	}
-	current.ParentID = parentID
 	if current.Kind == KindAction && !current.Done && (originalKind != KindAction || originalBucketID != current.BucketID || originalDone) {
 		full, err := s.bucketFullExcept(ctx, current.BucketID, current.ID)
 		if err != nil {
@@ -445,14 +424,13 @@ func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input 
 		UPDATE tasks t
 		SET board_id = $3, bucket_id = $4, title = $5, description = $6,
 			scheduled_date = NULLIF($7, '')::date, kind = $8,
-			parent_task_id = NULLIF($9, '')::uuid, done = $10,
-			status = $11, sort_order = $12, updated_at = now()
+			done = $9, status = $10, sort_order = $11, updated_at = now()
 		FROM boards b
 		WHERE b.id = t.board_id AND b.user_id = $1 AND t.id = $2
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
-			COALESCE(t.scheduled_date::text, ''), t.kind, COALESCE(t.parent_task_id::text, ''), t.done,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.sort_order, t.created_at, t.updated_at
-	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Description, current.ScheduledDate, current.Kind, current.ParentID, current.Done,
+	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Description, current.ScheduledDate, current.Kind, current.Done,
 		current.Status, current.SortOrder)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -473,7 +451,7 @@ func (s *Store) ClaimTask(ctx context.Context, userID string, id string) (Task, 
 			AND t.kind = $5
 			AND t.status = $4
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
-			COALESCE(t.scheduled_date::text, ''), t.kind, COALESCE(t.parent_task_id::text, ''), t.done,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.sort_order, t.created_at, t.updated_at
 	`, userID, id, StatusWorking, StatusQueued, KindAction)
 	task, err := scanTask(row)
@@ -527,7 +505,7 @@ func (s *Store) ReorderTasks(ctx context.Context, userID string, bucketID string
 func (s *Store) GetTask(ctx context.Context, userID string, id string) (Task, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
-			COALESCE(t.scheduled_date::text, ''), t.kind, COALESCE(t.parent_task_id::text, ''), t.done,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.sort_order, t.created_at, t.updated_at
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
@@ -566,7 +544,7 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 	args = append(args, limit)
 	query := `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
-			COALESCE(t.scheduled_date::text, ''), t.kind, COALESCE(t.parent_task_id::text, ''), t.done,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.sort_order, t.created_at, t.updated_at
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
@@ -639,7 +617,7 @@ func (s *Store) getBucket(ctx context.Context, userID string, id string) (Bucket
 func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID string) ([]Task, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
-			COALESCE(t.scheduled_date::text, ''), t.kind, COALESCE(t.parent_task_id::text, ''), t.done,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.sort_order, t.created_at, t.updated_at
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
@@ -682,49 +660,6 @@ func (s *Store) bucketFullExcept(ctx context.Context, bucketID string, taskID st
 	return full, err
 }
 
-func (s *Store) validParent(ctx context.Context, userID string, bucketID string, parentID string, taskID string) (string, error) {
-	parentID = clean(parentID)
-	if parentID == "" {
-		return "", nil
-	}
-	if parentID == taskID {
-		return "", fmt.Errorf("%w: item cannot contain itself", ErrInvalidData)
-	}
-	parent, err := s.GetTask(ctx, userID, parentID)
-	if err != nil {
-		return "", err
-	}
-	if parent.BucketID != bucketID {
-		return "", fmt.Errorf("%w: parent must be in the same list", ErrInvalidData)
-	}
-	if parent.ParentID != "" {
-		return "", fmt.Errorf("%w: items support one level of nesting", ErrInvalidData)
-	}
-	if taskID != "" {
-		hasChildren, err := s.taskHasChildren(ctx, userID, taskID)
-		if err != nil {
-			return "", err
-		}
-		if hasChildren {
-			return "", fmt.Errorf("%w: an item with sub-items cannot become a sub-item", ErrInvalidData)
-		}
-	}
-	return parentID, nil
-}
-
-func (s *Store) taskHasChildren(ctx context.Context, userID string, taskID string) (bool, error) {
-	var hasChildren bool
-	err := s.db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM tasks child
-			JOIN boards b ON b.id = child.board_id
-			WHERE b.user_id = $1 AND child.parent_task_id = $2
-		)
-	`, userID, taskID).Scan(&hasChildren)
-	return hasChildren, err
-}
-
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -750,7 +685,7 @@ func scanBucket(row rowScanner) (Bucket, error) {
 func scanTask(row rowScanner) (Task, error) {
 	var task Task
 	err := row.Scan(
-		&task.ID, &task.BoardID, &task.BucketID, &task.Title, &task.Description, &task.ScheduledDate, &task.Kind, &task.ParentID, &task.Done,
+		&task.ID, &task.BoardID, &task.BucketID, &task.Title, &task.Description, &task.ScheduledDate, &task.Kind, &task.Done,
 		&task.Status,
 		&task.SortOrder, &task.CreatedAt, &task.UpdatedAt,
 	)

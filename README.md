@@ -28,7 +28,7 @@ Slate now has an owner-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Owner sign in with a seeded owner.
-- Boards, goal-led lists, neutral items, one-level children, explicit actions, planned dates, Week and Today views, and theme.
+- Boards, goal-led lists, neutral items, explicit actions, planned dates, Week and Today views, and theme.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.

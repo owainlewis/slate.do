@@ -45,7 +45,6 @@ type Task struct {
 	Description   string    `json:"description"`
 	ScheduledDate string    `json:"scheduledDate"`
 	Kind          string    `json:"kind"`
-	ParentID      string    `json:"parentId"`
 	Done          bool      `json:"done"`
 	Status        string    `json:"status"`
 	SortOrder     int       `json:"sortOrder"`
@@ -87,7 +86,6 @@ type CreateTaskInput struct {
 	Description   string `json:"description"`
 	ScheduledDate string `json:"scheduledDate"`
 	Kind          string `json:"kind"`
-	ParentID      string `json:"parentId"`
 	OverrideLimit bool   `json:"overrideLimit"`
 }
 
@@ -96,7 +94,6 @@ type UpdateTaskInput struct {
 	Description   *string `json:"description"`
 	ScheduledDate *string `json:"scheduledDate"`
 	Kind          *string `json:"kind"`
-	ParentID      *string `json:"parentId"`
 	BucketID      *string `json:"bucketId"`
 	Done          *bool   `json:"done"`
 	Status        *string `json:"status"`
