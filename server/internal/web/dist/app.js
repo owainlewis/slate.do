@@ -214,7 +214,7 @@ function appHTML() {
                 </section>
               </div>
             </details>
-            ${calendarMode || todayMode ? "" : `<button class="icon-btn icon-label" id="add-list">${icon("plus")}<span>List</span></button>`}
+            <button class="icon-btn icon-label ${calendarMode || todayMode ? "add-list-placeholder" : ""}" id="add-list" ${calendarMode || todayMode ? 'aria-hidden="true" tabindex="-1" disabled' : ""}>${icon("plus")}<span>List</span></button>
           </div>
         </header>
         ${calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}

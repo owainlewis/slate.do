@@ -188,6 +188,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   color: var(--faint);
 }
 .top-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.add-list-placeholder { visibility: hidden; }
 .view-switch {
   display: flex;
   padding: 3px;
