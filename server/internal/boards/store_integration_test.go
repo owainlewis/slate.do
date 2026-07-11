@@ -59,6 +59,88 @@ func TestBoardMaxTasksPerListAppliesToAllBuckets(t *testing.T) {
 	}
 }
 
+func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Default limit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board.MaxTasksPerList != 20 {
+		t.Fatalf("MaxTasksPerList = %d, want 20", board.MaxTasksPerList)
+	}
+}
+
+func TestAnyQueuedTaskCanBeClaimed(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Shared work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{
+		Title: "Review positioning", Description: "Compare the three strongest options.", ScheduledDate: "2026-07-13",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Description != "Compare the three strongest options." || task.ScheduledDate != "2026-07-13" || task.Status != StatusQueued {
+		t.Fatalf("created task = %#v", task)
+	}
+
+	tasks, err := store.ListTasks(ctx, userID, TaskFilter{Status: StatusQueued})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != task.ID {
+		t.Fatalf("queued tasks = %#v, want created task", tasks)
+	}
+
+	working := StatusWorking
+	if _, err := store.UpdateTask(ctx, userID, task.ID, UpdateTaskInput{Status: &working}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("direct working status error = %v, want ErrInvalidData", err)
+	}
+
+	claimed, err := store.ClaimTask(ctx, userID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.Status != StatusWorking {
+		t.Fatalf("claimed status = %q, want %q", claimed.Status, StatusWorking)
+	}
+	if _, err := store.ClaimTask(ctx, userID, task.ID); !errors.Is(err, ErrTaskUnavailable) {
+		t.Fatalf("second claim error = %v, want ErrTaskUnavailable", err)
+	}
+
+	done := true
+	description := "Chosen direction and rationale."
+	needsReview := StatusNeedsReview
+	noDate := ""
+	completed, err := store.UpdateTask(ctx, userID, task.ID, UpdateTaskInput{Description: &description, ScheduledDate: &noDate, Done: &done, Status: &needsReview})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completed.Done || completed.Status != StatusDone || completed.Description != description || completed.ScheduledDate != "" {
+		t.Fatalf("completed task = %#v, want done task with updated description", completed)
+	}
+}
+
 func openIntegrationDB(t *testing.T) *database.Pool {
 	t.Helper()
 	url := os.Getenv("SLATE_TEST_DATABASE_URL")

@@ -18,7 +18,7 @@ type Config struct {
 func FromEnv() Config {
 	return Config{
 		Port:          env("PORT", "8080"),
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
+		DatabaseURL:   env("DATABASE_URL", "postgres://localhost/slate_dev?sslmode=disable"),
 		SessionSecret: os.Getenv("SESSION_SECRET"),
 		CookieSecure:  boolEnv("COOKIE_SECURE", true),
 		StaticDir:     os.Getenv("STATIC_DIR"),

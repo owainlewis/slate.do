@@ -48,7 +48,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return errors.New("usage: slate auth status|boards list|tasks list|pull|create|update|claim|status|done|note")
+	return errors.New("usage: slate auth status|boards list|tasks list|pull|create|update|claim|status|done")
 }
 
 func authCmd(c client, args []string) error {
@@ -80,16 +80,12 @@ func tasksCmd(c client, args []string) error {
 	switch args[0] {
 	case "list":
 		fs := flag.NewFlagSet("tasks list", flag.ContinueOnError)
-		assignee := fs.String("assignee", "", "assignee filter")
 		status := fs.String("status", "", "status filter")
 		done := fs.String("done", "", "done filter")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		q := url.Values{}
-		if *assignee != "" {
-			q.Set("assignee", *assignee)
-		}
 		if *status != "" {
 			q.Set("status", *status)
 		}
@@ -98,24 +94,17 @@ func tasksCmd(c client, args []string) error {
 		}
 		return c.getJSON("/api/v1/tasks", q)
 	case "pull":
-		fs := flag.NewFlagSet("tasks pull", flag.ContinueOnError)
-		assignee := fs.String("assignee", "", "assignee")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
+		if len(args) != 1 {
+			return errors.New("usage: slate tasks pull")
 		}
-		if *assignee == "" {
-			return errors.New("--assignee is required")
-		}
-		q := url.Values{"assignee": {*assignee}}
-		return c.getJSON("/api/v1/agent/tasks", q)
+		return c.getJSON("/api/v1/agent/tasks", nil)
 	case "create":
 		fs := flag.NewFlagSet("tasks create", flag.ContinueOnError)
 		bucket := fs.String("bucket", "", "bucket id")
 		list := fs.String("list", "", "list id")
 		title := fs.String("title", "", "task title")
-		assignee := fs.String("assignee", "", "assignee")
-		due := fs.String("due", "", "due date YYYY-MM-DD")
-		brief := fs.String("brief", "", "agent brief")
+		description := fs.String("description", "", "task description")
+		date := fs.String("date", "", "planned date (YYYY-MM-DD)")
 		override := fs.Bool("override-limit", false, "override list limit")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -124,7 +113,7 @@ func tasksCmd(c client, args []string) error {
 		if targetList == "" || *title == "" {
 			return errors.New("--list and --title are required")
 		}
-		body := map[string]any{"title": *title, "assignee": *assignee, "dueDate": *due, "agentBrief": *brief, "overrideLimit": *override}
+		body := map[string]any{"title": *title, "description": *description, "scheduledDate": *date, "overrideLimit": *override}
 		var out any
 		if err := c.do(http.MethodPost, "/api/v1/buckets/"+url.PathEscape(targetList)+"/tasks", body, &out); err != nil {
 			return err
@@ -137,37 +126,35 @@ func tasksCmd(c client, args []string) error {
 		id := args[1]
 		fs := flag.NewFlagSet("tasks update", flag.ContinueOnError)
 		title := fs.String("title", "", "title")
+		description := fs.String("description", "", "description")
+		date := fs.String("date", "", "planned date (YYYY-MM-DD, empty to clear)")
 		bucket := fs.String("bucket", "", "bucket id")
 		list := fs.String("list", "", "list id")
-		assignee := fs.String("assignee", "", "assignee")
-		due := fs.String("due", "", "due date")
-		notes := fs.String("notes", "", "notes")
-		brief := fs.String("brief", "", "agent brief")
-		focus := fs.Bool("focus", false, "set focus")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
+		descriptionSet := false
+		dateSet := false
+		fs.Visit(func(item *flag.Flag) {
+			if item.Name == "description" {
+				descriptionSet = true
+			}
+			if item.Name == "date" {
+				dateSet = true
+			}
+		})
 		body := map[string]any{}
 		if *title != "" {
 			body["title"] = *title
 		}
+		if descriptionSet {
+			body["description"] = *description
+		}
+		if dateSet {
+			body["scheduledDate"] = *date
+		}
 		if targetList := firstNonEmpty(*list, *bucket); targetList != "" {
 			body["bucketId"] = targetList
-		}
-		if *assignee != "" {
-			body["assignee"] = *assignee
-		}
-		if *due != "" {
-			body["dueDate"] = *due
-		}
-		if *notes != "" {
-			body["notes"] = *notes
-		}
-		if *brief != "" {
-			body["agentBrief"] = *brief
-		}
-		if *focus {
-			body["focus"] = true
 		}
 		return c.patchTask(id, body)
 	case "claim":
@@ -183,40 +170,25 @@ func tasksCmd(c client, args []string) error {
 		if len(args) != 3 {
 			return errors.New("usage: slate tasks status <task-id> queued|working|needs_review|done")
 		}
-		return c.patchTask(args[1], map[string]any{"status": args[2]})
+		var out any
+		method := http.MethodPatch
+		path := "/api/v1/agent/tasks/" + url.PathEscape(args[1]) + "/status"
+		body := map[string]any{"status": args[2]}
+		if args[2] == "working" {
+			method = http.MethodPost
+			path = "/api/v1/agent/tasks/" + url.PathEscape(args[1]) + "/claim"
+			body = map[string]any{}
+		}
+		if err := c.do(method, path, body, &out); err != nil {
+			return err
+		}
+		return printJSON(out)
 	case "done":
 		if len(args) != 2 {
 			return errors.New("task id is required")
 		}
 		var out any
 		if err := c.do(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/done", map[string]any{}, &out); err != nil {
-			return err
-		}
-		return printJSON(out)
-	case "note":
-		if len(args) < 2 {
-			return errors.New("task id is required")
-		}
-		id := args[1]
-		fs := flag.NewFlagSet("tasks note", flag.ContinueOnError)
-		file := fs.String("file", "", "file containing note")
-		text := fs.String("text", "", "note text")
-		if err := fs.Parse(args[2:]); err != nil {
-			return err
-		}
-		note := *text
-		if *file != "" {
-			body, err := os.ReadFile(*file)
-			if err != nil {
-				return err
-			}
-			note = string(body)
-		}
-		if strings.TrimSpace(note) == "" {
-			return errors.New("--text or --file is required")
-		}
-		var out any
-		if err := c.do(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(id)+"/notes", map[string]any{"notes": note}, &out); err != nil {
 			return err
 		}
 		return printJSON(out)

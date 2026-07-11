@@ -3,6 +3,7 @@ package boards
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -168,7 +169,11 @@ func (h *Handler) ReorderTasks(w http.ResponseWriter, r *http.Request, user auth
 }
 
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request, user auth.User) {
-	filter := taskFilterFromQuery(r)
+	filter, err := taskFilterFromQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "tasks could not be loaded")
@@ -181,9 +186,9 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request, user auth.Us
 }
 
 func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.User) {
-	filter := taskFilterFromQuery(r)
-	if filter.Assignee == "" {
-		writeError(w, http.StatusBadRequest, "assignee is required")
+	filter, err := taskFilterFromQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	done := false
@@ -195,7 +200,7 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 	}
 	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "agent tasks could not be loaded")
+		writeError(w, http.StatusInternalServerError, "tasks could not be loaded")
 		return
 	}
 	if tasks == nil {
@@ -205,22 +210,7 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 }
 
 func (h *Handler) AgentClaim(w http.ResponseWriter, r *http.Request, user auth.User) {
-	status := StatusWorking
-	task, err := h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &status})
-	if handleStoreError(w, err) {
-		return
-	}
-	writeJSON(w, http.StatusOK, task)
-}
-
-func (h *Handler) AgentNote(w http.ResponseWriter, r *http.Request, user auth.User) {
-	var input struct {
-		Notes string `json:"notes"`
-	}
-	if !decodeJSON(w, r, &input) {
-		return
-	}
-	task, err := h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Notes: &input.Notes})
+	task, err := h.store.ClaimTask(r.Context(), user.ID, r.PathValue("id"))
 	if handleStoreError(w, err) {
 		return
 	}
@@ -251,23 +241,38 @@ func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.Us
 	writeJSON(w, http.StatusOK, task)
 }
 
-func taskFilterFromQuery(r *http.Request) TaskFilter {
+func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 	q := r.URL.Query()
 	filter := TaskFilter{
-		BoardID:  strings.TrimSpace(q.Get("boardId")),
-		Assignee: strings.TrimSpace(q.Get("assignee")),
-		Status:   strings.TrimSpace(q.Get("status")),
+		BoardID: strings.TrimSpace(q.Get("boardId")),
+		Status:  strings.TrimSpace(q.Get("status")),
 	}
 	if raw := strings.TrimSpace(q.Get("done")); raw != "" {
-		done := raw == "true" || raw == "1"
-		filter.Done = &done
+		done, err := parseQueryBool("done", raw)
+		if err != nil {
+			return TaskFilter{}, err
+		}
+		filter.Done = done
 	}
 	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
 		if limit, err := strconv.Atoi(raw); err == nil {
 			filter.Limit = limit
 		}
 	}
-	return filter
+	return filter, nil
+}
+
+func parseQueryBool(name string, raw string) (*bool, error) {
+	var value bool
+	switch strings.ToLower(raw) {
+	case "true", "1":
+		value = true
+	case "false", "0":
+		value = false
+	default:
+		return nil, fmt.Errorf("%s must be true or false", name)
+	}
+	return &value, nil
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
@@ -290,6 +295,8 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, ErrLimitFull):
 		writeError(w, http.StatusConflict, "list limit reached")
+	case errors.Is(err, ErrTaskUnavailable):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrInvalidData):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:

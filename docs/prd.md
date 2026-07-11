@@ -31,9 +31,9 @@ The main behavior should be:
 - Capture tasks quickly.
 - Put tasks into clear buckets.
 - Limit each bucket.
-- Mark a few tasks as focus.
-- Assign some tasks to humans or agents.
-- Review agent work without making the board noisy.
+- Put the few tasks that matter now in a Focus bucket.
+- Let a human or agent pick up any task.
+- Review agent work without adding ownership complexity.
 
 ## Audience
 
@@ -73,14 +73,12 @@ Core fields:
 
 - `id`
 - `title`
+- `description`
+- `scheduledDate`
 - `boardId`
 - `bucketId`
 - `done`
-- `focus`
-- `assignee`
 - `status`
-- `dueDate`
-- `notes`
 
 ## Buckets
 
@@ -96,7 +94,6 @@ Examples:
 - Writing
 - Product
 - Personal
-- Agent work
 
 The app should not force one bucket style. Users should be able to bucket by priority, project, energy, time, person, or status.
 
@@ -129,64 +126,44 @@ List item display should include:
 
 - Checkbox.
 - Title.
-- Small due date if present.
-- Small assignee label if present.
-- Small status only when useful.
+- Planned date when set.
 
 The full task detail view should include:
 
 - Title.
+- Description.
+- Date.
 - Done.
-- Focus.
-- Assignee.
-- Due date.
-- Notes.
-- Agent brief when assigned to an agent.
-- Status.
+- List.
 
 ## Agents
 
-Agents are first-class assignees.
+Tasks do not have owners or assignees.
 
-An agent does not need a login.
+Any open task can be picked up by the human or by an agent. Agents do not need names or accounts in Slate.
 
-An agent is just a name string.
-
-Examples:
-
-- `claude-code-123`
-- `scribe`
-- `analyst`
-- `coder`
-
-The app should not treat agent names as secure identity. They are routing keys.
-
-Authentication and identity are separate:
-
-- Authentication: a valid workspace API token can access the workspace.
-- Identity: the caller asks for tasks assigned to an assignee string.
+A valid workspace API token can pull any queued task. Claiming a task changes its internal workflow status to `working`.
 
 Example CLI flow:
 
 ```bash
 SLATE_API_TOKEN=...
-slate pull --assignee "claude-code-123"
+slate tasks pull
 ```
 
-The API returns open tasks assigned to that string.
+The API returns open queued tasks.
 
 Example query:
 
 ```text
 workspace token is valid
-assignee = "claude-code-123"
 done = false
 status = "queued"
 ```
 
 This keeps agent collaboration simple.
 
-## Agent Status
+## Workflow Status
 
 Use a small status set:
 
@@ -203,9 +180,9 @@ The API should be boring and clear.
 
 Core agent operations:
 
-- Pull assigned tasks.
+- Pull queued tasks.
 - Claim or mark a task as working.
-- Add notes or result text.
+- Update the task description with useful context or results.
 - Mark a task as needs review.
 - Mark a task as done.
 
@@ -221,12 +198,12 @@ The first app version should include:
 - Create, rename, reorder, and delete buckets.
 - Create, edit, move, complete, and delete tasks.
 - Task detail panel.
-- Focus flag.
-- Assignee string.
-- Agent status.
+- Title and description.
+- Optional planned date and Monday-to-Sunday calendar view.
+- Internal workflow status for agent coordination.
 - Local persistence or simple database persistence.
 - Global workspace API token.
-- CLI pull by assignee.
+- CLI pull for queued tasks.
 
 Out of scope:
 
@@ -252,7 +229,7 @@ Out of scope:
 - Prefer text over configuration.
 - Make limits visible.
 - Make overload obvious.
-- Keep agent detail in the panel, not on the board.
+- Keep agent workflow metadata out of the task detail panel.
 - Make capture fast.
 - Make review calm.
 
@@ -266,15 +243,13 @@ It shows:
 
 - Sidebar boards.
 - List grid.
-- Three or six list layout.
+- Responsive list grid.
 - Task add flow.
 - Task drag flow.
 - Detail panel.
-- Human or agent assignee.
-- Agent brief.
-- Agent status.
-- Due date.
-- Focus flag.
+- Title and description.
+- Planned date.
+- Weekly calendar view.
 
 ## Success Criteria
 
@@ -283,15 +258,12 @@ Slate is working when:
 - The user can see active work at a glance.
 - Buckets stay small.
 - The user knows what matters this week.
-- Agents can find assigned work by name.
+- Agents can find queued work.
 - Agent work can be reviewed without clutter.
 - The product feels lighter than Trello, Notion, GitHub Issues, or a normal task app.
 
 ## Open Questions
 
 - Should the default bucket limit be 3 or 5?
-- Should focus be a flag, a view, or both?
 - Should Inbox have a limit?
-- Should agent results live in notes or a separate result field?
 - Should the CLI be part of v1 or come right after the web app?
-- Should tasks assigned to agents appear differently from human tasks?
