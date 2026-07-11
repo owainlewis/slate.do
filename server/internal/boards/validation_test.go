@@ -13,15 +13,22 @@ func TestValidStatus(t *testing.T) {
 	}
 }
 
-func TestParseDate(t *testing.T) {
-	date, err := parseDate("2026-06-30")
-	if err != nil {
-		t.Fatal(err)
+func TestValidDate(t *testing.T) {
+	for _, value := range []string{"", "2026-07-13"} {
+		if got, err := validDate(value); err != nil || got != value {
+			t.Fatalf("validDate(%q) = %q, %v", value, got, err)
+		}
 	}
-	if date == nil || date.Format("2006-01-02") != "2026-06-30" {
-		t.Fatalf("unexpected date: %v", date)
+	if _, err := validDate("13/07/2026"); err == nil {
+		t.Fatal("expected invalid date error")
 	}
-	if _, err := parseDate("30/06/2026"); err == nil {
-		t.Fatal("expected invalid date to fail")
+}
+
+func TestValidKind(t *testing.T) {
+	if !validKind(KindItem) || !validKind(KindAction) {
+		t.Fatal("item and action should be valid kinds")
+	}
+	if validKind("task") {
+		t.Fatal("unexpected valid kind")
 	}
 }

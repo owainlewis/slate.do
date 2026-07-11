@@ -66,15 +66,6 @@
   .newpage:hover { background: rgba(24,24,26,.045); color: var(--ink); }
   .newpage input { border: 0; background: none; outline: none; font: inherit; font-size: var(--fs-ui); font-weight: 500; color: var(--ink); width: 100%; }
 
-  /* segmented layout control — one unit, not loose buttons */
-  .sizes { display: flex; gap: 3px; margin: 0 2px; background: rgba(24,24,26,.05); border-radius: 9px; padding: 3px; }
-  .sizes button { flex: 1; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--fs-ui); font-weight: 600; color: var(--soft); padding: 7px 0; border-radius: 6px; transition: .14s; }
-  .sizes button:hover:not(.on):not(:disabled) { color: var(--ink); }
-  .sizes button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-  .sizes button:disabled { opacity: .4; cursor: not-allowed; }
-
-  .nav-note { margin: 10px 10px 0; padding: 0; font-size: var(--fs-meta); color: var(--faint); }
-
   /* ───────────── main ───────────── */
   .app {
     flex: 1; min-width: 0; display: flex; flex-direction: column;
@@ -152,12 +143,12 @@
   }
   .addlist .pl { font-size: var(--fs-body); line-height: 1; }
 
-  /* grid — always 3×2 */
+  /* responsive list grid */
   .grid {
     flex: 1; min-height: 0; margin: var(--grid-gap) 28px;
     display: grid;
     grid-template-columns: repeat(3, minmax(0,1fr));
-    grid-auto-rows: 1fr;
+    grid-auto-rows: minmax(230px, 1fr);
     gap: var(--grid-gap);
     overflow-x: hidden; overflow-y: auto;
   }
@@ -249,7 +240,7 @@
   .d-check svg { width: 13px; height: 13px; opacity: 0; stroke: #fff; }
   .d-check.on { background: var(--ink); border-color: var(--ink); }
   .d-check.on svg { opacity: 1; }
-  .d-title { flex: 1; border: 0; outline: none; resize: none; font: inherit; font-size: var(--fs-title); font-weight: 700; letter-spacing: var(--track-title); line-height: var(--lh-tight); color: var(--ink); padding: 0; overflow: hidden; }
+  .d-title { flex: 1; border: 0; outline: none; background: none; font: inherit; font-size: var(--fs-title); font-weight: 700; letter-spacing: var(--track-title); line-height: var(--lh-tight); color: var(--ink); padding: 0; min-width: 0; }
 
   .d-fields { display: flex; flex-direction: column; gap: 20px; }
   .d-field > label { display: block; font-size: var(--fs-micro); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--faint); margin-bottom: 8px; font-weight: 600; }
@@ -309,14 +300,6 @@
       <button class="newpage" id="newpage">+ New board</button>
     </div>
     <div class="nav-sec">
-      <h3>Layout</h3>
-      <div class="sizes" id="sizes">
-        <button data-s="3">Three</button>
-        <button data-s="6">Six</button>
-      </div>
-      <p class="nav-note">Three or six in view. The rest scroll.</p>
-    </div>
-    <div class="nav-sec">
       <h3>Background</h3>
       <div class="backgrounds" id="backgrounds"></div>
     </div>
@@ -350,7 +333,7 @@
     <div class="detail-body">
       <div class="d-title-row">
         <button class="d-check" id="dCheck"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6.5L4.7 9 10 3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <textarea class="d-title" id="dTitle" rows="1" placeholder="Untitled"></textarea>
+        <input class="d-title" id="dTitle" type="text" placeholder="Untitled">
       </div>
       <div class="d-fields">
         <div class="d-field">
@@ -400,7 +383,7 @@
 
   /* ───────── sample data ───────── */
   const DATA = [
-    { name: 'Studio', size: 6, background: 'mountain', lists: [
+    { name: 'Studio', background: 'mountain', lists: [
       { inbox: true, items: [ {t:'Idea: short video on prompt-caching'}, {t:'Ask agent to find 3 collab guests'}, {t:'Renew domain before July', due:'2026-06-30'} ] },
       { name:'YouTube', items: [
         {t:'Record “Agents that ship code” walkthrough', focus:true, owner:'OL', due:'2026-07-03', desc:'Three demos: agent writes a failing test, fixes it, opens a PR. Keep it under 12 minutes.'},
@@ -423,7 +406,7 @@
         {t:'Repurpose last video into a thread', agent:true, agentName:'Scribe', status:'Queued'},
         {t:'Schedule Monday newsletter', done:true} ] },
     ]},
-    { name: 'Personal', size: 3, background: 'plain', lists: [
+    { name: 'Personal', background: 'plain', lists: [
       { inbox: true, items: [ {t:'Call the dentist'}, {t:'Birthday gift for mum', due:'2026-07-05'}, {t:'Review subscriptions', agent:true, agentName:'Ledger', status:'Working', desc:'Agent found 4 to cancel — review and confirm.'} ] },
       { name:'Health', items: [ {t:'3 gym sessions this week', focus:true, owner:'OL'}, {t:'Meal prep on Sunday'}, {t:'8h sleep — no late screens'} ] },
       { name:'Home', items: [ {t:'Fix the kitchen tap', focus:true}, {t:'Book a cleaner', agent:true, agentName:'Errand', status:'Queued'}, {t:'Plan weekend trip'} ] },
@@ -508,17 +491,13 @@
     });
   }
 
-  /* ───────── layout (3 or 6) ───────── */
+  /* ───────── layout ───────── */
   function renumber() {
     let i = 0;
     grid.querySelectorAll('.cell[data-list]').forEach(cell => {
       if (cell.classList.contains('inbox')) return;
       i++; const el = cell.querySelector('.idx'); if (el) el.textContent = String(i).padStart(2, '0');
     });
-  }
-  function updateSizes() {
-    const size = pages[active].size;
-    document.querySelectorAll('#sizes button').forEach(b => b.classList.toggle('on', +b.dataset.s === size));
   }
   function applyBackground() {
     const current = pages[active].background || 'plain';
@@ -529,7 +508,6 @@
     document.querySelectorAll('#backgrounds button').forEach(b => b.classList.toggle('on', b.dataset.bg === bg.id));
   }
   function relayout() {
-    const size = pages[active].size;                 // 3 or 6 = lists in view
     grid.querySelectorAll('.cell.ph').forEach(e => e.remove());
     const n = grid.querySelectorAll('.cell[data-list]').length;
     const rem = n % 3, pad = rem === 0 ? 0 : 3 - rem; // blank cells to complete a partial row
@@ -539,9 +517,7 @@
       grid.appendChild(d);
     }
     grid.style.gridTemplateRows = 'none';
-    const rows = size / 3;
-    grid.style.gridAutoRows = `calc((100% - ${(rows - 1)} * var(--grid-gap)) / ${rows})`;
-    renumber(); updateSizes();
+    renumber();
   }
   function createList(name) {
     const cell = buildCell({ name });
@@ -582,7 +558,7 @@
   }
 
   /* ───────── boards ───────── */
-  const pages = DATA.map(spec => ({ name: spec.name, size: spec.size || (spec.lists.length > 3 ? 6 : 3), background: spec.background || 'plain', cells: spec.lists.map(buildCell) }));
+  const pages = DATA.map(spec => ({ name: spec.name, background: spec.background || 'plain', cells: spec.lists.map(buildCell) }));
   function renderPages() {
     pagesBox.innerHTML = '';
     pages.forEach((p, i) => {
@@ -604,7 +580,7 @@
     applyBackground();
     if (window.matchMedia('(max-width: 760px)').matches) document.body.classList.add('nav-closed');
   }
-  function addPage(name) { pages.push({ name, size: 3, background: 'plain', cells: [ buildCell({ inbox: true, items: [] }) ] }); showPage(pages.length - 1); }
+  function addPage(name) { pages.push({ name, background: 'plain', cells: [ buildCell({ inbox: true, items: [] }) ] }); showPage(pages.length - 1); }
 
   /* ───────── detail panel ───────── */
   const dTitle = document.getElementById('dTitle'), dCheck = document.getElementById('dCheck');
@@ -615,7 +591,7 @@
   function fillPanel() {
     const d = currentLi._data;
     document.getElementById('crumb').textContent = pages[active].name + '  ›  ' + currentLi.closest('.cell').dataset.list;
-    dTitle.value = d.t; autosize(dTitle);
+    dTitle.value = d.t;
     dCheck.classList.toggle('on', d.done);
     dAssignee.querySelectorAll('button').forEach(b => b.classList.toggle('on', (b.dataset.a === 'you') === !d.agent));
     dAgentWrap.hidden = !d.agent;
@@ -627,9 +603,7 @@
   }
   function openDetail(li) { currentLi = li; fillPanel(); document.body.classList.add('detail-open'); }
   function closeDetail() { document.body.classList.remove('detail-open'); currentLi = null; }
-  function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
-
-  dTitle.addEventListener('input', () => { if (currentLi) { currentLi._data.t = dTitle.value; autosize(dTitle); renderItem(currentLi); } });
+  dTitle.addEventListener('input', () => { if (currentLi) { currentLi._data.t = dTitle.value; renderItem(currentLi); } });
   dCheck.addEventListener('click', () => { if (!currentLi) return; currentLi._data.done = !currentLi._data.done; dCheck.classList.toggle('on'); renderItem(currentLi); });
   dAssignee.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     if (!currentLi) return; const d = currentLi._data, you = b.dataset.a === 'you';
@@ -666,9 +640,6 @@
     nc.scrollIntoView({ block: 'nearest' });
     renameList(nc);
   });
-  document.querySelectorAll('#sizes button').forEach(b => b.addEventListener('click', () => {
-    pages[active].size = +b.dataset.s; relayout();
-  }));
   function renderBackgrounds() {
     const wrap = document.getElementById('backgrounds');
     wrap.innerHTML = '';

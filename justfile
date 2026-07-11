@@ -13,6 +13,7 @@ serve:
 test:
     cd server && go test ./...
     cd cli && go test ./...
+    node --test server/internal/web/dist/app.test.js
 
 build:
     cd server && go build ./cmd/slate

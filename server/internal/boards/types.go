@@ -3,6 +3,8 @@ package boards
 import "time"
 
 const (
+	KindItem          = "item"
+	KindAction        = "action"
 	StatusQueued      = "queued"
 	StatusWorking     = "working"
 	StatusNeedsReview = "needs_review"
@@ -14,7 +16,6 @@ type Board struct {
 	Name            string    `json:"name"`
 	BackgroundKind  string    `json:"backgroundKind"`
 	BackgroundValue string    `json:"backgroundValue"`
-	LayoutSize      int       `json:"layoutSize"`
 	MaxTasksPerList int       `json:"maxTasksPerList"`
 	SortOrder       int       `json:"sortOrder"`
 	CreatedAt       time.Time `json:"createdAt"`
@@ -26,6 +27,7 @@ type Bucket struct {
 	ID         string    `json:"id"`
 	BoardID    string    `json:"boardId"`
 	Name       string    `json:"name"`
+	Goal       string    `json:"goal"`
 	IsInbox    bool      `json:"isInbox"`
 	LimitCount int       `json:"limitCount"`
 	SortOrder  int       `json:"sortOrder"`
@@ -36,27 +38,24 @@ type Bucket struct {
 }
 
 type Task struct {
-	ID         string    `json:"id"`
-	BoardID    string    `json:"boardId"`
-	BucketID   string    `json:"bucketId"`
-	Title      string    `json:"title"`
-	Done       bool      `json:"done"`
-	Focus      bool      `json:"focus"`
-	Assignee   string    `json:"assignee"`
-	Status     string    `json:"status"`
-	DueDate    string    `json:"dueDate,omitempty"`
-	Notes      string    `json:"notes"`
-	AgentBrief string    `json:"agentBrief"`
-	SortOrder  int       `json:"sortOrder"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID            string    `json:"id"`
+	BoardID       string    `json:"boardId"`
+	BucketID      string    `json:"bucketId"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description"`
+	ScheduledDate string    `json:"scheduledDate"`
+	Kind          string    `json:"kind"`
+	Done          bool      `json:"done"`
+	Status        string    `json:"status"`
+	SortOrder     int       `json:"sortOrder"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 type CreateBoardInput struct {
 	Name            string `json:"name"`
 	BackgroundKind  string `json:"backgroundKind"`
 	BackgroundValue string `json:"backgroundValue"`
-	LayoutSize      int    `json:"layoutSize"`
 	MaxTasksPerList int    `json:"maxTasksPerList"`
 }
 
@@ -64,51 +63,47 @@ type UpdateBoardInput struct {
 	Name            *string `json:"name"`
 	BackgroundKind  *string `json:"backgroundKind"`
 	BackgroundValue *string `json:"backgroundValue"`
-	LayoutSize      *int    `json:"layoutSize"`
 	MaxTasksPerList *int    `json:"maxTasksPerList"`
 	SortOrder       *int    `json:"sortOrder"`
 }
 
 type CreateBucketInput struct {
 	Name       string `json:"name"`
+	Goal       string `json:"goal"`
 	LimitCount int    `json:"limitCount"`
 	IsInbox    bool   `json:"isInbox"`
 }
 
 type UpdateBucketInput struct {
 	Name       *string `json:"name"`
+	Goal       *string `json:"goal"`
 	LimitCount *int    `json:"limitCount"`
 	SortOrder  *int    `json:"sortOrder"`
 }
 
 type CreateTaskInput struct {
 	Title         string `json:"title"`
-	Focus         bool   `json:"focus"`
-	Assignee      string `json:"assignee"`
-	Status        string `json:"status"`
-	DueDate       string `json:"dueDate"`
-	Notes         string `json:"notes"`
-	AgentBrief    string `json:"agentBrief"`
+	Description   string `json:"description"`
+	ScheduledDate string `json:"scheduledDate"`
+	Kind          string `json:"kind"`
 	OverrideLimit bool   `json:"overrideLimit"`
 }
 
 type UpdateTaskInput struct {
-	Title      *string `json:"title"`
-	BucketID   *string `json:"bucketId"`
-	Done       *bool   `json:"done"`
-	Focus      *bool   `json:"focus"`
-	Assignee   *string `json:"assignee"`
-	Status     *string `json:"status"`
-	DueDate    *string `json:"dueDate"`
-	Notes      *string `json:"notes"`
-	AgentBrief *string `json:"agentBrief"`
-	SortOrder  *int    `json:"sortOrder"`
+	Title         *string `json:"title"`
+	Description   *string `json:"description"`
+	ScheduledDate *string `json:"scheduledDate"`
+	Kind          *string `json:"kind"`
+	BucketID      *string `json:"bucketId"`
+	Done          *bool   `json:"done"`
+	Status        *string `json:"status"`
+	SortOrder     *int    `json:"sortOrder"`
 }
 
 type TaskFilter struct {
-	BoardID  string
-	Assignee string
-	Status   string
-	Done     *bool
-	Limit    int
+	BoardID     string
+	Status      string
+	Done        *bool
+	Limit       int
+	ActionsOnly bool
 }

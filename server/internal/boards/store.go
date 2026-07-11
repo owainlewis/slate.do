@@ -8,15 +8,17 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
 
 var (
-	ErrNotFound    = errors.New("not found")
-	ErrLimitFull   = errors.New("list limit reached")
-	ErrInvalidData = errors.New("invalid data")
+	ErrNotFound        = errors.New("not found")
+	ErrLimitFull       = errors.New("list limit reached")
+	ErrInvalidData     = errors.New("invalid data")
+	ErrTaskUnavailable = errors.New("task is not available")
 )
+
+const defaultMaxTasksPerList = 20
 
 type Store struct {
 	db *database.Pool
@@ -34,17 +36,16 @@ func (s *Store) SeedDefaultBoard(ctx context.Context, userID string) error {
 	if count > 0 {
 		return nil
 	}
-	board, err := s.CreateBoard(ctx, userID, CreateBoardInput{Name: "Today", LayoutSize: 6})
+	board, err := s.CreateBoard(ctx, userID, CreateBoardInput{Name: "Today"})
 	if err != nil {
 		return err
 	}
 	defaults := []CreateBucketInput{
-		{Name: "Inbox", LimitCount: 10, IsInbox: true},
-		{Name: "Focus", LimitCount: 10},
-		{Name: "Waiting", LimitCount: 10},
-		{Name: "Agent work", LimitCount: 10},
-		{Name: "Later", LimitCount: 10},
-		{Name: "Done", LimitCount: 10},
+		{Name: "Inbox", LimitCount: defaultMaxTasksPerList, IsInbox: true},
+		{Name: "Focus", LimitCount: defaultMaxTasksPerList},
+		{Name: "Waiting", LimitCount: defaultMaxTasksPerList},
+		{Name: "Later", LimitCount: defaultMaxTasksPerList},
+		{Name: "Done", LimitCount: defaultMaxTasksPerList},
 	}
 	for _, bucket := range defaults {
 		if _, err := s.CreateBucket(ctx, userID, board.ID, bucket); err != nil {
@@ -56,7 +57,7 @@ func (s *Store) SeedDefaultBoard(ctx context.Context, userID string) error {
 
 func (s *Store) ListBoards(ctx context.Context, userID string) ([]Board, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id::text, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order, created_at, updated_at
+		SELECT id::text, name, background_kind, background_value, max_tasks_per_list, sort_order, created_at, updated_at
 		FROM boards
 		WHERE user_id = $1
 		ORDER BY sort_order, created_at
@@ -79,7 +80,7 @@ func (s *Store) ListBoards(ctx context.Context, userID string) ([]Board, error) 
 
 func (s *Store) GetBoard(ctx context.Context, userID string, id string) (Board, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT id::text, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order, created_at, updated_at
+		SELECT id::text, name, background_kind, background_value, max_tasks_per_list, sort_order, created_at, updated_at
 		FROM boards
 		WHERE user_id = $1 AND id = $2
 	`, userID, id)
@@ -110,16 +111,9 @@ func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoar
 	if name == "" {
 		return Board{}, fmt.Errorf("%w: board name is required", ErrInvalidData)
 	}
-	layout := input.LayoutSize
-	if layout == 0 {
-		layout = 6
-	}
-	if layout != 3 && layout != 6 {
-		return Board{}, fmt.Errorf("%w: layout must be 3 or 6", ErrInvalidData)
-	}
 	maxTasksPerList := input.MaxTasksPerList
 	if maxTasksPerList == 0 {
-		maxTasksPerList = 10
+		maxTasksPerList = defaultMaxTasksPerList
 	}
 	if maxTasksPerList < 1 {
 		return Board{}, fmt.Errorf("%w: list limit must be positive", ErrInvalidData)
@@ -130,15 +124,15 @@ func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoar
 	}
 	var board Board
 	err := s.db.QueryRow(ctx, `
-		INSERT INTO boards (user_id, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order)
+		INSERT INTO boards (user_id, name, background_kind, background_value, max_tasks_per_list, sort_order)
 		VALUES (
-			$1, $2, $3, $4, $5, $6,
+			$1, $2, $3, $4, $5,
 			COALESCE((SELECT max(sort_order) + 1 FROM boards WHERE user_id = $1), 0)
 		)
-		RETURNING id::text, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order, created_at, updated_at
-	`, userID, name, backgroundKind, input.BackgroundValue, layout, maxTasksPerList).Scan(
+		RETURNING id::text, name, background_kind, background_value, max_tasks_per_list, sort_order, created_at, updated_at
+	`, userID, name, backgroundKind, input.BackgroundValue, maxTasksPerList).Scan(
 		&board.ID, &board.Name, &board.BackgroundKind, &board.BackgroundValue,
-		&board.LayoutSize, &board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
+		&board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
 	)
 	return board, err
 }
@@ -160,12 +154,6 @@ func (s *Store) UpdateBoard(ctx context.Context, userID string, id string, input
 	if input.BackgroundValue != nil {
 		current.BackgroundValue = *input.BackgroundValue
 	}
-	if input.LayoutSize != nil {
-		if *input.LayoutSize != 3 && *input.LayoutSize != 6 {
-			return Board{}, fmt.Errorf("%w: layout must be 3 or 6", ErrInvalidData)
-		}
-		current.LayoutSize = *input.LayoutSize
-	}
 	if input.MaxTasksPerList != nil {
 		if *input.MaxTasksPerList < 1 {
 			return Board{}, fmt.Errorf("%w: list limit must be positive", ErrInvalidData)
@@ -181,12 +169,12 @@ func (s *Store) UpdateBoard(ctx context.Context, userID string, id string, input
 	var board Board
 	err = s.db.QueryRow(ctx, `
 		UPDATE boards
-		SET name = $3, background_kind = $4, background_value = $5, layout_size = $6, max_tasks_per_list = $7, sort_order = $8, updated_at = now()
+		SET name = $3, background_kind = $4, background_value = $5, max_tasks_per_list = $6, sort_order = $7, updated_at = now()
 		WHERE user_id = $1 AND id = $2
-		RETURNING id::text, name, background_kind, background_value, layout_size, max_tasks_per_list, sort_order, created_at, updated_at
-	`, userID, id, current.Name, current.BackgroundKind, current.BackgroundValue, current.LayoutSize, current.MaxTasksPerList, current.SortOrder).Scan(
+		RETURNING id::text, name, background_kind, background_value, max_tasks_per_list, sort_order, created_at, updated_at
+	`, userID, id, current.Name, current.BackgroundKind, current.BackgroundValue, current.MaxTasksPerList, current.SortOrder).Scan(
 		&board.ID, &board.Name, &board.BackgroundKind, &board.BackgroundValue,
-		&board.LayoutSize, &board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
+		&board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Board{}, ErrNotFound
@@ -222,14 +210,14 @@ func (s *Store) CreateBucket(ctx context.Context, userID string, boardID string,
 	}
 	var bucket Bucket
 	err := s.db.QueryRow(ctx, `
-		INSERT INTO buckets (board_id, name, is_inbox, limit_count, sort_order)
+		INSERT INTO buckets (board_id, name, goal, is_inbox, limit_count, sort_order)
 		VALUES (
-			$1, $2, $3, $4,
+			$1, $2, $3, $4, $5,
 			COALESCE((SELECT max(sort_order) + 1 FROM buckets WHERE board_id = $1), 0)
 		)
-		RETURNING id::text, board_id::text, name, is_inbox, limit_count, sort_order, created_at, updated_at
-	`, boardID, name, input.IsInbox, limit).Scan(
-		&bucket.ID, &bucket.BoardID, &bucket.Name, &bucket.IsInbox, &bucket.LimitCount,
+		RETURNING id::text, board_id::text, name, goal, is_inbox, limit_count, sort_order, created_at, updated_at
+	`, boardID, name, input.Goal, input.IsInbox, limit).Scan(
+		&bucket.ID, &bucket.BoardID, &bucket.Name, &bucket.Goal, &bucket.IsInbox, &bucket.LimitCount,
 		&bucket.SortOrder, &bucket.CreatedAt, &bucket.UpdatedAt,
 	)
 	return bucket, err
@@ -242,6 +230,9 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	}
 	if input.Name != nil {
 		current.Name = clean(*input.Name)
+	}
+	if input.Goal != nil {
+		current.Goal = clean(*input.Goal)
 	}
 	if input.LimitCount != nil {
 		current.LimitCount = *input.LimitCount
@@ -258,12 +249,12 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	var bucket Bucket
 	err = s.db.QueryRow(ctx, `
 		UPDATE buckets b
-		SET name = $3, limit_count = $4, sort_order = $5, updated_at = now()
+		SET name = $3, goal = $4, limit_count = $5, sort_order = $6, updated_at = now()
 		FROM boards bo
 		WHERE bo.id = b.board_id AND bo.user_id = $1 AND b.id = $2
-		RETURNING b.id::text, b.board_id::text, b.name, b.is_inbox, b.limit_count, b.sort_order, b.created_at, b.updated_at
-	`, userID, id, current.Name, current.LimitCount, current.SortOrder).Scan(
-		&bucket.ID, &bucket.BoardID, &bucket.Name, &bucket.IsInbox, &bucket.LimitCount,
+		RETURNING b.id::text, b.board_id::text, b.name, b.goal, b.is_inbox, b.limit_count, b.sort_order, b.created_at, b.updated_at
+	`, userID, id, current.Name, current.Goal, current.LimitCount, current.SortOrder).Scan(
+		&bucket.ID, &bucket.BoardID, &bucket.Name, &bucket.Goal, &bucket.IsInbox, &bucket.LimitCount,
 		&bucket.SortOrder, &bucket.CreatedAt, &bucket.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -317,14 +308,18 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 	if title == "" {
 		return Task{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
 	}
-	status := clean(input.Status)
-	if status == "" {
-		status = StatusQueued
+	scheduledDate, err := validDate(input.ScheduledDate)
+	if err != nil {
+		return Task{}, err
 	}
-	if !validStatus(status) {
-		return Task{}, fmt.Errorf("%w: invalid status", ErrInvalidData)
+	kind := clean(input.Kind)
+	if kind == "" {
+		kind = KindItem
 	}
-	if !input.OverrideLimit {
+	if !validKind(kind) {
+		return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
+	}
+	if kind == KindAction && !input.OverrideLimit {
 		full, err := s.bucketFull(ctx, bucketID)
 		if err != nil {
 			return Task{}, err
@@ -333,18 +328,15 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 			return Task{}, ErrLimitFull
 		}
 	}
-	dueDate, err := parseDate(input.DueDate)
-	if err != nil {
-		return Task{}, err
-	}
 	row := s.db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, focus, assignee, status, due_date, notes, agent_brief, sort_order)
+		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, status, sort_order)
 		VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9,
+			$1, $2, $3, $4, NULLIF($5, '')::date, $6, $7,
 			COALESCE((SELECT max(sort_order) + 1 FROM tasks WHERE bucket_id = $2), 0)
 		)
-		RETURNING id::text, board_id::text, bucket_id::text, title, done, focus, assignee, status, due_date, notes, agent_brief, sort_order, created_at, updated_at
-	`, bucket.BoardID, bucketID, title, input.Focus, clean(input.Assignee), status, dueDate, input.Notes, input.AgentBrief)
+		RETURNING id::text, board_id::text, bucket_id::text, title, description,
+			COALESCE(scheduled_date::text, ''), kind, done, status, sort_order, created_at, updated_at
+	`, bucket.BoardID, bucketID, title, input.Description, scheduledDate, kind, StatusQueued)
 	return scanTask(row)
 }
 
@@ -353,8 +345,31 @@ func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input 
 	if err != nil {
 		return Task{}, err
 	}
+	originalKind := current.Kind
+	originalBucketID := current.BucketID
+	originalDone := current.Done
 	if input.Title != nil {
 		current.Title = clean(*input.Title)
+	}
+	if input.Description != nil {
+		current.Description = *input.Description
+	}
+	if input.ScheduledDate != nil {
+		current.ScheduledDate, err = validDate(*input.ScheduledDate)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	if input.Kind != nil {
+		kind := clean(*input.Kind)
+		if !validKind(kind) {
+			return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
+		}
+		current.Kind = kind
+		if kind == KindItem {
+			current.Done = false
+			current.Status = StatusQueued
+		}
 	}
 	if input.BucketID != nil && *input.BucketID != current.BucketID {
 		bucket, err := s.getBucket(ctx, userID, *input.BucketID)
@@ -365,34 +380,30 @@ func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input 
 		current.BoardID = bucket.BoardID
 		current.SortOrder = 0
 	}
-	if input.Done != nil {
-		current.Done = *input.Done
-		if current.Done {
-			current.Status = StatusDone
-		}
-	}
-	if input.Focus != nil {
-		current.Focus = *input.Focus
-	}
-	if input.Assignee != nil {
-		current.Assignee = clean(*input.Assignee)
-	}
 	if input.Status != nil {
 		status := clean(*input.Status)
 		if !validStatus(status) {
 			return Task{}, fmt.Errorf("%w: invalid status", ErrInvalidData)
 		}
+		if status == StatusWorking {
+			return Task{}, fmt.Errorf("%w: working status requires claim", ErrInvalidData)
+		}
+		if current.Kind != KindAction {
+			return Task{}, fmt.Errorf("%w: only actions have workflow status", ErrInvalidData)
+		}
 		current.Status = status
 		current.Done = status == StatusDone
 	}
-	if input.DueDate != nil {
-		current.DueDate = clean(*input.DueDate)
-	}
-	if input.Notes != nil {
-		current.Notes = *input.Notes
-	}
-	if input.AgentBrief != nil {
-		current.AgentBrief = *input.AgentBrief
+	if input.Done != nil {
+		if current.Kind != KindAction && *input.Done {
+			return Task{}, fmt.Errorf("%w: only actions can be completed", ErrInvalidData)
+		}
+		current.Done = *input.Done
+		if current.Done {
+			current.Status = StatusDone
+		} else if current.Status == StatusDone {
+			current.Status = StatusQueued
+		}
 	}
 	if input.SortOrder != nil {
 		current.SortOrder = *input.SortOrder
@@ -400,24 +411,52 @@ func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input 
 	if current.Title == "" {
 		return Task{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
 	}
-	dueDate, err := parseDate(current.DueDate)
-	if err != nil {
-		return Task{}, err
+	if current.Kind == KindAction && !current.Done && (originalKind != KindAction || originalBucketID != current.BucketID || originalDone) {
+		full, err := s.bucketFullExcept(ctx, current.BucketID, current.ID)
+		if err != nil {
+			return Task{}, err
+		}
+		if full {
+			return Task{}, ErrLimitFull
+		}
 	}
 	row := s.db.QueryRow(ctx, `
 		UPDATE tasks t
-		SET board_id = $3, bucket_id = $4, title = $5, done = $6, focus = $7,
-			assignee = $8, status = $9, due_date = $10, notes = $11,
-			agent_brief = $12, sort_order = $13, updated_at = now()
+		SET board_id = $3, bucket_id = $4, title = $5, description = $6,
+			scheduled_date = NULLIF($7, '')::date, kind = $8,
+			done = $9, status = $10, sort_order = $11, updated_at = now()
 		FROM boards b
 		WHERE b.id = t.board_id AND b.user_id = $1 AND t.id = $2
-		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.done, t.focus,
-			t.assignee, t.status, t.due_date, t.notes, t.agent_brief, t.sort_order, t.created_at, t.updated_at
-	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Done, current.Focus,
-		current.Assignee, current.Status, dueDate, current.Notes, current.AgentBrief, current.SortOrder)
+		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
+			t.status, t.sort_order, t.created_at, t.updated_at
+	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Description, current.ScheduledDate, current.Kind, current.Done,
+		current.Status, current.SortOrder)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
+	}
+	return task, err
+}
+
+func (s *Store) ClaimTask(ctx context.Context, userID string, id string) (Task, error) {
+	row := s.db.QueryRow(ctx, `
+		UPDATE tasks t
+		SET status = $3, updated_at = now()
+		FROM boards b
+		WHERE b.id = t.board_id
+			AND b.user_id = $1
+			AND t.id = $2
+			AND t.done = false
+			AND t.kind = $5
+			AND t.status = $4
+		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
+			t.status, t.sort_order, t.created_at, t.updated_at
+	`, userID, id, StatusWorking, StatusQueued, KindAction)
+	task, err := scanTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrTaskUnavailable
 	}
 	return task, err
 }
@@ -447,7 +486,12 @@ func (s *Store) ReorderTasks(ctx context.Context, userID string, bucketID string
 	}
 	defer tx.Rollback(ctx)
 	for i, id := range ids {
-		tag, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1, bucket_id = $2, updated_at = now() WHERE id = $3", i, bucketID, id)
+		tag, err := tx.Exec(ctx, `
+			UPDATE tasks t
+			SET sort_order = $1, updated_at = now()
+			FROM boards b
+			WHERE b.id = t.board_id AND b.user_id = $2 AND t.bucket_id = $3 AND t.id = $4
+		`, i, userID, bucketID, id)
 		if err != nil {
 			return err
 		}
@@ -460,8 +504,9 @@ func (s *Store) ReorderTasks(ctx context.Context, userID string, bucketID string
 
 func (s *Store) GetTask(ctx context.Context, userID string, id string) (Task, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.done, t.focus,
-			t.assignee, t.status, t.due_date, t.notes, t.agent_brief, t.sort_order, t.created_at, t.updated_at
+		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
+			t.status, t.sort_order, t.created_at, t.updated_at
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2
@@ -480,10 +525,6 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 		args = append(args, filter.BoardID)
 		doneSQL += fmt.Sprintf(" AND t.board_id = $%d", len(args))
 	}
-	if filter.Assignee != "" {
-		args = append(args, filter.Assignee)
-		doneSQL += fmt.Sprintf(" AND t.assignee = $%d", len(args))
-	}
 	if filter.Status != "" {
 		args = append(args, filter.Status)
 		doneSQL += fmt.Sprintf(" AND t.status = $%d", len(args))
@@ -492,14 +533,19 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 		args = append(args, *filter.Done)
 		doneSQL += fmt.Sprintf(" AND t.done = $%d", len(args))
 	}
+	if filter.ActionsOnly {
+		args = append(args, KindAction)
+		doneSQL += fmt.Sprintf(" AND t.kind = $%d", len(args))
+	}
 	limit := filter.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
 	args = append(args, limit)
 	query := `
-		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.done, t.focus,
-			t.assignee, t.status, t.due_date, t.notes, t.agent_brief, t.sort_order, t.created_at, t.updated_at
+		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
+			t.status, t.sort_order, t.created_at, t.updated_at
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1` + doneSQL + `
@@ -524,8 +570,8 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 
 func (s *Store) listBuckets(ctx context.Context, userID string, boardID string) ([]Bucket, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT b.id::text, b.board_id::text, b.name, b.is_inbox, bo.max_tasks_per_list, b.sort_order,
-			COUNT(t.id) FILTER (WHERE t.done = false)::int AS open_count,
+		SELECT b.id::text, b.board_id::text, b.name, b.goal, b.is_inbox, bo.max_tasks_per_list, b.sort_order,
+			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.done = false)::int AS open_count,
 			b.created_at, b.updated_at
 		FROM buckets b
 		JOIN boards bo ON bo.id = b.board_id
@@ -552,8 +598,8 @@ func (s *Store) listBuckets(ctx context.Context, userID string, boardID string) 
 
 func (s *Store) getBucket(ctx context.Context, userID string, id string) (Bucket, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT b.id::text, b.board_id::text, b.name, b.is_inbox, bo.max_tasks_per_list, b.sort_order,
-			COUNT(t.id) FILTER (WHERE t.done = false)::int AS open_count,
+		SELECT b.id::text, b.board_id::text, b.name, b.goal, b.is_inbox, bo.max_tasks_per_list, b.sort_order,
+			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.done = false)::int AS open_count,
 			b.created_at, b.updated_at
 		FROM buckets b
 		JOIN boards bo ON bo.id = b.board_id
@@ -570,8 +616,9 @@ func (s *Store) getBucket(ctx context.Context, userID string, id string) (Bucket
 
 func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID string) ([]Task, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.done, t.focus,
-			t.assignee, t.status, t.due_date, t.notes, t.agent_brief, t.sort_order, t.created_at, t.updated_at
+		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
+			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
+			t.status, t.sort_order, t.created_at, t.updated_at
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.bucket_id = $2
@@ -594,15 +641,22 @@ func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID str
 }
 
 func (s *Store) bucketFull(ctx context.Context, bucketID string) (bool, error) {
+	return s.bucketFullExcept(ctx, bucketID, "")
+}
+
+func (s *Store) bucketFullExcept(ctx context.Context, bucketID string, taskID string) (bool, error) {
 	var full bool
 	err := s.db.QueryRow(ctx, `
-		SELECT COUNT(t.id) FILTER (WHERE t.done = false) >= bo.max_tasks_per_list
+		SELECT COUNT(t.id) FILTER (
+			WHERE t.kind = 'action' AND t.done = false
+				AND ($2 = '' OR t.id <> NULLIF($2, '')::uuid)
+		) >= bo.max_tasks_per_list
 		FROM buckets b
 		JOIN boards bo ON bo.id = b.board_id
 		LEFT JOIN tasks t ON t.bucket_id = b.id
 		WHERE b.id = $1
 		GROUP BY b.id, bo.max_tasks_per_list
-	`, bucketID).Scan(&full)
+	`, bucketID, taskID).Scan(&full)
 	return full, err
 }
 
@@ -614,7 +668,7 @@ func scanBoard(row rowScanner) (Board, error) {
 	var board Board
 	err := row.Scan(
 		&board.ID, &board.Name, &board.BackgroundKind, &board.BackgroundValue,
-		&board.LayoutSize, &board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
+		&board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
 	)
 	return board, err
 }
@@ -622,7 +676,7 @@ func scanBoard(row rowScanner) (Board, error) {
 func scanBucket(row rowScanner) (Bucket, error) {
 	var bucket Bucket
 	err := row.Scan(
-		&bucket.ID, &bucket.BoardID, &bucket.Name, &bucket.IsInbox, &bucket.LimitCount,
+		&bucket.ID, &bucket.BoardID, &bucket.Name, &bucket.Goal, &bucket.IsInbox, &bucket.LimitCount,
 		&bucket.SortOrder, &bucket.OpenCount, &bucket.CreatedAt, &bucket.UpdatedAt,
 	)
 	return bucket, err
@@ -630,35 +684,27 @@ func scanBucket(row rowScanner) (Bucket, error) {
 
 func scanTask(row rowScanner) (Task, error) {
 	var task Task
-	var due pgtype.Date
 	err := row.Scan(
-		&task.ID, &task.BoardID, &task.BucketID, &task.Title, &task.Done, &task.Focus,
-		&task.Assignee, &task.Status, &due, &task.Notes, &task.AgentBrief,
+		&task.ID, &task.BoardID, &task.BucketID, &task.Title, &task.Description, &task.ScheduledDate, &task.Kind, &task.Done,
+		&task.Status,
 		&task.SortOrder, &task.CreatedAt, &task.UpdatedAt,
 	)
-	if err != nil {
-		return Task{}, err
-	}
-	if due.Valid {
-		task.DueDate = due.Time.Format("2006-01-02")
-	}
-	return task, nil
-}
-
-func parseDate(value string) (*time.Time, error) {
-	value = clean(value)
-	if value == "" {
-		return nil, nil
-	}
-	parsed, err := time.Parse("2006-01-02", value)
-	if err != nil {
-		return nil, fmt.Errorf("%w: due date must be YYYY-MM-DD", ErrInvalidData)
-	}
-	return &parsed, nil
+	return task, err
 }
 
 func clean(value string) string {
 	return strings.TrimSpace(value)
+}
+
+func validDate(value string) (string, error) {
+	value = clean(value)
+	if value == "" {
+		return "", nil
+	}
+	if _, err := time.Parse(time.DateOnly, value); err != nil {
+		return "", fmt.Errorf("%w: date must use YYYY-MM-DD", ErrInvalidData)
+	}
+	return value, nil
 }
 
 func validStatus(status string) bool {
@@ -668,4 +714,8 @@ func validStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func validKind(kind string) bool {
+	return kind == KindItem || kind == KindAction
 }

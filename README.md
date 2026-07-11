@@ -1,18 +1,18 @@
 # slate.do
 
-A minimal visual task manager for humans and agents.
+A minimal interactive operating plan for clear thinking and focused execution.
 
 Slate helps you choose what to work on, keep active work visible, and hide everything else.
 
-It is built around lists, limits, and human plus agent collaboration.
+It is built around thinking buckets, neutral items, explicit actions, and weekly planning.
 
 ## Product
 
-The product reference is a simple task board that protects attention instead of collecting infinite tasks.
+The product reference is a simple operating plan that protects attention instead of collecting infinite metadata.
 
-Each list has a limit.
+Each list can hold ideas, notes, reference material, and actions.
 
-That limit is a feature.
+Limits apply to open actions, not neutral items.
 
 Agents can suggest, update, and execute work, but Slate should make it hard to create clutter.
 
@@ -28,7 +28,7 @@ Slate now has an owner-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Owner sign in with a seeded owner.
-- Boards, lists, limits, tasks, details, focus, assignee, due date, notes, agent brief, agent status, layout, and theme.
+- Boards, goal-led lists, neutral items, explicit actions, planned dates, Week and Today views, and theme.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.
@@ -53,9 +53,9 @@ Open `http://localhost:8080`.
 export SLATE_BASE_URL=http://localhost:8080
 export SLATE_API_TOKEN=slate_...
 go run ./cli/cmd/slate boards list
-go run ./cli/cmd/slate tasks create --list <list-id> --title "Draft launch note" --assignee coder
-go run ./cli/cmd/slate tasks pull --assignee coder
-go run ./cli/cmd/slate tasks status <task-id> working
+go run ./cli/cmd/slate tasks create --list <list-id> --title "Draft launch note" --description "Write the first version" --date 2026-07-13
+go run ./cli/cmd/slate tasks pull
+go run ./cli/cmd/slate tasks claim <task-id>
 go run ./cli/cmd/slate tasks done <task-id>
 ```
 

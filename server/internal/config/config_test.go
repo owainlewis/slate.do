@@ -5,6 +5,7 @@ import "testing"
 func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("COOKIE_SECURE", "")
+	t.Setenv("DATABASE_URL", "")
 
 	cfg := FromEnv()
 	if cfg.Port != "8080" {
@@ -12,6 +13,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if !cfg.CookieSecure {
 		t.Fatal("CookieSecure should default to true")
+	}
+	if cfg.DatabaseURL != "" {
+		t.Fatalf("DatabaseURL = %q, want empty when unset", cfg.DatabaseURL)
 	}
 }
 
