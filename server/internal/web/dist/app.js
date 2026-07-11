@@ -40,6 +40,8 @@ const api = {
   del(path) { return this.request(path, { method: "DELETE" }); },
 };
 
+const goalSaveChains = new Map();
+
 const state = {
   me: null,
   boards: [],
@@ -48,6 +50,7 @@ const state = {
   settings: false,
   view: "home",
   error: "",
+  goalErrors: {},
   newToken: "",
   tokens: [],
   boardMode: "lists",
@@ -168,6 +171,7 @@ function appHTML() {
   const theme = themeFor(board?.backgroundValue);
   const lists = board?.buckets || [];
   const calendarMode = state.boardMode === "calendar";
+  const todayMode = state.boardMode === "today";
   return `
     <section class="shell theme-${theme}">
       <aside class="sidebar">
@@ -195,8 +199,9 @@ function appHTML() {
           <span class="week">${calendarMode ? weekLabel() : new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
           <div class="top-actions">
             <div class="view-switch" aria-label="Board view">
-              <button data-board-mode="lists" class="${calendarMode ? "" : "on"}">${icon("boards")}<span>Lists</span></button>
-              <button data-board-mode="calendar" class="${calendarMode ? "on" : ""}">${icon("calendar")}<span>Week</span></button>
+              <button data-board-mode="lists" aria-label="Lists" class="${!calendarMode && !todayMode ? "on" : ""}">${icon("boards")}<span>Lists</span></button>
+              <button data-board-mode="calendar" aria-label="Week" class="${calendarMode ? "on" : ""}">${icon("calendar")}<span>Week</span></button>
+              <button data-board-mode="today" aria-label="Today" class="${todayMode ? "on" : ""}">${icon("check")}<span>Today</span></button>
             </div>
             <details class="board-settings">
               <summary class="icon-btn" title="Board settings" aria-label="Board settings">${icon("gear")}</summary>
@@ -209,12 +214,12 @@ function appHTML() {
                 </section>
               </div>
             </details>
-            ${calendarMode ? "" : `<button class="icon-btn icon-label" id="add-list">${icon("plus")}<span>List</span></button>`}
+            ${calendarMode || todayMode ? "" : `<button class="icon-btn icon-label" id="add-list">${icon("plus")}<span>List</span></button>`}
           </div>
         </header>
-        ${calendarMode ? calendarHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
+        ${calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
         <footer class="footer">
-          <span>${openTaskCount(board)} open</span>
+          <span>${todayMode ? `${todayActionCount(board)} today` : `${openTaskCount(board)} open actions`}</span>
         </footer>
       </div>
       ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
@@ -232,34 +237,46 @@ function boardRowHTML(board) {
 
 function listHTML(list) {
   const over = list.openCount > list.limitCount ? "over-limit" : "";
+  const tasks = list.tasks || [];
   return `
     <section class="bucket ${over}" data-bucket="${list.id}">
       <div class="bucket-head">
-        <span class="count">${list.openCount}/${list.limitCount}</span>
+        <span class="count" title="Open actions / limit">${list.openCount}/${list.limitCount}</span>
         <input data-bucket-name="${list.id}" value="${escapeAttr(list.name)}">
         <div class="bucket-menu">
           <button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list">${icon("trash")}</button>
         </div>
       </div>
-      <ul class="tasks ${(list.tasks || []).length ? "" : "empty"}" data-task-list="${list.id}">
-        ${(list.tasks || []).length ? (list.tasks || []).map(taskHTML).join("") : `<li class="empty-state">${icon("inbox")}<p>No tasks yet</p></li>`}
+      <input class="bucket-goal" data-bucket-goal="${list.id}" value="${escapeAttr(list.goal || "")}" placeholder="What matters in this bucket?" aria-label="Goal for ${escapeAttr(list.name)}">
+      ${state.goalErrors[list.id] ? `<p class="error bucket-goal-error">${escapeHTML(state.goalErrors[list.id])}</p>` : ""}
+      <ul class="tasks ${tasks.length ? "" : "empty"}" data-task-list="${list.id}">
+        ${tasks.length ? listItemsHTML(tasks) : `<li class="empty-state">${icon("inbox")}<p>No items yet</p></li>`}
       </ul>
       <form class="add-task" data-add-task="${list.id}">
-        <button class="add-icon" type="submit" title="Add task">${icon("plus")}</button>
-        <input name="title" placeholder="Add task">
+        <button class="add-icon" type="submit" title="Add item">${icon("plus")}</button>
+        <input name="title" placeholder="Add item">
       </form>
     </section>`;
 }
 
-function taskHTML(task) {
+function listItemsHTML(tasks) {
+  const roots = tasks.filter(task => !task.parentId);
+  return roots.map(task => {
+    const children = tasks.filter(child => child.parentId === task.id);
+    return taskHTML(task, false, children.length > 0) + children.map(child => taskHTML(child, true)).join("");
+  }).join("");
+}
+
+function taskHTML(task, child = false, hasChildren = false) {
+  const action = task.kind === "action";
   return `
-    <li class="task ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <span class="grip" aria-hidden="true">${icon("grip")}</span>
-      <button class="check" data-toggle-done="${task.id}" title="Done">${task.done ? icon("check") : ""}</button>
-      <div class="task-body" data-open-task="${task.id}">
+    <li class="task ${child ? "child-item" : ""} ${action ? "action" : "item"} ${task.done ? "done" : ""}" draggable="${hasChildren ? "false" : "true"}" data-task="${task.id}">
+      <span class="grip" aria-hidden="true" ${hasChildren ? 'title="Move sub-items first"' : ""}>${icon("grip")}</span>
+      ${action ? `<button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>` : `<span class="item-dot" aria-hidden="true"></span>`}
+      <button class="task-body task-open" type="button" data-open-task="${task.id}">
         <div class="task-title">${escapeHTML(task.title)}</div>
         ${task.scheduledDate ? `<span class="task-date">${icon("calendar")}${formatTaskDate(task.scheduledDate)}</span>` : ""}
-      </div>
+      </button>
     </li>`;
 }
 
@@ -291,40 +308,68 @@ function calendarDayHTML(day, tasks) {
         <b>${day.getDate()}</b>
       </header>
       <ul class="calendar-tasks" data-calendar-date="${key}">
-        ${items.length ? items.map(calendarTaskHTML).join("") : `<li class="calendar-empty">No tasks</li>`}
+        ${items.length ? items.map(calendarTaskHTML).join("") : `<li class="calendar-empty">No dated items</li>`}
       </ul>
     </section>`;
 }
 
 function calendarTaskHTML(item) {
   const { task, list } = item;
+  const action = task.kind === "action";
   return `
-    <li class="task calendar-task ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <button class="check" data-toggle-done="${task.id}" title="Done">${task.done ? icon("check") : ""}</button>
-      <div class="task-body" data-open-task="${task.id}">
+    <li class="task calendar-task ${action ? "action" : "item"} ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
+      ${action ? `<button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>` : `<span class="item-dot" aria-hidden="true"></span>`}
+      <button class="task-body task-open" type="button" data-open-task="${task.id}">
         <div class="task-title">${escapeHTML(task.title)}</div>
         <span class="task-list-name">${escapeHTML(list.name)}</span>
-      </div>
+      </button>
     </li>`;
 }
 
+function todayHTML(board) {
+  const today = dateKey(new Date());
+  const dated = allTasks(board).filter(item => item.task.scheduledDate === today);
+  const actions = dated.filter(item => item.task.kind === "action");
+  const notes = dated.filter(item => item.task.kind !== "action");
+  return `
+    <section class="today-view">
+      <section class="today-section">
+        <div class="today-section-head"><div><span>${new Date().toLocaleDateString(undefined, { weekday: "long" })}</span><h2>Actions</h2></div><b>${actions.length}</b></div>
+        <ul>${actions.length ? actions.map(calendarTaskHTML).join("") : `<li class="today-empty">No actions planned today.</li>`}</ul>
+      </section>
+      ${notes.length ? `<section class="today-section today-notes"><div class="today-section-head"><div><span>For context</span><h2>Notes</h2></div><b>${notes.length}</b></div><ul>${notes.map(calendarTaskHTML).join("")}</ul></section>` : ""}
+    </section>`;
+}
+
 function detailHTML(task) {
+  const action = task.kind === "action";
+  const parent = task.parentId ? findTask(task.parentId) : null;
+  const children = (state.board?.buckets || []).flatMap(list => list.tasks || []).filter(item => item.parentId === task.id);
   return `
     <aside class="detail">
-      <div class="detail-head"><b>Task detail</b><button id="close-detail" title="Close">${icon("x")}</button></div>
+      <div class="detail-head"><b>Item detail</b><button id="close-detail" title="Close">${icon("x")}</button></div>
       <form class="detail-body" id="detail-form">
-        <div class="field"><label>Title</label><input name="title" type="text" value="${escapeAttr(task.title)}" placeholder="Task title" required></div>
-        <div class="toggles">
-          <label><input name="done" type="checkbox" ${task.done ? "checked" : ""}> Done</label>
-        </div>
+        <div class="field"><label>Title</label><input name="title" type="text" value="${escapeAttr(task.title)}" placeholder="Item title" required></div>
+        ${parent ? `<p class="parent-context">Under ${escapeHTML(parent.title)}</p>` : ""}
+        <div class="field"><label>Type</label><select name="kind">
+          <option value="item" ${action ? "" : "selected"}>Item</option>
+          <option value="action" ${action ? "selected" : ""}>Action</option>
+        </select></div>
+        ${action ? `<div class="toggles"><label><input name="done" type="checkbox" ${task.done ? "checked" : ""}> Done</label></div>` : ""}
         <div class="field"><label>List</label><select name="bucketId">
           ${state.board.buckets.map(b => `<option value="${b.id}" ${b.id === task.bucketId ? "selected" : ""}>${escapeHTML(b.name)}</option>`).join("")}
         </select></div>
         <div class="field"><label>Date</label><input name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
         <div class="field"><label>Description</label><textarea name="description" placeholder="Add details">${escapeHTML(task.description || "")}</textarea></div>
+        <p class="error detail-error">${escapeHTML(state.error)}</p>
         <button class="primary" type="submit">Save</button>
         <button class="danger icon-label" type="button" id="delete-task">${icon("trash")}<span>Delete</span></button>
       </form>
+      ${task.parentId ? "" : `<section class="sub-items">
+        <label>Sub-items</label>
+        <div class="sub-item-list">${children.map(child => `<button type="button" data-open-task="${child.id}"><span>${escapeHTML(child.title)}</span><small>${child.kind === "action" ? "Action" : "Item"}</small></button>`).join("")}</div>
+        <form id="add-child-form"><input name="title" placeholder="Add sub-item" required><button type="submit" aria-label="Add sub-item">${icon("plus")}</button></form>
+      </section>`}
     </aside>`;
 }
 
@@ -445,7 +490,28 @@ function bindApp() {
     await reload();
   });
   document.querySelectorAll("[data-bucket-name]").forEach(el => el.addEventListener("change", async e => { await api.patch(`/api/v1/buckets/${el.dataset.bucketName}`, { name: e.target.value }); await reload(); }));
-  document.querySelectorAll("[data-delete-bucket]").forEach(el => el.onclick = async () => { if (confirm("Delete this list and its tasks?")) { await api.del(`/api/v1/buckets/${el.dataset.deleteBucket}`); await reload(); } });
+  document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
+    const goal = e.target.value;
+    const id = el.dataset.bucketGoal;
+    const list = state.board.buckets.find(item => item.id === el.dataset.bucketGoal);
+    if (list) list.goal = goal;
+    delete state.goalErrors[id];
+    clearTimeout(el.goalSaveTimer);
+    el.goalSaveTimer = setTimeout(() => {
+      const previous = goalSaveChains.get(id) || Promise.resolve();
+      const next = previous.catch(() => {}).then(() => api.patch(`/api/v1/buckets/${id}`, { goal }));
+      goalSaveChains.set(id, next);
+      next.then(() => {
+        if (goalSaveChains.get(id) === next) delete state.goalErrors[id];
+      }).catch(err => {
+        if (goalSaveChains.get(id) === next) {
+          state.goalErrors[id] = err.message;
+          render();
+        }
+      });
+    }, 300);
+  }));
+  document.querySelectorAll("[data-delete-bucket]").forEach(el => el.onclick = async () => { if (confirm("Delete this list and its items?")) { await api.del(`/api/v1/buckets/${el.dataset.deleteBucket}`); await reload(); } });
   document.querySelectorAll("[data-add-task]").forEach(form => {
     form.addEventListener("submit", addTask);
     form.querySelector('input[name="title"]').addEventListener("keydown", event => {
@@ -454,7 +520,7 @@ function bindApp() {
       form.requestSubmit();
     });
   });
-  document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => { state.selectedTask = findTask(el.dataset.openTask); render(); });
+  document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => { state.error = ""; state.selectedTask = findTask(el.dataset.openTask); render(); });
   document.querySelectorAll("[data-toggle-done]").forEach(el => el.onclick = async e => { e.stopPropagation(); const task = findTask(el.dataset.toggleDone); await api.patch(`/api/v1/tasks/${task.id}`, { done: !task.done }); await reload(); });
   bindDrag();
   bindDetail();
@@ -462,7 +528,7 @@ function bindApp() {
 
 async function deleteBoard(id) {
   const board = state.boards.find(item => item.id === id);
-  if (!board || !confirm(`Delete "${board.name}" and all its lists and tasks?`)) return;
+  if (!board || !confirm(`Delete "${board.name}" and all its lists and items?`)) return;
   await api.del(`/api/v1/boards/${id}`);
   state.selectedTask = null;
   state.board = null;
@@ -483,12 +549,30 @@ function bindDetail() {
   document.querySelector("#detail-form").addEventListener("submit", async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    await api.patch(`/api/v1/tasks/${state.selectedTask.id}`, {
+    try {
+      await api.patch(`/api/v1/tasks/${state.selectedTask.id}`, {
+        title: form.get("title"),
+        description: form.get("description"),
+        scheduledDate: form.get("scheduledDate"),
+        kind: form.get("kind"),
+        done: form.get("kind") === "action" && form.get("done") === "on",
+        bucketId: form.get("bucketId"),
+        parentId: form.get("bucketId") === state.selectedTask.bucketId ? state.selectedTask.parentId : "",
+      });
+      state.error = "";
+      await reload();
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  });
+  document.querySelector("#add-child-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await api.post(`/api/v1/buckets/${state.selectedTask.bucketId}/tasks`, {
       title: form.get("title"),
-      description: form.get("description"),
-      scheduledDate: form.get("scheduledDate"),
-      done: form.get("done") === "on",
-      bucketId: form.get("bucketId"),
+      kind: "item",
+      parentId: state.selectedTask.id,
     });
     await reload();
   });
@@ -560,16 +644,7 @@ async function addTask(event) {
   const title = new FormData(form).get("title").trim();
   if (!title) return;
   const list = state.board.buckets.find(b => b.id === form.dataset.addTask);
-  const body = { title };
-  try {
-    await api.post(`/api/v1/buckets/${list.id}/tasks`, body);
-  } catch (err) {
-    if (err.message.includes("limit") && confirm("This list is at the board limit. Add anyway?")) {
-      await api.post(`/api/v1/buckets/${list.id}/tasks`, { ...body, overrideLimit: true });
-    } else {
-      throw err;
-    }
-  }
+  await api.post(`/api/v1/buckets/${list.id}/tasks`, { title, kind: "item" });
   await reload();
 }
 
@@ -583,7 +658,7 @@ function bindDrag() {
       event.preventDefault();
       const id = event.dataTransfer.getData("text/task-id");
       if (!id) return;
-      await api.patch(`/api/v1/tasks/${id}`, { bucketId: list.dataset.taskList });
+      await api.patch(`/api/v1/tasks/${id}`, { bucketId: list.dataset.taskList, parentId: "" });
       await reload();
     });
   });
@@ -681,6 +756,11 @@ function formatTaskDate(value) {
 
 function openTaskCount(board) {
   return (board?.buckets || []).reduce((sum, b) => sum + b.openCount, 0);
+}
+
+function todayActionCount(board) {
+  const today = dateKey(new Date());
+  return allTasks(board).filter(item => item.task.kind === "action" && !item.task.done && item.task.scheduledDate === today).length;
 }
 
 function themeFor(value) {

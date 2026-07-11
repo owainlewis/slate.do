@@ -3,6 +3,8 @@ package boards
 import "time"
 
 const (
+	KindItem          = "item"
+	KindAction        = "action"
 	StatusQueued      = "queued"
 	StatusWorking     = "working"
 	StatusNeedsReview = "needs_review"
@@ -25,6 +27,7 @@ type Bucket struct {
 	ID         string    `json:"id"`
 	BoardID    string    `json:"boardId"`
 	Name       string    `json:"name"`
+	Goal       string    `json:"goal"`
 	IsInbox    bool      `json:"isInbox"`
 	LimitCount int       `json:"limitCount"`
 	SortOrder  int       `json:"sortOrder"`
@@ -41,6 +44,8 @@ type Task struct {
 	Title         string    `json:"title"`
 	Description   string    `json:"description"`
 	ScheduledDate string    `json:"scheduledDate"`
+	Kind          string    `json:"kind"`
+	ParentID      string    `json:"parentId"`
 	Done          bool      `json:"done"`
 	Status        string    `json:"status"`
 	SortOrder     int       `json:"sortOrder"`
@@ -65,12 +70,14 @@ type UpdateBoardInput struct {
 
 type CreateBucketInput struct {
 	Name       string `json:"name"`
+	Goal       string `json:"goal"`
 	LimitCount int    `json:"limitCount"`
 	IsInbox    bool   `json:"isInbox"`
 }
 
 type UpdateBucketInput struct {
 	Name       *string `json:"name"`
+	Goal       *string `json:"goal"`
 	LimitCount *int    `json:"limitCount"`
 	SortOrder  *int    `json:"sortOrder"`
 }
@@ -79,6 +86,8 @@ type CreateTaskInput struct {
 	Title         string `json:"title"`
 	Description   string `json:"description"`
 	ScheduledDate string `json:"scheduledDate"`
+	Kind          string `json:"kind"`
+	ParentID      string `json:"parentId"`
 	OverrideLimit bool   `json:"overrideLimit"`
 }
 
@@ -86,6 +95,8 @@ type UpdateTaskInput struct {
 	Title         *string `json:"title"`
 	Description   *string `json:"description"`
 	ScheduledDate *string `json:"scheduledDate"`
+	Kind          *string `json:"kind"`
+	ParentID      *string `json:"parentId"`
 	BucketID      *string `json:"bucketId"`
 	Done          *bool   `json:"done"`
 	Status        *string `json:"status"`
@@ -93,8 +104,9 @@ type UpdateTaskInput struct {
 }
 
 type TaskFilter struct {
-	BoardID string
-	Status  string
-	Done    *bool
-	Limit   int
+	BoardID     string
+	Status      string
+	Done        *bool
+	Limit       int
+	ActionsOnly bool
 }

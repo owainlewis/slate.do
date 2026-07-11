@@ -4,11 +4,11 @@ Status: Draft v1.
 
 ## Summary
 
-Slate is a minimal list app for managing work with humans and agents.
+Slate is a minimal interactive operating plan for thinking clearly and executing deliberately.
 
 It is based on buckets.
 
-A bucket is a simple list with a name, a limit, and a small set of tasks.
+A bucket is a simple list with a name, a goal, and a small set of items.
 
 Slate helps the user think clearly by grouping work into visible buckets and keeping each bucket small.
 
@@ -22,17 +22,18 @@ The app should feel calm enough to use every day.
 
 ## Product Bet
 
-Most task tools collect work.
+Most productivity tools collect information and turn it into noise.
 
 Slate should help the user choose work.
 
 The main behavior should be:
 
-- Capture tasks quickly.
-- Put tasks into clear buckets.
+- Capture items quickly without declaring that everything is a task.
+- Put items into clear buckets.
 - Limit each bucket.
-- Put the few tasks that matter now in a Focus bucket.
-- Let a human or agent pick up any task.
+- Turn an item into an action only when it represents executable work.
+- Add dates to surface selected items in Week and Today.
+- Let a human or agent pick up any action.
 - Review agent work without adding ownership complexity.
 
 ## Audience
@@ -63,11 +64,11 @@ Slate has boards.
 
 A board has buckets.
 
-A bucket has tasks.
+A bucket has items.
 
-A task has a title.
+An item has a title and can optionally become an action.
 
-Optional task detail can exist, but the list item should stay simple.
+Items can have one level of children. Optional detail can exist, but the list item should stay simple.
 
 Core fields:
 
@@ -75,6 +76,8 @@ Core fields:
 - `title`
 - `description`
 - `scheduledDate`
+- `kind`
+- `parentId`
 - `boardId`
 - `bucketId`
 - `done`
@@ -97,9 +100,11 @@ Examples:
 
 The app should not force one bucket style. Users should be able to bucket by priority, project, energy, time, person, or status.
 
-## Bucket Limits
+Each bucket can state its goal in one sentence.
 
-Every bucket should have a visible limit.
+## Action Limits
+
+Every bucket should have a visible limit for open actions.
 
 Example:
 
@@ -109,7 +114,7 @@ Product 3/5
 
 The limit is not decoration. It is part of the product.
 
-When a bucket is full, adding more work should feel constrained. The user should finish, move, delete, or defer something before adding more.
+Neutral items never consume the action limit. When the action limit is full, the user should finish, move, or defer an action before creating another.
 
 Default limit:
 
@@ -118,13 +123,12 @@ Default limit:
 
 This can change after testing.
 
-## Tasks
+## Items and Actions
 
-A task should look like one clean line in the bucket.
+An item should look like one clean line in the bucket. Neutral items use a bullet. Actions use a checkbox.
 
 List item display should include:
 
-- Checkbox.
 - Title.
 - Planned date when set.
 
@@ -132,15 +136,16 @@ The full task detail view should include:
 
 - Title.
 - Description.
+- Type: Item or Action.
 - Date.
-- Done.
+- Done when it is an Action.
 - List.
 
 ## Agents
 
-Tasks do not have owners or assignees.
+Actions do not have owners or assignees.
 
-Any open task can be picked up by the human or by an agent. Agents do not need names or accounts in Slate.
+Any open action can be picked up by the human or by an agent. Neutral items are never returned as agent work.
 
 A valid workspace API token can pull any queued task. Claiming a task changes its internal workflow status to `working`.
 
@@ -196,10 +201,13 @@ The first app version should include:
 - Buckets.
 - Bucket limits.
 - Create, rename, reorder, and delete buckets.
-- Create, edit, move, complete, and delete tasks.
-- Task detail panel.
+- Create, edit, move, and delete items.
+- Convert items into completable actions.
+- Add one level of child items.
+- Item detail panel.
 - Title and description.
 - Optional planned date and Monday-to-Sunday calendar view.
+- Today view with actions first and dated notes shown quietly.
 - Internal workflow status for agent coordination.
 - Local persistence or simple database persistence.
 - Global workspace API token.
@@ -211,7 +219,7 @@ Out of scope:
 - Agent accounts.
 - Per-agent tokens.
 - Team permissions.
-- Subtasks.
+- Deeper nesting.
 - Comments.
 - Rich labels.
 - Calendar sync.
@@ -224,7 +232,7 @@ Out of scope:
 - The board is the interface.
 - Keep list items compact.
 - Avoid dashboards.
-- Avoid nested task structures.
+- Allow one useful level of hierarchy, but no deeper nesting.
 - Avoid heavy metadata.
 - Prefer text over configuration.
 - Make limits visible.
@@ -244,8 +252,8 @@ It shows:
 - Sidebar boards.
 - List grid.
 - Responsive list grid.
-- Task add flow.
-- Task drag flow.
+- Item add flow.
+- Item drag flow.
 - Detail panel.
 - Title and description.
 - Planned date.

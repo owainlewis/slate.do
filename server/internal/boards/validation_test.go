@@ -23,3 +23,12 @@ func TestValidDate(t *testing.T) {
 		t.Fatal("expected invalid date error")
 	}
 }
+
+func TestValidKind(t *testing.T) {
+	if !validKind(KindItem) || !validKind(KindAction) {
+		t.Fatal("item and action should be valid kinds")
+	}
+	if validKind("task") {
+		t.Fatal("unexpected valid kind")
+	}
+}

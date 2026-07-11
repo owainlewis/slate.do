@@ -1,18 +1,18 @@
 # slate.do
 
-A minimal visual task manager for humans and agents.
+A minimal interactive operating plan for clear thinking and focused execution.
 
 Slate helps you choose what to work on, keep active work visible, and hide everything else.
 
-It is built around lists, limits, and human plus agent collaboration.
+It is built around thinking buckets, neutral items, explicit actions, and weekly planning.
 
 ## Product
 
-The product reference is a simple task board that protects attention instead of collecting infinite tasks.
+The product reference is a simple operating plan that protects attention instead of collecting infinite metadata.
 
-Each list has a limit.
+Each list can hold ideas, notes, reference material, and actions.
 
-That limit is a feature.
+Limits apply to open actions, not neutral items.
 
 Agents can suggest, update, and execute work, but Slate should make it hard to create clutter.
 
@@ -28,7 +28,7 @@ Slate now has an owner-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Owner sign in with a seeded owner.
-- Boards, lists, limits, task titles and descriptions, planned dates, weekly calendar, completion, and theme.
+- Boards, goal-led lists, neutral items, one-level children, explicit actions, planned dates, Week and Today views, and theme.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.

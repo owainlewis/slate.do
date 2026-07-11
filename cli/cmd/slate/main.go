@@ -113,7 +113,7 @@ func tasksCmd(c client, args []string) error {
 		if targetList == "" || *title == "" {
 			return errors.New("--list and --title are required")
 		}
-		body := map[string]any{"title": *title, "description": *description, "scheduledDate": *date, "overrideLimit": *override}
+		body := map[string]any{"title": *title, "description": *description, "scheduledDate": *date, "kind": "action", "overrideLimit": *override}
 		var out any
 		if err := c.do(http.MethodPost, "/api/v1/buckets/"+url.PathEscape(targetList)+"/tasks", body, &out); err != nil {
 			return err

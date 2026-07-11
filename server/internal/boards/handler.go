@@ -198,6 +198,7 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 	if filter.Status == "" {
 		filter.Status = StatusQueued
 	}
+	filter.ActionsOnly = true
 	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "tasks could not be loaded")

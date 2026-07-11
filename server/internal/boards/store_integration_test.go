@@ -36,17 +36,17 @@ func TestBoardMaxTasksPerListAppliesToAllBuckets(t *testing.T) {
 	}
 
 	for i := 1; i <= 2; i++ {
-		if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: fmt.Sprintf("first %d", i)}); err != nil {
+		if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: fmt.Sprintf("first %d", i), Kind: KindAction}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.CreateTask(ctx, userID, second.ID, CreateTaskInput{Title: fmt.Sprintf("second %d", i)}); err != nil {
+		if _, err := store.CreateTask(ctx, userID, second.ID, CreateTaskInput{Title: fmt.Sprintf("second %d", i), Kind: KindAction}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "too many"}); !errors.Is(err, ErrLimitFull) {
+	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "too many", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
 		t.Fatalf("first list error = %v, want ErrLimitFull", err)
 	}
-	if _, err := store.CreateTask(ctx, userID, second.ID, CreateTaskInput{Title: "too many"}); !errors.Is(err, ErrLimitFull) {
+	if _, err := store.CreateTask(ctx, userID, second.ID, CreateTaskInput{Title: "too many", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
 		t.Fatalf("second list error = %v, want ErrLimitFull", err)
 	}
 
@@ -54,7 +54,7 @@ func TestBoardMaxTasksPerListAppliesToAllBuckets(t *testing.T) {
 	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &next}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "now allowed"}); err != nil {
+	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "now allowed", Kind: KindAction}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -77,6 +77,110 @@ func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
 	}
 }
 
+func TestNeutralItemsNestingAndActionLimits(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Operating plan", MaxTasksPerList: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "YouTube", Goal: "Publish one strong video each week"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherBucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "LinkedIn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Cameras I am considering"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent.Kind != KindItem {
+		t.Fatalf("default kind = %q, want item", parent.Kind)
+	}
+	child, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Sony FX3", ParentID: parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.ParentID != parent.ID {
+		t.Fatalf("child parent = %q, want %q", child.ParentID, parent.ID)
+	}
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Too deep", ParentID: child.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("nested child error = %v, want ErrInvalidData", err)
+	}
+	otherRoot, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Lenses"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTask(ctx, userID, parent.ID, UpdateTaskInput{ParentID: &otherRoot.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("reparent item with children error = %v, want ErrInvalidData", err)
+	}
+	if _, err := store.UpdateTask(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &otherBucket.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("move item with children error = %v, want ErrInvalidData", err)
+	}
+	if err := store.ReorderTasks(ctx, userID, otherBucket.ID, []string{parent.ID}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-list reorder error = %v, want ErrNotFound", err)
+	}
+	action, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Record camera comparison", Kind: KindAction})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Second action", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
+		t.Fatalf("second action error = %v, want ErrLimitFull", err)
+	}
+	updatedTitle := "Record the camera comparison"
+	unchangedKind := KindAction
+	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Title: &updatedTitle, Kind: &unchangedKind, BucketID: &bucket.ID}); err != nil {
+		t.Fatalf("edit existing action in full list: %v", err)
+	}
+	completeAction := true
+	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &completeAction}); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Replacement action", Kind: KindAction})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenAction := false
+	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); !errors.Is(err, ErrLimitFull) {
+		t.Fatalf("reopen action in full list error = %v, want ErrLimitFull", err)
+	}
+	if err := store.DeleteTask(ctx, userID, replacement.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); err != nil {
+		t.Fatalf("reopen action with capacity: %v", err)
+	}
+	done := true
+	if _, err := store.UpdateTask(ctx, userID, parent.ID, UpdateTaskInput{Done: &done}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("complete item error = %v, want ErrInvalidData", err)
+	}
+	if _, err := store.ClaimTask(ctx, userID, parent.ID); !errors.Is(err, ErrTaskUnavailable) {
+		t.Fatalf("claim item error = %v, want ErrTaskUnavailable", err)
+	}
+	actions, err := store.ListTasks(ctx, userID, TaskFilter{ActionsOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 1 || actions[0].ID != action.ID {
+		t.Fatalf("actions = %#v, want only %q", actions, action.ID)
+	}
+	loaded, err := store.GetBoard(ctx, userID, board.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Buckets[0].Goal != "Publish one strong video each week" || loaded.Buckets[0].OpenCount != 1 {
+		t.Fatalf("loaded bucket = %#v", loaded.Buckets[0])
+	}
+}
+
 func TestAnyQueuedTaskCanBeClaimed(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -95,7 +199,7 @@ func TestAnyQueuedTaskCanBeClaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 	task, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{
-		Title: "Review positioning", Description: "Compare the three strongest options.", ScheduledDate: "2026-07-13",
+		Title: "Review positioning", Description: "Compare the three strongest options.", ScheduledDate: "2026-07-13", Kind: KindAction,
 	})
 	if err != nil {
 		t.Fatal(err)

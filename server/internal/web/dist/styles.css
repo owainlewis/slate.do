@@ -314,6 +314,25 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .task-date .icon { width: 11px; height: 11px; }
 .calendar-empty { padding: 12px 4px; color: var(--faint); font-size: 11px; }
+.today-view {
+  flex: 1;
+  min-height: 0;
+  width: min(760px, calc(100% - 56px));
+  margin: 12px auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.today-section { border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; background: var(--bg); }
+.today-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.today-section-head span { color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.today-section h2 { margin: 2px 0 0; font-size: 17px; }
+.today-section-head > b { min-width: 24px; padding: 3px 6px; border-radius: 20px; background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--faint); font-size: 10px; text-align: center; }
+.today-section ul { list-style: none; margin: 10px 0 0; padding: 0; }
+.today-notes { background: color-mix(in srgb, var(--ink) 2%, var(--bg)); }
+.today-notes .task { opacity: .78; }
+.today-empty { padding: 34px 4px; color: var(--faint); text-align: center; }
 .bucket {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -343,6 +362,19 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .bucket-head input:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .bucket-head input:focus { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.bucket-goal {
+  width: 100%;
+  margin: -3px 0 9px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--soft);
+  outline: 0;
+  font-size: 12px;
+}
+.bucket-goal::placeholder { color: var(--faint); }
+.bucket-goal:focus { border-bottom: 1px solid var(--accent); }
+.bucket-goal-error { margin: -5px 0 8px; min-height: 0; font-size: 10px; }
 .count {
   color: var(--faint);
   font-size: 11px;
@@ -414,6 +446,11 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .check:hover { border-color: var(--faint); }
 .task.done .check { background: var(--ink); border-color: var(--ink); }
 .task-body { flex: 1; min-width: 0; }
+.task-open { width: 100%; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
+.item-dot { flex: 0 0 auto; width: 16px; height: 20px; display: grid; place-items: center; }
+.item-dot::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+.child-item { padding-left: 29px; font-size: 13px; }
+.child-item .grip { display: none; }
 .task-title { overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; }
 .focus-star { width: 12px; height: 12px; flex: 0 0 auto; color: var(--accent); fill: var(--accent); }
 .add-task { display: flex; gap: 8px; padding-top: 8px; align-items: center; }
@@ -477,7 +514,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   justify-content: center;
 }
 .detail-head button:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--ink); }
-.detail-body { padding: 22px; overflow: auto; display: flex; flex-direction: column; gap: 18px; }
+.detail-body { flex: 1; padding: 22px; overflow: auto; display: flex; flex-direction: column; gap: 18px; }
 .field label {
   display: block;
   margin-bottom: 6px;
@@ -497,6 +534,16 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   outline: 0;
 }
 .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+.parent-context { margin: -10px 0 0; color: var(--faint); font-size: 12px; }
+.sub-items { padding: 16px 22px 22px; border-top: 1px solid var(--line); }
+.sub-items > label { display: block; margin-bottom: 8px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.sub-item-list { display: flex; flex-direction: column; margin-bottom: 8px; }
+.sub-item-list button { display: flex; align-items: center; gap: 8px; border: 0; border-bottom: 1px solid var(--line-2); padding: 8px 0; background: transparent; color: inherit; text-align: left; }
+.sub-item-list button span { flex: 1; }
+.sub-item-list small { color: var(--faint); }
+#add-child-form { display: flex; gap: 8px; }
+#add-child-form input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--bg); color: inherit; }
+#add-child-form button { width: 34px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--ink) 7%, transparent); color: inherit; display: grid; place-items: center; }
 .field textarea { resize: vertical; min-height: 86px; }
 .toggles { display: flex; gap: 10px; }
 .toggles label { display: flex; align-items: center; gap: 6px; color: var(--soft); font-weight: 700; }
@@ -699,6 +746,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .week-calendar { margin: 10px 14px 20px; overflow: visible; }
   .calendar-grid { grid-template-columns: 1fr; overflow: visible; }
   .calendar-day { min-height: 140px; }
+  .today-view { width: auto; margin: 10px 14px 20px; overflow: visible; }
   .topbar { padding: 0 14px; gap: 10px; }
   .title-input { flex-basis: 140px; }
   .week { display: none; }

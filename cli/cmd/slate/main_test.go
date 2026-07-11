@@ -57,7 +57,7 @@ func TestTasksCreateSendsTitleAndDescription(t *testing.T) {
 	if decodeErr != nil {
 		t.Fatal(decodeErr)
 	}
-	if body["title"] != "Review positioning" || body["description"] != "Compare options" || body["scheduledDate"] != "2026-07-13" {
+	if body["title"] != "Review positioning" || body["description"] != "Compare options" || body["scheduledDate"] != "2026-07-13" || body["kind"] != "action" {
 		t.Fatalf("body = %#v", body)
 	}
 	if _, exists := body["agent"]; exists {
