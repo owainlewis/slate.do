@@ -119,3 +119,19 @@ test("same-list drops produce the requested task order", () => {
   assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "one", "")), ["two", "three", "one"]);
   assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "two", "two")), ids);
 });
+
+test("counts use readable singular and plural labels", () => {
+  assert.equal(app.formatCount(1, "open action", "open actions"), "1 open action");
+  assert.equal(app.formatCount(2, "open action", "open actions"), "2 open actions");
+});
+
+test("single-column list drops use vertical position", () => {
+  const rects = [
+    { top: 0, bottom: 100, left: 0, width: 300, height: 100 },
+    { top: 120, bottom: 220, left: 0, width: 300, height: 100 },
+  ];
+
+  assert.equal(app.bucketDropIndexForRects(rects, 280, 20, true), 0);
+  assert.equal(app.bucketDropIndexForRects(rects, 20, 90, true), 1);
+  assert.equal(app.bucketDropIndexForRects(rects, 280, 210, true), 2);
+});
