@@ -307,9 +307,19 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .flow-card-meta { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 8px; color: var(--faint); font-size: 10px; }
 .flow-card-meta > span { display: flex; align-items: center; gap: 4px; }
 .flow-card-meta .icon { width: 11px; height: 11px; }
-.flow-status { display: flex; align-items: center; gap: 8px; padding: 0 12px 12px; }
-.flow-status > span { color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-.flow-status select { min-width: 0; flex: 1; border: 1px solid var(--line); border-radius: 7px; padding: 5px 7px; background: var(--bg); color: var(--ink); font-size: 11px; }
+.flow-card-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 0 12px 12px; }
+.flow-card-actions button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+.flow-card-actions button:hover { background: color-mix(in srgb, var(--ink) 11%, transparent); color: var(--ink); }
 .flow-empty { padding: 24px 4px; color: var(--faint); font-size: 11px; text-align: center; }
 .week-calendar {
   flex: 1;
@@ -376,8 +386,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .today-section h2 { margin: 2px 0 0; font-size: 17px; }
 .today-section-head > b { min-width: 24px; padding: 3px 6px; border-radius: 20px; background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--faint); font-size: 10px; text-align: center; }
 .today-section ul { list-style: none; margin: 10px 0 0; padding: 0; }
-.today-notes { background: color-mix(in srgb, var(--ink) 2%, var(--bg)); }
-.today-notes .task { opacity: .78; }
 .today-empty { padding: 34px 4px; color: var(--faint); text-align: center; }
 .bucket {
   border: 1px solid var(--line);
@@ -493,8 +501,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .task.done .check { background: var(--ink); border-color: var(--ink); }
 .task-body { flex: 1; min-width: 0; }
 .task-open { width: 100%; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
-.item-dot { flex: 0 0 auto; width: 16px; height: 20px; display: grid; place-items: center; }
-.item-dot::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
 .task-title { overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; }
 .state-badge {
   flex: 0 0 auto;

@@ -3,7 +3,6 @@ package boards
 import "time"
 
 const (
-	KindItem          = "item"
 	KindAction        = "action"
 	StatusQueued      = "queued"
 	StatusWorking     = "working"

@@ -314,12 +314,12 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 	}
 	kind := clean(input.Kind)
 	if kind == "" {
-		kind = KindItem
+		kind = KindAction
 	}
 	if !validKind(kind) {
 		return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 	}
-	if kind == KindAction && !input.OverrideLimit {
+	if !input.OverrideLimit {
 		full, err := s.bucketFull(ctx, bucketID)
 		if err != nil {
 			return Task{}, err
@@ -374,10 +374,6 @@ func (s *Store) updateTask(ctx context.Context, userID string, id string, input 
 			return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 		}
 		current.Kind = kind
-		if kind == KindItem {
-			current.Done = false
-			current.Status = StatusQueued
-		}
 	}
 	if input.BucketID != nil && *input.BucketID != current.BucketID {
 		bucket, err := s.getBucket(ctx, userID, *input.BucketID)
@@ -732,5 +728,5 @@ func applyTaskStatus(task *Task, status string, allowWorking bool) error {
 }
 
 func validKind(kind string) bool {
-	return kind == KindItem || kind == KindAction
+	return kind == KindAction
 }

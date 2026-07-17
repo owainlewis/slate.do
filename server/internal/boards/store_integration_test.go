@@ -77,7 +77,7 @@ func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
 	}
 }
 
-func TestNeutralItemsAndActionLimits(t *testing.T) {
+func TestUnifiedListItemsAndActionLimits(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -86,7 +86,7 @@ func TestNeutralItemsAndActionLimits(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Operating plan", MaxTasksPerList: 1})
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Operating plan", MaxTasksPerList: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,15 +102,15 @@ func TestNeutralItemsAndActionLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reference.Kind != KindItem {
-		t.Fatalf("default kind = %q, want item", reference.Kind)
+	if reference.Kind != KindAction {
+		t.Fatalf("default kind = %q, want action", reference.Kind)
 	}
 	camera, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Sony FX3"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if camera.Kind != KindItem {
-		t.Fatalf("camera kind = %q, want item", camera.Kind)
+	if camera.Kind != KindAction {
+		t.Fatalf("camera kind = %q, want action", camera.Kind)
 	}
 	if _, err := store.UpdateTask(ctx, userID, camera.ID, UpdateTaskInput{BucketID: &otherBucket.ID}); err != nil {
 		t.Fatalf("move flat item: %v", err)
@@ -148,25 +148,25 @@ func TestNeutralItemsAndActionLimits(t *testing.T) {
 	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); err != nil {
 		t.Fatalf("reopen action with capacity: %v", err)
 	}
-	done := true
-	if _, err := store.UpdateTask(ctx, userID, reference.ID, UpdateTaskInput{Done: &done}); !errors.Is(err, ErrInvalidData) {
-		t.Fatalf("complete item error = %v, want ErrInvalidData", err)
+	claimed, err := store.ClaimTask(ctx, userID, reference.ID)
+	if err != nil {
+		t.Fatalf("claim default list item: %v", err)
 	}
-	if _, err := store.ClaimTask(ctx, userID, reference.ID); !errors.Is(err, ErrTaskUnavailable) {
-		t.Fatalf("claim item error = %v, want ErrTaskUnavailable", err)
+	if claimed.Status != StatusWorking {
+		t.Fatalf("claimed status = %q, want working", claimed.Status)
 	}
 	actions, err := store.ListTasks(ctx, userID, TaskFilter{ActionsOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(actions) != 1 || actions[0].ID != action.ID {
-		t.Fatalf("actions = %#v, want only %q", actions, action.ID)
+	if len(actions) != 3 {
+		t.Fatalf("actions = %#v, want all three list items", actions)
 	}
 	loaded, err := store.GetBoard(ctx, userID, board.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Buckets[0].Goal != "Publish one strong video each week" || loaded.Buckets[0].OpenCount != 1 {
+	if loaded.Buckets[0].Goal != "Publish one strong video each week" || loaded.Buckets[0].OpenCount != 2 {
 		t.Fatalf("loaded bucket = %#v", loaded.Buckets[0])
 	}
 }

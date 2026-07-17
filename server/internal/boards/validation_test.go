@@ -41,8 +41,8 @@ func TestApplyTaskStatusPreservesAgentClaimContract(t *testing.T) {
 	}
 }
 
-func TestApplyTaskStatusRejectsReferenceItems(t *testing.T) {
-	task := Task{Kind: KindItem, Status: StatusQueued}
+func TestApplyTaskStatusRejectsLegacyItems(t *testing.T) {
+	task := Task{Kind: "item", Status: StatusQueued}
 	if err := applyTaskStatus(&task, StatusDone, true); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("item status error = %v, want ErrInvalidData", err)
 	}
@@ -60,10 +60,10 @@ func TestValidDate(t *testing.T) {
 }
 
 func TestValidKind(t *testing.T) {
-	if !validKind(KindItem) || !validKind(KindAction) {
-		t.Fatal("item and action should be valid kinds")
+	if !validKind(KindAction) {
+		t.Fatal("action should be a valid kind")
 	}
-	if validKind("task") {
+	if validKind("item") || validKind("task") {
 		t.Fatal("unexpected valid kind")
 	}
 }
