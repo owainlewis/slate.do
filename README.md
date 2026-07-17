@@ -4,15 +4,15 @@ A minimal interactive operating plan for clear thinking and focused execution.
 
 Slate helps you choose what to work on, keep active work visible, and hide everything else.
 
-It is built around thinking buckets, neutral items, explicit actions, and weekly planning.
+It is built around thinking buckets, simple list items, execution state, and weekly planning.
 
 ## Product
 
 The product reference is a simple operating plan that protects attention instead of collecting infinite metadata.
 
-Each list can hold ideas, notes, reference material, and actions.
+Each list holds one simple item type. Every item can move through Ready, Working, Review, and Done.
 
-Limits apply to open actions, not neutral items.
+Limits apply to open list items.
 
 Agents can suggest, update, and execute work, but Slate should make it hard to create clutter.
 
@@ -28,7 +28,7 @@ Slate now has an owner-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Owner sign in with a seeded owner.
-- Boards, goal-led lists, neutral items, explicit actions, planned dates, Week and Today views, and theme.
+- Boards, goal-led Lists, a four-state Flow view for list items, planned dates, Week and Today views, and theme.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.
