@@ -43,6 +43,7 @@ function decodeResponseBody(text, ok) {
 const goalSaveChains = new Map();
 let themeSaveChain = Promise.resolve();
 let themeChangeVersion = 0;
+let authVersion = 0;
 
 const state = {
   me: null,
@@ -78,6 +79,7 @@ async function boot() {
     const me = await api.get("/api/v1/me");
     state.me = me.authenticated ? me.user : null;
     if (state.me) {
+      authVersion += 1;
       state.theme = themeFor(state.me.theme);
       await loadBoards();
       state.view = "app";
@@ -509,6 +511,7 @@ function bindLogin() {
       await api.post("/api/v1/auth/login", { email: form.get("email"), password: form.get("password") });
       state.error = "";
       const me = await api.get("/api/v1/me");
+      authVersion += 1;
       state.me = me.user;
       state.theme = themeFor(state.me.theme);
       await loadBoards();
@@ -540,7 +543,7 @@ function bindApp() {
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = async () => { await loadBoard(el.dataset.board); render(); });
   document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
   document.querySelector("#settings").onclick = async () => { await openSettings(true); };
-  document.querySelector("#logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.view = "home"; render(); };
+  document.querySelector("#logout").onclick = async () => { authVersion += 1; await api.post("/api/v1/auth/logout"); state.me = null; state.view = "home"; render(); };
   document.querySelector("#new-board").onclick = async () => {
     const board = await api.post("/api/v1/boards", { name: "Untitled board", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
     await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", isInbox: true });
@@ -658,7 +661,7 @@ function bindDetail() {
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#back").onclick = closeSettings;
-  document.querySelector("#settings-logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.settings = false; state.view = "home"; render(); };
+  document.querySelector("#settings-logout").onclick = async () => { authVersion += 1; await api.post("/api/v1/auth/logout"); state.me = null; state.settings = false; state.view = "home"; render(); };
   document.querySelectorAll("[data-settings-theme]").forEach(el => el.onclick = async () => {
     try {
       await updateTheme(el.dataset.settingsTheme);
@@ -1061,16 +1064,21 @@ function currentTheme() {
 async function updateTheme(value) {
   const theme = themeFor(value);
   const version = ++themeChangeVersion;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
   state.theme = theme;
   render();
   const save = themeSaveChain.catch(() => {}).then(async () => {
+    if (authVersion !== sessionVersion || state.me?.id !== userID) return;
     const user = await api.patch("/api/v1/me", { theme });
+    if (authVersion !== sessionVersion || state.me?.id !== userID || user.id !== userID) return;
     state.me = user;
     if (version === themeChangeVersion) state.theme = themeFor(user.theme);
     state.error = "";
     render();
   }).catch(err => {
-    if (version === themeChangeVersion) {
+    if (authVersion !== sessionVersion) return;
+    if (version === themeChangeVersion && authVersion === sessionVersion) {
       state.theme = themeFor(state.me?.theme);
       render();
     }

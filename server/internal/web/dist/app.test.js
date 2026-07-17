@@ -161,6 +161,104 @@ test("changing theme updates the interface before persistence completes", async 
   await save;
 });
 
+test("finishing a theme save after logout does not restore the user", async () => {
+  app.pendingLogoutThemeSave = new Promise(resolve => { app.releaseLogoutThemeSave = resolve; });
+  vm.runInContext(`
+    state.theme = "light";
+    state.me = { id: "owner", theme: "light" };
+    api.patch = async (path, input) => {
+      await pendingLogoutThemeSave;
+      return { id: "owner", theme: input.theme };
+    };
+  `, app);
+
+  const save = app.updateTheme("dark");
+  vm.runInContext(`state.me = null`, app);
+  app.releaseLogoutThemeSave();
+  await save;
+
+  assert.equal(vm.runInContext("state.me", app), null);
+});
+
+test("a theme response from an old session cannot overwrite a new login", async () => {
+  app.pendingOldSessionThemeSave = new Promise(resolve => { app.releaseOldSessionThemeSave = resolve; });
+  vm.runInContext(`
+    authVersion = 7;
+    state.theme = "light";
+    state.me = { id: "owner", theme: "light" };
+    api.patch = async (path, input) => {
+      await pendingOldSessionThemeSave;
+      return { id: "owner", theme: input.theme };
+    };
+  `, app);
+
+  const save = app.updateTheme("dark");
+  await Promise.resolve();
+  vm.runInContext(`
+    authVersion = 8;
+    state.me = { id: "owner", theme: "light" };
+  `, app);
+  app.releaseOldSessionThemeSave();
+  await save;
+
+  assert.equal(vm.runInContext("state.me.theme", app), "light");
+});
+
+test("a theme failure from an old session is cancelled after a new login", async () => {
+  app.pendingOldSessionThemeFailure = new Promise((resolve, reject) => { app.rejectOldSessionThemeSave = reject; });
+  app.oldSessionFailureStarted = new Promise(resolve => { app.markOldSessionFailureStarted = resolve; });
+  vm.runInContext(`
+    authVersion = 8;
+    state.theme = "light";
+    state.me = { id: "owner", theme: "light" };
+    api.patch = async () => {
+      markOldSessionFailureStarted();
+      return pendingOldSessionThemeFailure;
+    };
+  `, app);
+
+  const save = app.updateTheme("dark");
+  await app.oldSessionFailureStarted;
+  vm.runInContext(`
+    authVersion = 9;
+    state.me = { id: "owner", theme: "light" };
+  `, app);
+  app.rejectOldSessionThemeSave(new Error("old session expired"));
+  await save;
+
+  assert.equal(vm.runInContext("state.me.theme", app), "light");
+});
+
+test("a queued theme save does not start after the session changes", async () => {
+  const patches = [];
+  app.queuedThemePatches = patches;
+  app.pendingFirstThemeSave = new Promise(resolve => { app.releaseFirstThemeSave = resolve; });
+  app.firstThemePatchStarted = new Promise(resolve => { app.markFirstThemePatchStarted = resolve; });
+  vm.runInContext(`
+    authVersion = 10;
+    state.theme = "light";
+    state.me = { id: "owner", theme: "light" };
+    api.patch = async (path, input) => {
+      queuedThemePatches.push(input.theme);
+      if (queuedThemePatches.length === 1) {
+        markFirstThemePatchStarted();
+        await pendingFirstThemeSave;
+      }
+      return { id: "owner", theme: input.theme };
+    };
+  `, app);
+
+  const first = app.updateTheme("dark");
+  const second = app.updateTheme("light");
+  await app.firstThemePatchStarted;
+  vm.runInContext(`authVersion = 11; state.me = null`, app);
+  app.releaseFirstThemeSave();
+  await Promise.all([first, second]);
+
+  assert.deepEqual(patches, ["dark"]);
+  assert.equal(vm.runInContext("state.me", app), null);
+});
+
 test("rapid theme changes are persisted in click order", async () => {
   const patched = [];
   app.patched = patched;
