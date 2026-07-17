@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,6 +91,32 @@ func TestRequireSessionUserAcceptsSessionCookie(t *testing.T) {
 	}
 }
 
+func TestUpdateThemePersistsUserPreference(t *testing.T) {
+	store := &themeAuthStore{requestAuthStore: requestAuthStore{}}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/me", strings.NewReader(`{"theme":"dark"}`))
+	rec := httptest.NewRecorder()
+
+	service.UpdateTheme(rec, req, User{ID: "owner"})
+
+	if rec.Code != http.StatusOK || store.theme != "dark" {
+		t.Fatalf("status = %d, theme = %q", rec.Code, store.theme)
+	}
+}
+
+func TestUpdateThemeRejectsUnknownTheme(t *testing.T) {
+	store := &themeAuthStore{requestAuthStore: requestAuthStore{}}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/me", strings.NewReader(`{"theme":"sepia"}`))
+	rec := httptest.NewRecorder()
+
+	service.UpdateTheme(rec, req, User{ID: "owner"})
+
+	if rec.Code != http.StatusBadRequest || store.theme != "" {
+		t.Fatalf("status = %d, theme = %q", rec.Code, store.theme)
+	}
+}
+
 type requestAuthStore struct{}
 
 func (requestAuthStore) CreateOwner(context.Context, string, string) (User, error) {
@@ -123,4 +150,17 @@ func (requestAuthStore) FindUserByAPITokenHash(_ context.Context, tokenHash stri
 		return User{ID: "api-user"}, nil
 	}
 	return User{}, ErrUnauthorized
+}
+func (requestAuthStore) UpdateTheme(context.Context, string, string) (User, error) {
+	return User{}, errors.New("unused")
+}
+
+type themeAuthStore struct {
+	requestAuthStore
+	theme string
+}
+
+func (s *themeAuthStore) UpdateTheme(_ context.Context, userID string, theme string) (User, error) {
+	s.theme = theme
+	return User{ID: userID, Theme: theme}, nil
 }

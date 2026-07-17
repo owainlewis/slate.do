@@ -31,6 +31,7 @@ type User struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
 	Role  string `json:"role"`
+	Theme string `json:"theme"`
 }
 
 type UserWithPassword struct {
@@ -56,6 +57,7 @@ type Store interface {
 	CreateAPIToken(ctx context.Context, userID string, name string, tokenHash string) (APIToken, error)
 	RevokeAPIToken(ctx context.Context, userID string, id string) error
 	FindUserByAPITokenHash(ctx context.Context, tokenHash string, now time.Time) (User, error)
+	UpdateTheme(ctx context.Context, userID string, theme string) (User, error)
 }
 
 type Service struct {
@@ -149,6 +151,28 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meResponse{Authenticated: true, User: &user})
+}
+
+func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User) {
+	if !validateSameOrigin(w, r) {
+		return
+	}
+	var input struct {
+		Theme string `json:"theme"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Theme != "light" && input.Theme != "dark" {
+		writeError(w, http.StatusBadRequest, "theme must be light or dark")
+		return
+	}
+	updated, err := s.store.UpdateTheme(r.Context(), user.ID, input.Theme)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "theme could not be updated")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Service) UserFromRequest(r *http.Request) (User, bool) {

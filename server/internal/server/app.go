@@ -31,6 +31,7 @@ func (a *App) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", a.health)
 	mux.HandleFunc("GET /api/v1/me", a.me)
+	mux.HandleFunc("PATCH /api/v1/me", a.session(a.auth.UpdateTheme))
 	mux.HandleFunc("POST /api/v1/auth/login", a.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
 	mux.HandleFunc("GET /api/v1/api-tokens", a.session(a.auth.ListAPITokens))
