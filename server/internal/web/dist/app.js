@@ -419,22 +419,39 @@ function todayHTML(board) {
 }
 
 function detailHTML(task) {
+  const list = state.board.buckets.find(item => item.id === task.bucketId);
   return `
-    <aside class="detail">
-      <div class="detail-head"><b>Item detail</b><button id="close-detail" title="Close">${icon("x")}</button></div>
-      <form class="detail-body" id="detail-form">
-        <div class="field"><label>Title</label><input name="title" type="text" value="${escapeAttr(task.title)}" placeholder="Item title" required></div>
-        <div class="field"><label for="detail-status">State</label><select id="detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
-        <div class="field"><label>List</label><select name="bucketId">
-          ${state.board.buckets.map(b => `<option value="${b.id}" ${b.id === task.bucketId ? "selected" : ""}>${escapeHTML(b.name)}</option>`).join("")}
-        </select></div>
-        <div class="field"><label>Date</label><input name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
-        <div class="field"><label>Description</label><textarea name="description" placeholder="Add details">${escapeHTML(task.description || "")}</textarea></div>
-        <p class="error detail-error">${escapeHTML(state.error)}</p>
-        <button class="primary" type="submit">Save</button>
-        <button class="danger" type="button" id="delete-task">Delete</button>
-      </form>
-    </aside>`;
+    <div class="detail-overlay" data-detail-overlay>
+      <section class="detail" role="dialog" aria-modal="true" aria-labelledby="detail-heading">
+        <header class="detail-head">
+          <div class="detail-context"><span>${escapeHTML(list?.name || "Item")}</span><span aria-hidden="true">/</span><b id="detail-heading">Edit item</b></div>
+          <button class="detail-close" type="button" data-close-detail aria-label="Close editor" title="Close">${icon("x")}</button>
+        </header>
+        <form id="detail-form">
+          <div class="detail-body">
+            <label class="sr-only" for="detail-title">Title</label>
+            <input class="detail-title" id="detail-title" name="title" type="text" value="${escapeAttr(task.title)}" placeholder="Item title" autocomplete="off" required>
+            <label class="sr-only" for="detail-description">Description</label>
+            <textarea class="detail-description" id="detail-description" name="description" placeholder="Add a description…">${escapeHTML(task.description || "")}</textarea>
+            <div class="detail-properties" aria-label="Item properties">
+              <div class="field"><label for="detail-status">State</label><select id="detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
+              <div class="field"><label for="detail-list">List</label><select id="detail-list" name="bucketId">
+                ${state.board.buckets.map(b => `<option value="${b.id}" ${b.id === task.bucketId ? "selected" : ""}>${escapeHTML(b.name)}</option>`).join("")}
+              </select></div>
+              <div class="field"><label for="detail-date">Plan for</label><input id="detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
+            </div>
+            <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
+          </div>
+          <footer class="detail-actions">
+            <button class="danger" type="button" id="delete-task">Delete item</button>
+            <div>
+              <button class="secondary" type="button" data-close-detail>Cancel</button>
+              <button class="primary" type="submit">Save changes</button>
+            </div>
+          </footer>
+        </form>
+      </section>
+    </div>`;
 }
 
 function statusOptionsHTML(selected) {
@@ -635,10 +652,74 @@ async function deleteBoard(id) {
 
 function bindDetail() {
   if (!state.selectedTask) return;
-  document.querySelector("#close-detail").onclick = () => { state.selectedTask = null; render(); };
-  document.querySelector("#delete-task").onclick = async () => { await api.del(`/api/v1/tasks/${state.selectedTask.id}`); state.selectedTask = null; await reload(); };
-  document.querySelector("#detail-form").addEventListener("submit", async event => {
+  const overlay = document.querySelector("[data-detail-overlay]");
+  const formElement = document.querySelector("#detail-form");
+  const taskID = state.selectedTask.id;
+  const bucketID = state.selectedTask.bucketId;
+  let detailBusy = false;
+  const focusAfterDetail = (preferredTaskID = taskID) => {
+    const triggers = [...document.querySelectorAll("[data-open-task]")];
+    const trigger = triggers.find(element => element.dataset.openTask === preferredTaskID);
+    const addInput = document.querySelector(`[data-add-task="${bucketID}"] input[name="title"]`);
+    (trigger || triggers[0] || addInput || document.querySelector("#board-title"))?.focus();
+  };
+  const setDetailBusy = busy => {
+    detailBusy = busy;
+    document.querySelectorAll("[data-close-detail], #delete-task, #detail-form button[type=submit]").forEach(element => { element.disabled = busy; });
+  };
+  const closeDetail = () => {
+    if (detailBusy) return;
+    state.selectedTask = null;
+    state.error = "";
+    render();
+    focusAfterDetail();
+  };
+  document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = closeDetail);
+  overlay.addEventListener("click", event => { if (event.target === overlay) closeDetail(); });
+  overlay.addEventListener("keydown", event => {
+    if (event.key === "Escape") closeDetail();
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      if (!detailBusy) formElement.requestSubmit();
+    }
+    if (event.key === "Tab") {
+      const focusable = [...overlay.querySelectorAll("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)")];
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  });
+  document.querySelector("#detail-title").focus();
+  document.querySelector("#delete-task").onclick = async () => {
+    if (!confirm("Delete this item?")) return;
+    const visibleTaskIDs = [...document.querySelectorAll("[data-open-task]")].map(element => element.dataset.openTask);
+    const taskIndex = visibleTaskIDs.indexOf(taskID);
+    const nextTaskID = visibleTaskIDs[taskIndex + 1] || visibleTaskIDs[taskIndex - 1] || "";
+    setDetailBusy(true);
+    try {
+      await api.del(`/api/v1/tasks/${taskID}`);
+      state.selectedTask = null;
+      state.error = "";
+      await reload();
+      focusAfterDetail(nextTaskID);
+    } catch (err) {
+      state.error = err.message;
+      formElement.querySelector(".detail-error").textContent = err.message;
+      setDetailBusy(false);
+    }
+  };
+  formElement.addEventListener("submit", async event => {
     event.preventDefault();
+    if (detailBusy) return;
+    setDetailBusy(true);
+    const submit = event.currentTarget.querySelector('button[type="submit"]');
+    submit.textContent = "Saving…";
     const form = new FormData(event.currentTarget);
     try {
       const input = {
@@ -648,12 +729,17 @@ function bindDetail() {
         bucketId: form.get("bucketId"),
         status: form.get("status"),
       };
-      await api.patch(`/api/v1/tasks/${state.selectedTask.id}/status`, input);
+      await api.patch(`/api/v1/tasks/${taskID}/status`, input);
       state.error = "";
+      state.selectedTask = null;
       await reload();
+      focusAfterDetail();
     } catch (err) {
       state.error = err.message;
-      render();
+      const error = formElement.querySelector(".detail-error");
+      error.textContent = err.message;
+      setDetailBusy(false);
+      submit.textContent = "Save changes";
     }
   });
 }

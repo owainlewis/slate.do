@@ -85,6 +85,20 @@ test("detail exposes state without a type control", () => {
   assert.doesNotMatch(actionHTML, /name="kind"/);
 });
 
+test("detail presents a focused, accessible editor with clear actions", () => {
+  vm.runInContext(`state.board = ${JSON.stringify(board)}`, app);
+  const html = app.detailHTML(board.buckets[0].tasks[1]);
+
+  assert.match(html, /role="dialog" aria-modal="true"/);
+  assert.match(html, /class="detail-title"/);
+  assert.match(html, /class="detail-description"/);
+  assert.match(html, /class="detail-properties"/);
+  assert.match(html, />Save changes</);
+  assert.match(html, /data-close-detail>Cancel</);
+  assert.match(html, />Delete item</);
+  assert.match(html, /Home list/);
+});
+
 test("footer reports live Working and Review counts", () => {
   const html = app.footerHTML(board, false);
   assert.match(html, /1 working/);
