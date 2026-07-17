@@ -63,7 +63,7 @@ const board = {
   ],
 };
 
-test("Flow groups every list item into four fixed states with compact controls", () => {
+test("Flow groups every list item into four fixed states with drag-only cards", () => {
   const html = app.flowHTML(board);
 
   assert.deepEqual([...html.matchAll(/data-flow-status="([^"]+)"/g)].map(match => match[1]), ["queued", "working", "needs_review", "done"]);
@@ -72,8 +72,10 @@ test("Flow groups every list item into four fixed states with compact controls",
   assert.match(html, /Fri, Jul 17/);
   assert.match(html, /Reference item/);
   assert.doesNotMatch(html, /<select/);
-  assert.match(html, /aria-label="Move Working action to Ready"/);
-  assert.match(html, /aria-label="Move Working action to Review"/);
+  assert.match(html, /class="flow-card [^"]*" draggable="true" data-task="working"/);
+  assert.match(html, /data-open-task="working"/);
+  assert.doesNotMatch(html, /data-set-task-status/);
+  assert.doesNotMatch(html, /flow-card-actions/);
 });
 
 test("detail exposes state without a type control", () => {
