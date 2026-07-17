@@ -41,6 +41,7 @@ function decodeResponseBody(text, ok) {
 }
 
 const goalSaveChains = new Map();
+let themeSaveChain = Promise.resolve();
 
 const state = {
   me: null,
@@ -55,6 +56,7 @@ const state = {
   tokens: [],
   boardMode: "lists",
   weekStart: "",
+  theme: "",
 };
 
 const themes = [
@@ -75,6 +77,7 @@ async function boot() {
     const me = await api.get("/api/v1/me");
     state.me = me.authenticated ? me.user : null;
     if (state.me) {
+      state.theme = themeFor(state.me.theme);
       await loadBoards();
       state.view = "app";
     }
@@ -206,7 +209,7 @@ function landingHTML() {
 
 function appHTML() {
   const board = state.board;
-  const theme = themeFor(board?.backgroundValue);
+  const theme = currentTheme();
   const lists = board?.buckets || [];
   const listsMode = state.boardMode === "lists";
   const flowMode = state.boardMode === "flow";
@@ -449,7 +452,7 @@ function statusErrorHTML(error) {
 }
 
 function settingsHTML() {
-  const theme = themeFor(state.board?.backgroundValue);
+  const theme = currentTheme();
   return `
     <section class="settings-page theme-${theme}">
       <aside class="sidebar">
@@ -467,10 +470,11 @@ function settingsHTML() {
               <h1>Settings</h1>
             </div>
           </div>
+          ${statusErrorHTML(state.error)}
           <section class="settings-section">
             <div class="settings-section-head">
               <h2>Appearance</h2>
-              <p>Theme for ${escapeHTML(state.board?.name || "this board")}</p>
+              <p>Theme across Slate</p>
             </div>
             <div class="seg settings-theme">
               ${themes.map(item => `<button data-settings-theme="${item.id}" class="${theme === item.id ? "on" : ""}">${item.label}</button>`).join("")}
@@ -505,6 +509,7 @@ function bindLogin() {
       state.error = "";
       const me = await api.get("/api/v1/me");
       state.me = me.user;
+      state.theme = themeFor(state.me.theme);
       await loadBoards();
       state.view = "app";
     } catch (err) {
@@ -536,7 +541,7 @@ function bindApp() {
   document.querySelector("#settings").onclick = async () => { await openSettings(true); };
   document.querySelector("#logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.view = "home"; render(); };
   document.querySelector("#new-board").onclick = async () => {
-    const board = await api.post("/api/v1/boards", { name: "Untitled board", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: themeFor(state.board?.backgroundValue) });
+    const board = await api.post("/api/v1/boards", { name: "Untitled board", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
     await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", isInbox: true });
     await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Focus" });
     await loadBoards(board.id);
@@ -616,7 +621,7 @@ async function deleteBoard(id) {
   state.board = null;
   await loadBoards();
   if (!state.board) {
-    const next = await api.post("/api/v1/boards", { name: "Today", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: "light" });
+    const next = await api.post("/api/v1/boards", { name: "Today", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
     await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Inbox", isInbox: true });
     await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Focus" });
     await loadBoards(next.id);
@@ -654,8 +659,12 @@ async function bindSettings() {
   document.querySelector("#back").onclick = closeSettings;
   document.querySelector("#settings-logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.settings = false; state.view = "home"; render(); };
   document.querySelectorAll("[data-settings-theme]").forEach(el => el.onclick = async () => {
-    await api.patch(`/api/v1/boards/${state.board.id}`, { backgroundKind: "theme", backgroundValue: el.dataset.settingsTheme });
-    await reload();
+    try {
+      await updateTheme(el.dataset.settingsTheme);
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
   });
   document.querySelector("#token-form").addEventListener("submit", async event => {
     event.preventDefault();
@@ -1042,6 +1051,23 @@ function formatCount(count, singular, plural) {
 function themeFor(value) {
   if (value === "charcoal" || value === "dark") return "dark";
   return "light";
+}
+
+function currentTheme() {
+  return themeFor(state.theme || state.board?.backgroundValue);
+}
+
+async function updateTheme(value) {
+  const theme = themeFor(value);
+  const save = themeSaveChain.catch(() => {}).then(async () => {
+    const user = await api.patch("/api/v1/me", { theme });
+    state.me = user;
+    state.theme = themeFor(user.theme);
+    state.error = "";
+    render();
+  });
+  themeSaveChain = save;
+  return save;
 }
 
 function escapeHTML(value) {

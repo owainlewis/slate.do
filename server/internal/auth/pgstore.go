@@ -23,8 +23,8 @@ func (s *PGStore) CreateOwner(ctx context.Context, email string, passwordHash st
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, role)
 		VALUES ($1, $2, 'owner')
-		RETURNING id::text, email, role
-	`, email, passwordHash).Scan(&user.ID, &user.Email, &user.Role)
+		RETURNING id::text, email, role, theme
+	`, email, passwordHash).Scan(&user.ID, &user.Email, &user.Role, &user.Theme)
 	if uniqueViolation(err) {
 		return User{}, ErrEmailTaken
 	}
@@ -40,10 +40,10 @@ func (s *PGStore) OwnerCount(ctx context.Context) (int, error) {
 func (s *PGStore) FindUserByEmail(ctx context.Context, email string) (UserWithPassword, error) {
 	var user UserWithPassword
 	err := s.db.QueryRow(ctx, `
-		SELECT id::text, email, role, password_hash
+		SELECT id::text, email, role, theme, password_hash
 		FROM users
 		WHERE email = $1
-	`, email).Scan(&user.ID, &user.Email, &user.Role, &user.PasswordHash)
+	`, email).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.PasswordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserWithPassword{}, ErrInvalidAuth
 	}
@@ -53,11 +53,11 @@ func (s *PGStore) FindUserByEmail(ctx context.Context, email string) (UserWithPa
 func (s *PGStore) FindUserBySessionHash(ctx context.Context, tokenHash string, now time.Time) (User, error) {
 	var user User
 	err := s.db.QueryRow(ctx, `
-		SELECT u.id::text, u.email, u.role
+		SELECT u.id::text, u.email, u.role, u.theme
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1 AND s.expires_at > $2
-	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role)
+	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUnauthorized
 	}
@@ -126,11 +126,22 @@ func (s *PGStore) FindUserByAPITokenHash(ctx context.Context, tokenHash string, 
 		SET last_used_at = $2
 		FROM users u
 		WHERE t.user_id = u.id AND t.token_hash = $1 AND t.revoked_at IS NULL
-		RETURNING u.id::text, u.email, u.role
-	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role)
+		RETURNING u.id::text, u.email, u.role, u.theme
+	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUnauthorized
 	}
+	return user, err
+}
+
+func (s *PGStore) UpdateTheme(ctx context.Context, userID string, theme string) (User, error) {
+	var user User
+	err := s.db.QueryRow(ctx, `
+		UPDATE users
+		SET theme = $2, updated_at = now()
+		WHERE id = $1
+		RETURNING id::text, email, role, theme
+	`, userID, theme).Scan(&user.ID, &user.Email, &user.Role, &user.Theme)
 	return user, err
 }
 

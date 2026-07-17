@@ -111,6 +111,56 @@ test("plain-text API errors remain readable", () => {
   assert.equal(app.decodeResponseBody('{"ok":true}', true).ok, true);
 });
 
+test("one theme holds when switching between boards", () => {
+  vm.runInContext(`
+    state.theme = "dark";
+    state.board = { id: "light-board", name: "Light board", backgroundValue: "light", buckets: [] };
+  `, app);
+
+  assert.match(app.appHTML(), /class="shell theme-dark"/);
+  vm.runInContext(`state.board = { id: "other-board", name: "Other board", backgroundValue: "charcoal", buckets: [] }`, app);
+  assert.match(app.appHTML(), /class="shell theme-dark"/);
+  assert.match(app.settingsHTML(), /Theme across Slate/);
+});
+
+test("changing theme updates the user preference once", async () => {
+  const patched = [];
+  app.patched = patched;
+  vm.runInContext(`
+    state.theme = "light";
+    state.me = { id: "owner", theme: "light" };
+    api.patch = async (path, input) => {
+      patched.push({ path, input });
+      return { id: "owner", theme: input.theme };
+    };
+    render = () => {};
+  `, app);
+
+  await app.updateTheme("dark");
+
+  assert.deepEqual(patched.map(call => call.path), ["/api/v1/me"]);
+  assert.equal(vm.runInContext("state.theme", app), "dark");
+  assert.equal(vm.runInContext("state.me.theme", app), "dark");
+});
+
+test("rapid theme changes are persisted in click order", async () => {
+  const patched = [];
+  app.patched = patched;
+  vm.runInContext(`
+    state.theme = "light";
+    state.me = { id: "owner", theme: "light" };
+    api.patch = async (path, input) => {
+      patched.push(input.theme);
+      return { id: "owner", theme: input.theme };
+    };
+  `, app);
+
+  await Promise.all([app.updateTheme("dark"), app.updateTheme("light"), app.updateTheme("dark")]);
+
+  assert.deepEqual(patched, ["dark", "light", "dark"]);
+  assert.equal(vm.runInContext("state.theme", app), "dark");
+});
+
 test("same-list drops produce the requested task order", () => {
   const ids = ["one", "two", "three"];
 
