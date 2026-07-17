@@ -40,6 +40,8 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   let deleted = false;
   let hidden = false;
   let patchCount = 0;
+  let releaseFirstFailure;
+  const firstFailure = new Promise(resolve => { releaseFirstFailure = resolve; });
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
     if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
@@ -48,7 +50,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
     if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
       patchCount += 1;
       if (patchCount === 1) {
-        await new Promise(resolve => setTimeout(resolve, 120));
+        await firstFailure;
         response.writeHead(500, { "Content-Type": "application/json" });
         return response.end(JSON.stringify({ error: "Save failed" }));
       }
@@ -59,7 +61,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
       deleted = true;
       return json(response, { ok: true });
     }
-    if (url.pathname === "/" || url.pathname === "/index.html") return file(response, "index.html", "text/html");
+    if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
     if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
     if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
     response.writeHead(404).end();
@@ -77,9 +79,12 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   const title = page.getByRole("textbox", { name: "Title", exact: true });
   await title.fill("Changed but unsaved");
   await page.keyboard.press("Control+Enter");
+  await page.getByRole("button", { name: "Saving…", exact: true }).waitFor();
   await title.press("Escape");
   assert.equal(await page.getByRole("dialog").count(), 1);
   await page.keyboard.press("Control+Enter");
+  assert.equal(patchCount, 1);
+  releaseFirstFailure();
   await page.getByText("Save failed", { exact: true }).waitFor();
   assert.equal(patchCount, 1);
   assert.equal(await title.inputValue(), "Changed but unsaved");
@@ -123,4 +128,9 @@ function json(response, body) {
 function file(response, name, type) {
   response.writeHead(200, { "Content-Type": type });
   response.end(fs.readFileSync(path.join(dist, name)));
+}
+
+function html(response) {
+  response.writeHead(200, { "Content-Type": "text/html" });
+  response.end('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/styles.css"></head><body><main id="app"></main><script type="module" src="/app.js"></script></body></html>');
 }

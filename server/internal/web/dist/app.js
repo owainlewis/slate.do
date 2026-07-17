@@ -710,7 +710,6 @@ function bindDetail() {
     if (detailBusy) return;
     setDetailBusy(true);
     const submit = event.currentTarget.querySelector('button[type="submit"]');
-    submit.disabled = true;
     submit.textContent = "Saving…";
     const form = new FormData(event.currentTarget);
     try {
@@ -721,7 +720,7 @@ function bindDetail() {
         bucketId: form.get("bucketId"),
         status: form.get("status"),
       };
-      await api.patch(`/api/v1/tasks/${state.selectedTask.id}/status`, input);
+      await api.patch(`/api/v1/tasks/${taskID}/status`, input);
       state.error = "";
       state.selectedTask = null;
       await reload();
@@ -731,7 +730,6 @@ function bindDetail() {
       const error = formElement.querySelector(".detail-error");
       error.textContent = err.message;
       setDetailBusy(false);
-      submit.disabled = false;
       submit.textContent = "Save changes";
     }
   });
