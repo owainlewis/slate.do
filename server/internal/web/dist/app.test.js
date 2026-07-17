@@ -110,3 +110,12 @@ test("plain-text API errors remain readable", () => {
   );
   assert.equal(app.decodeResponseBody('{"ok":true}', true).ok, true);
 });
+
+test("same-list drops produce the requested task order", () => {
+  const ids = ["one", "two", "three"];
+
+  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "three", "one")), ["three", "one", "two"]);
+  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "one", "two", true)), ["two", "one", "three"]);
+  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "one", "")), ["two", "three", "one"]);
+  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "two", "two")), ids);
+});

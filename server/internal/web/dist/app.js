@@ -708,7 +708,19 @@ function bindDrag() {
       event.preventDefault();
       const id = event.dataTransfer.getData("text/task-id");
       if (!id) return;
-      await runMutation(() => api.patch(`/api/v1/tasks/${id}`, { bucketId: list.dataset.taskList }), reload);
+      const listID = list.dataset.taskList;
+      const task = findTask(id);
+      if (task?.bucketId === listID) {
+        const ids = Array.from(list.children).map(item => item.dataset.task).filter(Boolean);
+        const target = event.target.closest?.("[data-task]");
+        const targetRect = target?.getBoundingClientRect();
+        const afterTarget = targetRect ? event.clientY > targetRect.top + targetRect.height / 2 : false;
+        const ordered = reorderedTaskIDs(ids, id, target?.dataset.task || "", afterTarget);
+        if (ordered.every((taskID, index) => taskID === ids[index])) return;
+        await runMutation(() => api.post(`/api/v1/buckets/${listID}/reorder-tasks`, { ids: ordered }), reload);
+      } else {
+        await runMutation(() => api.patch(`/api/v1/tasks/${id}`, { bucketId: listID }), reload);
+      }
     });
   });
   document.querySelectorAll(".calendar-day[data-calendar-date]").forEach(day => {
@@ -746,6 +758,17 @@ async function runMutation(request, refresh) {
     state.error = err.message;
   }
   await refresh();
+}
+
+function reorderedTaskIDs(ids, movingID, targetID, afterTarget = false) {
+  if (!ids.includes(movingID) || targetID === movingID) return [...ids];
+  const ordered = ids.filter(id => id !== movingID);
+  if (!targetID) return [...ordered, movingID];
+  let targetIndex = ordered.indexOf(targetID);
+  if (targetIndex < 0) return [...ids];
+  if (afterTarget) targetIndex += 1;
+  ordered.splice(targetIndex, 0, movingID);
+  return ordered;
 }
 
 async function loadTokens() {
