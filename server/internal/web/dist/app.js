@@ -4,16 +4,6 @@ const ICON_PATHS = {
   trash: '<path d="M4 7h16"/><path d="M9 7V4.6C9 3.7 9.7 3 10.6 3h2.8c.9 0 1.6.7 1.6 1.6V7"/><path d="M18.4 7l-.8 12.4a2 2 0 0 1-2 1.9H8.4a2 2 0 0 1-2-1.9L5.6 7"/><path d="M10 11v6M14 11v6"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chevronLeft: '<path d="M15 6l-6 6 6 6"/>',
-  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
-  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
-  inbox: '<polyline points="21 11 15 11 13 14 9 14 7 11 1 11"/><path d="M5.4 4.6L1 11v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-7l-4.4-6.4A2 2 0 0 0 15 3H7a2 2 0 0 0-1.6 1.4z"/>',
-  file: '<path d="M13 2.4H6.6a1.6 1.6 0 0 0-1.6 1.6v16a1.6 1.6 0 0 0 1.6 1.6h10.8a1.6 1.6 0 0 0 1.6-1.6V8.6z"/><path d="M13 2.4V8.6h6.2"/>',
-  grip: '<circle cx="9" cy="5" r="1.1"/><circle cx="9" cy="12" r="1.1"/><circle cx="9" cy="19" r="1.1"/><circle cx="15" cy="5" r="1.1"/><circle cx="15" cy="12" r="1.1"/><circle cx="15" cy="19" r="1.1"/>',
-  calendar: '<rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>',
-  user: '<circle cx="12" cy="8" r="3.2"/><path d="M5 20.5c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2"/>',
-  tag: '<path d="M3 11.6V4.6A1.6 1.6 0 0 1 4.6 3h7l9 9-8.4 8.4-9-9z"/><circle cx="8" cy="8" r="1.3"/>',
-  star: '<path d="M12 3.6l2.5 5.1 5.6.8-4 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4-4 5.6-.8z"/>',
-  boards: '<rect x="3" y="4" width="7" height="7" rx="1.6"/><rect x="14" y="4" width="7" height="7" rx="1.6"/><rect x="3" y="15" width="7" height="6" rx="1.6"/><rect x="14" y="15" width="7" height="6" rx="1.6"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
 };
 
@@ -68,7 +58,10 @@ async function boot() {
   try {
     const me = await api.get("/api/v1/me");
     state.me = me.authenticated ? me.user : null;
-    if (state.me) await loadBoards();
+    if (state.me) {
+      await loadBoards();
+      state.view = "app";
+    }
     if (location.hash === "#settings" && state.me) await openSettings(false);
   } catch (err) {
     state.error = err.message;
@@ -123,10 +116,12 @@ function loginHTML() {
     <section class="login">
       <form id="login-form">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-        <h1>Sign in</h1>
-        <p>Owner sign in.</p>
-        <input name="email" type="email" autocomplete="email" placeholder="Email" required>
-        <input name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+        <h1>Welcome back.</h1>
+        <p>Sign in to your slate.</p>
+        <label class="login-label" for="login-email">Email</label>
+        <input id="login-email" name="email" type="email" autocomplete="email" required>
+        <label class="login-label" for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
         <button class="primary" type="submit">Sign in</button>
         <p class="error">${escapeHTML(state.error)}</p>
       </form>
@@ -139,30 +134,57 @@ function landingHTML() {
     <section class="landing">
       <nav class="landing-nav">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-        <div>
-          ${signedIn ? `<button class="plain-btn nav-action" id="landing-open">Open app</button>` : `<button class="plain-btn nav-action" id="landing-login">Log in</button>`}
-        </div>
+        ${signedIn ? `<button class="nav-action" id="landing-open">Open app</button>` : `<button class="nav-action" id="landing-login">Log in</button>`}
       </nav>
       <main class="landing-main">
-        <section class="landing-copy">
-          <p>Private beta</p>
-          <h1>Slate</h1>
-          <h2>A calm board for choosing what gets attention.</h2>
+        <section class="landing-hero">
+          <p class="landing-eyebrow">Private beta</p>
+          <h1>Decide what deserves attention.</h1>
+          <p class="landing-lede">Slate is a calm operating plan for one person running many streams of work, human and agent alike. A few lists, a hard limit on open actions, and one honest view of today.</p>
           <div class="landing-actions">
             ${signedIn ? `<button class="primary" id="open-app">Open app</button>` : `<button class="primary" id="hero-login">Log in</button>`}
             <a class="secondary-link" href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>
           </div>
         </section>
-        <section class="landing-preview" aria-label="Slate preview">
-          <div>
-            <span>3/20</span>
-            <b>Focus</b>
+        <section class="landing-board" aria-label="Slate preview">
+          <div class="preview-list">
+            <header><span class="preview-name">Inbox</span><span class="preview-count">2/20</span></header>
+            <div class="preview-task"><span class="preview-dot"></span>Pricing feedback from Anna</div>
+            <div class="preview-task"><span class="preview-check"></span>Reply to the beta list</div>
+            <div class="preview-add">Add item</div>
           </div>
-          <p>${icon("star", "focus-star")}Draft launch note</p>
-          <p>${icon("star", "focus-star")}Review agent work</p>
-          <p>${icon("star", "focus-star")}Ship one small thing</p>
+          <div class="preview-list preview-focus">
+            <header><span class="preview-name">Focus</span><span class="preview-count">3/5</span></header>
+            <div class="preview-task preview-done"><span class="preview-check checked">${icon("check")}</span>Draft launch note</div>
+            <div class="preview-task"><span class="preview-check"></span>Review agent pull requests</div>
+            <div class="preview-task"><span class="preview-check"></span>Ship one small thing</div>
+            <div class="preview-add">Add item</div>
+          </div>
+          <div class="preview-list">
+            <header><span class="preview-name">Agent work</span><span class="preview-count">1/20</span></header>
+            <div class="preview-task"><span class="preview-check"></span>Research pricing pages<span class="preview-status">working</span></div>
+            <div class="preview-add">Add item</div>
+          </div>
+        </section>
+        <section class="landing-principles">
+          <div>
+            <h3>Limits, not lists</h3>
+            <p>Every list caps its open actions. When a list is full, something has to finish before anything new begins.</p>
+          </div>
+          <div>
+            <h3>Neutral by default</h3>
+            <p>Ideas, notes, and reference sit quietly beside your work. Only explicit actions count against a limit.</p>
+          </div>
+          <div>
+            <h3>Agents welcome</h3>
+            <p>Agents pull, claim, and finish work through the same plan you read. You keep the judgment. They keep the pace.</p>
+          </div>
         </section>
       </main>
+      <footer class="landing-footer">
+        <span>slate.do</span>
+        <a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>
+      </footer>
     </section>`;
 }
 
@@ -188,38 +210,39 @@ function appHTML() {
             <button class="plain-btn icon-label" id="new-board">${icon("plus")}<span>New board</span></button>
           </section>
           <section class="nav-sec nav-sec-footer">
-            <button class="plain-btn icon-label" id="settings">${icon("gear")}<span>Settings and API tokens</span></button>
-            <button class="plain-btn icon-label" id="logout">${icon("logout")}<span>Sign out</span></button>
+            <button class="plain-btn" id="settings">Settings</button>
+            <button class="plain-btn" id="logout">Sign out</button>
           </section>
         </div>
       </aside>
       <div class="main">
         <header class="topbar">
-          <input class="title-input" id="board-title" value="${escapeAttr(board?.name || "")}">
+          <input class="title-input" id="board-title" aria-label="Board name" value="${escapeAttr(board?.name || "")}">
           <span class="week">${calendarMode ? weekLabel() : new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
           <div class="top-actions">
             <div class="view-switch" aria-label="Board view">
-              <button data-board-mode="lists" aria-label="Lists" class="${!calendarMode && !todayMode ? "on" : ""}">${icon("boards")}<span>Lists</span></button>
-              <button data-board-mode="calendar" aria-label="Week" class="${calendarMode ? "on" : ""}">${icon("calendar")}<span>Week</span></button>
-              <button data-board-mode="today" aria-label="Today" class="${todayMode ? "on" : ""}">${icon("check")}<span>Today</span></button>
+              <button data-board-mode="lists" class="${!calendarMode && !todayMode ? "on" : ""}">Lists</button>
+              <button data-board-mode="calendar" class="${calendarMode ? "on" : ""}">Week</button>
+              <button data-board-mode="today" class="${todayMode ? "on" : ""}">Today</button>
             </div>
             <details class="board-settings">
-              <summary class="icon-btn" title="Board settings" aria-label="Board settings">${icon("gear")}</summary>
+              <summary title="Board options" aria-label="Board options">Options</summary>
               <div class="board-settings-menu">
                 <section>
-                  <h3>Items per list</h3>
+                  <h3>Open actions per list</h3>
                   <div class="limit-control">
-                    <input id="list-limit" type="number" min="1" value="${board?.maxTasksPerList || DEFAULT_LIST_LIMIT}">
+                    <input id="list-limit" aria-label="Open actions per list" type="number" min="1" value="${board?.maxTasksPerList || DEFAULT_LIST_LIMIT}">
                   </div>
                 </section>
               </div>
             </details>
-            <button class="icon-btn icon-label ${calendarMode || todayMode ? "add-list-placeholder" : ""}" id="add-list" ${calendarMode || todayMode ? 'aria-hidden="true" tabindex="-1" disabled' : ""}>${icon("plus")}<span>List</span></button>
+            <button class="icon-btn icon-label ${calendarMode || todayMode ? "add-list-placeholder" : ""}" id="add-list" ${calendarMode || todayMode ? 'aria-hidden="true" tabindex="-1" disabled' : ""}>${icon("plus")}<span>New list</span></button>
           </div>
         </header>
         ${calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
         <footer class="footer">
-          <span>${todayMode ? `${todayActionCount(board)} today` : `${openTaskCount(board)} open actions`}</span>
+          <span>${todayMode ? formatCount(todayActionCount(board), "action today", "actions today") : formatCount(openTaskCount(board), "open action", "open actions")}</span>
+          ${state.error ? `<span class="footer-error">${escapeHTML(state.error)}</span>` : ""}
         </footer>
       </div>
       ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
@@ -230,7 +253,7 @@ function boardRowHTML(board) {
   const current = board.id === state.board?.id;
   return `
     <div class="board-row ${current ? "on" : ""}">
-      <button class="board-select" data-board="${board.id}">${icon("file", "board-icon")}<span>${escapeHTML(board.name)}</span></button>
+      <button class="board-select" data-board="${board.id}"><span>${escapeHTML(board.name)}</span></button>
       <button class="board-delete" data-delete-board="${board.id}" title="Delete board">${icon("trash")}</button>
     </div>`;
 }
@@ -239,18 +262,18 @@ function listHTML(list) {
   const over = list.openCount > list.limitCount ? "over-limit" : "";
   const tasks = list.tasks || [];
   return `
-    <section class="bucket ${over}" data-bucket="${list.id}">
+    <section class="bucket ${over}" data-bucket="${list.id}" draggable="true">
       <div class="bucket-head">
+        <input data-bucket-name="${list.id}" aria-label="List name" value="${escapeAttr(list.name)}">
         <span class="count" title="Open actions / limit">${list.openCount}/${list.limitCount}</span>
-        <input data-bucket-name="${list.id}" value="${escapeAttr(list.name)}">
         <div class="bucket-menu">
           <button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list">${icon("trash")}</button>
         </div>
       </div>
-      <input class="bucket-goal" data-bucket-goal="${list.id}" value="${escapeAttr(list.goal || "")}" placeholder="What matters in this bucket?" aria-label="Goal for ${escapeAttr(list.name)}">
+      <input class="bucket-goal" data-bucket-goal="${list.id}" value="${escapeAttr(list.goal || "")}" placeholder="Add a goal" aria-label="Goal for ${escapeAttr(list.name)}">
       ${state.goalErrors[list.id] ? `<p class="error bucket-goal-error">${escapeHTML(state.goalErrors[list.id])}</p>` : ""}
       <ul class="tasks ${tasks.length ? "" : "empty"}" data-task-list="${list.id}">
-        ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state">${icon("inbox")}<p>No items yet</p></li>`}
+        ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state"><p>Nothing here yet</p></li>`}
       </ul>
       <form class="add-task" data-add-task="${list.id}">
         <button class="add-icon" type="submit" title="Add item">${icon("plus")}</button>
@@ -263,11 +286,10 @@ function taskHTML(task) {
   const action = task.kind === "action";
   return `
     <li class="task ${action ? "action" : "item"} ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <span class="grip" aria-hidden="true">${icon("grip")}</span>
       ${action ? `<button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>` : `<span class="item-dot" aria-hidden="true"></span>`}
       <button class="task-body task-open" type="button" data-open-task="${task.id}">
         <div class="task-title">${escapeHTML(task.title)}</div>
-        ${task.scheduledDate ? `<span class="task-date">${icon("calendar")}${formatTaskDate(task.scheduledDate)}</span>` : ""}
+        ${task.scheduledDate ? `<span class="task-date">${formatTaskDate(task.scheduledDate)}</span>` : ""}
       </button>
     </li>`;
 }
@@ -352,7 +374,7 @@ function detailHTML(task) {
         <div class="field"><label>Description</label><textarea name="description" placeholder="Add details">${escapeHTML(task.description || "")}</textarea></div>
         <p class="error detail-error">${escapeHTML(state.error)}</p>
         <button class="primary" type="submit">Save</button>
-        <button class="danger icon-label" type="button" id="delete-task">${icon("trash")}<span>Delete</span></button>
+        <button class="danger" type="button" id="delete-task">Delete</button>
       </form>
     </aside>`;
 }
@@ -365,7 +387,7 @@ function settingsHTML() {
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         <section class="nav-sec">
           <button class="page-row on icon-label" id="back">${icon("chevronLeft")}<span>Board</span></button>
-          <button class="plain-btn icon-label" id="settings-logout">${icon("logout")}<span>Sign out</span></button>
+          <button class="plain-btn" id="settings-logout">Sign out</button>
         </section>
       </aside>
       <main class="settings-main">
@@ -375,7 +397,6 @@ function settingsHTML() {
               <p>Owner settings</p>
               <h1>Settings</h1>
             </div>
-            <button class="icon-btn icon-label" id="settings-back">${icon("chevronLeft")}<span>Back</span></button>
           </div>
           <section class="settings-section">
             <div class="settings-section-head">
@@ -397,7 +418,7 @@ function settingsHTML() {
             </form>
             ${state.newToken ? `<div class="new-token"><label>New token</label><code>${escapeHTML(state.newToken)}</code></div>` : ""}
             <div class="token-list">
-              ${state.tokens.length ? state.tokens.map(t => `<div class="token-row"><span>${escapeHTML(t.name)}</span><button class="danger icon-label" data-revoke="${t.id}">${icon("trash")}<span>Revoke</span></button></div>`).join("") : `<div class="empty-state">${icon("inbox")}<p>No active tokens.</p></div>`}
+              ${state.tokens.length ? state.tokens.map(t => `<div class="token-row"><span>${escapeHTML(t.name)}</span><button class="danger" data-revoke="${t.id}">Revoke</button></div>`).join("") : `<div class="empty-state"><p>No active tokens.</p></div>`}
             </div>
           </section>
         </section>
@@ -554,7 +575,6 @@ function bindDetail() {
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#back").onclick = closeSettings;
-  document.querySelector("#settings-back").onclick = closeSettings;
   document.querySelector("#settings-logout").onclick = async () => { await api.post("/api/v1/auth/logout"); state.me = null; state.settings = false; state.view = "home"; render(); };
   document.querySelectorAll("[data-settings-theme]").forEach(el => el.onclick = async () => {
     await api.patch(`/api/v1/boards/${state.board.id}`, { backgroundKind: "theme", backgroundValue: el.dataset.settingsTheme });
@@ -621,30 +641,181 @@ async function addTask(event) {
   await reload();
 }
 
+let drag = null;
+
 function bindDrag() {
   document.querySelectorAll("[data-task]").forEach(el => {
-    el.addEventListener("dragstart", event => event.dataTransfer.setData("text/task-id", el.dataset.task));
-  });
-  document.querySelectorAll("[data-task-list]").forEach(list => {
-    list.addEventListener("dragover", event => event.preventDefault());
-    list.addEventListener("drop", async event => {
-      event.preventDefault();
-      const id = event.dataTransfer.getData("text/task-id");
-      if (!id) return;
-      await api.patch(`/api/v1/tasks/${id}`, { bucketId: list.dataset.taskList });
-      await reload();
+    el.addEventListener("dragstart", event => {
+      drag = { type: "task", id: el.dataset.task };
+      event.dataTransfer.setData("text/task-id", el.dataset.task);
+      event.dataTransfer.effectAllowed = "move";
+      requestAnimationFrame(() => el.classList.add("dragging"));
+    });
+    el.addEventListener("dragend", () => {
+      drag = null;
+      el.classList.remove("dragging");
+      clearDropMarks();
     });
   });
-  document.querySelectorAll(".calendar-day[data-calendar-date]").forEach(day => {
-    day.addEventListener("dragover", event => event.preventDefault());
-    day.addEventListener("drop", async event => {
+  document.querySelectorAll("[data-task-list]").forEach(list => {
+    list.addEventListener("dragover", event => {
+      if (drag?.type !== "task") return;
       event.preventDefault();
-      const id = event.dataTransfer.getData("text/task-id");
-      if (!id) return;
+      event.dataTransfer.dropEffect = "move";
+      markTaskDrop(list, event.clientY);
+    });
+    list.addEventListener("drop", async event => {
+      if (drag?.type !== "task") return;
+      event.preventDefault();
+      const index = taskDropIndex(list, event.clientY);
+      const id = drag.id;
+      drag = null;
+      clearDropMarks();
+      await dropTask(id, list.dataset.taskList, index);
+    });
+  });
+  document.querySelectorAll(".grid [data-bucket]").forEach(bucket => {
+    bucket.addEventListener("dragstart", event => {
+      if (event.target.closest?.("[data-task]")) return;
+      if (event.target.closest?.("input, textarea, select, button")) {
+        event.preventDefault();
+        return;
+      }
+      drag = { type: "bucket", id: bucket.dataset.bucket };
+      event.dataTransfer.setData("text/bucket-id", bucket.dataset.bucket);
+      event.dataTransfer.effectAllowed = "move";
+      requestAnimationFrame(() => bucket.classList.add("dragging"));
+    });
+    bucket.addEventListener("dragend", () => {
+      drag = null;
+      bucket.classList.remove("dragging");
+      clearDropMarks();
+    });
+  });
+  const grid = document.querySelector(".grid");
+  if (grid) {
+    grid.addEventListener("dragover", event => {
+      if (drag?.type !== "bucket") return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      markBucketDrop(event);
+    });
+    grid.addEventListener("drop", async event => {
+      if (drag?.type !== "bucket") return;
+      event.preventDefault();
+      const index = bucketDropIndex(event);
+      const id = drag.id;
+      drag = null;
+      clearDropMarks();
+      await dropBucket(id, index);
+    });
+  }
+  document.querySelectorAll(".calendar-day[data-calendar-date]").forEach(day => {
+    day.addEventListener("dragover", event => {
+      if (drag?.type !== "task") return;
+      event.preventDefault();
+      day.classList.add("drop-into");
+    });
+    day.addEventListener("dragleave", () => day.classList.remove("drop-into"));
+    day.addEventListener("drop", async event => {
+      if (drag?.type !== "task") return;
+      event.preventDefault();
+      const id = drag.id;
+      drag = null;
+      clearDropMarks();
       await api.patch(`/api/v1/tasks/${id}`, { scheduledDate: day.dataset.calendarDate });
       await reload();
     });
   });
+}
+
+function taskDropIndex(list, y) {
+  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")];
+  for (let i = 0; i < items.length; i++) {
+    const rect = items[i].getBoundingClientRect();
+    if (y < rect.top + rect.height / 2) return i;
+  }
+  return items.length;
+}
+
+function markTaskDrop(list, y) {
+  clearDropMarks();
+  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")];
+  if (!items.length) {
+    list.classList.add("drop-into");
+    return;
+  }
+  const index = taskDropIndex(list, y);
+  if (index < items.length) items[index].classList.add("drop-before");
+  else items[items.length - 1].classList.add("drop-after");
+}
+
+function bucketDropIndex(event) {
+  const buckets = [...document.querySelectorAll(".grid [data-bucket]:not(.dragging)")];
+  const rects = buckets.map(bucket => bucket.getBoundingClientRect());
+  return bucketDropIndexForRects(rects, event.clientX, event.clientY, window.matchMedia("(max-width: 900px)").matches);
+}
+
+function bucketDropIndexForRects(rects, x, y, singleColumn) {
+  for (let i = 0; i < rects.length; i++) {
+    const rect = rects[i];
+    if (singleColumn) {
+      if (y < rect.top + rect.height / 2) return i;
+      continue;
+    }
+    if (y < rect.top || (y <= rect.bottom && x < rect.left + rect.width / 2)) return i;
+  }
+  return rects.length;
+}
+
+function markBucketDrop(event) {
+  clearDropMarks();
+  const buckets = [...document.querySelectorAll(".grid [data-bucket]:not(.dragging)")];
+  if (!buckets.length) return;
+  const index = bucketDropIndex(event);
+  if (index < buckets.length) buckets[index].classList.add("drop-before-bucket");
+  else buckets[buckets.length - 1].classList.add("drop-after-bucket");
+}
+
+function clearDropMarks() {
+  document.querySelectorAll(".drop-before, .drop-after, .drop-into, .drop-before-bucket, .drop-after-bucket").forEach(el => {
+    el.classList.remove("drop-before", "drop-after", "drop-into", "drop-before-bucket", "drop-after-bucket");
+  });
+}
+
+async function dropTask(taskId, bucketId, index) {
+  const task = findTask(taskId);
+  const target = state.board.buckets.find(b => b.id === bucketId);
+  if (!task || !target) return;
+  const moved = task.bucketId !== bucketId;
+  const from = state.board.buckets.find(b => b.id === task.bucketId);
+  if (from) from.tasks = (from.tasks || []).filter(t => t.id !== taskId);
+  task.bucketId = bucketId;
+  target.tasks = target.tasks || [];
+  target.tasks.splice(index, 0, task);
+  state.error = "";
+  render();
+  try {
+    if (moved) await api.patch(`/api/v1/tasks/${taskId}`, { bucketId });
+    await api.post(`/api/v1/buckets/${bucketId}/reorder-tasks`, { ids: target.tasks.map(t => t.id) });
+  } catch (err) {
+    state.error = err.message;
+  }
+  await reload();
+}
+
+async function dropBucket(bucketId, index) {
+  const ids = state.board.buckets.map(b => b.id).filter(id => id !== bucketId);
+  ids.splice(index, 0, bucketId);
+  state.board.buckets.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+  state.error = "";
+  render();
+  try {
+    await api.post(`/api/v1/boards/${state.board.id}/reorder-buckets`, { ids });
+  } catch (err) {
+    state.error = err.message;
+  }
+  await reload();
 }
 
 async function loadTokens() {
@@ -734,6 +905,10 @@ function openTaskCount(board) {
 function todayActionCount(board) {
   const today = dateKey(new Date());
   return allTasks(board).filter(item => item.task.kind === "action" && !item.task.done && item.task.scheduledDate === today).length;
+}
+
+function formatCount(count, singular, plural) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function themeFor(value) {
