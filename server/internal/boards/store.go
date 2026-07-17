@@ -341,6 +341,14 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 }
 
 func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input UpdateTaskInput) (Task, error) {
+	return s.updateTask(ctx, userID, id, input, false)
+}
+
+func (s *Store) UpdateTaskForHuman(ctx context.Context, userID string, id string, input UpdateTaskInput) (Task, error) {
+	return s.updateTask(ctx, userID, id, input, true)
+}
+
+func (s *Store) updateTask(ctx context.Context, userID string, id string, input UpdateTaskInput, allowWorking bool) (Task, error) {
 	current, err := s.GetTask(ctx, userID, id)
 	if err != nil {
 		return Task{}, err
@@ -381,18 +389,9 @@ func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input 
 		current.SortOrder = 0
 	}
 	if input.Status != nil {
-		status := clean(*input.Status)
-		if !validStatus(status) {
-			return Task{}, fmt.Errorf("%w: invalid status", ErrInvalidData)
+		if err := applyTaskStatus(&current, *input.Status, allowWorking); err != nil {
+			return Task{}, err
 		}
-		if status == StatusWorking {
-			return Task{}, fmt.Errorf("%w: working status requires claim", ErrInvalidData)
-		}
-		if current.Kind != KindAction {
-			return Task{}, fmt.Errorf("%w: only actions have workflow status", ErrInvalidData)
-		}
-		current.Status = status
-		current.Done = status == StatusDone
 	}
 	if input.Done != nil {
 		if current.Kind != KindAction && *input.Done {
@@ -714,6 +713,22 @@ func validStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func applyTaskStatus(task *Task, status string, allowWorking bool) error {
+	status = clean(status)
+	if !validStatus(status) {
+		return fmt.Errorf("%w: invalid status", ErrInvalidData)
+	}
+	if status == StatusWorking && !allowWorking {
+		return fmt.Errorf("%w: working status requires claim", ErrInvalidData)
+	}
+	if task.Kind != KindAction {
+		return fmt.Errorf("%w: only actions have workflow status", ErrInvalidData)
+	}
+	task.Status = status
+	task.Done = status == StatusDone
+	return nil
 }
 
 func validKind(kind string) bool {

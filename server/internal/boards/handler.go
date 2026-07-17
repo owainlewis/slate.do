@@ -148,6 +148,32 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	writeJSON(w, http.StatusOK, task)
 }
 
+func (h *Handler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request, user auth.User) {
+	var input struct {
+		Title         *string `json:"title"`
+		Description   *string `json:"description"`
+		ScheduledDate *string `json:"scheduledDate"`
+		Kind          *string `json:"kind"`
+		BucketID      *string `json:"bucketId"`
+		Status        *string `json:"status"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Status == nil {
+		writeError(w, http.StatusBadRequest, "status is required")
+		return
+	}
+	task, err := h.store.UpdateTaskForHuman(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{
+		Title: input.Title, Description: input.Description, ScheduledDate: input.ScheduledDate,
+		Kind: input.Kind, BucketID: input.BucketID, Status: input.Status,
+	})
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
 func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request, user auth.User) {
 	err := h.store.DeleteTask(r.Context(), user.ID, r.PathValue("id"))
 	if handleStoreError(w, err) {

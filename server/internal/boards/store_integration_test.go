@@ -235,6 +235,81 @@ func TestAnyQueuedTaskCanBeClaimed(t *testing.T) {
 	}
 }
 
+func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Flow", MaxTasksPerList: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Move through flow", Kind: KindAction})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, status := range []string{StatusWorking, StatusNeedsReview, StatusDone, StatusQueued} {
+		updated, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Status: &status})
+		if err != nil {
+			t.Fatalf("set %q: %v", status, err)
+		}
+		if updated.Status != status || updated.Done != (status == StatusDone) {
+			t.Fatalf("updated task = %#v", updated)
+		}
+		if updated.BucketID != bucket.ID {
+			t.Fatalf("bucket = %q after %q, want %q", updated.BucketID, status, bucket.ID)
+		}
+		loaded, err := store.GetTask(ctx, userID, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Status != status || loaded.BucketID != bucket.ID {
+			t.Fatalf("persisted task after %q = %#v", status, loaded)
+		}
+	}
+
+	target, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Target blocker", Kind: KindAction}); err != nil {
+		t.Fatal(err)
+	}
+	done := StatusDone
+	movedTitle := "Moved and completed"
+	updated, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Title: &movedTitle, BucketID: &target.ID, Status: &done})
+	if err != nil {
+		t.Fatalf("atomically move into full list and complete: %v", err)
+	}
+	if updated.Title != movedTitle || updated.BucketID != target.ID || !updated.Done {
+		t.Fatalf("atomic update = %#v", updated)
+	}
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Home blocker", Kind: KindAction}); err != nil {
+		t.Fatal(err)
+	}
+	queued := StatusQueued
+	reopenedTitle := "Should not persist"
+	if _, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Title: &reopenedTitle, BucketID: &bucket.ID, Status: &queued}); !errors.Is(err, ErrLimitFull) {
+		t.Fatalf("reopen into full list error = %v, want ErrLimitFull", err)
+	}
+	loaded, err := store.GetTask(ctx, userID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Title != movedTitle || loaded.BucketID != target.ID || loaded.Status != StatusDone {
+		t.Fatalf("failed atomic update persisted partially: %#v", loaded)
+	}
+}
+
 func openIntegrationDB(t *testing.T) *database.Pool {
 	t.Helper()
 	url := os.Getenv("SLATE_TEST_DATABASE_URL")

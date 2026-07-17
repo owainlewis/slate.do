@@ -136,6 +136,7 @@ The full task detail view should include:
 - Type: Item or Action.
 - Date.
 - Done when it is an Action.
+- Workflow state when it is an Action.
 - List.
 
 ## Agents
@@ -204,7 +205,8 @@ The first app version should include:
 - Title and description.
 - Optional planned date and Monday-to-Sunday calendar view.
 - Today view with actions first and dated notes shown quietly.
-- Internal workflow status for agent coordination.
+- Flow view with Ready, Working, Review, and Done columns for Actions.
+- Workflow status controls for human and agent coordination.
 - Local persistence or simple database persistence.
 - Global workspace API token.
 - CLI pull for queued tasks.
@@ -233,7 +235,7 @@ Out of scope:
 - Prefer text over configuration.
 - Make limits visible.
 - Make overload obvious.
-- Keep agent workflow metadata out of the task detail panel.
+- Show the fixed Action state in the detail panel without adding ownership or workflow configuration.
 - Make capture fast.
 - Make review calm.
 
