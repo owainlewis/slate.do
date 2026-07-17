@@ -30,7 +30,7 @@ const api = {
       ...options,
     });
     const text = await res.text();
-    const data = text ? JSON.parse(text) : {};
+    const data = decodeResponseBody(text, res.ok);
     if (!res.ok) throw new Error(data.error || "Request failed");
     return data;
   },
@@ -39,6 +39,16 @@ const api = {
   patch(path, body) { return this.request(path, { method: "PATCH", body: JSON.stringify(body || {}) }); },
   del(path) { return this.request(path, { method: "DELETE" }); },
 };
+
+function decodeResponseBody(text, ok) {
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (!ok) throw new Error(text.trim() || "Request failed");
+    throw new Error("Invalid server response");
+  }
+}
 
 const goalSaveChains = new Map();
 
@@ -63,6 +73,12 @@ const themes = [
 ];
 
 const DEFAULT_LIST_LIMIT = 20;
+const FLOW_STATES = [
+  { value: "queued", label: "Ready" },
+  { value: "working", label: "Working" },
+  { value: "needs_review", label: "Review" },
+  { value: "done", label: "Done" },
+];
 
 async function boot() {
   try {
@@ -170,6 +186,8 @@ function appHTML() {
   const board = state.board;
   const theme = themeFor(board?.backgroundValue);
   const lists = board?.buckets || [];
+  const listsMode = state.boardMode === "lists";
+  const flowMode = state.boardMode === "flow";
   const calendarMode = state.boardMode === "calendar";
   const todayMode = state.boardMode === "today";
   return `
@@ -199,9 +217,10 @@ function appHTML() {
           <span class="week">${calendarMode ? weekLabel() : new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
           <div class="top-actions">
             <div class="view-switch" aria-label="Board view">
-              <button data-board-mode="lists" aria-label="Lists" class="${!calendarMode && !todayMode ? "on" : ""}">${icon("boards")}<span>Lists</span></button>
-              <button data-board-mode="calendar" aria-label="Week" class="${calendarMode ? "on" : ""}">${icon("calendar")}<span>Week</span></button>
-              <button data-board-mode="today" aria-label="Today" class="${todayMode ? "on" : ""}">${icon("check")}<span>Today</span></button>
+              <button data-board-mode="lists" aria-label="Lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}">${icon("boards")}<span>Lists</span></button>
+              <button data-board-mode="flow" aria-label="Flow" aria-pressed="${flowMode}" class="${flowMode ? "on" : ""}">${icon("grip")}<span>Flow</span></button>
+              <button data-board-mode="calendar" aria-label="Week" aria-pressed="${calendarMode}" class="${calendarMode ? "on" : ""}">${icon("calendar")}<span>Week</span></button>
+              <button data-board-mode="today" aria-label="Today" aria-pressed="${todayMode}" class="${todayMode ? "on" : ""}">${icon("check")}<span>Today</span></button>
             </div>
             <details class="board-settings">
               <summary class="icon-btn" title="Board settings" aria-label="Board settings">${icon("gear")}</summary>
@@ -214,13 +233,12 @@ function appHTML() {
                 </section>
               </div>
             </details>
-            <button class="icon-btn icon-label ${calendarMode || todayMode ? "add-list-placeholder" : ""}" id="add-list" ${calendarMode || todayMode ? 'aria-hidden="true" tabindex="-1" disabled' : ""}>${icon("plus")}<span>List</span></button>
+            <button class="icon-btn icon-label ${listsMode ? "" : "add-list-placeholder"}" id="add-list" ${listsMode ? "" : 'aria-hidden="true" tabindex="-1" disabled'}>${icon("plus")}<span>List</span></button>
           </div>
         </header>
-        ${calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
-        <footer class="footer">
-          <span>${todayMode ? `${todayActionCount(board)} today` : `${openTaskCount(board)} open actions`}</span>
-        </footer>
+        ${statusErrorHTML(state.error)}
+        ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
+        ${footerHTML(board, todayMode)}
       </div>
       ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
     </section>`;
@@ -241,7 +259,7 @@ function listHTML(list) {
   return `
     <section class="bucket ${over}" data-bucket="${list.id}">
       <div class="bucket-head">
-        <span class="count" title="Open actions / limit">${list.openCount}/${list.limitCount}</span>
+        <span class="count" title="Open items / limit">${list.openCount}/${list.limitCount}</span>
         <input data-bucket-name="${list.id}" value="${escapeAttr(list.name)}">
         <div class="bucket-menu">
           <button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list">${icon("trash")}</button>
@@ -260,16 +278,60 @@ function listHTML(list) {
 }
 
 function taskHTML(task) {
-  const action = task.kind === "action";
   return `
-    <li class="task ${action ? "action" : "item"} ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
+    <li class="task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
       <span class="grip" aria-hidden="true">${icon("grip")}</span>
-      ${action ? `<button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>` : `<span class="item-dot" aria-hidden="true"></span>`}
+      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>
       <button class="task-body task-open" type="button" data-open-task="${task.id}">
-        <div class="task-title">${escapeHTML(task.title)}</div>
+        <div class="task-title">${escapeHTML(task.title)}${taskStateBadgeHTML(task)}</div>
         ${task.scheduledDate ? `<span class="task-date">${icon("calendar")}${formatTaskDate(task.scheduledDate)}</span>` : ""}
       </button>
     </li>`;
+}
+
+function taskStateBadgeHTML(task) {
+  if (task.status === "queued" || task.status === "done") return "";
+  return `<span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span>`;
+}
+
+function flowHTML(board) {
+  const actions = allTasks(board);
+  return `
+    <section class="flow" aria-label="Item flow">
+      ${FLOW_STATES.map(state => flowColumnHTML(state, actions.filter(item => item.task.status === state.value))).join("")}
+    </section>`;
+}
+
+function flowColumnHTML(flowState, items) {
+  return `
+    <section class="flow-column" data-flow-status="${flowState.value}" aria-labelledby="flow-${flowState.value}">
+      <header><h2 id="flow-${flowState.value}">${flowState.label}</h2><span>${items.length}</span></header>
+      <ul class="flow-cards">
+        ${items.length ? items.map(flowCardHTML).join("") : `<li class="flow-empty">No items</li>`}
+      </ul>
+    </section>`;
+}
+
+function flowCardHTML(item) {
+  const { task, list } = item;
+  return `
+    <li class="flow-card ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
+      <button class="task-open flow-card-open" type="button" data-open-task="${task.id}">
+        <span class="flow-card-title">${escapeHTML(task.title)}</span>
+        <span class="flow-card-meta"><span>${escapeHTML(list.name)}</span>${task.scheduledDate ? `<span>${icon("calendar")}${formatTaskDate(task.scheduledDate)}</span>` : ""}</span>
+      </button>
+      ${flowCardActionsHTML(task)}
+    </li>`;
+}
+
+function flowCardActionsHTML(task) {
+  const index = FLOW_STATES.findIndex(item => item.value === task.status);
+  const previous = index > 0 ? FLOW_STATES[index - 1] : null;
+  const next = index >= 0 && index < FLOW_STATES.length - 1 ? FLOW_STATES[index + 1] : null;
+  return `<div class="flow-card-actions">
+    ${previous ? `<button type="button" data-set-task-status="${task.id}" data-status="${previous.value}" aria-label="Move ${escapeAttr(task.title)} to ${previous.label}">← ${previous.label}</button>` : ""}
+    ${next ? `<button type="button" data-set-task-status="${task.id}" data-status="${next.value}" aria-label="Move ${escapeAttr(task.title)} to ${next.label}">${next.label} →</button>` : ""}
+  </div>`;
 }
 
 function calendarHTML(board) {
@@ -307,10 +369,9 @@ function calendarDayHTML(day, tasks) {
 
 function calendarTaskHTML(item) {
   const { task, list } = item;
-  const action = task.kind === "action";
   return `
-    <li class="task calendar-task ${action ? "action" : "item"} ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      ${action ? `<button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>` : `<span class="item-dot" aria-hidden="true"></span>`}
+    <li class="task calendar-task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
+      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>
       <button class="task-body task-open" type="button" data-open-task="${task.id}">
         <div class="task-title">${escapeHTML(task.title)}</div>
         <span class="task-list-name">${escapeHTML(list.name)}</span>
@@ -320,31 +381,23 @@ function calendarTaskHTML(item) {
 
 function todayHTML(board) {
   const today = dateKey(new Date());
-  const dated = allTasks(board).filter(item => item.task.scheduledDate === today);
-  const actions = dated.filter(item => item.task.kind === "action");
-  const notes = dated.filter(item => item.task.kind !== "action");
+  const actions = allTasks(board).filter(item => item.task.scheduledDate === today);
   return `
     <section class="today-view">
       <section class="today-section">
-        <div class="today-section-head"><div><span>${new Date().toLocaleDateString(undefined, { weekday: "long" })}</span><h2>Actions</h2></div><b>${actions.length}</b></div>
-        <ul>${actions.length ? actions.map(calendarTaskHTML).join("") : `<li class="today-empty">No actions planned today.</li>`}</ul>
+        <div class="today-section-head"><div><span>${new Date().toLocaleDateString(undefined, { weekday: "long" })}</span><h2>Items</h2></div><b>${actions.length}</b></div>
+        <ul>${actions.length ? actions.map(calendarTaskHTML).join("") : `<li class="today-empty">No items planned today.</li>`}</ul>
       </section>
-      ${notes.length ? `<section class="today-section today-notes"><div class="today-section-head"><div><span>For context</span><h2>Notes</h2></div><b>${notes.length}</b></div><ul>${notes.map(calendarTaskHTML).join("")}</ul></section>` : ""}
     </section>`;
 }
 
 function detailHTML(task) {
-  const action = task.kind === "action";
   return `
     <aside class="detail">
       <div class="detail-head"><b>Item detail</b><button id="close-detail" title="Close">${icon("x")}</button></div>
       <form class="detail-body" id="detail-form">
         <div class="field"><label>Title</label><input name="title" type="text" value="${escapeAttr(task.title)}" placeholder="Item title" required></div>
-        <div class="field"><label>Type</label><select name="kind">
-          <option value="item" ${action ? "" : "selected"}>Item</option>
-          <option value="action" ${action ? "selected" : ""}>Action</option>
-        </select></div>
-        ${action ? `<div class="toggles"><label><input name="done" type="checkbox" ${task.done ? "checked" : ""}> Done</label></div>` : ""}
+        <div class="field"><label for="detail-status">State</label><select id="detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
         <div class="field"><label>List</label><select name="bucketId">
           ${state.board.buckets.map(b => `<option value="${b.id}" ${b.id === task.bucketId ? "selected" : ""}>${escapeHTML(b.name)}</option>`).join("")}
         </select></div>
@@ -355,6 +408,23 @@ function detailHTML(task) {
         <button class="danger icon-label" type="button" id="delete-task">${icon("trash")}<span>Delete</span></button>
       </form>
     </aside>`;
+}
+
+function statusOptionsHTML(selected) {
+  return FLOW_STATES.map(item => `<option value="${item.value}" ${item.value === selected ? "selected" : ""}>${item.label}</option>`).join("");
+}
+
+function statusLabel(status) {
+  return FLOW_STATES.find(item => item.value === status)?.label || "Ready";
+}
+
+function footerHTML(board, todayMode) {
+  const counts = statusCounts(board);
+  return `<footer class="footer"><span>${todayMode ? `${todayActionCount(board)} today` : `${openTaskCount(board)} open items`}</span><span>${counts.working} working</span><span>${counts.needs_review} review</span></footer>`;
+}
+
+function statusErrorHTML(error) {
+  return error ? `<p class="status-error" role="alert">${escapeHTML(error)}</p>` : "";
 }
 
 function settingsHTML() {
@@ -505,7 +575,15 @@ function bindApp() {
     });
   });
   document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => { state.error = ""; state.selectedTask = findTask(el.dataset.openTask); render(); });
-  document.querySelectorAll("[data-toggle-done]").forEach(el => el.onclick = async e => { e.stopPropagation(); const task = findTask(el.dataset.toggleDone); await api.patch(`/api/v1/tasks/${task.id}`, { done: !task.done }); await reload(); });
+  document.querySelectorAll("[data-toggle-done]").forEach(el => el.onclick = async event => {
+    event.stopPropagation();
+    const task = findTask(el.dataset.toggleDone);
+    await runMutation(() => api.patch(`/api/v1/tasks/${task.id}`, { done: !task.done }), reload);
+  });
+  document.querySelectorAll("[data-set-task-status]").forEach(el => el.onclick = async event => {
+    event.stopPropagation();
+    await updateTaskStatus(el.dataset.setTaskStatus, el.dataset.status);
+  });
   bindDrag();
   bindDetail();
 }
@@ -534,14 +612,14 @@ function bindDetail() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      await api.patch(`/api/v1/tasks/${state.selectedTask.id}`, {
+      const input = {
         title: form.get("title"),
         description: form.get("description"),
         scheduledDate: form.get("scheduledDate"),
-        kind: form.get("kind"),
-        done: form.get("kind") === "action" && form.get("done") === "on",
         bucketId: form.get("bucketId"),
-      });
+        status: form.get("status"),
+      };
+      await api.patch(`/api/v1/tasks/${state.selectedTask.id}/status`, input);
       state.error = "";
       await reload();
     } catch (err) {
@@ -617,8 +695,7 @@ async function addTask(event) {
   const title = new FormData(form).get("title").trim();
   if (!title) return;
   const list = state.board.buckets.find(b => b.id === form.dataset.addTask);
-  await api.post(`/api/v1/buckets/${list.id}/tasks`, { title, kind: "item" });
-  await reload();
+  await runMutation(() => api.post(`/api/v1/buckets/${list.id}/tasks`, { title }), reload);
 }
 
 function bindDrag() {
@@ -640,11 +717,10 @@ function bindDrag() {
         const afterTarget = targetRect ? event.clientY > targetRect.top + targetRect.height / 2 : false;
         const ordered = reorderedTaskIDs(ids, id, target?.dataset.task || "", afterTarget);
         if (ordered.every((taskID, index) => taskID === ids[index])) return;
-        await api.post(`/api/v1/buckets/${listID}/reorder-tasks`, { ids: ordered });
+        await runMutation(() => api.post(`/api/v1/buckets/${listID}/reorder-tasks`, { ids: ordered }), reload);
       } else {
-        await api.patch(`/api/v1/tasks/${id}`, { bucketId: listID });
+        await runMutation(() => api.patch(`/api/v1/tasks/${id}`, { bucketId: listID }), reload);
       }
-      await reload();
     });
   });
   document.querySelectorAll(".calendar-day[data-calendar-date]").forEach(day => {
@@ -653,10 +729,35 @@ function bindDrag() {
       event.preventDefault();
       const id = event.dataTransfer.getData("text/task-id");
       if (!id) return;
-      await api.patch(`/api/v1/tasks/${id}`, { scheduledDate: day.dataset.calendarDate });
-      await reload();
+      await runMutation(() => api.patch(`/api/v1/tasks/${id}`, { scheduledDate: day.dataset.calendarDate }), reload);
     });
   });
+  document.querySelectorAll("[data-flow-status]").forEach(column => {
+    column.addEventListener("dragover", event => event.preventDefault());
+    column.addEventListener("drop", async event => {
+      event.preventDefault();
+      const id = event.dataTransfer.getData("text/task-id");
+      if (!id) return;
+      await updateTaskStatus(id, column.dataset.flowStatus);
+    });
+  });
+}
+
+async function updateTaskStatus(id, status) {
+  await runMutation(
+    () => api.patch(`/api/v1/tasks/${id}/status`, { status }),
+    reload,
+  );
+}
+
+async function runMutation(request, refresh) {
+  try {
+    await request();
+    state.error = "";
+  } catch (err) {
+    state.error = err.message;
+  }
+  await refresh();
 }
 
 function reorderedTaskIDs(ids, movingID, targetID, afterTarget = false) {
@@ -756,7 +857,15 @@ function openTaskCount(board) {
 
 function todayActionCount(board) {
   const today = dateKey(new Date());
-  return allTasks(board).filter(item => item.task.kind === "action" && !item.task.done && item.task.scheduledDate === today).length;
+  return allTasks(board).filter(item => !item.task.done && item.task.scheduledDate === today).length;
+}
+
+function statusCounts(board) {
+  const counts = { queued: 0, working: 0, needs_review: 0, done: 0 };
+  for (const { task } of allTasks(board)) {
+    if (Object.hasOwn(counts, task.status)) counts[task.status] += 1;
+  }
+  return counts;
 }
 
 function themeFor(value) {

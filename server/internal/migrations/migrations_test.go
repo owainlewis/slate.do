@@ -134,6 +134,13 @@ func TestNeutralItemsMigrationsPreserveExistingTasksAsActions(t *testing.T) {
 	if _, err := tx.Exec(ctx, string(body)); err != nil {
 		t.Fatal(err)
 	}
+	body, err = files.ReadFile("010_unify_task_kind.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
 
 	var existingKind string
 	if err := tx.QueryRow(ctx, "SELECT kind FROM tasks WHERE title = 'Cameras'").Scan(&existingKind); err != nil {
@@ -165,8 +172,8 @@ func TestNeutralItemsMigrationsPreserveExistingTasksAsActions(t *testing.T) {
 	if err := tx.QueryRow(ctx, "INSERT INTO tasks (bucket_id, title) SELECT id, 'New item' FROM buckets LIMIT 1 RETURNING kind").Scan(&newKind); err != nil {
 		t.Fatal(err)
 	}
-	if newKind != "item" {
-		t.Fatalf("new kind = %q, want item", newKind)
+	if newKind != "action" {
+		t.Fatalf("new kind = %q, want action", newKind)
 	}
 	var goal string
 	if err := tx.QueryRow(ctx, "INSERT INTO buckets DEFAULT VALUES RETURNING goal").Scan(&goal); err != nil {

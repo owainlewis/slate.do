@@ -50,6 +50,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/tasks", a.user(a.boards.ListTasks))
 	mux.HandleFunc("GET /api/v1/tasks/{id}", a.user(a.boards.GetTask))
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}", a.user(a.boards.UpdateTask))
+	mux.HandleFunc("PATCH /api/v1/tasks/{id}/status", a.session(a.boards.UpdateTaskStatus))
 	mux.HandleFunc("DELETE /api/v1/tasks/{id}", a.user(a.boards.DeleteTask))
 	mux.HandleFunc("GET /api/v1/agent/tasks", a.user(a.boards.AgentTasks))
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/claim", a.user(a.boards.AgentClaim))

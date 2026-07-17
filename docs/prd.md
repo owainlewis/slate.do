@@ -28,12 +28,11 @@ Slate should help the user choose work.
 
 The main behavior should be:
 
-- Capture items quickly without declaring that everything is a task.
+- Capture list items quickly.
 - Put items into clear buckets.
 - Limit each bucket.
-- Turn an item into an action only when it represents executable work.
 - Add dates to surface selected items in Week and Today.
-- Let a human or agent pick up any action.
+- Let a human or agent pick up any queued item.
 - Review agent work without adding ownership complexity.
 
 ## Audience
@@ -66,7 +65,7 @@ A board has buckets.
 
 A bucket has items.
 
-An item has a title and can optionally become an action. Items stay flat inside a bucket. Separate buckets provide structure without nested lists.
+An item has a title and an execution state. Items stay flat inside a bucket. Separate buckets provide structure without nested lists.
 
 Core fields:
 
@@ -74,7 +73,6 @@ Core fields:
 - `title`
 - `description`
 - `scheduledDate`
-- `kind`
 - `boardId`
 - `bucketId`
 - `done`
@@ -99,9 +97,9 @@ The app should not force one bucket style. Users should be able to bucket by pri
 
 Each bucket can state its goal in one sentence.
 
-## Action Limits
+## List Limits
 
-Every bucket should have a visible limit for open actions.
+Every bucket should have a visible limit for open items.
 
 Example:
 
@@ -111,7 +109,7 @@ Product 3/5
 
 The limit is not decoration. It is part of the product.
 
-Neutral items never consume the action limit. When the action limit is full, the user should finish, move, or defer an action before creating another.
+When the limit is full, the user should finish or move an item before creating another.
 
 Default limit:
 
@@ -120,9 +118,9 @@ Default limit:
 
 This can change after testing.
 
-## Items and Actions
+## List Items
 
-An item should look like one clean line in the bucket. Neutral items use a bullet. Actions use a checkbox.
+An item should look like one clean, completable line in the bucket.
 
 List item display should include:
 
@@ -133,16 +131,15 @@ The full task detail view should include:
 
 - Title.
 - Description.
-- Type: Item or Action.
 - Date.
-- Done when it is an Action.
+- Workflow state.
 - List.
 
 ## Agents
 
-Actions do not have owners or assignees.
+List items do not have owners or assignees.
 
-Any open action can be picked up by the human or by an agent. Neutral items are never returned as agent work.
+Any queued item can be picked up by the human or by an agent.
 
 A valid workspace API token can pull any queued task. Claiming a task changes its internal workflow status to `working`.
 
@@ -198,13 +195,13 @@ The first app version should include:
 - Buckets.
 - Bucket limits.
 - Create, rename, reorder, and delete buckets.
-- Create, edit, move, and delete items.
-- Convert items into completable actions.
+- Create, edit, move, complete, and delete items.
 - Item detail panel.
 - Title and description.
 - Optional planned date and Monday-to-Sunday calendar view.
-- Today view with actions first and dated notes shown quietly.
-- Internal workflow status for agent coordination.
+- Today view for dated items.
+- Flow view with Ready, Working, Review, and Done columns for list items.
+- Workflow status controls for human and agent coordination.
 - Local persistence or simple database persistence.
 - Global workspace API token.
 - CLI pull for queued tasks.
@@ -233,7 +230,7 @@ Out of scope:
 - Prefer text over configuration.
 - Make limits visible.
 - Make overload obvious.
-- Keep agent workflow metadata out of the task detail panel.
+- Show the fixed item state in the detail panel without adding ownership or workflow configuration.
 - Make capture fast.
 - Make review calm.
 
