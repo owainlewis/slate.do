@@ -143,6 +143,24 @@ test("changing theme updates the user preference once", async () => {
   assert.equal(vm.runInContext("state.me.theme", app), "dark");
 });
 
+test("changing theme updates the interface before persistence completes", async () => {
+  app.pendingThemeSave = new Promise(resolve => { app.releaseThemeSave = resolve; });
+  vm.runInContext(`
+    state.theme = "light";
+    state.me = { id: "owner", theme: "light" };
+    api.patch = async (path, input) => {
+      await pendingThemeSave;
+      return { id: "owner", theme: input.theme };
+    };
+  `, app);
+
+  const save = app.updateTheme("dark");
+
+  assert.equal(vm.runInContext("state.theme", app), "dark");
+  app.releaseThemeSave();
+  await save;
+});
+
 test("rapid theme changes are persisted in click order", async () => {
   const patched = [];
   app.patched = patched;

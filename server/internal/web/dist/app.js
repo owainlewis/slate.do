@@ -42,6 +42,7 @@ function decodeResponseBody(text, ok) {
 
 const goalSaveChains = new Map();
 let themeSaveChain = Promise.resolve();
+let themeChangeVersion = 0;
 
 const state = {
   me: null,
@@ -1059,12 +1060,21 @@ function currentTheme() {
 
 async function updateTheme(value) {
   const theme = themeFor(value);
+  const version = ++themeChangeVersion;
+  state.theme = theme;
+  render();
   const save = themeSaveChain.catch(() => {}).then(async () => {
     const user = await api.patch("/api/v1/me", { theme });
     state.me = user;
-    state.theme = themeFor(user.theme);
+    if (version === themeChangeVersion) state.theme = themeFor(user.theme);
     state.error = "";
     render();
+  }).catch(err => {
+    if (version === themeChangeVersion) {
+      state.theme = themeFor(state.me?.theme);
+      render();
+    }
+    throw err;
   });
   themeSaveChain = save;
   return save;

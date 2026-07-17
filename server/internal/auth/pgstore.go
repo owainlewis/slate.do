@@ -142,6 +142,9 @@ func (s *PGStore) UpdateTheme(ctx context.Context, userID string, theme string) 
 		WHERE id = $1
 		RETURNING id::text, email, role, theme
 	`, userID, theme).Scan(&user.ID, &user.Email, &user.Role, &user.Theme)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrUnauthorized
+	}
 	return user, err
 }
 
