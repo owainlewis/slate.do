@@ -5,6 +5,14 @@ const ICON_PATHS = {
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chevronLeft: '<path d="M15 6l-6 6 6 6"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  rows: '<path d="M8.5 6h11.5M8.5 12h11.5M8.5 18h11.5"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
+  kanban: '<rect x="4" y="4.5" width="6.4" height="15" rx="1.6"/><rect x="13.6" y="4.5" width="6.4" height="10" rx="1.6"/>',
+  calendar: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10.5h16M8.5 3.5v4M15.5 3.5v4"/>',
+  sun: '<circle cx="12" cy="12" r="3.6"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6L18 18M18 6l-1.4 1.4M7.4 16.6L6 18"/>',
+  moon: '<path d="M20 13.2A7.8 7.8 0 0 1 10.8 4a7.8 7.8 0 1 0 9.2 9.2z"/>',
+  gear: '<circle cx="12" cy="12" r="3.1"/><path d="M12.6 2.6h-1.2a1.5 1.5 0 0 0-1.5 1.5v.3a1.5 1.5 0 0 1-.75 1.3l-.55.31a1.5 1.5 0 0 1-1.5 0l-.26-.14a1.5 1.5 0 0 0-2.05.54l-.6 1.04a1.5 1.5 0 0 0 .55 2.05l.26.15a1.5 1.5 0 0 1 .75 1.3v.62a1.5 1.5 0 0 1-.75 1.3l-.26.15a1.5 1.5 0 0 0-.55 2.05l.6 1.04a1.5 1.5 0 0 0 2.05.54l.26-.14a1.5 1.5 0 0 1 1.5 0l.55.31a1.5 1.5 0 0 1 .75 1.3v.3a1.5 1.5 0 0 0 1.5 1.5h1.2a1.5 1.5 0 0 0 1.5-1.5v-.3a1.5 1.5 0 0 1 .75-1.3l.55-.31a1.5 1.5 0 0 1 1.5 0l.26.14a1.5 1.5 0 0 0 2.05-.54l.6-1.04a1.5 1.5 0 0 0-.55-2.05l-.26-.15a1.5 1.5 0 0 1-.75-1.3v-.62a1.5 1.5 0 0 1 .75-1.3l.26-.15a1.5 1.5 0 0 0 .55-2.05l-.6-1.04a1.5 1.5 0 0 0-2.05-.54l-.26.14a1.5 1.5 0 0 1-1.5 0l-.55-.31a1.5 1.5 0 0 1-.75-1.3v-.3a1.5 1.5 0 0 0-1.5-1.5z"/>',
+  signOut: '<path d="M9.5 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h2.5"/><path d="M15 8l4 4-4 4"/><path d="M9.5 12H19"/>',
+  inboxTray: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 13h4.6a3.4 3.4 0 0 0 6.8 0H20"/>',
 };
 
 function icon(name, cls = "") {
@@ -38,6 +46,11 @@ function decodeResponseBody(text, ok) {
     if (!ok) throw new Error(text.trim() || "Request failed");
     throw new Error("Invalid server response");
   }
+}
+
+function listLimitUpdate(boardId, value) {
+  const next = Math.max(1, Number(value) || DEFAULT_LIST_LIMIT);
+  return { next, path: `/api/v1/boards/${boardId}`, input: { maxTasksPerList: next } };
 }
 
 const goalSaveChains = new Map();
@@ -243,8 +256,8 @@ function appHTML() {
             </div>
           </section>
           <section class="nav-sec nav-sec-footer">
-            <button class="plain-btn" id="settings">Settings</button>
-            <button class="plain-btn" id="logout">Sign out</button>
+            <button class="plain-btn icon-label" id="settings">${icon("gear")}<span>Settings</span></button>
+            <button class="plain-btn icon-label" id="logout">${icon("signOut")}<span>Sign out</span></button>
           </section>
         </div>
       </aside>
@@ -254,22 +267,11 @@ function appHTML() {
           <span class="week">${calendarMode ? weekLabel() : new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
           <div class="top-actions">
             <div class="view-switch" aria-label="Board view">
-              <button data-board-mode="lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}">Lists</button>
-              <button data-board-mode="flow" aria-pressed="${flowMode}" class="${flowMode ? "on" : ""}">Flow</button>
-              <button data-board-mode="calendar" aria-pressed="${calendarMode}" class="${calendarMode ? "on" : ""}">Week</button>
-              <button data-board-mode="today" aria-pressed="${todayMode}" class="${todayMode ? "on" : ""}">Today</button>
+              <button data-board-mode="lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}" title="Lists">${icon("rows")}<span>Lists</span></button>
+              <button data-board-mode="flow" aria-pressed="${flowMode}" class="${flowMode ? "on" : ""}" title="Flow">${icon("kanban")}<span>Flow</span></button>
+              <button data-board-mode="calendar" aria-pressed="${calendarMode}" class="${calendarMode ? "on" : ""}" title="Week">${icon("calendar")}<span>Week</span></button>
+              <button data-board-mode="today" aria-pressed="${todayMode}" class="${todayMode ? "on" : ""}" title="Today">${icon("sun")}<span>Today</span></button>
             </div>
-            <details class="board-settings">
-              <summary title="Board options" aria-label="Board options">Options</summary>
-              <div class="board-settings-menu">
-                <section>
-                  <h3>Open actions per list</h3>
-                  <div class="limit-control">
-                    <input id="list-limit" aria-label="Open actions per list" type="number" min="1" value="${board?.maxTasksPerList || DEFAULT_LIST_LIMIT}">
-                  </div>
-                </section>
-              </div>
-            </details>
             <button class="icon-btn icon-label ${listsMode ? "" : "add-list-placeholder"}" id="add-list" ${listsMode ? "" : 'aria-hidden="true" tabindex="-1" disabled'}>${icon("plus")}<span>New list</span></button>
           </div>
         </header>
@@ -305,7 +307,7 @@ function listHTML(list) {
       <input class="bucket-goal" data-bucket-goal="${list.id}" value="${escapeAttr(list.goal || "")}" placeholder="Add a goal" aria-label="Goal for ${escapeAttr(list.name)}">
       ${state.goalErrors[list.id] ? `<p class="error bucket-goal-error">${escapeHTML(state.goalErrors[list.id])}</p>` : ""}
       <ul class="tasks ${tasks.length ? "" : "empty"}" data-task-list="${list.id}">
-        ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state"><p>Nothing here yet</p></li>`}
+        ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state">${icon("inboxTray")}<p>Nothing here yet</p></li>`}
       </ul>
       <form class="add-task" data-add-task="${list.id}">
         <button class="add-icon" type="submit" title="Add item">${icon("plus")}</button>
@@ -317,7 +319,7 @@ function listHTML(list) {
 function taskHTML(task) {
   return `
     <li class="task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>
+      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
       <button class="task-body task-open" type="button" data-open-task="${task.id}">
         <div class="task-title">${escapeHTML(task.title)}${taskStateBadgeHTML(task)}</div>
         ${task.scheduledDate ? `<span class="task-date">${formatTaskDate(task.scheduledDate)}</span>` : ""}
@@ -354,7 +356,7 @@ function flowColumnHTML(flowState, items) {
     <section class="flow-column" data-flow-status="${flowState.value}" aria-labelledby="flow-${flowState.value}">
       <header><h2 id="flow-${flowState.value}">${flowState.label}</h2><span>${items.length}</span></header>
       <ul class="flow-cards">
-        ${items.length ? items.map(flowCardHTML).join("") : `<li class="flow-empty">No items</li>`}
+        ${items.length ? items.map(flowCardHTML).join("") : `<li class="flow-empty">Drag items here</li>`}
       </ul>
     </section>`;
 }
@@ -388,9 +390,10 @@ function calendarHTML(board) {
     <section class="week-calendar">
       <div class="calendar-toolbar">
         <button class="icon-btn" id="previous-week" title="Previous week">${icon("chevronLeft")}</button>
-        <button class="plain-btn" id="current-week">Today</button>
+        <button class="plain-btn" id="current-week">This week</button>
+        <button class="plain-btn" id="next-week-jump" aria-label="Jump to next week">Next week</button>
         <b>${weekLabel()}</b>
-        <button class="icon-btn next" id="next-week" title="Next week">${icon("chevronLeft")}</button>
+        <button class="icon-btn next" id="next-week" aria-label="Show following week" title="Show following week">${icon("chevronLeft")}</button>
       </div>
       <div class="calendar-grid">
         ${days.map(day => calendarDayHTML(day, tasks)).join("")}
@@ -409,7 +412,7 @@ function calendarDayHTML(day, tasks) {
         <b>${day.getDate()}</b>
       </header>
       <ul class="calendar-tasks" data-calendar-date="${key}">
-        ${items.length ? items.map(calendarTaskHTML).join("") : `<li class="calendar-empty">No dated items</li>`}
+        ${items.length ? items.map(calendarTaskHTML).join("") : `<li class="calendar-empty">Drag items here</li>`}
       </ul>
     </section>`;
 }
@@ -418,7 +421,7 @@ function calendarTaskHTML(item) {
   const { task, list } = item;
   return `
     <li class="task calendar-task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${task.done ? icon("check") : ""}</button>
+      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
       <button class="task-body task-open" type="button" data-open-task="${task.id}">
         <div class="task-title">${escapeHTML(task.title)}</div>
         <span class="task-list-name">${escapeHTML(list.name)}</span>
@@ -433,7 +436,7 @@ function todayHTML(board) {
     <section class="today-view">
       <section class="today-section">
         <div class="today-section-head"><div><span>${new Date().toLocaleDateString(undefined, { weekday: "long" })}</span><h2>Items</h2></div><b>${actions.length}</b></div>
-        <ul>${actions.length ? actions.map(calendarTaskHTML).join("") : `<li class="today-empty">No items planned today.</li>`}</ul>
+        <ul>${actions.length ? actions.map(calendarTaskHTML).join("") : `<li class="today-empty">${icon("sun")}<p>Nothing planned for today</p></li>`}</ul>
       </section>
     </section>`;
 }
@@ -484,7 +487,7 @@ function statusLabel(status) {
 
 function footerHTML(board, todayMode) {
   const counts = statusCounts(board);
-  return `<footer class="footer"><span>${todayMode ? `${todayActionCount(board)} today` : `${openTaskCount(board)} open items`}</span><span>${counts.working} working</span><span>${counts.needs_review} review</span></footer>`;
+  return `<footer class="footer"><span>${todayMode ? `${todayActionCount(board)} today` : `${openTaskCount(board)} open items`}</span><span class="foot-stat"><span class="dot dot-working"></span>${counts.working} working</span><span class="foot-stat"><span class="dot dot-review"></span>${counts.needs_review} in review</span></footer>`;
 }
 
 function statusErrorHTML(error) {
@@ -499,7 +502,7 @@ function settingsHTML() {
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         <section class="nav-sec">
           <button class="page-row on icon-label" id="back">${icon("chevronLeft")}<span>Board</span></button>
-          <button class="plain-btn" id="settings-logout">Sign out</button>
+          <button class="plain-btn icon-label" id="settings-logout">${icon("signOut")}<span>Sign out</span></button>
         </section>
       </aside>
       <main class="settings-main">
@@ -517,7 +520,16 @@ function settingsHTML() {
               <p>Theme across Slate</p>
             </div>
             <div class="seg settings-theme">
-              ${themes.map(item => `<button data-settings-theme="${item.id}" class="${theme === item.id ? "on" : ""}">${item.label}</button>`).join("")}
+              ${themes.map(item => `<button data-settings-theme="${item.id}" class="${theme === item.id ? "on" : ""}">${icon(item.id === "dark" ? "moon" : "sun")}<span>${item.label}</span></button>`).join("")}
+            </div>
+          </section>
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h2>Lists</h2>
+              <p>Open actions per list on this board</p>
+            </div>
+            <div class="limit-control settings-limit">
+              <input id="settings-list-limit" aria-label="Open actions per list" type="number" min="1" value="${state.board?.maxTasksPerList || DEFAULT_LIST_LIMIT}">
             </div>
           </section>
           <section class="settings-section">
@@ -605,6 +617,10 @@ function bindApp() {
   document.querySelector("#previous-week")?.addEventListener("click", () => changeWeek(-7));
   document.querySelector("#next-week")?.addEventListener("click", () => changeWeek(7));
   document.querySelector("#current-week")?.addEventListener("click", () => { state.weekStart = ""; render(); });
+  document.querySelector("#next-week-jump")?.addEventListener("click", () => {
+    state.weekStart = dateKey(addDays(startOfWeek(new Date()), 7));
+    render();
+  });
   const addListButton = document.querySelector("#add-list");
   if (addListButton) addListButton.onclick = async () => {
     const list = await api.post(`/api/v1/boards/${state.board.id}/buckets`, { name: "New list" });
@@ -613,11 +629,6 @@ function bindApp() {
     document.querySelector(`[data-bucket="${list.id}"] input[data-bucket-name]`)?.focus();
   };
   document.querySelector("#board-title").addEventListener("change", async e => { await api.patch(`/api/v1/boards/${state.board.id}`, { name: e.target.value }); await reload(); });
-  document.querySelector("#list-limit").addEventListener("change", async e => {
-    const next = Math.max(1, Number(e.target.value) || DEFAULT_LIST_LIMIT);
-    await api.patch(`/api/v1/boards/${state.board.id}`, { maxTasksPerList: next });
-    await reload();
-  });
   document.querySelectorAll("[data-bucket-name]").forEach(el => el.addEventListener("change", async e => { await api.patch(`/api/v1/buckets/${el.dataset.bucketName}`, { name: e.target.value }); await reload(); }));
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
@@ -777,6 +788,18 @@ async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#back").onclick = closeSettings;
   document.querySelector("#settings-logout").onclick = async () => { authVersion += 1; await api.post("/api/v1/auth/logout"); state.me = null; state.settings = false; state.view = "home"; render(); };
+  document.querySelector("#settings-list-limit")?.addEventListener("change", async e => {
+    const update = listLimitUpdate(state.board.id, e.target.value);
+    e.target.value = update.next;
+    try {
+      await api.patch(update.path, update.input);
+      state.error = "";
+      await loadBoards(state.board?.id);
+    } catch (err) {
+      state.error = err.message;
+    }
+    render();
+  });
   document.querySelectorAll("[data-settings-theme]").forEach(el => el.onclick = async () => {
     try {
       await updateTheme(el.dataset.settingsTheme);

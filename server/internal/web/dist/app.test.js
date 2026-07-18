@@ -57,6 +57,37 @@ test("sidebar separates board creation and explains the board limit", () => {
   vm.runInContext(`state.maxBoards = 10; state.boards = []; state.board = null;`, app);
 });
 
+test("primary navigation uses distinct icons and keeps readable labels", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board", name: "Board" }];
+    state.board = { id: "board", name: "Board", maxTasksPerList: 12, buckets: [] };
+    state.boardMode = "lists";
+  `, app);
+
+  const html = app.appHTML();
+  for (const [mode, label] of [["lists", "Lists"], ["flow", "Flow"], ["calendar", "Week"], ["today", "Today"]]) {
+    assert.match(html, new RegExp(`data-board-mode="${mode}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
+  }
+  assert.match(html, /id="settings"[\s\S]*?<span>Settings<\/span>/);
+  assert.match(html, /id="logout"[\s\S]*?<span>Sign out<\/span>/);
+  assert.doesNotMatch(html, /class="board-settings"/);
+
+  const settings = app.settingsHTML();
+  assert.match(settings, /id="settings-list-limit"[^>]*value="12"/);
+  assert.match(settings, /Open actions per list on this board/);
+  assert.match(settings, /data-settings-theme="light"[\s\S]*?<span>Light<\/span>/);
+  assert.match(settings, /data-settings-theme="dark"[\s\S]*?<span>Dark<\/span>/);
+  vm.runInContext(`state.boards = []; state.board = null;`, app);
+});
+
+test("list limits remain scoped to the selected board", () => {
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(app.listLimitUpdate("current-board", "12"))),
+    { next: 12, path: "/api/v1/boards/current-board", input: { maxTasksPerList: 12 } },
+  );
+  assert.equal(app.listLimitUpdate("current-board", "0").next, 20);
+});
+
 function themeTokens(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const block = styles.match(new RegExp(`${escaped} \\{([\\s\\S]*?)\\n\\}`))[1];
@@ -89,6 +120,14 @@ test("week labels handle month and year boundaries", () => {
   const start = new Date(2026, 11, 29, 12);
   const days = Array.from({ length: 7 }, (_, index) => app.addDays(start, index));
   assert.equal(app.formatWeekLabel(days), "Dec 29 – Jan 4, 2027");
+});
+
+test("week view offers direct current and next week jumps", () => {
+  const html = app.calendarHTML({ buckets: [] });
+
+  assert.match(html, /id="current-week">This week<\/button>/);
+  assert.match(html, /id="next-week-jump" aria-label="Jump to next week">Next week<\/button>/);
+  assert.match(html, /id="next-week" aria-label="Show following week"/);
 });
 
 test("local date keys survive the spring DST boundary", () => {
@@ -194,7 +233,7 @@ test("detail presents a focused, accessible editor with clear actions", () => {
 test("footer reports live Working and Review counts", () => {
   const html = app.footerHTML(board, false);
   assert.match(html, /1 working/);
-  assert.match(html, /1 review/);
+  assert.match(html, /1 in review/);
 });
 
 test("failed status updates restore persisted state and expose an accessible error", async () => {
