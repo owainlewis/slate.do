@@ -19,27 +19,77 @@ steps:
       - push
       - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - slate
-      - --image
-      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
-      - --region
-      - $_REGION
-      - --platform
-      - managed
-      - --no-invoker-iam-check
-      - --add-cloudsql-instances
-      - $PROJECT_ID:$_REGION:slate-postgres
-      - --set-env-vars
-      - COOKIE_SECURE=true
-      - --set-secrets
-      - DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest
+      - -lc
+      - |
+        set -euo pipefail
+        expected="$PROJECT_ID:$_REGION:$_INSTANCE"
+        gcloud secrets versions access latest --secret=slate-database-url | grep -Fq "$$expected"
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        build_id="$BUILD_ID"
+        revision="slate-$SHORT_SHA-$${build_id:0:8}"
+        image="$_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA"
+        instance="$PROJECT_ID:$_REGION:$_INSTANCE"
+
+        gcloud run deploy slate \
+          --image "$$image" \
+          --region "$_REGION" \
+          --platform managed \
+          --no-traffic \
+          --revision-suffix "$${revision#slate-}" \
+          --no-invoker-iam-check \
+          --ingress all \
+          --set-cloudsql-instances "$$instance" \
+          --set-env-vars COOKIE_SECURE=true \
+          --set-secrets DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest \
+          --quiet
+
+        service_name="projects/$PROJECT_ID/locations/$_REGION/services/slate"
+        service_url="https://run.googleapis.com/v2/$$service_name"
+        token="$(gcloud auth print-access-token)"
+        service_json="$(curl -fsSL -H "Authorization: Bearer $$token" "$$service_url")"
+        latest_revision_resource="$(printf '%s' "$$service_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["latestCreatedRevision"])')"
+        latest_revision="$${latest_revision_resource##*/}"
+        if [[ "$$latest_revision" != "$$revision" ]]; then
+          echo "Skipping traffic promotion: latest revision is $$latest_revision, build revision is $$revision"
+          exit 0
+        fi
+
+        remote_sha="$(curl -fsSL https://api.github.com/repos/owainlewis/slate.do/commits/main | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')"
+        if [[ "$$remote_sha" != "$COMMIT_SHA" ]]; then
+          echo "Skipping traffic promotion: main is $$remote_sha, build is $COMMIT_SHA"
+          exit 0
+        fi
+
+        etag="$(printf '%s' "$$service_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["etag"])')"
+        payload="$(ETAG="$$etag" REVISION="$$latest_revision_resource" SERVICE_NAME="$$service_name" python3 -c 'import json,os; print(json.dumps({"name": os.environ["SERVICE_NAME"], "etag": os.environ["ETAG"], "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", "revision": os.environ["REVISION"], "percent": 100}]}))')"
+        operation="$(curl -fsSL -X PATCH \
+          -H "Authorization: Bearer $$token" \
+          -H "Content-Type: application/json" \
+          --data "$$payload" \
+          "$$service_url?updateMask=traffic")"
+        operation_name="$(printf '%s' "$$operation" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
+
+        for _ in $(seq 1 60); do
+          operation="$(curl -fsSL -H "Authorization: Bearer $$token" "https://run.googleapis.com/v2/$$operation_name")"
+          if [[ "$(printf '%s' "$$operation" | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("done", False)).lower())')" == "true" ]]; then
+            printf '%s' "$$operation" | python3 -c 'import json,sys; data=json.load(sys.stdin); error=data.get("error"); error and (_ for _ in ()).throw(RuntimeError(error))'
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "Timed out waiting for Cloud Run traffic promotion" >&2
+        exit 1
 images:
   - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
 substitutions:
-  _REGION: europe-west2
+  _REGION: europe-west1
+  _INSTANCE: slate-postgres-ew1
 options:
   logging: CLOUD_LOGGING_ONLY

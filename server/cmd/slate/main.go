@@ -61,6 +61,9 @@ func serve(cfg config.Config) error {
 		return fmt.Errorf("connect database: %w", err)
 	}
 	defer db.Close()
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
 
 	staticFS, err := web.FileSystem(cfg.StaticDir)
 	if err != nil {

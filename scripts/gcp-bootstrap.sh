@@ -2,10 +2,16 @@
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-slate-do-production}"
-REGION="${REGION:-europe-west2}"
-INSTANCE="${INSTANCE:-slate-postgres}"
+REGION="${REGION:-europe-west1}"
+INSTANCE="${INSTANCE:-slate-postgres-ew1}"
 DB_NAME="${DB_NAME:-slate}"
 DB_USER="${DB_USER:-slate}"
+EXPECTED_CONNECTION="$PROJECT_ID:$REGION:$INSTANCE"
+
+if [[ "$DATABASE_URL" != *"$EXPECTED_CONNECTION"* ]]; then
+  echo "DATABASE_URL must reference $EXPECTED_CONNECTION" >&2
+  exit 1
+fi
 
 gcloud config set project "$PROJECT_ID"
 gcloud services enable run.googleapis.com sqladmin.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
