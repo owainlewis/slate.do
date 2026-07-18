@@ -26,6 +26,6 @@ Open `http://localhost:8080`.
 6. Create a Cloud Build trigger on pushes to `main` using `cloudbuild.yaml`.
 
 The Cloud Run service is `slate`.
-The Cloud SQL instance is `slate-postgres`.
+The Cloud SQL instance is `slate-postgres` and uses PostgreSQL 18.
 The required secrets are `slate-database-url` and `slate-session-secret`.
 The owner password is stored as `slate-owner-password` after production seeding.
