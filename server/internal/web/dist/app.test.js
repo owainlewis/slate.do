@@ -7,9 +7,16 @@ const vm = require("node:vm");
 const filename = path.join(__dirname, "app.js");
 const source = fs.readFileSync(filename, "utf8").replace(/\nboot\(\);\s*$/, "");
 const styles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
+const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+const favicon = fs.readFileSync(path.join(__dirname, "favicon.svg"), "utf8");
 const app = { console, Date, window: { addEventListener() {} } };
 vm.createContext(app);
 vm.runInContext(source, app, { filename });
+
+test("the app provides its branded favicon", () => {
+  assert.match(index, /<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg">/);
+  assert.match(favicon, /<rect[^>]*fill="#4f5bc2"/);
+});
 
 test("theme palettes use neutral surfaces and an indigo accent", () => {
   const light = themeTokens(":root");
