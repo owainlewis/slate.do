@@ -14,11 +14,15 @@ import (
 var (
 	ErrNotFound        = errors.New("not found")
 	ErrLimitFull       = errors.New("list limit reached")
+	ErrBoardLimit      = errors.New("board limit reached")
 	ErrInvalidData     = errors.New("invalid data")
 	ErrTaskUnavailable = errors.New("task is not available")
 )
 
-const defaultMaxTasksPerList = 20
+const (
+	defaultMaxBoards       = 10
+	defaultMaxTasksPerList = 20
+)
 
 type Store struct {
 	db *database.Pool
@@ -122,8 +126,24 @@ func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoar
 	if backgroundKind == "" {
 		backgroundKind = "plain"
 	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Board{}, err
+	}
+	defer tx.Rollback(ctx)
+	var lockedUserID string
+	if err := tx.QueryRow(ctx, "SELECT id::text FROM users WHERE id = $1 FOR UPDATE", userID).Scan(&lockedUserID); err != nil {
+		return Board{}, err
+	}
+	var boardCount int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM boards WHERE user_id = $1", userID).Scan(&boardCount); err != nil {
+		return Board{}, err
+	}
+	if boardCount >= defaultMaxBoards {
+		return Board{}, ErrBoardLimit
+	}
 	var board Board
-	err := s.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO boards (user_id, name, background_kind, background_value, max_tasks_per_list, sort_order)
 		VALUES (
 			$1, $2, $3, $4, $5,
@@ -134,7 +154,13 @@ func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoar
 		&board.ID, &board.Name, &board.BackgroundKind, &board.BackgroundValue,
 		&board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
 	)
-	return board, err
+	if err != nil {
+		return Board{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Board{}, err
+	}
+	return board, nil
 }
 
 func (s *Store) UpdateBoard(ctx context.Context, userID string, id string, input UpdateBoardInput) (Board, error) {

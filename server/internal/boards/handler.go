@@ -29,7 +29,7 @@ func (h *Handler) ListBoards(w http.ResponseWriter, r *http.Request, user auth.U
 	if boards == nil {
 		boards = []Board{}
 	}
-	writeJSON(w, http.StatusOK, map[string][]Board{"boards": boards})
+	writeJSON(w, http.StatusOK, map[string]any{"boards": boards, "maxBoards": defaultMaxBoards})
 }
 
 func (h *Handler) CreateBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
@@ -322,6 +322,8 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, ErrLimitFull):
 		writeError(w, http.StatusConflict, "list limit reached")
+	case errors.Is(err, ErrBoardLimit):
+		writeError(w, http.StatusConflict, "board limit reached")
 	case errors.Is(err, ErrTaskUnavailable):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrInvalidData):

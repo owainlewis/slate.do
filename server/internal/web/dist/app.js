@@ -48,6 +48,7 @@ let authVersion = 0;
 const state = {
   me: null,
   boards: [],
+  maxBoards: 10,
   board: null,
   selectedTask: null,
   settings: false,
@@ -67,6 +68,7 @@ const themes = [
 ];
 
 const DEFAULT_LIST_LIMIT = 20;
+const DEFAULT_MAX_BOARDS = 10;
 const FLOW_STATES = [
   { value: "queued", label: "Ready" },
   { value: "working", label: "Working" },
@@ -94,6 +96,7 @@ async function boot() {
 async function loadBoards(selectId) {
   const data = await api.get("/api/v1/boards");
   state.boards = data.boards;
+  state.maxBoards = data.maxBoards || DEFAULT_MAX_BOARDS;
   const nextId = selectId || state.board?.id || state.boards[0]?.id;
   if (nextId) {
     await loadBoard(nextId);
@@ -218,6 +221,7 @@ function appHTML() {
   const flowMode = state.boardMode === "flow";
   const calendarMode = state.boardMode === "calendar";
   const todayMode = state.boardMode === "today";
+  const boardLimitReached = state.boards.length >= state.maxBoards;
   return `
     <section class="shell theme-${theme}">
       <aside class="sidebar">
@@ -226,12 +230,15 @@ function appHTML() {
           <button class="icon-btn sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar-content" aria-expanded="false">${icon("menu")}</button>
         </div>
         <div class="sidebar-content" id="sidebar-content">
-          <section class="nav-sec">
+          <section class="nav-sec nav-boards">
             <h3>Boards</h3>
             <div class="pages">
               ${state.boards.map(boardRowHTML).join("")}
             </div>
-            <button class="plain-btn icon-label" id="new-board">${icon("plus")}<span>New board</span></button>
+            <div class="board-create">
+              <button class="plain-btn icon-label" id="new-board" ${boardLimitReached ? 'disabled aria-describedby="board-limit"' : ""}>${icon("plus")}<span>New board</span></button>
+              ${boardLimitReached ? `<p class="board-limit" id="board-limit">${state.maxBoards} board limit reached</p>` : ""}
+            </div>
           </section>
           <section class="nav-sec nav-sec-footer">
             <button class="plain-btn" id="settings">Settings</button>
@@ -562,10 +569,13 @@ function bindApp() {
   document.querySelector("#settings").onclick = async () => { await openSettings(true); };
   document.querySelector("#logout").onclick = async () => { authVersion += 1; await api.post("/api/v1/auth/logout"); state.me = null; state.view = "home"; render(); };
   document.querySelector("#new-board").onclick = async () => {
-    const board = await api.post("/api/v1/boards", { name: "Untitled board", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
-    await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", isInbox: true });
-    await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Focus" });
-    await loadBoards(board.id);
+    if (state.boards.length >= state.maxBoards) return;
+    let board;
+    await runMutation(async () => {
+      board = await api.post("/api/v1/boards", { name: "Untitled board", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
+      await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", isInbox: true });
+      await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Focus" });
+    }, async () => loadBoards(board?.id));
     render();
   };
   document.querySelectorAll("[data-board-mode]").forEach(el => el.onclick = () => {

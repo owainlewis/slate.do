@@ -31,6 +31,27 @@ test("theme palettes use neutral surfaces and an indigo accent", () => {
   }
 });
 
+test("sidebar separates board creation and explains the board limit", () => {
+  vm.runInContext(`
+    state.maxBoards = 10;
+    state.boards = Array.from({ length: 10 }, (_, index) => ({ id: String(index), name: "Board " + index }));
+    state.board = { id: "0", name: "Board 0", buckets: [] };
+  `, app);
+
+  const html = app.appHTML();
+  assert.match(html, /class="nav-sec nav-boards"/);
+  assert.match(html, /class="board-create"/);
+  assert.match(html, /id="new-board" disabled aria-describedby="board-limit"/);
+  assert.match(html, />10 board limit reached</);
+
+  vm.runInContext(`state.boards = state.boards.slice(0, 2);`, app);
+  const availableHTML = app.appHTML();
+  assert.match(availableHTML, /id="new-board"\s*>/);
+  assert.doesNotMatch(availableHTML, /id="new-board"[^>]*disabled/);
+  assert.doesNotMatch(availableHTML, /board limit reached/);
+  vm.runInContext(`state.maxBoards = 10; state.boards = []; state.board = null;`, app);
+});
+
 function themeTokens(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const block = styles.match(new RegExp(`${escaped} \\{([\\s\\S]*?)\\n\\}`))[1];
