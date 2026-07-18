@@ -369,18 +369,7 @@ function flowCardHTML(item) {
         <span class="flow-card-title">${escapeHTML(task.title)}</span>
         <span class="flow-card-meta"><span>${escapeHTML(list.name)}</span>${task.scheduledDate ? `<span>${formatTaskDate(task.scheduledDate)}</span>` : ""}</span>
       </button>
-      ${flowCardActionsHTML(task)}
     </li>`;
-}
-
-function flowCardActionsHTML(task) {
-  const index = FLOW_STATES.findIndex(item => item.value === task.status);
-  const previous = index > 0 ? FLOW_STATES[index - 1] : null;
-  const next = index >= 0 && index < FLOW_STATES.length - 1 ? FLOW_STATES[index + 1] : null;
-  return `<div class="flow-card-actions">
-    ${previous ? `<button type="button" data-set-task-status="${task.id}" data-status="${previous.value}" aria-label="Move ${escapeAttr(task.title)} to ${previous.label}">← ${previous.label}</button>` : ""}
-    ${next ? `<button type="button" data-set-task-status="${task.id}" data-status="${next.value}" aria-label="Move ${escapeAttr(task.title)} to ${next.label}">${next.label} →</button>` : ""}
-  </div>`;
 }
 
 function calendarHTML(board) {
@@ -665,10 +654,6 @@ function bindApp() {
     event.stopPropagation();
     const task = findTask(el.dataset.toggleDone);
     await runMutation(() => api.patch(`/api/v1/tasks/${task.id}`, { done: !task.done }), reload);
-  });
-  document.querySelectorAll("[data-set-task-status]").forEach(el => el.onclick = async event => {
-    event.stopPropagation();
-    await updateTaskStatus(el.dataset.setTaskStatus, el.dataset.status);
   });
   bindDrag();
   bindDetail();

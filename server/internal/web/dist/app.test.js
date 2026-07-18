@@ -181,7 +181,7 @@ const board = {
   ],
 };
 
-test("Flow groups every list item into four fixed states with compact controls", () => {
+test("Flow groups every list item into four fixed states without redundant move controls", () => {
   const html = app.flowHTML(board);
 
   assert.deepEqual([...html.matchAll(/data-flow-status="([^"]+)"/g)].map(match => match[1]), ["queued", "working", "needs_review", "done"]);
@@ -192,8 +192,8 @@ test("Flow groups every list item into four fixed states with compact controls",
   assert.match(html, /aria-label="Filter Flow by list"/);
   assert.match(html, />All lists</);
   assert.match(html, />YouTube</);
-  assert.match(html, /aria-label="Move Working action to Ready"/);
-  assert.match(html, /aria-label="Move Working action to Review"/);
+  assert.doesNotMatch(html, /data-set-task-status/);
+  assert.doesNotMatch(html, /aria-label="Move Working action to/);
 });
 
 test("Flow filters cards to one selected list", () => {
