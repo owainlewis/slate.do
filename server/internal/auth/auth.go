@@ -24,7 +24,7 @@ var (
 	ErrEmailTaken   = errors.New("email already exists")
 	ErrInvalidAuth  = errors.New("invalid email or password")
 	ErrUnauthorized = errors.New("unauthorized")
-	ErrOwnerExists  = errors.New("owner already exists")
+	ErrAdminExists  = errors.New("admin already exists")
 )
 
 type User struct {
@@ -47,8 +47,7 @@ type APIToken struct {
 }
 
 type Store interface {
-	CreateOwner(ctx context.Context, email string, passwordHash string) (User, error)
-	OwnerCount(ctx context.Context) (int, error)
+	CreateAdmin(ctx context.Context, email string, passwordHash string) (User, error)
 	FindUserByEmail(ctx context.Context, email string) (UserWithPassword, error)
 	FindUserBySessionHash(ctx context.Context, tokenHash string, now time.Time) (User, error)
 	CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error
@@ -74,26 +73,29 @@ func NewService(store Store, cookieSecure bool) *Service {
 	}
 }
 
-func SeedOwner(ctx context.Context, store Store, email string, password string) (User, error) {
+func SeedAdmin(ctx context.Context, store Store, email string, password string) (User, error) {
 	email = normalizeEmail(email)
 	if email == "" {
-		return User{}, errors.New("owner email is required")
+		return User{}, errors.New("admin email is required")
 	}
 	if len(password) < 12 {
-		return User{}, errors.New("owner password must be at least 12 characters")
+		return User{}, errors.New("admin password must be at least 12 characters")
 	}
-	count, err := store.OwnerCount(ctx)
-	if err != nil {
+	existing, err := store.FindUserByEmail(ctx, email)
+	if err == nil {
+		if existing.Role == "admin" {
+			return User{}, ErrAdminExists
+		}
+		return User{}, ErrEmailTaken
+	}
+	if !errors.Is(err, ErrInvalidAuth) {
 		return User{}, err
-	}
-	if count > 0 {
-		return User{}, ErrOwnerExists
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return User{}, err
 	}
-	return store.CreateOwner(ctx, email, string(hash))
+	return store.CreateAdmin(ctx, email, string(hash))
 }
 
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {

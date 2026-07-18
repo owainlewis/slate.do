@@ -117,14 +117,74 @@ func TestUpdateThemeRejectsUnknownTheme(t *testing.T) {
 	}
 }
 
+func TestSeedAdminCreatesNamedAdminWhenAnotherAdminExists(t *testing.T) {
+	store := &seedAdminStore{
+		users: map[string]UserWithPassword{
+			"first@example.com": {User: User{Email: "first@example.com", Role: "admin"}},
+		},
+	}
+
+	user, err := SeedAdmin(context.Background(), store, " NEW@Example.com ", "a-secure-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.Email != "new@example.com" || user.Role != "admin" {
+		t.Fatalf("user = %#v", user)
+	}
+}
+
+func TestSeedAdminIsIdempotentForSameEmail(t *testing.T) {
+	store := &seedAdminStore{
+		users: map[string]UserWithPassword{
+			"admin@example.com": {User: User{Email: "admin@example.com", Role: "admin"}},
+		},
+	}
+
+	_, err := SeedAdmin(context.Background(), store, "admin@example.com", "a-secure-password")
+	if !errors.Is(err, ErrAdminExists) {
+		t.Fatalf("error = %v, want ErrAdminExists", err)
+	}
+}
+
+func TestSeedAdminDoesNotPromoteExistingMember(t *testing.T) {
+	store := &seedAdminStore{
+		users: map[string]UserWithPassword{
+			"member@example.com": {User: User{Email: "member@example.com", Role: "member"}},
+		},
+	}
+
+	_, err := SeedAdmin(context.Background(), store, "member@example.com", "a-secure-password")
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("error = %v, want ErrEmailTaken", err)
+	}
+}
+
 type requestAuthStore struct{}
 
-func (requestAuthStore) CreateOwner(context.Context, string, string) (User, error) {
+func (requestAuthStore) CreateAdmin(context.Context, string, string) (User, error) {
 	return User{}, errors.New("unused")
 }
-func (requestAuthStore) OwnerCount(context.Context) (int, error) { return 0, errors.New("unused") }
 func (requestAuthStore) FindUserByEmail(context.Context, string) (UserWithPassword, error) {
 	return UserWithPassword{}, errors.New("unused")
+}
+
+type seedAdminStore struct {
+	requestAuthStore
+	users map[string]UserWithPassword
+}
+
+func (s *seedAdminStore) FindUserByEmail(_ context.Context, email string) (UserWithPassword, error) {
+	user, ok := s.users[email]
+	if !ok {
+		return UserWithPassword{}, ErrInvalidAuth
+	}
+	return user, nil
+}
+
+func (s *seedAdminStore) CreateAdmin(_ context.Context, email string, passwordHash string) (User, error) {
+	user := User{ID: "new-admin", Email: email, Role: "admin", Theme: "light"}
+	s.users[email] = UserWithPassword{User: user, PasswordHash: passwordHash}
+	return user, nil
 }
 func (requestAuthStore) FindUserBySessionHash(_ context.Context, tokenHash string, _ time.Time) (User, error) {
 	if tokenHash == hashToken("sess_ok") {

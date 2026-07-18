@@ -18,11 +18,11 @@ func NewPGStore(db *database.Pool) *PGStore {
 	return &PGStore{db: db}
 }
 
-func (s *PGStore) CreateOwner(ctx context.Context, email string, passwordHash string) (User, error) {
+func (s *PGStore) CreateAdmin(ctx context.Context, email string, passwordHash string) (User, error) {
 	var user User
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, role)
-		VALUES ($1, $2, 'owner')
+		VALUES ($1, $2, 'admin')
 		RETURNING id::text, email, role, theme
 	`, email, passwordHash).Scan(&user.ID, &user.Email, &user.Role, &user.Theme)
 	if uniqueViolation(err) {
@@ -30,13 +30,6 @@ func (s *PGStore) CreateOwner(ctx context.Context, email string, passwordHash st
 	}
 	return user, err
 }
-
-func (s *PGStore) OwnerCount(ctx context.Context) (int, error) {
-	var count int
-	err := s.db.QueryRow(ctx, "SELECT count(*) FROM users").Scan(&count)
-	return count, err
-}
-
 func (s *PGStore) FindUserByEmail(ctx context.Context, email string) (UserWithPassword, error) {
 	var user UserWithPassword
 	err := s.db.QueryRow(ctx, `

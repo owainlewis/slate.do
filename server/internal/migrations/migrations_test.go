@@ -3,10 +3,69 @@ package migrations
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
+
+func TestAdminMemberRolesMigration(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE users (
+			id integer PRIMARY KEY,
+			role text NOT NULL DEFAULT 'owner',
+			updated_at timestamptz NOT NULL DEFAULT now()
+		);
+		INSERT INTO users (id) VALUES (1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("012_admin_member_roles.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var migratedRole string
+	if err := tx.QueryRow(ctx, "SELECT role FROM users WHERE id = 1").Scan(&migratedRole); err != nil {
+		t.Fatal(err)
+	}
+	if migratedRole != "admin" {
+		t.Fatalf("migrated role = %q, want admin", migratedRole)
+	}
+
+	var defaultRole string
+	if err := tx.QueryRow(ctx, "INSERT INTO users (id) VALUES (2) RETURNING role").Scan(&defaultRole); err != nil {
+		t.Fatal(err)
+	}
+	if defaultRole != "member" {
+		t.Fatalf("default role = %q, want member", defaultRole)
+	}
+
+	if _, err := tx.Exec(ctx, "INSERT INTO users (id, role) VALUES (3, 'owner')"); err == nil || !strings.Contains(err.Error(), "users_role_check") {
+		t.Fatalf("invalid role error = %v, want users_role_check violation", err)
+	}
+}
 
 func TestScheduledDateMigrationPreservesExistingValues(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")

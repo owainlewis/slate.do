@@ -23,11 +23,11 @@ Agents can suggest, update, and execute work, but Slate should make it hard to c
 
 ## App
 
-Slate now has an owner-only MVP:
+Slate now has an admin-only MVP:
 
 - Go server and static JS frontend.
 - Postgres persistence.
-- Owner sign in with a seeded owner.
+- Admin sign in with a seeded admin.
 - Boards, goal-led Lists, a four-state Flow view for list items, planned dates, Week and Today views, and theme.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
@@ -38,10 +38,10 @@ Slate now has an owner-only MVP:
 ```bash
 createdb slate_dev
 export DATABASE_URL=postgres://localhost/slate_dev?sslmode=disable
-export OWNER_EMAIL=you@example.com
-export OWNER_PASSWORD='use-a-long-password'
+export ADMIN_EMAIL=you@example.com
+export ADMIN_PASSWORD='use-a-long-password'
 just migrate
-just seed-owner
+just seed-admin
 just serve
 ```
 

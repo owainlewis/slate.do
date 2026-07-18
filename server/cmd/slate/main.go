@@ -37,15 +37,15 @@ func run(args []string) error {
 		return serve(cfg)
 	case "migrate":
 		return migrate(cfg)
-	case "seed-owner":
-		return seedOwner(cfg)
+	case "seed-admin", "seed-owner":
+		return seedAdmin(cfg)
 	default:
 		return usage()
 	}
 }
 
 func usage() error {
-	return errors.New("usage: slate serve|migrate|seed-owner")
+	return errors.New("usage: slate serve|migrate|seed-admin")
 }
 
 func serve(cfg config.Config) error {
@@ -114,9 +114,9 @@ func migrate(cfg config.Config) error {
 	return nil
 }
 
-func seedOwner(cfg config.Config) error {
-	if cfg.OwnerEmail == "" || cfg.OwnerPassword == "" {
-		return errors.New("OWNER_EMAIL and OWNER_PASSWORD are required")
+func seedAdmin(cfg config.Config) error {
+	if cfg.AdminEmail == "" || cfg.AdminPassword == "" {
+		return errors.New("ADMIN_EMAIL and ADMIN_PASSWORD are required")
 	}
 	db, err := openDB(cfg)
 	if err != nil {
@@ -128,9 +128,9 @@ func seedOwner(cfg config.Config) error {
 		return err
 	}
 	authStore := auth.NewPGStore(db)
-	user, err := auth.SeedOwner(context.Background(), authStore, cfg.OwnerEmail, cfg.OwnerPassword)
-	if errors.Is(err, auth.ErrOwnerExists) {
-		fmt.Println("owner already exists")
+	user, err := auth.SeedAdmin(context.Background(), authStore, cfg.AdminEmail, cfg.AdminPassword)
+	if errors.Is(err, auth.ErrAdminExists) {
+		fmt.Println("admin already exists")
 		return nil
 	}
 	if err != nil {
@@ -139,7 +139,7 @@ func seedOwner(cfg config.Config) error {
 	if err := boards.NewStore(db).SeedDefaultBoard(context.Background(), user.ID); err != nil {
 		return err
 	}
-	fmt.Printf("seeded owner %s\n", user.Email)
+	fmt.Printf("seeded admin %s\n", user.Email)
 	return nil
 }
 

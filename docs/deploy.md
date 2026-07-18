@@ -7,10 +7,10 @@ Production target: GCP project `slate-do-production`.
 ```bash
 createdb slate_dev
 export DATABASE_URL=postgres://localhost/slate_dev?sslmode=disable
-export OWNER_EMAIL=you@example.com
-export OWNER_PASSWORD='use-a-long-password'
+export ADMIN_EMAIL=you@example.com
+export ADMIN_PASSWORD='use-a-long-password'
 just migrate
-just seed-owner
+just seed-admin
 just serve
 ```
 
@@ -28,4 +28,6 @@ Open `http://localhost:8080`.
 The Cloud Run service is `slate`.
 The Cloud SQL instance is `slate-postgres` and uses PostgreSQL 18.
 The required secrets are `slate-database-url` and `slate-session-secret`.
-The owner password is stored as `slate-owner-password` after production seeding.
+`OWNER_EMAIL` and `OWNER_PASSWORD` remain supported as legacy aliases.
+
+Admin credentials are only needed while running `seed-admin` and should be supplied through a secure operator environment. Do not add them to the Cloud Run service or source control.
