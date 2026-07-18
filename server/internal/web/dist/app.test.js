@@ -60,6 +60,15 @@ const board = {
         { id: "reference", title: "Reference item", kind: "item", status: "queued", scheduledDate: "", done: false },
       ],
     },
+    {
+      id: "youtube",
+      name: "YouTube",
+      openCount: 1,
+      limitCount: 20,
+      tasks: [
+        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", done: false },
+      ],
+    },
   ],
 };
 
@@ -71,9 +80,22 @@ test("Flow groups every list item into four fixed states with compact controls",
   assert.match(html, /Home list/);
   assert.match(html, /Fri, Jul 17/);
   assert.match(html, /Reference item/);
-  assert.doesNotMatch(html, /<select/);
+  assert.match(html, /aria-label="Filter Flow by list"/);
+  assert.match(html, />All lists</);
+  assert.match(html, />YouTube</);
   assert.match(html, /aria-label="Move Working action to Ready"/);
   assert.match(html, /aria-label="Move Working action to Review"/);
+});
+
+test("Flow filters cards to one selected list", () => {
+  vm.runInContext('state.flowListId = "youtube"', app);
+  const html = app.flowHTML(board);
+
+  assert.match(html, /value="youtube" selected>YouTube/);
+  assert.match(html, /Write video script/);
+  assert.doesNotMatch(html, /Working action/);
+  assert.doesNotMatch(html, /Reference item/);
+  vm.runInContext('state.flowListId = ""', app);
 });
 
 test("detail exposes state without a type control", () => {

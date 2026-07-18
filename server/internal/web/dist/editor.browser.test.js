@@ -17,6 +17,17 @@ const task = {
   done: false,
   status: "queued",
 };
+const youtubeTask = {
+  id: "task-youtube",
+  boardId: "board-one",
+  bucketId: "list-youtube",
+  title: "Record YouTube video",
+  description: "",
+  scheduledDate: "",
+  kind: "action",
+  done: false,
+  status: "working",
+};
 
 function board(deleted) {
   return {
@@ -24,15 +35,26 @@ function board(deleted) {
     name: "Business",
     backgroundValue: "dark",
     maxTasksPerList: 20,
-    buckets: [{
-      id: "list-one",
-      boardId: "board-one",
-      name: "AI Engineer",
-      goal: "",
-      openCount: deleted ? 0 : 1,
-      limitCount: 20,
-      tasks: deleted ? [] : [task],
-    }],
+    buckets: [
+      {
+        id: "list-one",
+        boardId: "board-one",
+        name: "AI Engineer",
+        goal: "",
+        openCount: deleted ? 0 : 1,
+        limitCount: 20,
+        tasks: deleted ? [] : [task],
+      },
+      {
+        id: "list-youtube",
+        boardId: "board-one",
+        name: "YouTube",
+        goal: "",
+        openCount: deleted ? 0 : 1,
+        limitCount: 20,
+        tasks: deleted ? [] : [youtubeTask],
+      },
+    ],
   };
 }
 
@@ -113,6 +135,13 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   deleted = false;
   await page.reload();
   await page.getByRole("button", { name: "Flow", exact: true }).click();
+  const listFilter = page.getByRole("combobox", { name: "Filter Flow by list" });
+  await listFilter.selectOption("list-youtube");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "flow-list-filter");
+  assert.equal(await page.locator('[data-open-task="task-one"]').count(), 0);
+  assert.equal(await page.locator('[data-open-task="task-youtube"]').count(), 1);
+  await listFilter.selectOption("");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "flow-list-filter");
   await page.locator('[data-open-task="task-one"]').click();
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
