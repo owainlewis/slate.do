@@ -31,6 +31,11 @@ test("theme palettes use neutral surfaces and an indigo accent", () => {
   }
 });
 
+test("brand wordmark has no gap before the domain", () => {
+  assert.match(styles, /\.brand \{[^}]*gap: 0;/);
+  assert.match(styles, /\.brand::before \{[^}]*margin-right: 8px;/);
+});
+
 test("sidebar separates board creation and explains the board limit", () => {
   vm.runInContext(`
     state.maxBoards = 10;
