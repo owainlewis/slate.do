@@ -77,15 +77,17 @@ type UpdateBucketInput struct {
 	Name       *string `json:"name"`
 	Goal       *string `json:"goal"`
 	LimitCount *int    `json:"limitCount"`
+	IsInbox    *bool   `json:"isInbox"`
 	SortOrder  *int    `json:"sortOrder"`
 }
 
 type CreateTaskInput struct {
-	Title         string `json:"title"`
-	Description   string `json:"description"`
-	ScheduledDate string `json:"scheduledDate"`
-	Kind          string `json:"kind"`
-	OverrideLimit bool   `json:"overrideLimit"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	ScheduledDate  string `json:"scheduledDate"`
+	Kind           string `json:"kind"`
+	OverrideLimit  bool   `json:"overrideLimit"`
+	IdempotencyKey string `json:"-"`
 }
 
 type UpdateTaskInput struct {
@@ -101,6 +103,7 @@ type UpdateTaskInput struct {
 
 type TaskFilter struct {
 	BoardID     string
+	BucketID    string
 	Status      string
 	Done        *bool
 	Limit       int

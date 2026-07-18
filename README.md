@@ -50,14 +50,23 @@ Open `http://localhost:8080`.
 ## CLI
 
 ```bash
-export SLATE_BASE_URL=http://localhost:8080
+go install github.com/owainlewis/slate.do/cli/cmd/slate@latest
 export SLATE_API_TOKEN=slate_...
-go run ./cli/cmd/slate boards list
-go run ./cli/cmd/slate tasks create --list <list-id> --title "Draft launch note" --description "Write the first version" --date 2026-07-13
-go run ./cli/cmd/slate tasks pull
-go run ./cli/cmd/slate tasks claim <task-id>
-go run ./cli/cmd/slate tasks done <task-id>
+slate auth status
+slate boards list
+slate lists list --board <board-id>
+slate tasks create --list <list-id> --title "Draft launch note" --description "Write the first version" --date 2026-07-13
+slate tasks pull
+slate tasks claim <task-id>
+slate tasks status <task-id> needs_review
 ```
+
+The CLI uses `https://slate.do` by default. Set `SLATE_BASE_URL` only for a
+different deployment, such as `http://localhost:8080` during development.
+
+Run `slate help` for an overview or `slate help boards`, `slate help lists`,
+and `slate help tasks` for every supported command and flag. Successful output
+is always JSON so humans and agents can use the same interface.
 
 ## Deploy
 
