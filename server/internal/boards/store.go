@@ -44,19 +44,22 @@ func (s *Store) SeedDefaultBoard(ctx context.Context, userID string) error {
 	if err != nil {
 		return err
 	}
-	defaults := []CreateBucketInput{
-		{Name: "Inbox", LimitCount: defaultMaxTasksPerList, IsInbox: true},
-		{Name: "Focus", LimitCount: defaultMaxTasksPerList},
-		{Name: "Waiting", LimitCount: defaultMaxTasksPerList},
-		{Name: "Later", LimitCount: defaultMaxTasksPerList},
-		{Name: "Done", LimitCount: defaultMaxTasksPerList},
-	}
-	for _, bucket := range defaults {
+	for _, bucket := range defaultBuckets() {
 		if _, err := s.CreateBucket(ctx, userID, board.ID, bucket); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func defaultBuckets() []CreateBucketInput {
+	return []CreateBucketInput{
+		{Name: "Inbox", Goal: "Capture now, organise later", LimitCount: defaultMaxTasksPerList, IsInbox: true},
+		{Name: "Product", Goal: "Make the thing more useful", LimitCount: defaultMaxTasksPerList},
+		{Name: "Content", Goal: "Publish work that teaches or helps", LimitCount: defaultMaxTasksPerList},
+		{Name: "Growth", Goal: "Reach and serve more people", LimitCount: defaultMaxTasksPerList},
+		{Name: "Operations", Goal: "Keep everything running smoothly", LimitCount: defaultMaxTasksPerList},
+	}
 }
 
 func (s *Store) ListBoards(ctx context.Context, userID string) ([]Board, error) {
