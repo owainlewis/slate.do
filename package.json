@@ -4,7 +4,8 @@
   "private": true,
   "description": "A minimal visual task manager for humans and agents.",
   "scripts": {
-    "verify:browser": "playwright --version"
+    "verify:browser": "playwright --version",
+    "test:browser": "node --test server/internal/web/dist/editor.browser.test.js"
   },
   "repository": {
     "type": "git",
