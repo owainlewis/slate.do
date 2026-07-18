@@ -88,6 +88,10 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .sidebar {
   width: var(--nav-w);
   flex: 0 0 var(--nav-w);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow: hidden;
   background: var(--panel);
   border-right: 1px solid var(--line);
   padding: 18px 14px;
@@ -97,6 +101,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; }
 .sidebar-content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 20px; }
+.nav-boards { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sidebar-head .sidebar-toggle { display: none; width: 34px; height: 34px; padding: 0; }
 .brand { font-size: 16px; font-weight: 700; letter-spacing: -.01em; padding: 0 8px; display: flex; align-items: center; gap: 8px; }
 .brand::before {
@@ -138,7 +143,12 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .page-row:hover, .plain-btn:hover, .board-row:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
 .page-row.on { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); font-weight: 600; }
-.pages { display: flex; flex-direction: column; gap: 2px; }
+.pages { min-height: 0; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.board-create { flex: 0 0 auto; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.board-create .plain-btn { color: var(--faint); }
+.board-create .plain-btn:hover { color: var(--ink); }
+.board-create .plain-btn:disabled { cursor: not-allowed; opacity: .55; background: transparent; color: var(--faint); }
+.board-limit { margin: 3px 10px 0; color: var(--faint); font-size: 10px; line-height: 1.35; }
 .board-row { display: flex; align-items: center; border-radius: var(--radius-sm); }
 .board-row.on { background: color-mix(in srgb, var(--ink) 7%, transparent); }
 .board-select { flex: 1; min-width: 0; display: flex; align-items: center; color: var(--soft); }
@@ -920,6 +930,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
     height: 56px;
     flex: 0 0 56px;
     padding: 10px 14px;
+    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }

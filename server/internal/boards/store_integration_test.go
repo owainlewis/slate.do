@@ -77,6 +77,25 @@ func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
 	}
 }
 
+func TestCreateBoardEnforcesDefaultBoardLimit(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	for index := 0; index < defaultMaxBoards; index++ {
+		if _, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: fmt.Sprintf("Board %d", index+1)}); err != nil {
+			t.Fatalf("create board %d: %v", index+1, err)
+		}
+	}
+	if _, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "One too many"}); !errors.Is(err, ErrBoardLimit) {
+		t.Fatalf("create board above limit error = %v, want ErrBoardLimit", err)
+	}
+}
+
 func TestUnifiedListItemsAndActionLimits(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
