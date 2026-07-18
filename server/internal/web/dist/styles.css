@@ -103,11 +103,12 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .sidebar-content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 20px; }
 .nav-boards { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sidebar-head .sidebar-toggle { display: none; width: 34px; height: 34px; padding: 0; }
-.brand { font-size: 16px; font-weight: 700; letter-spacing: -.01em; padding: 0 8px; display: flex; align-items: center; gap: 8px; }
+.brand { font-size: 16px; font-weight: 700; letter-spacing: -.01em; padding: 0 8px; display: flex; align-items: center; gap: 0; }
 .brand::before {
   content: "";
   width: 7px;
   height: 7px;
+  margin-right: 8px;
   border-radius: 2px;
   background: var(--accent);
   flex: 0 0 auto;
