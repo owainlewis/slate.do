@@ -448,13 +448,44 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .footer-error { color: var(--danger); letter-spacing: 0; text-transform: none; font-size: 12px; font-weight: 500; }
 
 /* ---------- Flow ---------- */
+.flow-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.flow-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 24px 0;
+}
+.flow-toolbar label {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.flow-toolbar select {
+  min-width: 160px;
+  max-width: 280px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 7px 30px 7px 10px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
 .flow {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(210px, 1fr));
   gap: 12px;
-  margin: 16px 24px 10px;
+  margin: 10px 24px 10px;
   overflow: auto;
 }
 .flow-column {
@@ -980,6 +1011,9 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .bucket.drop-before-bucket { box-shadow: 0 -9px 0 -7px var(--accent); }
   .bucket.drop-after-bucket { box-shadow: 0 9px 0 -7px var(--accent); }
   .flow { grid-template-columns: 1fr; margin: 10px 14px 20px; overflow: visible; }
+  .flow-view { overflow: visible; }
+  .flow-toolbar { margin: 10px 14px 0; }
+  .flow-toolbar select { flex: 1; min-width: 0; max-width: none; }
   .flow-column { min-height: 180px; }
   .week-calendar { margin: 10px 14px 20px; overflow: visible; }
   .calendar-grid { grid-template-columns: 1fr; overflow: visible; }

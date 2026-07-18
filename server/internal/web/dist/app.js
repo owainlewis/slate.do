@@ -58,6 +58,7 @@ const state = {
   newToken: "",
   tokens: [],
   boardMode: "lists",
+  flowListId: "",
   weekStart: "",
   theme: "",
 };
@@ -112,6 +113,7 @@ async function loadBoard(id) {
     await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
     state.board = await api.get(`/api/v1/boards/${id}`);
   }
+  if (!(state.board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
   state.selectedTask = state.selectedTask ? findTask(state.selectedTask.id) : null;
 }
 
@@ -329,10 +331,21 @@ function taskStateBadgeHTML(task) {
 }
 
 function flowHTML(board) {
-  const actions = allTasks(board);
+  const lists = board?.buckets || [];
+  const selectedList = lists.find(list => list.id === state.flowListId);
+  const actions = allTasks(board).filter(item => !selectedList || item.list.id === selectedList.id);
   return `
-    <section class="flow" aria-label="Item flow">
-      ${FLOW_STATES.map(state => flowColumnHTML(state, actions.filter(item => item.task.status === state.value))).join("")}
+    <section class="flow-view" aria-label="Item flow">
+      <div class="flow-toolbar">
+        <label for="flow-list-filter">List</label>
+        <select id="flow-list-filter" aria-label="Filter Flow by list">
+          <option value="">All lists</option>
+          ${lists.map(list => `<option value="${escapeAttr(list.id)}" ${list.id === selectedList?.id ? "selected" : ""}>${escapeHTML(list.name)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="flow">
+        ${FLOW_STATES.map(state => flowColumnHTML(state, actions.filter(item => item.task.status === state.value))).join("")}
+      </div>
     </section>`;
 }
 
@@ -582,6 +595,12 @@ function bindApp() {
     state.boardMode = el.dataset.boardMode;
     state.selectedTask = null;
     render();
+  });
+  document.querySelector("#flow-list-filter")?.addEventListener("change", event => {
+    state.flowListId = event.target.value;
+    state.selectedTask = null;
+    render();
+    document.querySelector("#flow-list-filter")?.focus();
   });
   document.querySelector("#previous-week")?.addEventListener("click", () => changeWeek(-7));
   document.querySelector("#next-week")?.addEventListener("click", () => changeWeek(7));
