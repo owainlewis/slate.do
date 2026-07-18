@@ -11,20 +11,30 @@ type Config struct {
 	SessionSecret string
 	CookieSecure  bool
 	StaticDir     string
-	OwnerEmail    string
-	OwnerPassword string
+	AdminEmail    string
+	AdminPassword string
 }
 
 func FromEnv() Config {
+	adminEmail, adminPassword := adminCredentials()
 	return Config{
 		Port:          env("PORT", "8080"),
 		DatabaseURL:   strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		SessionSecret: os.Getenv("SESSION_SECRET"),
 		CookieSecure:  boolEnv("COOKIE_SECURE", true),
 		StaticDir:     os.Getenv("STATIC_DIR"),
-		OwnerEmail:    os.Getenv("OWNER_EMAIL"),
-		OwnerPassword: os.Getenv("OWNER_PASSWORD"),
+		AdminEmail:    adminEmail,
+		AdminPassword: adminPassword,
 	}
+}
+
+func adminCredentials() (string, string) {
+	email := os.Getenv("ADMIN_EMAIL")
+	password := os.Getenv("ADMIN_PASSWORD")
+	if email != "" || password != "" {
+		return email, password
+	}
+	return os.Getenv("OWNER_EMAIL"), os.Getenv("OWNER_PASSWORD")
 }
 
 func env(key, fallback string) string {

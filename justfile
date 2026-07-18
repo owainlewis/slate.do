@@ -6,8 +6,11 @@ default:
 migrate:
     DATABASE_URL={{database_url}} go run ./server/cmd/slate migrate
 
-seed-owner:
-    DATABASE_URL={{database_url}} go run ./server/cmd/slate seed-owner
+seed-admin:
+    DATABASE_URL={{database_url}} go run ./server/cmd/slate seed-admin
+
+# Compatibility alias. Prefer seed-admin.
+seed-owner: seed-admin
 
 serve:
     DATABASE_URL={{database_url}} COOKIE_SECURE=false go run ./server/cmd/slate serve
