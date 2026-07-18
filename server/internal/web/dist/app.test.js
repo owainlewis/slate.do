@@ -6,9 +6,53 @@ const vm = require("node:vm");
 
 const filename = path.join(__dirname, "app.js");
 const source = fs.readFileSync(filename, "utf8").replace(/\nboot\(\);\s*$/, "");
+const styles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
 const app = { console, Date, window: { addEventListener() {} } };
 vm.createContext(app);
 vm.runInContext(source, app, { filename });
+
+test("theme palettes use neutral surfaces and an indigo accent", () => {
+  const light = themeTokens(":root");
+  const dark = themeTokens(".theme-dark");
+
+  assert.match(styles, /--bg: #f7f7f8;/);
+  assert.match(styles, /--panel: #f1f1f3;/);
+  assert.match(styles, /--bg: #0f1011;/);
+  assert.match(styles, /--panel: #151617;/);
+  assert.match(styles, /--card: #1b1c1e;/);
+  assert.match(styles, /--accent: #8791f0;/);
+  assert.doesNotMatch(styles, /#111411|#151815|#191d19|#2d332e|#68bc8a/);
+  for (const theme of [light, dark]) {
+    for (const surface of ["bg", "panel", "card"]) {
+      assert.ok(contrastRatio(theme.faint, theme[surface]) >= 4.5, `muted text must remain readable on ${surface}`);
+    }
+    const badgeBackground = mixColors(theme.accent, theme.card, 0.13);
+    assert.ok(contrastRatio(theme.accent, badgeBackground) >= 4.5, "accent badges must remain readable");
+  }
+});
+
+function themeTokens(selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const block = styles.match(new RegExp(`${escaped} \\{([\\s\\S]*?)\\n\\}`))[1];
+  return Object.fromEntries([...block.matchAll(/--([\w-]+):\s*(#[\da-f]{6});/gi)].map(match => [match[1], match[2]]));
+}
+
+function contrastRatio(first, second) {
+  const values = [first, second].map(relativeLuminance);
+  return (Math.max(...values) + 0.05) / (Math.min(...values) + 0.05);
+}
+
+function mixColors(first, second, amount) {
+  const firstChannels = first.slice(1).match(/../g).map(value => parseInt(value, 16));
+  const secondChannels = second.slice(1).match(/../g).map(value => parseInt(value, 16));
+  return `#${firstChannels.map((value, index) => Math.round(value * amount + secondChannels[index] * (1 - amount)).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function relativeLuminance(hex) {
+  const channels = hex.slice(1).match(/../g).map(value => parseInt(value, 16) / 255);
+  const [red, green, blue] = channels.map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
 
 test("weeks start on Monday, including Sunday", () => {
   assert.equal(app.dateKey(app.startOfWeek(new Date(2026, 6, 12, 9))), "2026-07-06");

@@ -1,16 +1,16 @@
 :root {
-  --bg: #f7f8f6;
-  --panel: #f1f3f0;
+  --bg: #f7f7f8;
+  --panel: #f1f1f3;
   --card: #ffffff;
-  --ink: #171a17;
-  --soft: #5d655e;
-  --faint: #89918a;
-  --line: #dce1dc;
-  --line-2: #ebeeeb;
-  --accent: #28734d;
+  --ink: #1f2023;
+  --soft: #606168;
+  --faint: #6b6c73;
+  --line: #dedfe3;
+  --line-2: #ececef;
+  --accent: #4f5bc2;
   --danger: #a23f39;
   --warn: #9a621f;
-  --sans: "Hanken Grotesk", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --nav-w: 216px;
   --radius: 7px;
   --radius-sm: 5px;
@@ -71,15 +71,15 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .shell { min-height: 100%; display: flex; color: var(--ink); background: var(--bg); }
 .settings-page { height: 100%; overflow-y: auto; display: flex; color: var(--ink); background: var(--bg); }
 .theme-dark {
-  --bg: #111411;
-  --panel: #151815;
-  --card: #191d19;
-  --ink: #f1f4f1;
-  --soft: #adb5ad;
-  --faint: #7f897f;
-  --line: #2d332e;
-  --line-2: #252a26;
-  --accent: #68bc8a;
+  --bg: #0f1011;
+  --panel: #151617;
+  --card: #1b1c1e;
+  --ink: #f1f1f2;
+  --soft: #a0a0a5;
+  --faint: #85868d;
+  --line: #2b2c2f;
+  --line-2: #232427;
+  --accent: #8791f0;
   --danger: #d07862;
   --warn: #d39a55;
 }
@@ -558,7 +558,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  background: rgba(10, 12, 10, .58);
+  background: rgba(8, 9, 11, .58);
   backdrop-filter: blur(2px);
   overflow-y: auto;
   animation: detail-fade-in .16s ease-out;
