@@ -44,6 +44,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/boards/{id}", a.user(a.boards.DeleteBoard))
 	mux.HandleFunc("POST /api/v1/boards/{id}/buckets", a.user(a.boards.CreateBucket))
 	mux.HandleFunc("POST /api/v1/boards/{id}/reorder-buckets", a.user(a.boards.ReorderBuckets))
+	mux.HandleFunc("GET /api/v1/buckets/{id}", a.user(a.boards.GetBucket))
 	mux.HandleFunc("PATCH /api/v1/buckets/{id}", a.user(a.boards.UpdateBucket))
 	mux.HandleFunc("DELETE /api/v1/buckets/{id}", a.user(a.boards.DeleteBucket))
 	mux.HandleFunc("POST /api/v1/buckets/{id}/tasks", a.user(a.boards.CreateTask))

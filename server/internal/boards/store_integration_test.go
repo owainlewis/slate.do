@@ -77,6 +77,97 @@ func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
 	}
 }
 
+func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Agent work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Publish release", IdempotencyKey: "publish-release-v1"}
+	first, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("retry created %q, want original %q", second.ID, first.ID)
+	}
+	otherBucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTask(ctx, userID, first.ID, UpdateTaskInput{BucketID: &otherBucket.ID}); err != nil {
+		t.Fatal(err)
+	}
+	afterMove, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterMove.ID != first.ID || afterMove.BucketID != otherBucket.ID {
+		t.Fatalf("retry after move = %#v, want moved original %q", afterMove, first.ID)
+	}
+	changedInput := input
+	changedInput.Title = "Publish a different release"
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, changedInput); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("changed retry error = %v, want ErrIdempotencyKey", err)
+	}
+	tasks, err := store.ListTasks(ctx, userID, TaskFilter{BucketID: bucket.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("original list tasks = %#v, want moved task only", tasks)
+	}
+	if err := store.DeleteTask(ctx, userID, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, input); !errors.Is(err, ErrIdempotencyGone) {
+		t.Fatalf("retry after delete error = %v, want ErrIdempotencyGone", err)
+	}
+}
+
+func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Inbox settings"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Capture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []bool{true, false} {
+		updated, err := store.UpdateBucket(ctx, userID, bucket.ID, UpdateBucketInput{IsInbox: &value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if updated.IsInbox != value {
+			t.Fatalf("isInbox = %v, want %v", updated.IsInbox, value)
+		}
+	}
+}
+
 func TestCreateBoardEnforcesDefaultBoardLimit(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

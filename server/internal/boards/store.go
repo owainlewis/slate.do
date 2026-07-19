@@ -2,6 +2,9 @@ package boards
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +20,8 @@ var (
 	ErrBoardLimit      = errors.New("board limit reached")
 	ErrInvalidData     = errors.New("invalid data")
 	ErrTaskUnavailable = errors.New("task is not available")
+	ErrIdempotencyKey  = errors.New("idempotency key already used with different task data")
+	ErrIdempotencyGone = errors.New("task created by idempotency key was deleted")
 )
 
 const (
@@ -111,6 +116,19 @@ func (s *Store) GetBoard(ctx context.Context, userID string, id string) (Board, 
 	}
 	board.Buckets = buckets
 	return board, nil
+}
+
+func (s *Store) GetBucket(ctx context.Context, userID string, id string) (Bucket, error) {
+	bucket, err := s.getBucket(ctx, userID, id)
+	if err != nil {
+		return Bucket{}, err
+	}
+	tasks, err := s.listBucketTasks(ctx, userID, id)
+	if err != nil {
+		return Bucket{}, err
+	}
+	bucket.Tasks = tasks
+	return bucket, nil
 }
 
 func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoardInput) (Board, error) {
@@ -266,6 +284,9 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	if input.LimitCount != nil {
 		current.LimitCount = *input.LimitCount
 	}
+	if input.IsInbox != nil {
+		current.IsInbox = *input.IsInbox
+	}
 	if input.SortOrder != nil {
 		current.SortOrder = *input.SortOrder
 	}
@@ -278,11 +299,11 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	var bucket Bucket
 	err = s.db.QueryRow(ctx, `
 		UPDATE buckets b
-		SET name = $3, goal = $4, limit_count = $5, sort_order = $6, updated_at = now()
+		SET name = $3, goal = $4, limit_count = $5, is_inbox = $6, sort_order = $7, updated_at = now()
 		FROM boards bo
 		WHERE bo.id = b.board_id AND bo.user_id = $1 AND b.id = $2
 		RETURNING b.id::text, b.board_id::text, b.name, b.goal, b.is_inbox, b.limit_count, b.sort_order, b.created_at, b.updated_at
-	`, userID, id, current.Name, current.Goal, current.LimitCount, current.SortOrder).Scan(
+	`, userID, id, current.Name, current.Goal, current.LimitCount, current.IsInbox, current.SortOrder).Scan(
 		&bucket.ID, &bucket.BoardID, &bucket.Name, &bucket.Goal, &bucket.IsInbox, &bucket.LimitCount,
 		&bucket.SortOrder, &bucket.CreatedAt, &bucket.UpdatedAt,
 	)
@@ -348,6 +369,13 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 	if !validKind(kind) {
 		return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 	}
+	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
+	if len(idempotencyKey) > 200 {
+		return Task{}, fmt.Errorf("%w: idempotency key must be 200 characters or fewer", ErrInvalidData)
+	}
+	if idempotencyKey != "" {
+		return s.createTaskIdempotently(ctx, userID, bucket, title, input.Description, scheduledDate, kind, idempotencyKey, input.OverrideLimit)
+	}
 	if !input.OverrideLimit {
 		full, err := s.bucketFull(ctx, bucketID)
 		if err != nil {
@@ -357,7 +385,15 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 			return Task{}, ErrLimitFull
 		}
 	}
-	row := s.db.QueryRow(ctx, `
+	return insertTask(ctx, s.db, bucket, title, input.Description, scheduledDate, kind)
+}
+
+type queryRower interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string, description string, scheduledDate string, kind string) (Task, error) {
+	row := db.QueryRow(ctx, `
 		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, status, sort_order)
 		VALUES (
 			$1, $2, $3, $4, NULLIF($5, '')::date, $6, $7,
@@ -365,8 +401,104 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 		)
 		RETURNING id::text, board_id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, done, status, sort_order, created_at, updated_at
-	`, bucket.BoardID, bucketID, title, input.Description, scheduledDate, kind, StatusQueued)
+	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusQueued)
 	return scanTask(row)
+}
+
+func (s *Store) createTaskIdempotently(ctx context.Context, userID string, bucket Bucket, title string, description string, scheduledDate string, kind string, key string, overrideLimit bool) (Task, error) {
+	fingerprint, err := taskCreateFingerprint(bucket.ID, title, description, scheduledDate, kind, overrideLimit)
+	if err != nil {
+		return Task{}, err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Task{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":"+key); err != nil {
+		return Task{}, err
+	}
+	var existingFingerprint, existingTaskID string
+	row := tx.QueryRow(ctx, `
+		SELECT i.request_hash, COALESCE(i.task_id::text, '')
+		FROM task_idempotency_keys i
+		WHERE i.user_id = $1 AND i.key = $2
+	`, userID, key)
+	err = row.Scan(&existingFingerprint, &existingTaskID)
+	if err == nil {
+		if existingFingerprint != fingerprint {
+			return Task{}, ErrIdempotencyKey
+		}
+		if existingTaskID == "" {
+			return Task{}, ErrIdempotencyGone
+		}
+		return taskByID(ctx, tx, existingTaskID)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, err
+	}
+	if !overrideLimit {
+		var full bool
+		err := tx.QueryRow(ctx, `
+			SELECT COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.done = false) >= bo.max_tasks_per_list
+			FROM buckets b
+			JOIN boards bo ON bo.id = b.board_id
+			LEFT JOIN tasks t ON t.bucket_id = b.id
+			WHERE b.id = $1
+			GROUP BY b.id, bo.max_tasks_per_list
+		`, bucket.ID).Scan(&full)
+		if err != nil {
+			return Task{}, err
+		}
+		if full {
+			return Task{}, ErrLimitFull
+		}
+	}
+	task, err := insertTask(ctx, tx, bucket, title, description, scheduledDate, kind)
+	if err != nil {
+		return Task{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, key, fingerprint, task.ID); err != nil {
+		return Task{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Task{}, err
+	}
+	return task, nil
+}
+
+func taskByID(ctx context.Context, db queryRower, id string) (Task, error) {
+	row := db.QueryRow(ctx, `
+		SELECT id::text, board_id::text, bucket_id::text, title, description,
+			COALESCE(scheduled_date::text, ''), kind, done,
+			status, sort_order, created_at, updated_at
+		FROM tasks
+		WHERE id = $1
+	`, id)
+	task, err := scanTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrIdempotencyGone
+	}
+	return task, err
+}
+
+func taskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, overrideLimit bool) (string, error) {
+	raw, err := json.Marshal(struct {
+		BucketID      string `json:"bucketId"`
+		Title         string `json:"title"`
+		Description   string `json:"description"`
+		ScheduledDate string `json:"scheduledDate"`
+		Kind          string `json:"kind"`
+		OverrideLimit bool   `json:"overrideLimit"`
+	}{bucketID, title, description, scheduledDate, kind, overrideLimit})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input UpdateTaskInput) (Task, error) {
@@ -548,6 +680,10 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 	if filter.BoardID != "" {
 		args = append(args, filter.BoardID)
 		doneSQL += fmt.Sprintf(" AND t.board_id = $%d", len(args))
+	}
+	if filter.BucketID != "" {
+		args = append(args, filter.BucketID)
+		doneSQL += fmt.Sprintf(" AND t.bucket_id = $%d", len(args))
 	}
 	if filter.Status != "" {
 		args = append(args, filter.Status)

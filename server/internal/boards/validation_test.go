@@ -2,6 +2,7 @@ package boards
 
 import (
 	"errors"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -65,5 +66,16 @@ func TestValidKind(t *testing.T) {
 	}
 	if validKind("item") || validKind("task") {
 		t.Fatal("unexpected valid kind")
+	}
+}
+
+func TestTaskFilterFromQueryIncludesBoardAndList(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId=board-1&bucketId=list-1&status=queued&done=false&limit=12", nil)
+	filter, err := taskFilterFromQuery(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filter.BoardID != "board-1" || filter.BucketID != "list-1" || filter.Status != "queued" || filter.Done == nil || *filter.Done || filter.Limit != 12 {
+		t.Fatalf("filter = %#v", filter)
 	}
 }

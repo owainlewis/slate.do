@@ -84,6 +84,14 @@ func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request, user auth
 	writeJSON(w, http.StatusCreated, bucket)
 }
 
+func (h *Handler) GetBucket(w http.ResponseWriter, r *http.Request, user auth.User) {
+	bucket, err := h.store.GetBucket(r.Context(), user.ID, r.PathValue("id"))
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, bucket)
+}
+
 func (h *Handler) UpdateBucket(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input UpdateBucketInput
 	if !decodeJSON(w, r, &input) {
@@ -121,6 +129,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	task, err := h.store.CreateTask(r.Context(), user.ID, r.PathValue("id"), input)
 	if handleStoreError(w, err) {
 		return
@@ -271,8 +280,9 @@ func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.Us
 func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 	q := r.URL.Query()
 	filter := TaskFilter{
-		BoardID: strings.TrimSpace(q.Get("boardId")),
-		Status:  strings.TrimSpace(q.Get("status")),
+		BoardID:  strings.TrimSpace(q.Get("boardId")),
+		BucketID: strings.TrimSpace(q.Get("bucketId")),
+		Status:   strings.TrimSpace(q.Get("status")),
 	}
 	if raw := strings.TrimSpace(q.Get("done")); raw != "" {
 		done, err := parseQueryBool("done", raw)
@@ -326,6 +336,10 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusConflict, "board limit reached")
 	case errors.Is(err, ErrTaskUnavailable):
 		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrIdempotencyKey):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrIdempotencyGone):
+		writeError(w, http.StatusGone, err.Error())
 	case errors.Is(err, ErrInvalidData):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
