@@ -19,6 +19,7 @@ test:
     cd server && go test ./...
     cd cli && go test ./...
     node --test server/internal/web/dist/app.test.js
+    sh scripts/test-install.sh
 
 build:
     cd server && go build ./cmd/slate

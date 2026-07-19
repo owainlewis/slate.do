@@ -50,7 +50,7 @@ Open `http://localhost:8080`.
 ## CLI
 
 ```bash
-go install github.com/owainlewis/slate.do/cli/cmd/slate@latest
+curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/main/install.sh | sh
 export SLATE_API_TOKEN=slate_...
 slate auth status
 slate boards list
@@ -59,6 +59,13 @@ slate tasks create --list <list-id> --title "Draft launch note" --description "W
 slate tasks pull
 slate tasks claim <task-id>
 slate tasks status <task-id> needs_review
+```
+
+Run the install command again to upgrade to the latest release. It installs to
+`~/.local/bin` by default. Set `SLATE_INSTALL_DIR` to choose another directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/main/install.sh | SLATE_INSTALL_DIR=/usr/local/bin sh
 ```
 
 The CLI uses `https://slate.do` by default. Set `SLATE_BASE_URL` only for a

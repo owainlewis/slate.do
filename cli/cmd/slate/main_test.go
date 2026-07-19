@@ -1,12 +1,26 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestVersion(t *testing.T) {
+	var output bytes.Buffer
+	if err := printVersion(nil, &output); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), "{\"version\":\"dev\"}\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+	if err := printVersion([]string{"extra"}, &output); err == nil {
+		t.Fatal("version accepted an extra argument")
+	}
+}
 
 func TestEnvFallback(t *testing.T) {
 	t.Setenv("SLATE_BASE_URL", "")
@@ -22,6 +36,9 @@ func TestNoArgumentsShowsHelp(t *testing.T) {
 }
 
 func TestHelpDocumentsEveryResource(t *testing.T) {
+	if !strings.Contains(helpText[""], "slate version") {
+		t.Fatal("help does not document version command")
+	}
 	for _, topic := range []string{"", "auth", "boards", "lists", "tasks"} {
 		if strings.TrimSpace(helpText[topic]) == "" {
 			t.Fatalf("missing help for %q", topic)

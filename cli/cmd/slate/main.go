@@ -17,6 +17,8 @@ import (
 
 const defaultBaseURL = "https://slate.do"
 
+var version = "dev"
+
 type client struct {
 	baseURL string
 	token   string
@@ -46,6 +48,8 @@ func run(args []string) error {
 			topic = args[2]
 		}
 		return printHelp(topic)
+	case "version", "--version":
+		return printVersion(args[2:], os.Stdout)
 	case "auth":
 		return authCmd(c, args[2:])
 	case "boards":
@@ -57,6 +61,13 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q; run 'slate help'", args[1])
 	}
+}
+
+func printVersion(args []string, w io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("usage: slate version")
+	}
+	return json.NewEncoder(w).Encode(map[string]string{"version": version})
 }
 
 func printHelp(topic string) error {
@@ -76,6 +87,7 @@ Configuration:
   SLATE_BASE_URL    API URL (default: https://slate.do)
 
 Usage:
+  slate version
   slate help [auth|boards|lists|tasks]
   slate auth status
   slate boards <command>
