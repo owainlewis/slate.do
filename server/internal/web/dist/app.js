@@ -178,47 +178,86 @@ function landingHTML() {
       </nav>
       <main class="landing-main">
         <section class="landing-hero">
-          <p class="landing-eyebrow">Private beta</p>
-          <h1>Decide what deserves attention.</h1>
-          <p class="landing-lede">Slate is a calm operating plan for one person running many streams of work, human and agent alike. A few lists, a hard limit on open actions, and one honest view of today.</p>
-          <div class="landing-actions">
-            ${signedIn ? `<button class="primary" id="open-app">Open app</button>` : `<button class="primary" id="hero-login">Log in</button>`}
-            <a class="secondary-link" href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>
+          <div class="hero-copy">
+            <h1 class="rise" style="--d:0">Decide what deserves <em>attention</em>.</h1>
+            <p class="landing-lede rise" style="--d:1">Work is infinite. Attention is not. Slate is a planning and execution tool for you and your agents: think clearly about what matters, then let your agents execute it. A few lists, a hard limit on open actions, and one honest view of today.</p>
+            <div class="landing-actions rise" style="--d:2">
+              ${signedIn ? `<button class="primary" id="open-app">Open app</button>` : `<button class="primary" id="hero-login">Log in</button>`}
+              <a class="secondary-link" href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>
+            </div>
           </div>
+          <figure class="hero-photo rise" style="--d:1">
+            <img src="/landing-stones.jpg" alt="Three balanced slate stones on a plain grey background" width="1050" height="1400">
+          </figure>
         </section>
-        <section class="landing-board" aria-label="Slate preview">
-          <div class="preview-list">
-            <header><span class="preview-name">Inbox</span><span class="preview-count">2/20</span></header>
-            <div class="preview-task"><span class="preview-check"></span>Pricing feedback from Anna</div>
-            <div class="preview-task"><span class="preview-check"></span>Reply to the beta list</div>
-            <div class="preview-add">Add item</div>
+        <section class="landing-preview" aria-label="Slate preview">
+          <div class="preview-frame" data-reveal>
+            <header class="preview-chrome" aria-hidden="true"><span></span><span></span><span></span><b>This week</b></header>
+            <div class="landing-board">
+              <div class="preview-list">
+                <header><span class="preview-name">Inbox</span><span class="preview-count">2/20</span></header>
+                <div class="preview-task" style="--d:0"><span class="preview-check"></span>Pricing feedback from Anna</div>
+                <div class="preview-task" style="--d:1"><span class="preview-check"></span>Reply to the waitlist</div>
+                <div class="preview-add" style="--d:2">Add item</div>
+              </div>
+              <div class="preview-list preview-focus">
+                <header><span class="preview-name">Focus</span><span class="preview-count">2/5</span></header>
+                <div class="preview-task preview-done" style="--d:2"><span class="preview-check checked">${icon("check")}</span>Draft launch note</div>
+                <div class="preview-task" style="--d:3"><span class="preview-check"></span>Review agent pull requests</div>
+                <div class="preview-task" style="--d:4"><span class="preview-check"></span>Ship one small thing</div>
+                <div class="preview-add" style="--d:5">Add item</div>
+              </div>
+              <div class="preview-list">
+                <header><span class="preview-name">Agent work</span><span class="preview-count">1/20</span></header>
+                <div class="preview-task" style="--d:5"><span class="preview-check"></span>Research pricing pages<span class="preview-status">working</span></div>
+                <div class="preview-add" style="--d:6">Add item</div>
+              </div>
+            </div>
           </div>
-          <div class="preview-list preview-focus">
-            <header><span class="preview-name">Focus</span><span class="preview-count">2/5</span></header>
-            <div class="preview-task preview-done"><span class="preview-check checked">${icon("check")}</span>Draft launch note</div>
-            <div class="preview-task"><span class="preview-check"></span>Review agent pull requests</div>
-            <div class="preview-task"><span class="preview-check"></span>Ship one small thing</div>
-            <div class="preview-add">Add item</div>
-          </div>
-          <div class="preview-list">
-            <header><span class="preview-name">Agent work</span><span class="preview-count">1/20</span></header>
-            <div class="preview-task"><span class="preview-check"></span>Research pricing pages<span class="preview-status">working</span></div>
-            <div class="preview-add">Add item</div>
-          </div>
+          <p class="preview-caption" data-reveal>One board. A few lists. A hard cap on open work.</p>
         </section>
         <section class="landing-principles">
-          <div>
+          <h2 class="principles-head" data-reveal>Less, on purpose.</h2>
+          <p class="principles-sub" data-reveal style="--d:0">Work will always be infinite. Your attention will not. Strip away the noise, decide what actually matters, and let your agents execute it.</p>
+          <div class="principle" data-reveal style="--d:0">
+            <span class="principle-num">01</span>
             <h3>Limits, not lists</h3>
             <p>Every list caps its open actions. When a list is full, something has to finish before anything new begins.</p>
           </div>
-          <div>
+          <div class="principle" data-reveal style="--d:1">
+            <span class="principle-num">02</span>
             <h3>Clear state, less noise</h3>
             <p>Every item is completable and moves through the same small set of states, so open work stays honest.</p>
           </div>
-          <div>
-            <h3>Agents welcome</h3>
-            <p>Agents pull, claim, and finish work through the same plan you read. You keep the judgment. They keep the pace.</p>
+          <div class="principle" data-reveal style="--d:2">
+            <span class="principle-num">03</span>
+            <h3>You think, they execute</h3>
+            <p>Agents pull, claim, and finish work through the same plan you read. You keep the judgment about what matters. They keep the pace of getting it done.</p>
           </div>
+        </section>
+        <section class="landing-manifesto">
+          <div class="manifesto-inner" data-reveal>
+            <img src="/landing-slabs.jpg" alt="Slate slabs leaning against a pale plaster wall" loading="lazy" width="1920" height="1080">
+            <blockquote>
+              <p class="manifesto-line" data-reveal style="--d:2">Work is infinite.<br><em>Attention is not.</em></p>
+              <p class="manifesto-sub" data-reveal style="--d:3">Strip away the noise. Focus on what matters.</p>
+            </blockquote>
+          </div>
+        </section>
+        <section class="landing-note">
+          <p class="note-label" data-reveal>A note from the founder</p>
+          <div class="note-body">
+            <p data-reveal style="--d:0">I have used a lot of task apps over the years. The problem was always the same: I spent more time learning or configuring the software than actually getting work done.</p>
+            <p data-reveal style="--d:1">Then agents changed how fast we can execute. We can move faster than ever now, but we still need a clear place to think about what work matters. That place got harder to find, not easier, as I added more tools.</p>
+            <p data-reveal style="--d:2">So I stripped things back instead of adding more. Slate is the one app I use to plan and track everything in my business, as a founder running a lot of moving pieces day to day. I plan there. I hand work to my agents there. I review what comes back there. One place, not five.</p>
+            <p data-reveal style="--d:3">If you want to get more done, the fastest path is often to simplify your tools, not add to them. That is what Slate is for me. It might not be the answer for you, but it is mine.</p>
+          </div>
+          <p class="note-sign" data-reveal style="--d:4">Owain Lewis<span>Founder, Slate</span></p>
+        </section>
+        <section class="landing-close">
+          <h2 data-reveal>Begin with a clear slate.</h2>
+          <p data-reveal style="--d:1">A short note about how you work is enough to get started.</p>
+          <div data-reveal style="--d:2"><a class="landing-request" href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a></div>
         </section>
       </main>
       <footer class="landing-footer">
@@ -567,6 +606,20 @@ function bindLanding() {
   document.querySelector("#hero-login")?.addEventListener("click", showLogin);
   document.querySelector("#landing-open")?.addEventListener("click", openApp);
   document.querySelector("#open-app")?.addEventListener("click", openApp);
+  const revealEls = document.querySelectorAll("[data-reveal]");
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  if (reduceMotion || typeof IntersectionObserver === "undefined") {
+    revealEls.forEach(el => el.classList.add("in"));
+    return;
+  }
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add("in");
+      io.unobserve(entry.target);
+    });
+  }, { threshold: 0.15, rootMargin: "0px 0px -60px 0px" });
+  revealEls.forEach(el => io.observe(el));
 }
 
 function bindApp() {
