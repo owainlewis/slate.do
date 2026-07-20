@@ -6,6 +6,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("COOKIE_SECURE", "")
 	t.Setenv("DATABASE_URL", "")
+	t.Setenv("INVITE_CODE", "")
 
 	cfg := FromEnv()
 	if cfg.Port != "8080" {
@@ -16,6 +17,18 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.DatabaseURL != "" {
 		t.Fatalf("DatabaseURL = %q, want empty when unset", cfg.DatabaseURL)
+	}
+	if cfg.InviteCode != "" {
+		t.Fatalf("InviteCode = %q, want empty when unset", cfg.InviteCode)
+	}
+}
+
+func TestFromEnvInviteCodeIsExact(t *testing.T) {
+	t.Setenv("INVITE_CODE", " shared code ")
+
+	cfg := FromEnv()
+	if cfg.InviteCode != " shared code " {
+		t.Fatalf("InviteCode = %q, want exact secret value", cfg.InviteCode)
 	}
 }
 

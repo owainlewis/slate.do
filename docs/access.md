@@ -22,6 +22,8 @@ The `seed-admin` command creates a named admin account and grants Pro with the `
 
 There is no Free tier, `beta_pro`, or second paid plan. Stripe behavior is not implemented here.
 
+Invite-code registration creates `member` accounts with the same `pro` plan and records `invite_code` only as the entitlement source. The shared admission code is not stored with the account and is not needed for later sign-in.
+
 The authenticated user response exposes the resolved plan, source, and the server-owned Pro limits:
 
 - 5 boards per account.

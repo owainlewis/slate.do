@@ -47,6 +47,20 @@ func TestSameOriginRejectsDifferentHost(t *testing.T) {
 	}
 }
 
+func TestSameOriginRejectsHostPrefixAttack(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://slate.test/api", nil)
+	req.Host = "slate.test"
+	req.Header.Set("Origin", "https://slate.test.evil.example")
+	rec := httptest.NewRecorder()
+
+	if validateSameOrigin(rec, req) {
+		t.Fatal("expected deceptive origin to be blocked")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
 func TestRequireSessionUserRejectsBearerOnlyAuthentication(t *testing.T) {
 	service := NewService(requestAuthStore{}, false)
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/tasks/task/status", nil)
@@ -133,6 +147,99 @@ func TestUpdateThemeRejectsUnknownTheme(t *testing.T) {
 	}
 }
 
+func TestRegisterCreatesInvitedProMemberAndSessionCookie(t *testing.T) {
+	store := &signupAuthStore{}
+	service := NewService(store, false, "correct horse battery staple")
+	req := httptest.NewRequest(http.MethodPost, "https://slate.test/api/v1/auth/register", strings.NewReader(`{"email":" NEW@Example.com ","password":"a secure password","inviteCode":"correct horse battery staple"}`))
+	req.Host = "slate.test"
+	req.Header.Set("Origin", "https://slate.test")
+	req.Header.Set("X-Forwarded-For", "203.0.113.9, 35.191.0.1")
+	rec := httptest.NewRecorder()
+
+	service.Register(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if store.email != "new@example.com" || store.passwordHash == "a secure password" || store.sessionHash == "" {
+		t.Fatalf("stored signup = email %q, password %q, session %q", store.email, store.passwordHash, store.sessionHash)
+	}
+	if store.ipHash != hashToken("203.0.113.9") || store.emailHash != hashToken("new@example.com") {
+		t.Fatalf("rate-limit keys = %q, %q", store.ipHash, store.emailHash)
+	}
+	result := rec.Result()
+	cookies := result.Cookies()
+	if len(cookies) != 1 || cookies[0].Name != CookieName || !cookies[0].HttpOnly || cookies[0].Value == "" {
+		t.Fatalf("cookies = %#v", cookies)
+	}
+	if strings.Contains(rec.Body.String(), "correct horse battery staple") || strings.Contains(rec.Body.String(), "a secure password") {
+		t.Fatal("response exposed credentials")
+	}
+}
+
+func TestRegisterFailsSafely(t *testing.T) {
+	tests := []struct {
+		name       string
+		inviteCode string
+		body       string
+		store      *signupAuthStore
+		status     int
+	}{
+		{"missing configuration", "", `{"email":"new@example.com","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{}, http.StatusNotFound},
+		{"invalid code", "secret", `{"email":"new@example.com","password":"a secure password","inviteCode":"wrong"}`, &signupAuthStore{}, http.StatusUnauthorized},
+		{"short password", "secret", `{"email":"new@example.com","password":"short","inviteCode":"secret"}`, &signupAuthStore{}, http.StatusBadRequest},
+		{"invalid email", "secret", `{"email":"not-an-email","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{}, http.StatusBadRequest},
+		{"duplicate email", "secret", `{"email":"new@example.com","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{createErr: ErrEmailTaken}, http.StatusConflict},
+		{"rate limited", "secret", `{"email":"new@example.com","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{rateErr: ErrRateLimited}, http.StatusTooManyRequests},
+		{"partial failure", "secret", `{"email":"new@example.com","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{createErr: errors.New("database failed")}, http.StatusInternalServerError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := NewService(tt.store, false, tt.inviteCode)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+			service.Register(rec, req)
+			if rec.Code != tt.status {
+				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tt.status, rec.Body.String())
+			}
+			if tt.status != http.StatusCreated && len(rec.Result().Cookies()) != 0 {
+				t.Fatal("failed signup set a session cookie")
+			}
+			if strings.Contains(rec.Body.String(), "secret") || strings.Contains(rec.Body.String(), "database failed") {
+				t.Fatalf("unsafe error body = %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRegisterRotationRejectsOldCodeAndAcceptsNewCode(t *testing.T) {
+	store := &signupAuthStore{}
+	service := NewService(store, false, "new-code")
+
+	oldRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(`{"email":"old@example.com","password":"a secure password","inviteCode":"old-code"}`))
+	oldRecorder := httptest.NewRecorder()
+	service.Register(oldRecorder, oldRequest)
+	if oldRecorder.Code != http.StatusUnauthorized || store.email != "" {
+		t.Fatalf("old code response = %d, created email = %q", oldRecorder.Code, store.email)
+	}
+
+	newRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(`{"email":"new@example.com","password":"a secure password","inviteCode":"new-code"}`))
+	newRecorder := httptest.NewRecorder()
+	service.Register(newRecorder, newRequest)
+	if newRecorder.Code != http.StatusCreated || store.email != "new@example.com" {
+		t.Fatalf("new code response = %d, created email = %q", newRecorder.Code, store.email)
+	}
+}
+
+func TestClientIPUsesCloudRunAppendedAddresses(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "198.51.100.88, 203.0.113.9, 35.191.0.1")
+	if got := clientIP(req); got != "203.0.113.9" {
+		t.Fatalf("clientIP = %q, want Cloud Run client address", got)
+	}
+}
+
 func TestSeedAdminCreatesNamedAdminWhenAnotherAdminExists(t *testing.T) {
 	store := &seedAdminStore{
 		users: map[string]UserWithPassword{
@@ -177,8 +284,41 @@ func TestSeedAdminDoesNotPromoteExistingMember(t *testing.T) {
 
 type requestAuthStore struct{}
 
+type signupAuthStore struct {
+	requestAuthStore
+	email        string
+	passwordHash string
+	sessionHash  string
+	ipHash       string
+	emailHash    string
+	createErr    error
+	rateErr      error
+}
+
+func (s *signupAuthStore) ConsumeSignupAttempt(_ context.Context, ipHash string, emailHash string, _ time.Time, _ time.Duration, _ int) (time.Duration, error) {
+	s.ipHash = ipHash
+	s.emailHash = emailHash
+	return 0, s.rateErr
+}
+
+func (s *signupAuthStore) CreateInvitedMember(_ context.Context, email string, passwordHash string, sessionHash string, _ time.Time) (User, error) {
+	s.email = email
+	s.passwordHash = passwordHash
+	s.sessionHash = sessionHash
+	if s.createErr != nil {
+		return User{}, s.createErr
+	}
+	return User{ID: "member", Email: email, Role: "member", Entitlement: entitlements.Pro(entitlements.SourceInviteCode)}, nil
+}
+
 func (requestAuthStore) CreateAdmin(context.Context, string, string) (User, error) {
 	return User{}, errors.New("unused")
+}
+func (requestAuthStore) CreateInvitedMember(context.Context, string, string, string, time.Time) (User, error) {
+	return User{}, errors.New("unused")
+}
+func (requestAuthStore) ConsumeSignupAttempt(context.Context, string, string, time.Time, time.Duration, int) (time.Duration, error) {
+	return 0, errors.New("unused")
 }
 func (requestAuthStore) FindUserByEmail(context.Context, string) (UserWithPassword, error) {
 	return UserWithPassword{}, errors.New("unused")
