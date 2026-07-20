@@ -103,6 +103,8 @@ async function boot() {
       state.theme = themeFor(state.me.theme);
       await loadBoards();
       state.view = "app";
+	} else if (location.pathname === "/early-access") {
+	  state.view = "early-access";
     }
     if (location.hash === "#settings" && state.me) await openSettings(false);
   } catch (err) {
@@ -136,6 +138,11 @@ async function loadBoard(id) {
 
 function render() {
   const root = document.querySelector("#app");
+	if (state.view === "early-access" && !state.me) {
+	  root.innerHTML = earlyAccessHTML();
+	  bindEarlyAccess();
+	  return;
+	}
   if (state.view === "home") {
     root.innerHTML = landingHTML();
     bindLanding();
@@ -153,6 +160,27 @@ function render() {
   }
   root.innerHTML = appHTML();
   bindApp();
+}
+
+function earlyAccessHTML() {
+  return `
+    <section class="login early-access">
+      <form id="early-access-form" method="post" action="/api/v1/auth/register">
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <h1>Join Slate.</h1>
+        <p>Create your Pro account with your early access invite.</p>
+        <label class="login-label" for="signup-email">Email</label>
+        <input id="signup-email" name="email" type="email" autocomplete="email" required>
+        <label class="login-label" for="signup-password">Password</label>
+        <input id="signup-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="72" aria-describedby="password-requirements" required>
+        <p class="form-help" id="password-requirements">Use at least 12 characters, up to 72 bytes.</p>
+        <label class="login-label" for="signup-invite-code">Invite code</label>
+        <input id="signup-invite-code" name="inviteCode" type="password" autocomplete="off" required>
+        <button class="primary" type="submit">Create Pro account</button>
+        <button class="auth-link" id="early-access-login" type="button">Already have an account? Sign in</button>
+        <p class="error" role="alert">${escapeHTML(state.error)}</p>
+      </form>
+    </section>`;
 }
 
 function loginHTML() {
@@ -608,6 +636,36 @@ function bindLogin() {
   });
 }
 
+function bindEarlyAccess() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelector("#early-access-login").onclick = () => {
+	history.replaceState({}, "", "/");
+	showLogin();
+  };
+  document.querySelector("#early-access-form").addEventListener("submit", async (event) => {
+	event.preventDefault();
+	const form = new FormData(event.currentTarget);
+	try {
+	  await api.post("/api/v1/auth/register", {
+		email: form.get("email"),
+		password: form.get("password"),
+		inviteCode: form.get("inviteCode"),
+	  });
+	  state.error = "";
+	  const me = await api.get("/api/v1/me");
+	  authVersion += 1;
+	  state.me = me.user;
+	  state.theme = themeFor(state.me.theme);
+	  await loadBoards();
+	  history.replaceState({}, "", "/");
+	  state.view = "app";
+	} catch (err) {
+	  state.error = err.message;
+	}
+	render();
+  });
+}
+
 function bindLanding() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#landing-login")?.addEventListener("click", showLogin);
@@ -915,7 +973,7 @@ function goHome() {
   state.view = "home";
   state.settings = false;
   state.selectedTask = null;
-  if (location.hash) history.replaceState({}, "", location.pathname);
+	if (location.pathname === "/early-access" || location.hash) history.replaceState({}, "", "/");
   render();
 }
 

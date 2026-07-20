@@ -4,11 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/mail"
+	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,15 +22,21 @@ import (
 )
 
 const (
-	CookieName      = "slate_session"
-	sessionDuration = 30 * 24 * time.Hour
+	CookieName       = "slate_session"
+	sessionDuration  = 30 * 24 * time.Hour
+	signupWindow     = 15 * time.Minute
+	signupLimit      = 5
+	minPasswordLen   = 12
+	maxPasswordBytes = 72
 )
 
 var (
-	ErrEmailTaken   = errors.New("email already exists")
-	ErrInvalidAuth  = errors.New("invalid email or password")
-	ErrUnauthorized = errors.New("unauthorized")
-	ErrAdminExists  = errors.New("admin already exists")
+	ErrEmailTaken     = errors.New("email already exists")
+	ErrInvalidAuth    = errors.New("invalid email or password")
+	ErrUnauthorized   = errors.New("unauthorized")
+	ErrAdminExists    = errors.New("admin already exists")
+	ErrRateLimited    = errors.New("registration rate limit reached")
+	ErrMemberNotFound = errors.New("member account not found")
 )
 
 type User struct {
@@ -48,8 +59,16 @@ type APIToken struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 }
 
+type MemberAccount struct {
+	Email      string     `json:"email"`
+	DisabledAt *time.Time `json:"disabledAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+}
+
 type Store interface {
 	CreateAdmin(ctx context.Context, email string, passwordHash string) (User, error)
+	CreateInvitedMember(ctx context.Context, email string, passwordHash string, sessionHash string, expiresAt time.Time) (User, error)
+	ConsumeSignupAttempt(ctx context.Context, ipHash string, emailHash string, now time.Time, window time.Duration, limit int) (time.Duration, error)
 	FindUserByEmail(ctx context.Context, email string) (UserWithPassword, error)
 	FindUserBySessionHash(ctx context.Context, tokenHash string, now time.Time) (User, error)
 	CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error
@@ -64,15 +83,95 @@ type Store interface {
 type Service struct {
 	store        Store
 	cookieSecure bool
+	inviteCode   string
 	now          func() time.Time
 }
 
-func NewService(store Store, cookieSecure bool) *Service {
+func NewService(store Store, cookieSecure bool, inviteCode ...string) *Service {
+	configuredCode := ""
+	if len(inviteCode) > 0 {
+		configuredCode = inviteCode[0]
+	}
 	return &Service{
 		store:        store,
 		cookieSecure: cookieSecure,
+		inviteCode:   configuredCode,
 		now:          time.Now,
 	}
+}
+
+func (s *Service) SignupEnabled() bool {
+	return s != nil && s.inviteCode != ""
+}
+
+func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
+	if !s.SignupEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	if !validateAuthPost(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	var input signupInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+
+	email := normalizeEmail(input.Email)
+	ipHash := hashToken(clientIP(r))
+	emailHash := hashToken(email)
+	if retryAfter, err := s.store.ConsumeSignupAttempt(r.Context(), ipHash, emailHash, s.now(), signupWindow, signupLimit); errors.Is(err, ErrRateLimited) {
+		retrySeconds := (retryAfter + time.Second - 1) / time.Second
+		if retrySeconds < 1 {
+			retrySeconds = 1
+		}
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(retrySeconds), 10))
+		writeError(w, http.StatusTooManyRequests, "too many registration attempts; try again later")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "registration is temporarily unavailable")
+		return
+	}
+
+	if email == "" || input.Password == "" || input.InviteCode == "" {
+		writeError(w, http.StatusBadRequest, "email, password, and invite code are required")
+		return
+	}
+	if !validEmail(email) {
+		writeError(w, http.StatusBadRequest, "enter a valid email address")
+		return
+	}
+	if len([]rune(input.Password)) < minPasswordLen || len([]byte(input.Password)) > maxPasswordBytes {
+		writeError(w, http.StatusBadRequest, "password must be at least 12 characters and no more than 72 bytes")
+		return
+	}
+	if !constantTimeEqual(input.InviteCode, s.inviteCode) {
+		writeError(w, http.StatusUnauthorized, "invalid invite code")
+		return
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "account could not be created")
+		return
+	}
+	sessionToken, err := randomToken("sess")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "account could not be created")
+		return
+	}
+	expiresAt := s.now().Add(sessionDuration)
+	user, err := s.store.CreateInvitedMember(r.Context(), email, string(passwordHash), hashToken(sessionToken), expiresAt)
+	if errors.Is(err, ErrEmailTaken) {
+		writeError(w, http.StatusConflict, "an account with that email already exists")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "account could not be created")
+		return
+	}
+	setSessionCookie(w, s.cookieSecure, sessionToken, expiresAt)
+	writeJSON(w, http.StatusCreated, meResponse{Authenticated: true, User: &user})
 }
 
 func SeedAdmin(ctx context.Context, store Store, email string, password string) (User, error) {
@@ -262,6 +361,11 @@ func (s *Service) CreateAPIToken(w http.ResponseWriter, r *http.Request, user Us
 		return
 	}
 	token, err := s.store.CreateAPIToken(r.Context(), user.ID, name, hashToken(plain))
+	if errors.Is(err, ErrUnauthorized) {
+		clearSessionCookie(w, s.cookieSecure)
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "API token could not be created")
 		return
@@ -294,19 +398,28 @@ func (s *Service) createSession(w http.ResponseWriter, r *http.Request, user Use
 	}
 	expiresAt := s.now().Add(sessionDuration)
 	if err := s.store.CreateSession(r.Context(), user.ID, hashToken(token), expiresAt); err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			clearSessionCookie(w, s.cookieSecure)
+			writeError(w, http.StatusUnauthorized, "invalid email or password")
+			return false
+		}
 		writeError(w, http.StatusInternalServerError, "session could not be created")
 		return false
 	}
+	setSessionCookie(w, s.cookieSecure, token, expiresAt)
+	return true
+}
+
+func setSessionCookie(w http.ResponseWriter, secure bool, token string, expiresAt time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    token,
 		Path:     "/",
 		Expires:  expiresAt,
 		HttpOnly: true,
-		Secure:   s.cookieSecure,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
-	return true
 }
 
 func (s *Service) readSessionToken(r *http.Request) (string, bool) {
@@ -342,8 +455,45 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func constantTimeEqual(left string, right string) bool {
+	leftHash := sha256.Sum256([]byte(left))
+	rightHash := sha256.Sum256([]byte(right))
+	return subtle.ConstantTimeCompare(leftHash[:], rightHash[:]) == 1
+}
+
+func clientIP(r *http.Request) string {
+	var forwarded []netip.Addr
+	for part := range strings.SplitSeq(r.Header.Get("X-Forwarded-For"), ",") {
+		if addr, err := netip.ParseAddr(strings.TrimSpace(part)); err == nil {
+			forwarded = append(forwarded, addr.Unmap())
+		}
+	}
+	if len(forwarded) >= 2 {
+		return forwarded[len(forwarded)-2].String()
+	}
+	if len(forwarded) == 1 {
+		return forwarded[0].String()
+	}
+	host := strings.TrimSpace(r.RemoteAddr)
+	if addrPort, err := netip.ParseAddrPort(host); err == nil {
+		return addrPort.Addr().Unmap().String()
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Unmap().String()
+	}
+	return "unknown"
+}
+
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func validEmail(email string) bool {
+	if len(email) > 254 {
+		return false
+	}
+	address, err := mail.ParseAddress(email)
+	return err == nil && address.Address == email
 }
 
 func validateAuthPost(w http.ResponseWriter, r *http.Request) bool {
@@ -366,7 +516,8 @@ func validateSameOrigin(w http.ResponseWriter, r *http.Request) bool {
 	if host == "" {
 		return true
 	}
-	if strings.Contains(origin, "://"+host) {
+	parsed, err := url.Parse(origin)
+	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && strings.EqualFold(parsed.Host, host) && parsed.User == nil {
 		return true
 	}
 	writeError(w, http.StatusForbidden, "cross-origin request blocked")
@@ -428,6 +579,12 @@ func validID(id string) bool {
 type credentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+type signupInput struct {
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	InviteCode string `json:"inviteCode"`
 }
 
 type meResponse struct {

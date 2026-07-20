@@ -13,6 +13,7 @@ type Config struct {
 	StaticDir     string
 	AdminEmail    string
 	AdminPassword string
+	InviteCode    string
 }
 
 func FromEnv() Config {
@@ -25,6 +26,7 @@ func FromEnv() Config {
 		StaticDir:     os.Getenv("STATIC_DIR"),
 		AdminEmail:    adminEmail,
 		AdminPassword: adminPassword,
+		InviteCode:    os.Getenv("INVITE_CODE"),
 	}
 }
 

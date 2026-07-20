@@ -17,11 +17,11 @@ type App struct {
 	boards *boards.Handler
 }
 
-func NewApp(static fs.FS, db *database.Pool, cookieSecure bool) *App {
+func NewApp(static fs.FS, db *database.Pool, cookieSecure bool, inviteCode ...string) *App {
 	app := &App{static: static, db: db}
 	if db != nil {
 		authStore := auth.NewPGStore(db)
-		app.auth = auth.NewService(authStore, cookieSecure)
+		app.auth = auth.NewService(authStore, cookieSecure, inviteCode...)
 		app.boards = boards.NewHandler(boards.NewStore(db))
 	}
 	return app
@@ -33,6 +33,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/me", a.me)
 	mux.HandleFunc("PATCH /api/v1/me", a.session(a.auth.UpdateTheme))
 	mux.HandleFunc("POST /api/v1/auth/login", a.login)
+	mux.HandleFunc("POST /api/v1/auth/register", a.register)
 	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
 	mux.HandleFunc("GET /api/v1/api-tokens", a.session(a.auth.ListAPITokens))
 	mux.HandleFunc("POST /api/v1/api-tokens", a.session(a.auth.CreateAPIToken))
@@ -58,8 +59,17 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/claim", a.user(a.boards.AgentClaim))
 	mux.HandleFunc("PATCH /api/v1/agent/tasks/{id}/status", a.user(a.boards.AgentStatus))
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/done", a.user(a.boards.AgentDone))
+	mux.HandleFunc("GET /early-access", a.earlyAccess)
 	mux.Handle("/", StaticHandler(a.static))
 	return mux
+}
+
+func (a *App) earlyAccess(w http.ResponseWriter, r *http.Request) {
+	if a.auth == nil || !a.auth.SignupEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	serveFile(w, r, a.static, "index.html")
 }
 
 func (a *App) health(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +96,13 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auth.Login(w, r)
+}
+
+func (a *App) register(w http.ResponseWriter, r *http.Request) {
+	if !a.ready(w) {
+		return
+	}
+	a.auth.Register(w, r)
 }
 
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {

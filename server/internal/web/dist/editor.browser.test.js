@@ -245,6 +245,48 @@ test("server limit rejections stay visible for board, list, and active-item crea
 	}
 });
 
+test("early access submits credentials in the body and opens the app", async t => {
+	let authenticated = false;
+	let registration;
+	const defaultBoard = { id: "board-one", name: "Today", maxTasksPerList: 20, buckets: [] };
+	const server = http.createServer(async (request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		if (url.pathname === "/api/v1/me") return json(response, authenticated ? {
+			authenticated: true,
+			user: { id: "member", email: "member@example.com", theme: "light", entitlement: { plan: "pro", source: "invite_code", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } } },
+		} : { authenticated: false });
+		if (url.pathname === "/api/v1/auth/register" && request.method === "POST") {
+			let body = "";
+			for await (const chunk of request) body += chunk;
+			registration = { url: request.url, body: JSON.parse(body) };
+			authenticated = true;
+			return json(response, { authenticated: true });
+		}
+		if (url.pathname === "/api/v1/boards") return json(response, { boards: [defaultBoard], maxBoards: 5 });
+		if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
+		if (url.pathname === "/early-access" || url.pathname === "/index.html") return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	await page.goto(`http://127.0.0.1:${server.address().port}/early-access`);
+	await page.getByLabel("Email").fill("member@example.com");
+	await page.getByLabel("Password").fill("a secure password");
+	await page.getByLabel("Invite code").fill("private-invite-code");
+	await page.getByRole("button", { name: "Create Pro account" }).click();
+	await page.getByText("Today", { exact: true }).first().waitFor();
+
+	assert.equal(page.url(), `http://127.0.0.1:${server.address().port}/`);
+	assert.equal(registration.url, "/api/v1/auth/register");
+	assert.deepEqual(registration.body, { email: "member@example.com", password: "a secure password", inviteCode: "private-invite-code" });
+});
+
 function json(response, body) {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));

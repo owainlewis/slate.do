@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,13 +40,15 @@ func run(args []string) error {
 		return migrate(cfg)
 	case "seed-admin", "seed-owner":
 		return seedAdmin(cfg)
+	case "accounts":
+		return accounts(cfg, args[2:])
 	default:
 		return usage()
 	}
 }
 
 func usage() error {
-	return errors.New("usage: slate serve|migrate|seed-admin")
+	return errors.New("usage: slate serve|migrate|seed-admin|accounts list|accounts disable <email>|accounts enable <email>")
 }
 
 func serve(cfg config.Config) error {
@@ -67,7 +70,7 @@ func serve(cfg config.Config) error {
 		return err
 	}
 
-	app := slatehttp.NewApp(staticFS, db, cfg.CookieSecure)
+	app := slatehttp.NewApp(staticFS, db, cfg.CookieSecure, cfg.InviteCode)
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           app.Routes(),
@@ -90,6 +93,52 @@ func serve(cfg config.Config) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func accounts(cfg config.Config, args []string) error {
+	if len(args) == 0 {
+		return usage()
+	}
+	db, err := openDB(cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := migrations.Apply(context.Background(), db); err != nil {
+		return err
+	}
+	store := auth.NewPGStore(db)
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return errors.New("usage: slate accounts list")
+		}
+		members, err := store.ListMembers(context.Background())
+		if err != nil {
+			return err
+		}
+		fmt.Println("EMAIL\tSTATUS\tCREATED")
+		for _, member := range members {
+			status := "enabled"
+			if member.DisabledAt != nil {
+				status = "disabled"
+			}
+			fmt.Printf("%s\t%s\t%s\n", member.Email, status, member.CreatedAt.UTC().Format(time.RFC3339))
+		}
+		return nil
+	case "disable", "enable":
+		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
+			return fmt.Errorf("usage: slate accounts %s <email>", args[0])
+		}
+		disabled := args[0] == "disable"
+		if err := store.SetMemberDisabled(context.Background(), args[1], disabled); err != nil {
+			return err
+		}
+		fmt.Printf("%s %s\n", args[0]+"d", strings.ToLower(strings.TrimSpace(args[1])))
+		return nil
+	default:
+		return usage()
 	}
 }
 

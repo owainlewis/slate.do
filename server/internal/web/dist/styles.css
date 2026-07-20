@@ -723,6 +723,9 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .login input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
 .login .primary { width: 100%; padding: 10px; margin-top: 4px; }
 .login .brand { padding: 0; }
+.login .form-help { margin: -7px 0 14px; font-size: 12px; }
+.login .auth-link { width: 100%; margin-top: 14px; border: 0; background: transparent; color: var(--soft); cursor: pointer; }
+.login .auth-link:hover { color: var(--ink); }
 .error { color: var(--danger); min-height: 20px; }
 
 /* ---------- Landing ---------- */
