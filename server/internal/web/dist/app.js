@@ -191,34 +191,25 @@ function landingHTML() {
           </figure>
         </section>
         <section class="landing-preview" aria-label="Slate preview">
-          <div class="preview-frame" data-reveal>
-            <header class="preview-chrome" aria-hidden="true"><span></span><span></span><span></span><b>This week</b></header>
-            <div class="landing-board">
-              <div class="preview-list">
-                <header><span class="preview-name">Inbox</span><span class="preview-count">2/20</span></header>
-                <div class="preview-task" style="--d:0"><span class="preview-check"></span>Pricing feedback from Anna</div>
-                <div class="preview-task" style="--d:1"><span class="preview-check"></span>Reply to the waitlist</div>
-                <div class="preview-add" style="--d:2">Add item</div>
-              </div>
-              <div class="preview-list preview-focus">
-                <header><span class="preview-name">Focus</span><span class="preview-count">2/5</span></header>
-                <div class="preview-task preview-done" style="--d:2"><span class="preview-check checked">${icon("check")}</span>Draft launch note</div>
-                <div class="preview-task" style="--d:3"><span class="preview-check"></span>Review agent pull requests</div>
-                <div class="preview-task" style="--d:4"><span class="preview-check"></span>Ship one small thing</div>
-                <div class="preview-add" style="--d:5">Add item</div>
-              </div>
-              <div class="preview-list">
-                <header><span class="preview-name">Agent work</span><span class="preview-count">1/20</span></header>
-                <div class="preview-task" style="--d:5"><span class="preview-check"></span>Research pricing pages<span class="preview-status">working</span></div>
-                <div class="preview-add" style="--d:6">Add item</div>
-              </div>
-            </div>
+          <div class="tour-tabs rise" style="--d:2" role="tablist" aria-label="Slate views">
+            <button class="tour-tab on" type="button" data-tour="lists" role="tab" aria-selected="true">Lists</button>
+            <button class="tour-tab" type="button" data-tour="flow" role="tab" aria-selected="false">Flow</button>
+            <button class="tour-tab" type="button" data-tour="week" role="tab" aria-selected="false">Week</button>
           </div>
-          <p class="preview-caption" data-reveal>One board. A few lists. A hard cap on open work.</p>
+          <div class="tour-frame" data-reveal>
+            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: three goal-led lists of work, each with a hard cap on open items">
+            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Flow view: work moving through Ready, Working, Review, and Done">
+            <img class="tour-img" data-tour-img="week" src="/app-week.jpg" alt="Slate Week view: tasks laid out across the days of the week">
+          </div>
+          <p class="preview-caption" data-reveal>
+            <span class="tour-caption on" data-tour-caption="lists">A few lists, each with a hard cap on open work.</span>
+            <span class="tour-caption" data-tour-caption="flow">Every item moves through the same four honest states.</span>
+            <span class="tour-caption" data-tour-caption="week">See the week before you're already in it.</span>
+          </p>
         </section>
         <section class="landing-principles">
           <h2 class="principles-head" data-reveal>Less, on purpose.</h2>
-          <p class="principles-sub" data-reveal style="--d:0">Work will always be infinite. Your attention will not. Strip away the noise, decide what actually matters, and let your agents execute it.</p>
+          <p class="principles-sub" data-reveal style="--d:0">Radical productivity comes from getting clear on what actually matters, not from doing more. Avoid the busy work. Scale yourself by letting your agents do it for you.</p>
           <div class="principle" data-reveal style="--d:0">
             <span class="principle-num">01</span>
             <h3>Limits, not lists</h3>
@@ -232,7 +223,7 @@ function landingHTML() {
           <div class="principle" data-reveal style="--d:2">
             <span class="principle-num">03</span>
             <h3>You think, they execute</h3>
-            <p>Agents pull, claim, and finish work through the same plan you read. You keep the judgment about what matters. They keep the pace of getting it done.</p>
+            <p>Agents pull, claim, and finish work through the same plan you read. You stay clear on what matters. They handle the busy work and scale what you can get done.</p>
           </div>
         </section>
         <section class="landing-manifesto">
@@ -606,6 +597,16 @@ function bindLanding() {
   document.querySelector("#hero-login")?.addEventListener("click", showLogin);
   document.querySelector("#landing-open")?.addEventListener("click", openApp);
   document.querySelector("#open-app")?.addEventListener("click", openApp);
+  document.querySelectorAll(".tour-tab").forEach(tab => tab.addEventListener("click", () => {
+    const name = tab.dataset.tour;
+    document.querySelectorAll(".tour-tab").forEach(el => {
+      const on = el === tab;
+      el.classList.toggle("on", on);
+      el.setAttribute("aria-selected", String(on));
+    });
+    document.querySelectorAll("[data-tour-img]").forEach(el => el.classList.toggle("on", el.dataset.tourImg === name));
+    document.querySelectorAll("[data-tour-caption]").forEach(el => el.classList.toggle("on", el.dataset.tourCaption === name));
+  }));
   const revealEls = document.querySelectorAll("[data-reveal]");
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   if (reduceMotion || typeof IntersectionObserver === "undefined") {
