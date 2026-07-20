@@ -49,7 +49,7 @@ function decodeResponseBody(text, ok) {
 }
 
 function listLimitUpdate(boardId, value) {
-  const next = Math.max(1, Number(value) || DEFAULT_LIST_LIMIT);
+  const next = Math.min(proLimits().activeItemsPerList, Math.max(1, Number(value) || DEFAULT_LIST_LIMIT));
   return { next, path: `/api/v1/boards/${boardId}`, input: { maxTasksPerList: next } };
 }
 
@@ -61,7 +61,8 @@ let authVersion = 0;
 const state = {
   me: null,
   boards: [],
-  maxBoards: 10,
+  maxBoards: 5,
+  maxListsPerBoard: 9,
   board: null,
   selectedTask: null,
   settings: false,
@@ -82,7 +83,8 @@ const themes = [
 ];
 
 const DEFAULT_LIST_LIMIT = 20;
-const DEFAULT_MAX_BOARDS = 10;
+const DEFAULT_MAX_BOARDS = 5;
+const DEFAULT_MAX_LISTS_PER_BOARD = 9;
 const FLOW_STATES = [
   { value: "queued", label: "Ready" },
   { value: "working", label: "Working" },
@@ -95,6 +97,8 @@ async function boot() {
     const me = await api.get("/api/v1/me");
     state.me = me.authenticated ? me.user : null;
     if (state.me) {
+      state.maxBoards = proLimits().boards;
+      state.maxListsPerBoard = proLimits().listsPerBoard;
       authVersion += 1;
       state.theme = themeFor(state.me.theme);
       await loadBoards();
@@ -110,7 +114,7 @@ async function boot() {
 async function loadBoards(selectId) {
   const data = await api.get("/api/v1/boards");
   state.boards = data.boards;
-  state.maxBoards = data.maxBoards || DEFAULT_MAX_BOARDS;
+  state.maxBoards = data.maxBoards || proLimits().boards;
   const nextId = selectId || state.board?.id || state.boards[0]?.id;
   if (nextId) {
     await loadBoard(nextId);
@@ -267,6 +271,7 @@ function appHTML() {
   const calendarMode = state.boardMode === "calendar";
   const todayMode = state.boardMode === "today";
   const boardLimitReached = state.boards.length >= state.maxBoards;
+  const listLimitReached = lists.length >= state.maxListsPerBoard;
   return `
     <section class="shell theme-${theme}">
       <aside class="sidebar">
@@ -302,7 +307,8 @@ function appHTML() {
               <button data-board-mode="calendar" aria-pressed="${calendarMode}" class="${calendarMode ? "on" : ""}" title="Week">${icon("calendar")}<span>Week</span></button>
               <button data-board-mode="today" aria-pressed="${todayMode}" class="${todayMode ? "on" : ""}" title="Today">${icon("sun")}<span>Today</span></button>
             </div>
-            <button class="icon-btn icon-label ${listsMode ? "" : "add-list-placeholder"}" id="add-list" ${listsMode ? "" : 'aria-hidden="true" tabindex="-1" disabled'}>${icon("plus")}<span>New list</span></button>
+      <button class="icon-btn icon-label ${listsMode ? "" : "add-list-placeholder"}" id="add-list" ${listsMode ? (listLimitReached ? 'disabled aria-describedby="list-limit"' : "") : 'aria-hidden="true" tabindex="-1" disabled'}>${icon("plus")}<span>New list</span></button>
+      ${listsMode && listLimitReached ? `<span class="board-limit" id="list-limit">${state.maxListsPerBoard} list Pro limit reached</span>` : ""}
           </div>
         </header>
         ${statusErrorHTML(state.error)}
@@ -325,6 +331,8 @@ function boardRowHTML(board) {
 function listHTML(list) {
   const over = list.openCount > list.limitCount ? "over-limit" : "";
   const tasks = list.tasks || [];
+  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+  const activeLimitReached = (list.openCount || 0) >= activeLimit;
   return `
     <section class="bucket ${over}" data-bucket="${list.id}" draggable="true">
       <div class="bucket-head">
@@ -339,11 +347,20 @@ function listHTML(list) {
       <ul class="tasks ${tasks.length ? "" : "empty"}" data-task-list="${list.id}">
         ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state">${icon("inboxTray")}<p>Nothing here yet</p></li>`}
       </ul>
-      <form class="add-task" data-add-task="${list.id}">
-        <button class="add-icon" type="submit" title="Add item">${icon("plus")}</button>
-        <input name="title" placeholder="Add item">
-      </form>
-    </section>`;
+    <form class="add-task" data-add-task="${list.id}">
+    <button class="add-icon" type="submit" title="Add item" ${activeLimitReached ? 'disabled aria-describedby="item-limit-' + list.id + '"' : ""}>${icon("plus")}</button>
+    <input name="title" placeholder="${activeLimitReached ? `Limit of ${activeLimit} active items reached` : "Add item"}" ${activeLimitReached ? 'disabled aria-describedby="item-limit-' + list.id + '"' : ""}>
+  </form>
+  ${activeLimitReached ? `<p class="board-limit" id="item-limit-${list.id}">${activeLimit} active item limit reached</p>` : ""}
+  </section>`;
+}
+
+function proLimits() {
+  return state.me?.entitlement?.limits || {
+    boards: DEFAULT_MAX_BOARDS,
+    listsPerBoard: DEFAULT_MAX_LISTS_PER_BOARD,
+    activeItemsPerList: DEFAULT_LIST_LIMIT,
+  };
 }
 
 function taskHTML(task) {
@@ -545,10 +562,10 @@ function settingsHTML() {
           <section class="settings-section">
             <div class="settings-section-head">
               <h2>Lists</h2>
-              <p>Open actions per list on this board</p>
+        <p>Max active items per list on this board</p>
             </div>
             <div class="limit-control settings-limit">
-              <input id="settings-list-limit" aria-label="Open actions per list" type="number" min="1" value="${state.board?.maxTasksPerList || DEFAULT_LIST_LIMIT}">
+        <input id="settings-list-limit" aria-label="Max active items per list" type="number" min="1" max="${proLimits().activeItemsPerList}" value="${state.board?.maxTasksPerList || DEFAULT_LIST_LIMIT}">
             </div>
           </section>
           <section class="settings-section">
@@ -666,10 +683,14 @@ function bindApp() {
   });
   const addListButton = document.querySelector("#add-list");
   if (addListButton) addListButton.onclick = async () => {
-    const list = await api.post(`/api/v1/boards/${state.board.id}/buckets`, { name: "New list" });
-    await loadBoards(state.board.id);
+    if ((state.board.buckets || []).length >= state.maxListsPerBoard) return;
+    let list;
+    await runMutation(
+      async () => { list = await api.post(`/api/v1/boards/${state.board.id}/buckets`, { name: "New list" }); },
+      async () => loadBoards(state.board.id),
+    );
     render();
-    document.querySelector(`[data-bucket="${list.id}"] input[data-bucket-name]`)?.focus();
+    if (list) document.querySelector(`[data-bucket="${list.id}"] input[data-bucket-name]`)?.focus();
   };
   document.querySelector("#board-title").addEventListener("change", async e => { await api.patch(`/api/v1/boards/${state.board.id}`, { name: e.target.value }); await reload(); });
   document.querySelectorAll("[data-bucket-name]").forEach(el => el.addEventListener("change", async e => { await api.patch(`/api/v1/buckets/${el.dataset.bucketName}`, { name: e.target.value }); await reload(); }));
@@ -904,6 +925,8 @@ async function addTask(event) {
   const title = new FormData(form).get("title").trim();
   if (!title) return;
   const list = state.board.buckets.find(b => b.id === form.dataset.addTask);
+  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+  if ((list.openCount || 0) >= activeLimit) return;
   await runMutation(() => api.post(`/api/v1/buckets/${list.id}/tasks`, { title }), reload);
 }
 

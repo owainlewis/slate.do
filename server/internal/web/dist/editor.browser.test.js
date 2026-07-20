@@ -149,9 +149,110 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   assert.equal(await page.evaluate(() => document.activeElement?.id), "board-title");
 });
 
+test("Pro resource limits block obvious actions and show server rejection messages", async t => {
+	const lists = Array.from({ length: 9 }, (_, index) => ({
+		id: `list-${index}`,
+		boardId: "board-one",
+		name: `List ${index + 1}`,
+		goal: "",
+		openCount: index === 0 ? 20 : 0,
+		limitCount: 20,
+		tasks: [],
+	}));
+	const limitedBoard = { id: "board-one", name: "Limited", maxTasksPerList: 20, buckets: lists };
+	const boards = Array.from({ length: 4 }, (_, index) => ({ id: index === 0 ? "board-one" : `board-${index}`, name: `Board ${index + 1}` }));
+	const server = http.createServer((request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		if (url.pathname === "/api/v1/me") return json(response, {
+			authenticated: true,
+			user: { id: "owner", email: "owner@example.com", entitlement: { plan: "pro", source: "admin", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } } },
+		});
+		if (url.pathname === "/api/v1/boards" && request.method === "GET") return json(response, { boards, maxBoards: 5 });
+		if (url.pathname === "/api/v1/boards" && request.method === "POST") {
+			response.writeHead(409, { "Content-Type": "application/json" });
+			return response.end(JSON.stringify({ code: "pro_board_limit_reached", error: "Pro allows up to 5 boards." }));
+		}
+		if (url.pathname === "/api/v1/boards/board-one") return json(response, limitedBoard);
+		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	await page.goto(`http://127.0.0.1:${server.address().port}`);
+
+	await page.getByText("9 list Pro limit reached", { exact: true }).waitFor();
+	assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isDisabled(), true);
+	assert.equal(await page.getByPlaceholder("Limit of 20 active items reached").isDisabled(), true);
+	assert.equal(await page.getByText("20 active item limit reached", { exact: true }).count(), 1);
+
+	await page.getByRole("button", { name: "New board", exact: true }).click();
+	await page.getByRole("alert").filter({ hasText: "Pro allows up to 5 boards." }).waitFor();
+});
+
+test("server limit rejections stay visible for board, list, and active-item creation", async t => {
+	const availableBoard = {
+		id: "board-one",
+		name: "Available",
+		maxTasksPerList: 20,
+		buckets: Array.from({ length: 8 }, (_, index) => ({
+			id: `list-${index}`,
+			boardId: "board-one",
+			name: `List ${index + 1}`,
+			goal: "",
+			openCount: index === 0 ? 19 : 0,
+			limitCount: 20,
+			tasks: [],
+		})),
+	};
+	const boards = Array.from({ length: 4 }, (_, index) => ({ id: index === 0 ? "board-one" : `board-${index}`, name: `Board ${index + 1}` }));
+	const server = http.createServer((request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		if (url.pathname === "/api/v1/me") return json(response, {
+			authenticated: true,
+			user: { id: "owner", entitlement: { plan: "pro", source: "admin", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } } },
+		});
+		if (url.pathname === "/api/v1/boards" && request.method === "GET") return json(response, { boards, maxBoards: 5 });
+		if (url.pathname === "/api/v1/boards/board-one") return json(response, availableBoard);
+		if (url.pathname === "/api/v1/boards" && request.method === "POST") return conflict(response, "pro_board_limit_reached", "Pro allows up to 5 boards.");
+		if (url.pathname === "/api/v1/boards/board-one/buckets" && request.method === "POST") return conflict(response, "pro_list_limit_reached", "Pro allows up to 9 lists per board.");
+		if (url.pathname === "/api/v1/buckets/list-0/tasks" && request.method === "POST") return conflict(response, "pro_active_item_limit_reached", "Max active items per list is 20 on Pro.");
+		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	await page.goto(`http://127.0.0.1:${server.address().port}`);
+
+	for (const action of [
+		{ click: () => page.getByRole("button", { name: "New board", exact: true }).click(), message: "Pro allows up to 5 boards." },
+		{ click: () => page.getByRole("button", { name: "New list", exact: true }).click(), message: "Pro allows up to 9 lists per board." },
+		{ click: async () => { const input = page.locator('[data-add-task="list-0"] input'); await input.fill("Twenty first"); await input.press("Enter"); }, message: "Max active items per list is 20 on Pro." },
+	]) {
+		await action.click();
+		await page.getByRole("alert").filter({ hasText: action.message }).waitFor();
+	}
+});
+
 function json(response, body) {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
+}
+
+function conflict(response, code, error) {
+	response.writeHead(409, { "Content-Type": "application/json" });
+	response.end(JSON.stringify({ code, error }));
 }
 
 function file(response, name, type) {

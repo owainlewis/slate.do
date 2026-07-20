@@ -1,22 +1,33 @@
 # Access model
 
-Slate keeps application authority separate from paid membership.
+Slate keeps application authority separate from product access. Every account that can use the app has one server-owned `pro` entitlement.
 
 ## Roles
 
-- `admin` is an operator role. Admins can use and administer the app without a paid membership.
-- `member` is the default role for future public sign-ups. A member's role does not imply paid access.
+- `admin` is an operator role.
+- `member` is the default role for future public sign-ups.
 
-The `seed-admin` command creates a named admin account. It is idempotent for the same email and does not promote an existing member silently. More than one named admin may exist.
+Neither role is a plan. A user is usable only when the server resolves a separate Pro entitlement.
 
-## Future membership and Stripe
+The `seed-admin` command creates a named admin account and grants Pro with the `admin` source. It is idempotent for the same email and does not promote an existing member silently. More than one named admin may exist. The Pro migration grants the same entitlement to every existing admin, so those accounts remain usable.
 
-Follow the Passage billing shape when paid access is added:
+## Pro entitlement
 
-1. Store commercial state separately from `users.role`, in a billing account keyed by user ID.
-2. Resolve a server-owned entitlement such as `free` or `paid` from an explicit override, admin access, and Stripe subscription state.
-3. Treat active and trialing Stripe subscriptions as paid. Webhooks remain the durable source of subscription state.
-4. Enforce paid features on the server. UI checks only explain the current entitlement.
-5. Put checkout, portal, and webhooks behind a disabled-by-default billing configuration until all Stripe secrets and price IDs are set.
+`entitlements` records the user, the single `pro` plan, and how access was granted:
 
-Public registration, Stripe checkout, billing webhooks, and paid feature limits are intentionally outside the current admin-account task.
+- `invite_code`
+- `stripe`
+- `manual`
+- `admin`
+
+There is no Free tier, `beta_pro`, or second paid plan. Stripe behavior is not implemented here.
+
+The authenticated user response exposes the resolved plan, source, and the server-owned Pro limits:
+
+- 5 boards per account.
+- 9 lists per board.
+- Max active items per list: 20.
+
+Completed items do not count toward the active-item maximum. A board can configure a lower Max active items per list value as a working constraint. API input cannot configure a value above 20. An explicit override can bypass only the lower working constraint, never the Pro maximum.
+
+All resource limits are enforced transactionally on the server for browser, CLI, idempotent, and agent requests. UI checks explain obvious over-limit actions but are not an authorization boundary. Every query and mutation continues to scope resources to the authenticated account owner.

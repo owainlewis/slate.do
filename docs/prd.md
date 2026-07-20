@@ -97,9 +97,9 @@ The app should not force one bucket style. Users should be able to bucket by pri
 
 Each bucket can state its goal in one sentence.
 
-## List Limits
+## Active item limits
 
-Every bucket should have a visible limit for open items.
+Every list should have a visible Max active items per list setting.
 
 Example:
 
@@ -111,12 +111,7 @@ The limit is not decoration. It is part of the product.
 
 When the limit is full, the user should finish or move an item before creating another.
 
-Default limit:
-
-- 5 for normal buckets.
-- 3 for focus buckets.
-
-This can change after testing.
+The default and Pro hard maximum are 20 active items per list. A board can choose a lower working limit, but no input or override can exceed 20.
 
 ## List Items
 

@@ -6,12 +6,210 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/owainlewis/slate.do/server/internal/database"
 	"github.com/owainlewis/slate.do/server/internal/migrations"
 )
+
+func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	boardResults := runConcurrently(12, func(index int) error {
+		_, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: fmt.Sprintf("Board %d", index)})
+		return err
+	})
+	assertConcurrentResults(t, boardResults, defaultMaxBoards, ErrBoardLimit)
+
+	boards, err := store.ListBoards(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listResults := runConcurrently(15, func(index int) error {
+		_, err := store.CreateBucket(ctx, userID, boards[0].ID, CreateBucketInput{Name: fmt.Sprintf("List %d", index)})
+		return err
+	})
+	assertConcurrentResults(t, listResults, defaultMaxListsPerBoard, ErrListLimit)
+
+	loaded, err := store.GetBoard(ctx, userID, boards[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Buckets) != defaultMaxListsPerBoard {
+		t.Fatalf("lists = %d, want %d", len(loaded.Buckets), defaultMaxListsPerBoard)
+	}
+
+	taskResults := runConcurrently(30, func(index int) error {
+		_, err := store.CreateTask(ctx, userID, loaded.Buckets[0].ID, CreateTaskInput{Title: fmt.Sprintf("Task %d", index), OverrideLimit: true})
+		return err
+	})
+	assertConcurrentResults(t, taskResults, defaultMaxTasksPerList, ErrActiveItemLimit)
+}
+
+func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	tooHigh := defaultMaxTasksPerList + 1
+	if _, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Invalid", MaxTasksPerList: tooHigh}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("create board above Pro maximum error = %v, want ErrInvalidData", err)
+	}
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Limits", MaxTasksPerList: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &tooHigh}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("update board above Pro maximum error = %v, want ErrInvalidData", err)
+	}
+	target, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Working limit"}); !errors.Is(err, ErrLimitFull) {
+		t.Fatalf("configured max active items error = %v, want ErrLimitFull", err)
+	}
+	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Override 2", OverrideLimit: true}); err != nil {
+		t.Fatalf("override lower working limit: %v", err)
+	}
+	hardMaximum := defaultMaxTasksPerList
+	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &hardMaximum}); err != nil {
+		t.Fatal(err)
+	}
+	for index := 3; index < defaultMaxTasksPerList; index++ {
+		if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: fmt.Sprintf("Override %d", index), OverrideLimit: true}); err != nil {
+			t.Fatalf("override create %d: %v", index, err)
+		}
+	}
+	idempotent := CreateTaskInput{Title: "Idempotent twentieth", OverrideLimit: true, IdempotencyKey: "twentieth"}
+	twentieth, err := store.CreateTask(ctx, userID, target.ID, idempotent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.CreateTask(ctx, userID, target.ID, idempotent)
+	if err != nil || retry.ID != twentieth.ID {
+		t.Fatalf("idempotent retry = %#v, %v", retry, err)
+	}
+	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Twenty first", OverrideLimit: true}); !errors.Is(err, ErrActiveItemLimit) {
+		t.Fatalf("twenty-first create error = %v, want ErrActiveItemLimit", err)
+	}
+	moving, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Move me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTask(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); !errors.Is(err, ErrActiveItemLimit) {
+		t.Fatalf("API move into full list error = %v, want ErrActiveItemLimit", err)
+	}
+	if _, err := store.UpdateTaskForHuman(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); !errors.Is(err, ErrActiveItemLimit) {
+		t.Fatalf("human move into full list error = %v, want ErrActiveItemLimit", err)
+	}
+	done := true
+	if _, err := store.UpdateTask(ctx, userID, first.ID, UpdateTaskInput{Done: &done}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTask(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); err != nil {
+		t.Fatalf("move after completion freed capacity: %v", err)
+	}
+}
+
+func TestProLimitLocksPreserveAccountOwnershipIsolation(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	ownerID := createIntegrationUser(t, ctx, db)
+	otherID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
+	})
+
+	ownerBoard, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerList, err := store.CreateBucket(ctx, ownerID, ownerBoard.ID, CreateBucketInput{Name: "Private"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBucket(ctx, otherID, ownerBoard.ID, CreateBucketInput{Name: "Intruder"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-account list create error = %v, want ErrNotFound", err)
+	}
+	if _, err := store.CreateTask(ctx, otherID, ownerList.ID, CreateTaskInput{Title: "Intruder"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-account task create error = %v, want ErrNotFound", err)
+	}
+
+	otherBoard, err := store.CreateBoard(ctx, otherID, CreateBoardInput{Name: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherList, err := store.CreateBucket(ctx, otherID, otherBoard.ID, CreateBucketInput{Name: "Other list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTask, err := store.CreateTask(ctx, otherID, otherList.ID, CreateTaskInput{Title: "Other task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTask(ctx, otherID, otherTask.ID, UpdateTaskInput{BucketID: &ownerList.ID}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-account move error = %v, want ErrNotFound", err)
+	}
+	unchanged, err := store.GetTask(ctx, otherID, otherTask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.BucketID != otherList.ID {
+		t.Fatalf("task moved to %q, want %q", unchanged.BucketID, otherList.ID)
+	}
+}
+
+func runConcurrently(count int, operation func(int) error) []error {
+	start := make(chan struct{})
+	results := make([]error, count)
+	var wait sync.WaitGroup
+	wait.Add(count)
+	for index := range results {
+		go func() {
+			defer wait.Done()
+			<-start
+			results[index] = operation(index)
+		}()
+	}
+	close(start)
+	wait.Wait()
+	return results
+}
+
+func assertConcurrentResults(t *testing.T, results []error, wantSuccess int, wantLimit error) {
+	t.Helper()
+	var successes int
+	for _, err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		if !errors.Is(err, wantLimit) {
+			t.Fatalf("concurrent error = %v, want %v", err, wantLimit)
+		}
+	}
+	if successes != wantSuccess {
+		t.Fatalf("concurrent successes = %d, want %d", successes, wantSuccess)
+	}
+}
 
 func TestBoardMaxTasksPerListAppliesToAllBuckets(t *testing.T) {
 	db := openIntegrationDB(t)

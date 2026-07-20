@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/owainlewis/slate.do/server/internal/entitlements"
 )
 
 func TestHashTokenIsStableAndDoesNotExposeToken(t *testing.T) {
@@ -88,6 +90,20 @@ func TestRequireSessionUserAcceptsSessionCookie(t *testing.T) {
 
 	if got.ID != "session-user" {
 		t.Fatalf("user = %#v", got)
+	}
+}
+
+func TestMeExposesResolvedProPlanAndLimits(t *testing.T) {
+	service := NewService(requestAuthStore{}, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: "sess_ok"})
+	recorder := httptest.NewRecorder()
+
+	service.Me(recorder, req)
+
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `"plan":"pro"`) || !strings.Contains(body, `"boards":5`) || !strings.Contains(body, `"listsPerBoard":9`) || !strings.Contains(body, `"activeItemsPerList":20`) {
+		t.Fatalf("status = %d, body = %s", recorder.Code, body)
 	}
 }
 
@@ -188,7 +204,7 @@ func (s *seedAdminStore) CreateAdmin(_ context.Context, email string, passwordHa
 }
 func (requestAuthStore) FindUserBySessionHash(_ context.Context, tokenHash string, _ time.Time) (User, error) {
 	if tokenHash == hashToken("sess_ok") {
-		return User{ID: "session-user"}, nil
+		return User{ID: "session-user", Entitlement: entitlements.Pro(entitlements.SourceAdmin)}, nil
 	}
 	return User{}, ErrUnauthorized
 }
@@ -207,7 +223,7 @@ func (requestAuthStore) RevokeAPIToken(context.Context, string, string) error {
 }
 func (requestAuthStore) FindUserByAPITokenHash(_ context.Context, tokenHash string, _ time.Time) (User, error) {
 	if tokenHash == hashToken("slate_ok") {
-		return User{ID: "api-user"}, nil
+		return User{ID: "api-user", Entitlement: entitlements.Pro(entitlements.SourceManual)}, nil
 	}
 	return User{}, ErrUnauthorized
 }
