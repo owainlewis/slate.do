@@ -331,9 +331,13 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, ErrLimitFull):
-		writeError(w, http.StatusConflict, "list limit reached")
+		writeLimitError(w, "working_limit_reached", "This list's working limit has been reached.")
 	case errors.Is(err, ErrBoardLimit):
-		writeError(w, http.StatusConflict, "board limit reached")
+		writeLimitError(w, "pro_board_limit_reached", fmt.Sprintf("Pro allows up to %d boards.", defaultMaxBoards))
+	case errors.Is(err, ErrListLimit):
+		writeLimitError(w, "pro_list_limit_reached", fmt.Sprintf("Pro allows up to %d lists per board.", defaultMaxListsPerBoard))
+	case errors.Is(err, ErrActiveItemLimit):
+		writeLimitError(w, "pro_active_item_limit_reached", fmt.Sprintf("Max active items per list is %d on Pro.", defaultMaxTasksPerList))
 	case errors.Is(err, ErrTaskUnavailable):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrIdempotencyKey):
@@ -351,6 +355,10 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeLimitError(w http.ResponseWriter, code string, message string) {
+	writeJSON(w, http.StatusConflict, map[string]string{"code": code, "error": message})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

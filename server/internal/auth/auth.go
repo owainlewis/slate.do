@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/owainlewis/slate.do/server/internal/entitlements"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -28,10 +29,11 @@ var (
 )
 
 type User struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Role  string `json:"role"`
-	Theme string `json:"theme"`
+	ID          string                   `json:"id"`
+	Email       string                   `json:"email"`
+	Role        string                   `json:"role"`
+	Theme       string                   `json:"theme"`
+	Entitlement entitlements.Entitlement `json:"entitlement"`
 }
 
 type UserWithPassword struct {
@@ -122,6 +124,10 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(input.Password)) != nil {
+		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+	if account.Entitlement.Plan != entitlements.PlanPro {
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}

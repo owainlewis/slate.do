@@ -172,7 +172,7 @@ func boardsCmd(c client, args []string) error {
 		name := fs.String("name", "", "board name")
 		backgroundKind := fs.String("background-kind", "", "background kind")
 		backgroundValue := fs.String("background-value", "", "background value")
-		maxTasks := fs.Int("max-tasks-per-list", 0, "default list limit")
+		maxTasks := fs.Int("max-tasks-per-list", 0, "Max active items per list")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -190,7 +190,7 @@ func boardsCmd(c client, args []string) error {
 		name := fs.String("name", "", "board name")
 		backgroundKind := fs.String("background-kind", "", "background kind")
 		backgroundValue := fs.String("background-value", "", "background value")
-		maxTasks := fs.Int("max-tasks-per-list", 0, "default list limit")
+		maxTasks := fs.Int("max-tasks-per-list", 0, "Max active items per list")
 		sortOrder := fs.Int("sort-order", 0, "sort order")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
@@ -363,7 +363,7 @@ func tasksCmd(c client, args []string) error {
 		description := fs.String("description", "", "task description")
 		date := fs.String("date", "", "planned date")
 		idempotencyKey := fs.String("idempotency-key", "", "stable key for safe retries")
-		override := fs.Bool("override-limit", false, "override list limit")
+		override := fs.Bool("override-limit", false, "override the configured Max active items per list, never the Pro maximum")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}

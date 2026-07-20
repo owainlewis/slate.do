@@ -9,6 +9,74 @@ import (
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
 
+func TestProEntitlementMigrationKeepsExistingAdminsUsable(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		SET LOCAL search_path TO pg_temp;
+		CREATE TEMP TABLE users (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			role text NOT NULL
+		);
+		CREATE TEMP TABLE boards (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			max_tasks_per_list integer NOT NULL,
+			updated_at timestamptz NOT NULL DEFAULT now()
+		);
+		INSERT INTO users (role) VALUES ('admin'), ('member');
+		INSERT INTO boards (max_tasks_per_list) VALUES (50);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("014_pro_entitlements.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var plan, source string
+	if err := tx.QueryRow(ctx, `
+		SELECT e.plan, e.source
+		FROM entitlements e
+		JOIN users u ON u.id = e.user_id
+		WHERE u.role = 'admin'
+	`).Scan(&plan, &source); err != nil {
+		t.Fatal(err)
+	}
+	if plan != "pro" || source != "admin" {
+		t.Fatalf("admin entitlement = %q/%q, want pro/admin", plan, source)
+	}
+	var memberEntitlements, maxActiveItems int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM entitlements e JOIN users u ON u.id = e.user_id WHERE u.role = 'member'
+	`).Scan(&memberEntitlements); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT max_tasks_per_list FROM boards").Scan(&maxActiveItems); err != nil {
+		t.Fatal(err)
+	}
+	if memberEntitlements != 0 || maxActiveItems != 20 {
+		t.Fatalf("member entitlements = %d, max active items = %d", memberEntitlements, maxActiveItems)
+	}
+}
+
 func TestAdminMemberRolesMigration(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

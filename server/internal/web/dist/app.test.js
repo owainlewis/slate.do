@@ -81,7 +81,8 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
 
   const settings = app.settingsHTML();
   assert.match(settings, /id="settings-list-limit"[^>]*value="12"/);
-  assert.match(settings, /Open actions per list on this board/);
+	assert.match(settings, /Max active items per list on this board/);
+	assert.match(settings, /aria-label="Max active items per list"[^>]*max="20"/);
   assert.match(settings, /data-settings-theme="light"[\s\S]*?<span>Light<\/span>/);
   assert.match(settings, /data-settings-theme="dark"[\s\S]*?<span>Dark<\/span>/);
   vm.runInContext(`state.boards = []; state.board = null;`, app);
@@ -93,6 +94,30 @@ test("list limits remain scoped to the selected board", () => {
     { next: 12, path: "/api/v1/boards/current-board", input: { maxTasksPerList: 12 } },
   );
   assert.equal(app.listLimitUpdate("current-board", "0").next, 20);
+});
+
+test("Pro limits prevent obvious list and active-item creation", () => {
+	vm.runInContext(`
+		state.me = { entitlement: { plan: "pro", source: "manual", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } } };
+		state.maxListsPerBoard = 9;
+		state.boards = [{ id: "board", name: "Board" }];
+		state.board = {
+			id: "board", name: "Board", maxTasksPerList: 20,
+			buckets: Array.from({ length: 9 }, (_, index) => ({
+				id: "list-" + index, name: "List " + index, openCount: index === 0 ? 20 : 0,
+				limitCount: 20, tasks: [],
+			})),
+		};
+		state.boardMode = "lists";
+	`, app);
+
+	const html = app.appHTML();
+	assert.match(html, /id="add-list" disabled aria-describedby="list-limit"/);
+	assert.match(html, />9 list Pro limit reached</);
+	assert.match(html, /data-add-task="list-0"[\s\S]*?placeholder="Limit of 20 active items reached" disabled/);
+	assert.match(html, />20 active item limit reached</);
+	assert.equal(app.proLimits().boards, 5);
+	vm.runInContext(`state.me = null; state.boards = []; state.board = null;`, app);
 });
 
 function themeTokens(selector) {
@@ -244,15 +269,15 @@ test("footer reports live Working and Review counts", () => {
 });
 
 test("failed status updates restore persisted state and expose an accessible error", async () => {
-  let refreshed = false;
-  await app.runMutation(
-    async () => { throw new Error("list limit reached"); },
-    async () => { refreshed = true; },
-  );
+	let refreshed = false;
+	await app.runMutation(
+		async () => { throw new Error("Max active items per list is 20 on Pro."); },
+		async () => { refreshed = true; },
+	);
 
-  assert.equal(refreshed, true);
-  assert.equal(vm.runInContext("state.error", app), "list limit reached");
-  assert.match(app.statusErrorHTML("list limit reached"), /role="alert">list limit reached/);
+	assert.equal(refreshed, true);
+	assert.equal(vm.runInContext("state.error", app), "Max active items per list is 20 on Pro.");
+	assert.match(app.statusErrorHTML("Max active items per list is 20 on Pro."), /role="alert">Max active items per list is 20 on Pro\./);
 });
 
 test("plain-text API errors remain readable", () => {
