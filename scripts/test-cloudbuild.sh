@@ -23,6 +23,11 @@ for file in cloudbuild.yaml scripts/gcp-deploy.sh; do
   assert_contains "$file" "slate-migrate"
   assert_contains "$file" "slate-postgres-ew1"
   assert_contains "$file" "INVITE_CODE=slate-invite-code:latest"
+  assert_contains "$file" "gcloud secrets versions access latest --secret=slate-invite-code"
+  assert_contains "$file" "gcloud run services list"
+  assert_contains "$file" "existing_env_names"
+  assert_contains "$file" "The live service uses INVITE_CODE, but slate-invite-code:latest is not accessible"
+  assert_not_contains "$file" "env[].name)' 2>/dev/null"
   assert_contains "$file" '"database":"ok"'
   assert_contains "$file" "--ingress"
   assert_contains "$file" "all"

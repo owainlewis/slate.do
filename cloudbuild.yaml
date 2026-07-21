@@ -75,6 +75,18 @@ steps:
         image_tag="$_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID"
         image="$$(gcloud artifacts docker images describe "$$image_tag" --format='value(image_summary.fully_qualified_digest)')"
         test -n "$$image"
+        runtime_secrets="DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest"
+        existing_service="$$(gcloud run services list --region "$_REGION" --filter='metadata.name=slate' --format='value(metadata.name)')"
+        existing_env_names=""
+        if [ "$$existing_service" = slate ]; then
+          existing_env_names="$$(gcloud run services describe slate --region "$_REGION" --format='value(spec.template.spec.containers[0].env[].name)')"
+        fi
+        if gcloud secrets versions access latest --secret=slate-invite-code >/dev/null 2>&1; then
+          runtime_secrets="$$runtime_secrets,INVITE_CODE=slate-invite-code:latest"
+        elif printf '%s' "$$existing_env_names" | tr ';' '\n' | grep -Fx INVITE_CODE >/dev/null; then
+          echo "The live service uses INVITE_CODE, but slate-invite-code:latest is not accessible" >&2
+          exit 1
+        fi
         gcloud run jobs deploy "slate-migrate-$SHORT_SHA" \
           --image "$$image" \
           --region "$_REGION" \
@@ -96,7 +108,7 @@ steps:
           --set-cloudsql-instances "$PROJECT_ID:$_REGION:slate-postgres-ew1" \
           --ingress all \
           --set-env-vars COOKIE_SECURE=true \
-          --set-secrets DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest,INVITE_CODE=slate-invite-code:latest \
+          --set-secrets "$$runtime_secrets" \
           --quiet
 
         deployed="$$(gcloud run services describe slate --region "$_REGION" --format='value(spec.template.spec.containers[0].image)')"
