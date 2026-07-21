@@ -193,22 +193,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   background: var(--bg);
 }
 .topbar { min-height: 64px; display: flex; align-items: center; gap: 16px; padding: 10px 24px; border-bottom: 1px solid var(--line-2); }
-.title-input {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-weight: 700;
-  font-size: 15px;
-  outline: 0;
-  width: 220px;
-  min-width: 0;
-  flex: 0 1 220px;
-  padding: 5px 8px;
-  margin: 0 0 0 -8px;
-  border-radius: var(--radius-sm);
-}
-.title-input:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
-.title-input:focus { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .week {
   font-size: 12px;
   font-weight: 600;
@@ -1347,14 +1331,13 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .topbar {
     min-height: 96px;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "title date" "actions actions";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "date" "actions";
     align-content: center;
     padding: 10px 14px;
     gap: 6px 12px;
   }
-  .title-input { grid-area: title; width: 100%; max-width: none; min-width: 0; flex: none; font-size: 17px; }
-  .week { grid-area: date; display: block; white-space: nowrap; text-align: right; }
+  .week { grid-area: date; display: block; white-space: normal; text-align: left; }
   .top-actions { grid-area: actions; width: 100%; margin: 0; justify-content: space-between; gap: 4px; }
   .view-switch { flex: 1; min-width: 0; }
   .view-switch button { flex: 1; padding: 7px 6px; }

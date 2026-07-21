@@ -117,6 +117,9 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   `, app);
 
   const html = app.appHTML();
+  assert.doesNotMatch(html, /id="board-title"/);
+  assert.doesNotMatch(html, /aria-label="Board name"/);
+  assert.match(html, /class="week">Week \d+ \([^)]+\)<\/span>/);
   for (const [mode, label] of [["lists", "Lists"], ["flow", "Flow"], ["calendar", "Week"], ["today", "Today"]]) {
     assert.match(html, new RegExp(`data-board-mode="${mode}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
@@ -197,6 +200,14 @@ test("week labels handle month and year boundaries", () => {
   const start = new Date(2026, 11, 29, 12);
   const days = Array.from({ length: 7 }, (_, index) => app.addDays(start, index));
   assert.equal(app.formatWeekLabel(days), "Dec 29 – Jan 4, 2027");
+});
+
+test("board headers use ISO week numbers and full date ranges", () => {
+  const july = app.daysInWeek(new Date(2026, 6, 21, 12));
+  assert.equal(app.formatWeekHeading(july), "Week 30 (July 20th – July 26th 2026)");
+
+  const newYear = app.daysInWeek(new Date(2025, 11, 31, 12));
+  assert.equal(app.formatWeekHeading(newYear), "Week 1 (December 29th 2025 – January 4th 2026)");
 });
 
 test("week view offers direct current and next week jumps", () => {

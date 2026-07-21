@@ -96,6 +96,15 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   const page = await browser.newPage({ viewport: { width: 1024, height: 768 } });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
 
+  assert.equal(await page.getByRole("textbox", { name: "Board name" }).count(), 0);
+  await page.locator(".week").filter({ hasText: /^Week \d+ \(.+\)$/ }).waitFor();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileWeek = await page.locator(".week").boundingBox();
+  const mobileActions = await page.locator(".top-actions").boundingBox();
+  assert.ok(mobileWeek && mobileWeek.x >= 0 && mobileWeek.x + mobileWeek.width <= 390);
+  assert.ok(mobileActions && mobileWeek && mobileActions.y >= mobileWeek.y + mobileWeek.height);
+  await page.setViewportSize({ width: 1024, height: 768 });
+
   const taskButton = page.getByRole("button", { name: "Improve the vault", exact: true });
   await taskButton.click();
   const title = page.getByRole("textbox", { name: "Title", exact: true });
@@ -142,11 +151,12 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   assert.equal(await page.locator('[data-open-task="task-youtube"]').count(), 1);
   await listFilter.selectOption("");
   assert.equal(await page.evaluate(() => document.activeElement?.id), "flow-list-filter");
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('[data-open-task="task-one"]').click();
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
   assert.equal(patchCount, 3);
-  assert.equal(await page.evaluate(() => document.activeElement?.id), "board-title");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.boardMode), "flow");
 });
 
 test("Pro resource limits block obvious actions and show server rejection messages", async t => {
