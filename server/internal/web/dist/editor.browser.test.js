@@ -325,7 +325,15 @@ test("password reset request and confirmation work without exposing the token in
 	await page.getByRole("button", { name: "Forgot your password?" }).click();
 	await page.getByLabel("Email").fill("person@example.com");
 	await page.getByRole("button", { name: "Send reset link" }).click();
-	await page.getByRole("status").filter({ hasText: "If an account exists" }).waitFor();
+	const resetNotice = page.getByRole("status").filter({ hasText: "If an account exists" });
+	await resetNotice.waitFor();
+	const backToLogin = page.getByRole("button", { name: "Back to sign in" });
+	for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+		await page.setViewportSize(viewport);
+		const noticeBox = await resetNotice.boundingBox();
+		const backBox = await backToLogin.boundingBox();
+		assert.ok(noticeBox && backBox && noticeBox.y + noticeBox.height + 8 <= backBox.y, `reset notice must stay separated at ${viewport.width}px`);
+	}
 	assert.deepEqual(resetRequest, { email: "person@example.com" });
 
 	await page.goto(`${baseURL}/reset-password#token=reset_secret`);
