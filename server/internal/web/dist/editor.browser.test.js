@@ -184,7 +184,10 @@ test("an item can move to a chosen position on another board", async t => {
     if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
     if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }, { id: "board-two", name: "Website" }] });
     if (url.pathname === "/api/v1/boards/board-one") return json(response, sourceBoard());
-    if (url.pathname === "/api/v1/boards/board-two") return json(response, targetBoard());
+    if (url.pathname === "/api/v1/boards/board-two") {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      return json(response, targetBoard());
+    }
     if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
       saveBody = await requestJSON(request);
       currentTask = { ...currentTask, ...saveBody };
@@ -212,6 +215,8 @@ test("an item can move to a chosen position on another board", async t => {
   await page.locator("#detail-date").fill("2026-07-30");
   await page.getByRole("button", { name: /Move…/ }).click();
   await page.getByLabel("Board", { exact: true }).selectOption("board-two");
+  assert.equal(await page.locator("#move-list").textContent(), "Loading lists…");
+  assert.equal(await page.getByRole("button", { name: "Move item", exact: true }).isDisabled(), true);
   await page.getByLabel("List", { exact: true }).selectOption("list-target");
   await page.getByLabel("Position", { exact: true }).selectOption("1");
   await page.getByRole("button", { name: "Move item", exact: true }).click();

@@ -1211,10 +1211,11 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
   };
   const refreshLists = (board, selectedID = "") => {
     listSelect.innerHTML = moveListOptionsHTML(board, task, selectedID);
+    const firstAvailable = [...listSelect.options].find(option => !option.disabled);
     if (!listSelect.selectedOptions[0] || listSelect.selectedOptions[0].disabled) {
-      const firstAvailable = [...listSelect.options].find(option => !option.disabled);
       listSelect.value = firstAvailable?.value || "";
     }
+    listSelect.disabled = !firstAvailable;
     refreshPositions();
   };
 
@@ -1227,11 +1228,17 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
     document.querySelector("#open-move").focus();
   };
   boardSelect.onchange = async () => {
+    const destinationBoardID = boardSelect.value;
     try {
       boardSelect.disabled = true;
-      let board = loadedBoards.get(boardSelect.value);
+      listSelect.disabled = true;
+      positionSelect.disabled = true;
+      moveButton.disabled = true;
+      listSelect.innerHTML = '<option value="">Loading lists…</option>';
+      positionSelect.innerHTML = "";
+      let board = loadedBoards.get(destinationBoardID);
       if (!board) {
-        board = await api.get(`/api/v1/boards/${boardSelect.value}`);
+        board = await api.get(`/api/v1/boards/${destinationBoardID}`);
         loadedBoards.set(board.id, board);
       }
       state.error = "";
@@ -1247,7 +1254,10 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
   moveButton.onclick = async () => {
     const destinationBoard = loadedBoards.get(boardSelect.value);
     const destinationList = selectedList();
-    if (!destinationBoard || !destinationList) return;
+    if (!destinationBoard || !destinationList) {
+      showError("Choose a destination list before moving this item.");
+      return;
+    }
     moveButton.textContent = "Saving…";
     const savePromise = savePendingChanges();
     setDetailBusy(true);
