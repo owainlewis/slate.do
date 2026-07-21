@@ -17,6 +17,7 @@ jobs:
         working-directory: server
       - run: go test ./...
         working-directory: cli
-      - run: sh -n install.sh scripts/build-cli-release.sh scripts/test-install.sh
+      - run: sh -n install.sh scripts/build-cli-release.sh scripts/test-install.sh scripts/gcp-deploy.sh scripts/test-cloudbuild.sh
+      - run: sh scripts/test-cloudbuild.sh
       - run: sh scripts/test-install.sh
       - run: sh scripts/build-cli-release.sh v0.0.0 "$RUNNER_TEMP/slate-release"

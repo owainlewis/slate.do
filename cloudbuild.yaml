@@ -2,44 +2,117 @@ steps:
   - name: golang:1.26
     entrypoint: bash
     args:
-      - -lc
+      - -ceu
       - |
         cd server
         go test ./...
         cd ../cli
         go test ./...
+        cd ..
+        sh scripts/test-cloudbuild.sh
   - name: gcr.io/cloud-builders/docker
     args:
       - build
       - -t
-      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID
       - .
   - name: gcr.io/cloud-builders/docker
     args:
       - push
-      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - slate
-      - --image
-      - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
-      - --region
-      - $_REGION
-      - --platform
-      - managed
-      - --no-invoker-iam-check
-      - --add-cloudsql-instances
-      - $PROJECT_ID:$_REGION:slate-postgres
-      - --set-env-vars
-      - COOKIE_SECURE=true
-      - --set-secrets
-      - DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest
+      - -ceu
+      - |
+        lock_uri="gs://${PROJECT_ID}_cloudbuild/deploy/slate.lock"
+        lock_generation=""
+        job_created=0
+        cleanup() {
+          rc=$$?
+          trap - EXIT INT TERM
+          if [ "$$job_created" = 1 ]; then
+            gcloud run jobs delete "slate-migrate-$SHORT_SHA" --region "$_REGION" --quiet || true
+          fi
+          if [ -n "$$lock_generation" ]; then
+            gcloud storage rm "$$lock_uri" --if-generation-match="$$lock_generation" --quiet || true
+          fi
+          exit "$$rc"
+        }
+        trap cleanup EXIT INT TERM
+
+        while :; do
+          if printf '%s' "$BUILD_ID" | gcloud storage cp - "$$lock_uri" --if-generation-match=0 --quiet 2>/tmp/slate-lock-error; then
+            lock_generation="$$(gcloud storage objects describe "$$lock_uri" --format='value(generation)')"
+            break
+          fi
+
+          if lock_details="$$(gcloud storage objects describe "$$lock_uri" --format='value(generation)' 2>/dev/null)"; then
+            owner="$$(gcloud storage cat "$$lock_uri" 2>/dev/null || true)"
+            owner_status="$$(gcloud builds describe "$$owner" --project "$PROJECT_ID" --format='value(status)' 2>/dev/null || true)"
+            case "$$owner_status" in
+              QUEUED|PENDING|WORKING)
+                echo "Waiting for production deployment lock held by build $$owner"
+                ;;
+              SUCCESS|FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
+                echo "Removing abandoned production deployment lock from build $$owner"
+                gcloud storage rm "$$lock_uri" --if-generation-match="$$lock_details" --quiet || true
+                ;;
+              *)
+                echo "Could not verify production deployment lock owner $$owner; waiting safely" >&2
+                ;;
+            esac
+          fi
+          sleep 10
+        done
+
+        latest="$$(git ls-remote https://github.com/owainlewis/slate.do.git refs/heads/main | cut -f1)"
+        test "$$latest" = "$COMMIT_SHA" || {
+          echo "Refusing to deploy stale build $COMMIT_SHA; main is $$latest" >&2
+          exit 1
+        }
+
+        image_tag="$_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID"
+        image="$$(gcloud artifacts docker images describe "$$image_tag" --format='value(image_summary.fully_qualified_digest)')"
+        test -n "$$image"
+        gcloud run jobs deploy "slate-migrate-$SHORT_SHA" \
+          --image "$$image" \
+          --region "$_REGION" \
+          --command /app/slate \
+          --args migrate \
+          --set-cloudsql-instances "$PROJECT_ID:$_REGION:slate-postgres-ew1" \
+          --set-secrets DATABASE_URL=slate-database-url:latest \
+          --max-retries 0 \
+          --task-timeout 10m \
+          --quiet
+        job_created=1
+        gcloud run jobs execute "slate-migrate-$SHORT_SHA" --region "$_REGION" --wait --quiet
+
+        gcloud run deploy slate \
+          --image "$$image" \
+          --region "$_REGION" \
+          --platform managed \
+          --no-invoker-iam-check \
+          --set-cloudsql-instances "$PROJECT_ID:$_REGION:slate-postgres-ew1" \
+          --ingress all \
+          --set-env-vars COOKIE_SECURE=true \
+          --set-secrets DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest,INVITE_CODE=slate-invite-code:latest \
+          --quiet
+
+        deployed="$$(gcloud run services describe slate --region "$_REGION" --format='value(spec.template.spec.containers[0].image)')"
+        expected="$$image"
+        test "$$deployed" = "$$expected" || {
+          echo "Expected deployed image $$expected, got $$deployed" >&2
+          exit 1
+        }
+        response="$$(curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 --max-time 10 "$_HEALTH_URL")"
+        printf '%s\n' "$$response"
+        grep -F '"database":"ok"' <<<"$$response"
 images:
-  - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA
+  - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID
 substitutions:
-  _REGION: europe-west2
+  _REGION: europe-west1
+  _HEALTH_URL: https://slate.do/api/health
 options:
   logging: CLOUD_LOGGING_ONLY
+timeout: 3600s

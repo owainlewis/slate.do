@@ -20,6 +20,7 @@ test:
     cd cli && go test ./...
     node --test server/internal/web/dist/app.test.js
     sh scripts/test-install.sh
+    sh scripts/test-cloudbuild.sh
 
 build:
     cd server && go build ./cmd/slate
