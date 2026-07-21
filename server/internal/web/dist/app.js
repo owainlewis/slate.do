@@ -1170,11 +1170,11 @@ function bindDetail() {
   formElement.addEventListener("submit", async event => {
     event.preventDefault();
     if (detailBusy) return;
+    const input = detailInput();
     setDetailBusy(true);
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     submit.textContent = "Saving…";
     try {
-      const input = detailInput();
       await api.patch(`/api/v1/tasks/${taskID}/status`, input);
       state.error = "";
       state.selectedTask = null;

@@ -62,6 +62,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   let deleted = false;
   let hidden = false;
   let patchCount = 0;
+  const patchBodies = [];
   let releaseFirstFailure;
   const firstFailure = new Promise(resolve => { releaseFirstFailure = resolve; });
   const server = http.createServer(async (request, response) => {
@@ -71,6 +72,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
     if (url.pathname === "/api/v1/boards/board-one") return json(response, board(deleted || hidden));
     if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
       patchCount += 1;
+      patchBodies.push(await requestJSON(request));
       if (patchCount === 1) {
         await firstFailure;
         response.writeHead(500, { "Content-Type": "application/json" });
@@ -133,6 +135,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   await save.click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
   assert.equal(patchCount, 2);
+  assert.equal(patchBodies[1].status, "queued");
   assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "Improve the vault");
 
   await taskButton.click();
