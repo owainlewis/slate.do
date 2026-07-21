@@ -172,8 +172,8 @@ function earlyAccessHTML() {
         <label class="login-label" for="signup-email">Email</label>
         <input id="signup-email" name="email" type="email" autocomplete="email" required>
         <label class="login-label" for="signup-password">Password</label>
-        <input id="signup-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="72" aria-describedby="password-requirements" required>
-        <p class="form-help" id="password-requirements">Use at least 12 characters, up to 72 bytes.</p>
+        <input id="signup-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="72" aria-describedby="password-requirements" required>
+        <p class="form-help" id="password-requirements">Use at least 8 characters, up to 72 bytes.</p>
         <label class="login-label" for="signup-invite-code">Invite code</label>
         <input id="signup-invite-code" name="inviteCode" type="password" autocomplete="off" required>
         <button class="primary" type="submit">Create Pro account</button>

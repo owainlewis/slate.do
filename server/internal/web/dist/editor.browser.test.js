@@ -277,14 +277,17 @@ test("early access submits credentials in the body and opens the app", async t =
 	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 	await page.goto(`http://127.0.0.1:${server.address().port}/early-access`);
 	await page.getByLabel("Email").fill("member@example.com");
-	await page.getByLabel("Password").fill("a secure password");
+	await page.getByLabel("Password").fill("abc1234");
 	await page.getByLabel("Invite code").fill("private-invite-code");
+	await page.getByRole("button", { name: "Create Pro account" }).click();
+	assert.equal(registration, undefined);
+	await page.getByLabel("Password").fill("abcd1234");
 	await page.getByRole("button", { name: "Create Pro account" }).click();
 	await page.getByText("Today", { exact: true }).first().waitFor();
 
 	assert.equal(page.url(), `http://127.0.0.1:${server.address().port}/`);
 	assert.equal(registration.url, "/api/v1/auth/register");
-	assert.deepEqual(registration.body, { email: "member@example.com", password: "a secure password", inviteCode: "private-invite-code" });
+	assert.deepEqual(registration.body, { email: "member@example.com", password: "abcd1234", inviteCode: "private-invite-code" });
 });
 
 function json(response, body) {

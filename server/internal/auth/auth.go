@@ -26,7 +26,7 @@ const (
 	sessionDuration  = 30 * 24 * time.Hour
 	signupWindow     = 15 * time.Minute
 	signupLimit      = 5
-	minPasswordLen   = 12
+	minPasswordLen   = 8
 	maxPasswordBytes = 72
 )
 
@@ -143,7 +143,7 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len([]rune(input.Password)) < minPasswordLen || len([]byte(input.Password)) > maxPasswordBytes {
-		writeError(w, http.StatusBadRequest, "password must be at least 12 characters and no more than 72 bytes")
+		writeError(w, http.StatusBadRequest, "password must be at least 8 characters and no more than 72 bytes")
 		return
 	}
 	if !constantTimeEqual(input.InviteCode, s.inviteCode) {

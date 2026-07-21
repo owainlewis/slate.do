@@ -47,8 +47,8 @@ test("early access form shows every required field and password requirements", (
   const html = app.earlyAccessHTML();
   assert.match(html, /id="early-access-form" method="post" action="\/api\/v1\/auth\/register"/);
   assert.match(html, /name="email" type="email"/);
-  assert.match(html, /name="password" type="password"[^>]*minlength="12"[^>]*maxlength="72"/);
-  assert.match(html, /Use at least 12 characters, up to 72 bytes/);
+  assert.match(html, /name="password" type="password"[^>]*minlength="8"[^>]*maxlength="72"/);
+  assert.match(html, /Use at least 8 characters, up to 72 bytes/);
   assert.match(html, /name="inviteCode" type="password"/);
   assert.match(source, /api\.post\("\/api\/v1\/auth\/register"/);
   assert.doesNotMatch(source, /early-access\?[^"'`]*/);
