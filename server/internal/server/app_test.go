@@ -27,3 +27,13 @@ func TestEarlyAccessPageFollowsInviteConfiguration(t *testing.T) {
 		t.Fatalf("enabled response = %d %q", enabledRecorder.Code, enabledRecorder.Body.String())
 	}
 }
+
+func TestResetPasswordPageServesApplicationShell(t *testing.T) {
+	static := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("reset shell")}}
+	handler := (&App{static: fs.FS(static)}).Routes()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/reset-password", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "reset shell" {
+		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
+	}
+}

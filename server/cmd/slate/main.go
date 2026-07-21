@@ -64,13 +64,25 @@ func serve(cfg config.Config) error {
 		return fmt.Errorf("connect database: %w", err)
 	}
 	defer db.Close()
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
 
 	staticFS, err := web.FileSystem(cfg.StaticDir)
 	if err != nil {
 		return err
 	}
 
-	app := slatehttp.NewApp(staticFS, db, cfg.CookieSecure, cfg.InviteCode)
+	var passwordResetSender auth.PasswordResetSender
+	if cfg.ResendAPIKey != "" && cfg.ResendFrom != "" {
+		passwordResetSender = auth.NewResendSender(cfg.ResendAPIKey, cfg.ResendFrom, nil)
+	}
+	app := slatehttp.NewApp(staticFS, db, cfg.CookieSecure, auth.Options{
+		InviteCode:          cfg.InviteCode,
+		AppBaseURL:          cfg.AppBaseURL,
+		PasswordResetSender: passwordResetSender,
+	})
+	go app.RunPasswordResetWorker(ctx)
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           app.Routes(),

@@ -727,6 +727,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .login .auth-link { width: 100%; margin-top: 14px; border: 0; background: transparent; color: var(--soft); cursor: pointer; }
 .login .auth-link:hover { color: var(--ink); }
 .error { color: var(--danger); min-height: 20px; }
+.notice { color: var(--soft); min-height: 20px; }
 
 /* ---------- Landing ---------- */
 .landing {

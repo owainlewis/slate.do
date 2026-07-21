@@ -54,6 +54,24 @@ test("early access form shows every required field and password requirements", (
   assert.doesNotMatch(source, /early-access\?[^"'`]*/);
 });
 
+test("password reset forms collect email and a secure replacement password", () => {
+  const login = app.loginHTML();
+  const forgot = app.forgotPasswordHTML();
+  vm.runInContext(`state.resetToken = "reset_secret"`, app);
+  const reset = app.resetPasswordHTML();
+
+  assert.match(login, /id="forgot-password"/);
+  assert.match(forgot, /id="forgot-password-form"/);
+  assert.match(forgot, /name="email" type="email"/);
+  assert.match(reset, /id="reset-password-form"/);
+  assert.match(reset, /name="password" type="password"[^>]*minlength="8"[^>]*maxlength="72"/);
+  assert.match(reset, /Use at least 8 characters, up to 72 bytes/);
+  assert.match(source, /api\.post\("\/api\/v1\/auth\/password-reset\/request"/);
+  assert.match(source, /api\.post\("\/api\/v1\/auth\/password-reset\/confirm"/);
+  assert.match(source, /history\.replaceState\(\{\}, "", "\/reset-password"\)/);
+  vm.runInContext(`state.resetToken = ""`, app);
+});
+
 test("sidebar separates board creation and explains the board limit", () => {
   vm.runInContext(`
     state.maxBoards = 10;

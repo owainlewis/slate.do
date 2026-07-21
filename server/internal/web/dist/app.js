@@ -68,6 +68,8 @@ const state = {
   settings: false,
   view: "home",
   error: "",
+  notice: "",
+  resetToken: "",
   goalErrors: {},
   newToken: "",
   tokens: [],
@@ -96,7 +98,11 @@ async function boot() {
   try {
     const me = await api.get("/api/v1/me");
     state.me = me.authenticated ? me.user : null;
-    if (state.me) {
+    if (location.pathname === "/reset-password") {
+      state.resetToken = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+      history.replaceState({}, "", "/reset-password");
+      state.view = "reset-password";
+    } else if (state.me) {
       state.maxBoards = proLimits().boards;
       state.maxListsPerBoard = proLimits().listsPerBoard;
       authVersion += 1;
@@ -138,6 +144,16 @@ async function loadBoard(id) {
 
 function render() {
   const root = document.querySelector("#app");
+	if (state.view === "forgot-password" && !state.me) {
+	  root.innerHTML = forgotPasswordHTML();
+	  bindForgotPassword();
+	  return;
+	}
+	if (state.view === "reset-password") {
+	  root.innerHTML = resetPasswordHTML();
+	  bindResetPassword();
+	  return;
+	}
 	if (state.view === "early-access" && !state.me) {
 	  root.innerHTML = earlyAccessHTML();
 	  bindEarlyAccess();
@@ -195,7 +211,46 @@ function loginHTML() {
         <label class="login-label" for="login-password">Password</label>
         <input id="login-password" name="password" type="password" autocomplete="current-password" required>
         <button class="primary" type="submit">Sign in</button>
-        <p class="error">${escapeHTML(state.error)}</p>
+        <button class="auth-link" id="forgot-password" type="button">Forgot your password?</button>
+        <p class="notice" role="status">${escapeHTML(state.notice)}</p>
+        <p class="error" role="alert">${escapeHTML(state.error)}</p>
+      </form>
+    </section>`;
+}
+
+function forgotPasswordHTML() {
+  return `
+    <section class="login">
+      <form id="forgot-password-form">
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <h1>Reset your password.</h1>
+        <p>Enter your email and we’ll send you a secure reset link.</p>
+        <label class="login-label" for="reset-email">Email</label>
+        <input id="reset-email" name="email" type="email" autocomplete="email" required>
+        <button class="primary" type="submit">Send reset link</button>
+        <button class="auth-link" id="back-to-login" type="button">Back to sign in</button>
+        <p class="notice" role="status">${escapeHTML(state.notice)}</p>
+        <p class="error" role="alert">${escapeHTML(state.error)}</p>
+      </form>
+    </section>`;
+}
+
+function resetPasswordHTML() {
+  const hasToken = Boolean(state.resetToken);
+  return `
+    <section class="login">
+      <form id="reset-password-form">
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <h1>Choose a new password.</h1>
+        ${hasToken ? `
+          <p>Your new password will sign you out on other devices.</p>
+          <label class="login-label" for="new-password">New password</label>
+          <input id="new-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="72" aria-describedby="new-password-requirements" required>
+          <p class="form-help" id="new-password-requirements">Use at least 8 characters, up to 72 bytes.</p>
+          <button class="primary" type="submit">Reset password</button>
+        ` : `<p class="error" role="alert">This reset link is invalid. Request a new one.</p>`}
+        <button class="auth-link" id="reset-back-to-login" type="button">Back to sign in</button>
+        ${hasToken ? `<p class="error" role="alert">${escapeHTML(state.error)}</p>` : ""}
       </form>
     </section>`;
 }
@@ -634,6 +689,55 @@ function bindLogin() {
     }
     render();
   });
+  document.querySelector("#forgot-password").onclick = () => {
+	state.view = "forgot-password";
+	state.error = "";
+	state.notice = "";
+	render();
+  };
+}
+
+function bindForgotPassword() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelector("#back-to-login").onclick = showLogin;
+  document.querySelector("#forgot-password-form").addEventListener("submit", async event => {
+	event.preventDefault();
+	const formElement = event.currentTarget;
+	const form = new FormData(formElement);
+	try {
+	  const result = await api.post("/api/v1/auth/password-reset/request", { email: form.get("email") });
+	  state.error = "";
+	  state.notice = result.message;
+	  formElement.reset();
+	} catch (err) {
+	  state.notice = "";
+	  state.error = err.message;
+	}
+	render();
+  });
+}
+
+function bindResetPassword() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelector("#reset-back-to-login").onclick = showLogin;
+  document.querySelector("#reset-password-form").addEventListener("submit", async event => {
+	event.preventDefault();
+	if (!state.resetToken) return;
+	const form = new FormData(event.currentTarget);
+	try {
+	  await api.post("/api/v1/auth/password-reset/confirm", { token: state.resetToken, password: form.get("password") });
+	  authVersion += 1;
+	  state.me = null;
+	  state.resetToken = "";
+	  state.error = "";
+	  state.notice = "Password reset. Sign in with your new password.";
+	  history.replaceState({}, "", "/");
+	  state.view = "login";
+	} catch (err) {
+	  state.error = err.message;
+	}
+	render();
+  });
 }
 
 function bindEarlyAccess() {
@@ -956,6 +1060,7 @@ function closeSettings() {
 function showLogin() {
   state.view = "login";
   state.error = "";
+  if (location.pathname === "/reset-password") history.replaceState({}, "", "/");
   render();
 }
 
@@ -974,6 +1079,7 @@ function goHome() {
   state.settings = false;
   state.selectedTask = null;
 	if (location.pathname === "/early-access" || location.hash) history.replaceState({}, "", "/");
+	if (location.pathname === "/reset-password") history.replaceState({}, "", "/");
   render();
 }
 

@@ -10,6 +10,9 @@ export DATABASE_URL=postgres://localhost/slate_dev?sslmode=disable
 export ADMIN_EMAIL=you@example.com
 export ADMIN_PASSWORD='use-a-long-password'
 export INVITE_CODE='use-a-long-random-shared-code'
+export APP_BASE_URL='http://localhost:8080'
+export RESEND_API_KEY='re_...'
+export RESEND_FROM='Slate <passwords@mail.slate.do>'
 just migrate
 just seed-admin
 just serve
@@ -54,10 +57,32 @@ The migration job and service attach the production Cloud SQL instance in Europe
 
 The production Cloud Run service is `slate` in `europe-west1`; the `slate.do` domain mapping routes to it.
 The Cloud SQL instance is `slate-postgres-ew1` in `europe-west1` and uses PostgreSQL 18.
-The required runtime secrets are `slate-database-url` and `slate-session-secret`. Invite registration is off by default. To enable it, create a separate Secret Manager secret and expose its latest version to the service as `INVITE_CODE`. Never put the code in source, command history, a URL, or a non-secret environment file.
+The server applies pending database migrations under a Postgres advisory lock before it begins serving traffic. A failed migration prevents the new revision from starting.
+The required runtime secrets are `slate-database-url`, `slate-session-secret`, and `slate-resend-api-key`. Invite registration is off by default. To enable it, create a separate Secret Manager secret and expose its latest version to the service as `INVITE_CODE`. Never put secret values in source, command history, a URL, or a non-secret environment file.
 `OWNER_EMAIL` and `OWNER_PASSWORD` remain supported as legacy aliases.
 
 Admin credentials are only needed while running `seed-admin` and should be supplied through a secure operator environment. Do not add them to the Cloud Run service or source control.
+
+## Password reset email
+
+Password reset links are single-use, expire after one hour, and revoke all browser sessions when consumed. Request responses do not reveal whether an account exists. Requests are rate-limited by both client IP and normalized email.
+Email requests are written to a Postgres outbox before the generic response is returned. The Cloud Run revision keeps one instance with CPU available so its worker can deliver and retry queued mail without making valid accounts distinguishable by request latency.
+
+Verify `mail.slate.do` as a sending domain in Resend, then store the API key in Secret Manager without putting it on the command line:
+
+```bash
+gcloud secrets create slate-resend-api-key --replication-policy=automatic
+gcloud secrets versions add slate-resend-api-key --data-file=-
+```
+
+Cloud Run uses these non-secret settings:
+
+```text
+APP_BASE_URL=https://slate.do
+RESEND_FROM=Slate <passwords@mail.slate.do>
+```
+
+The reset feature reports itself as temporarily unavailable when either `RESEND_API_KEY` or `RESEND_FROM` is missing. Use a verified sender domain. Resend rejects arbitrary recipients from an unverified domain.
 
 ## Invite registration
 

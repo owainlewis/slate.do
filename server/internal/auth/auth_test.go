@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestHashTokenIsStableAndDoesNotExposeToken(t *testing.T) {
@@ -231,6 +232,172 @@ func TestRegisterRotationRejectsOldCodeAndAcceptsNewCode(t *testing.T) {
 	}
 }
 
+func TestRequestPasswordResetQueuesGenericRequestBeforeDelivery(t *testing.T) {
+	store := &passwordResetAuthStore{claim: PasswordResetRequest{ID: "request-id", Email: "person@example.com", Attempts: 1}}
+	sender := &recordingPasswordResetSender{}
+	service := NewServiceWithOptions(store, false, Options{
+		AppBaseURL:          "https://slate.do/",
+		PasswordResetSender: sender,
+	})
+	fixedNow := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return fixedNow }
+	req := httptest.NewRequest(http.MethodPost, "https://slate.do/api/v1/auth/password-reset/request", strings.NewReader(`{"email":" Person@Example.com "}`))
+	req.Host = "slate.do"
+	req.Header.Set("Origin", "https://slate.do")
+	req.RemoteAddr = "203.0.113.10:1234"
+	rec := httptest.NewRecorder()
+
+	service.RequestPasswordReset(rec, req)
+
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "If an account exists") {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if store.queuedEmail != "person@example.com" {
+		t.Fatalf("queued email = %q", store.queuedEmail)
+	}
+	if sender.email != "" {
+		t.Fatal("request handler delivered email synchronously")
+	}
+	processed, err := service.processPasswordResetRequest(context.Background())
+	if err != nil || !processed {
+		t.Fatalf("worker processed = %v, error = %v", processed, err)
+	}
+	if store.email != "person@example.com" || store.tokenHash == "" || store.expiresAt != fixedNow.Add(time.Hour) {
+		t.Fatalf("stored reset = email %q, hash %q, expiry %s", store.email, store.tokenHash, store.expiresAt)
+	}
+	if sender.email != "person@example.com" || !strings.HasPrefix(sender.resetURL, "https://slate.do/reset-password#token=reset_") || sender.idempotencyKey != "password-reset-request-id-1" {
+		t.Fatalf("sent reset = email %q, url %q", sender.email, sender.resetURL)
+	}
+	plainToken := strings.TrimPrefix(sender.resetURL, "https://slate.do/reset-password#token=")
+	if store.tokenHash != hashToken(plainToken) || strings.Contains(rec.Body.String(), plainToken) {
+		t.Fatal("reset token was not stored and returned safely")
+	}
+}
+
+func TestRequestPasswordResetDoesNotRevealQueueOrRateLimitState(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		queueErr error
+		rateErr  error
+	}{
+		{name: "queue failure", queueErr: errors.New("database unavailable")},
+		{name: "rate limited", rateErr: ErrRateLimited},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &passwordResetAuthStore{queueErr: tt.queueErr, rateErr: tt.rateErr}
+			sender := &recordingPasswordResetSender{}
+			service := NewServiceWithOptions(store, false, Options{AppBaseURL: "https://slate.do", PasswordResetSender: sender})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password-reset/request", strings.NewReader(`{"email":"person@example.com"}`))
+			rec := httptest.NewRecorder()
+			service.RequestPasswordReset(rec, req)
+			if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "If an account exists") {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestPasswordResetWorkerSkipsUnknownAccountsAndRetriesDeliveryFailures(t *testing.T) {
+	unknownStore := &passwordResetAuthStore{
+		claim:     PasswordResetRequest{ID: "unknown", Email: "unknown@example.com", Attempts: 1},
+		createErr: ErrInvalidAuth,
+	}
+	unknownSender := &recordingPasswordResetSender{}
+	unknownService := NewServiceWithOptions(unknownStore, false, Options{AppBaseURL: "https://slate.do", PasswordResetSender: unknownSender})
+	if processed, err := unknownService.processPasswordResetRequest(context.Background()); err != nil || !processed {
+		t.Fatalf("unknown processed = %v, error = %v", processed, err)
+	}
+	if unknownSender.email != "" || unknownStore.completedID != "unknown" {
+		t.Fatalf("unknown delivery = %q, completed = %q", unknownSender.email, unknownStore.completedID)
+	}
+
+	failureStore := &passwordResetAuthStore{claim: PasswordResetRequest{ID: "retry", Email: "person@example.com", Attempts: 2}}
+	failureSender := &recordingPasswordResetSender{err: errors.New("resend unavailable")}
+	failureService := NewServiceWithOptions(failureStore, false, Options{AppBaseURL: "https://slate.do", PasswordResetSender: failureSender})
+	fixedNow := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
+	failureService.now = func() time.Time { return fixedNow }
+	if processed, err := failureService.processPasswordResetRequest(context.Background()); err != nil || !processed {
+		t.Fatalf("failure processed = %v, error = %v", processed, err)
+	}
+	if failureStore.retriedID != "retry" || failureStore.retryAt != fixedNow.Add(2*time.Minute) {
+		t.Fatalf("retry = %q at %s", failureStore.retriedID, failureStore.retryAt)
+	}
+}
+
+func TestResetPasswordHashesPasswordAndRejectsReusedToken(t *testing.T) {
+	store := &passwordResetAuthStore{tokenValid: true}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password-reset/confirm", strings.NewReader(`{"token":"reset_secret","password":"a new secure password"}`))
+	rec := httptest.NewRecorder()
+
+	service.ResetPassword(rec, req)
+
+	if rec.Code != http.StatusOK || store.resetTokenHash != hashToken("reset_secret") {
+		t.Fatalf("status = %d, token hash = %q", rec.Code, store.resetTokenHash)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(store.passwordHash), []byte("a new secure password")) != nil {
+		t.Fatal("new password was not bcrypt hashed")
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != CookieName || cookies[0].MaxAge != -1 {
+		t.Fatalf("cookies = %#v", cookies)
+	}
+
+	store.resetErr = ErrInvalidResetToken
+	store.tokenValid = false
+	reused := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password-reset/confirm", strings.NewReader(`{"token":"reset_secret","password":"another secure password"}`))
+	reusedRecorder := httptest.NewRecorder()
+	service.ResetPassword(reusedRecorder, reused)
+	if reusedRecorder.Code != http.StatusBadRequest || !strings.Contains(reusedRecorder.Body.String(), "invalid or has expired") {
+		t.Fatalf("status = %d, body = %s", reusedRecorder.Code, reusedRecorder.Body.String())
+	}
+}
+
+func TestResetPasswordEnforcesSharedPasswordMinimum(t *testing.T) {
+	store := &passwordResetAuthStore{tokenValid: true}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password-reset/confirm", strings.NewReader(`{"token":"reset_secret","password":"abc1234"}`))
+	rec := httptest.NewRecorder()
+
+	service.ResetPassword(rec, req)
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at least 8 characters") {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if store.passwordHash != "" || store.resetTokenHash != "" {
+		t.Fatalf("password hash = %q, reset hash = %q", store.passwordHash, store.resetTokenHash)
+	}
+}
+
+func TestResetPasswordRateLimitRunsBeforeBcryptAndMutation(t *testing.T) {
+	store := &passwordResetAuthStore{tokenValid: true, rateErr: ErrRateLimited}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password-reset/confirm", strings.NewReader(`{"token":"reset_secret","password":"a new secure password"}`))
+	rec := httptest.NewRecorder()
+
+	service.ResetPassword(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests || store.resetTokenHash != "" || store.passwordHash != "" {
+		t.Fatalf("status = %d, token hash = %q, password hash = %q", rec.Code, store.resetTokenHash, store.passwordHash)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("rate-limited reset did not include Retry-After")
+	}
+}
+
+func TestResetPasswordRejectsInvalidTokenBeforeBcrypt(t *testing.T) {
+	store := &passwordResetAuthStore{tokenValid: false}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password-reset/confirm", strings.NewReader(`{"token":"reset_invalid","password":"a new secure password"}`))
+	rec := httptest.NewRecorder()
+
+	service.ResetPassword(rec, req)
+
+	if rec.Code != http.StatusBadRequest || store.passwordHash != "" || store.resetTokenHash != "" {
+		t.Fatalf("status = %d, password hash = %q, reset hash = %q", rec.Code, store.passwordHash, store.resetTokenHash)
+	}
+}
+
 func TestClientIPUsesCloudRunAppendedAddresses(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
@@ -283,6 +450,84 @@ func TestSeedAdminDoesNotPromoteExistingMember(t *testing.T) {
 }
 
 type requestAuthStore struct{}
+
+type recordingPasswordResetSender struct {
+	email          string
+	resetURL       string
+	idempotencyKey string
+	err            error
+}
+
+func (s *recordingPasswordResetSender) SendPasswordReset(_ context.Context, email string, resetURL string, idempotencyKey string) error {
+	s.email = email
+	s.resetURL = resetURL
+	s.idempotencyKey = idempotencyKey
+	return s.err
+}
+
+type passwordResetAuthStore struct {
+	requestAuthStore
+	queuedEmail    string
+	queueErr       error
+	claim          PasswordResetRequest
+	claimErr       error
+	completedID    string
+	retriedID      string
+	retryAt        time.Time
+	email          string
+	tokenHash      string
+	expiresAt      time.Time
+	resetTokenHash string
+	passwordHash   string
+	createErr      error
+	rateErr        error
+	resetErr       error
+	tokenValid     bool
+}
+
+func (s *passwordResetAuthStore) ConsumePasswordResetAttempt(context.Context, string, string, time.Time, time.Duration, int) (time.Duration, error) {
+	return 0, s.rateErr
+}
+
+func (s *passwordResetAuthStore) ConsumePasswordResetConfirmationAttempt(context.Context, string, string, time.Time, time.Duration, int) (time.Duration, error) {
+	return 0, s.rateErr
+}
+
+func (s *passwordResetAuthStore) QueuePasswordResetRequest(_ context.Context, email string, _ time.Time) error {
+	s.queuedEmail = email
+	return s.queueErr
+}
+
+func (s *passwordResetAuthStore) ClaimPasswordResetRequest(context.Context, time.Time) (PasswordResetRequest, error) {
+	return s.claim, s.claimErr
+}
+
+func (s *passwordResetAuthStore) CompletePasswordResetRequest(_ context.Context, id string, _ time.Time) error {
+	s.completedID = id
+	return nil
+}
+
+func (s *passwordResetAuthStore) RetryPasswordResetRequest(_ context.Context, id string, availableAt time.Time) error {
+	s.retriedID = id
+	s.retryAt = availableAt
+	return nil
+}
+
+func (s *passwordResetAuthStore) CreatePasswordResetToken(_ context.Context, email string, tokenHash string, expiresAt time.Time) error {
+	s.email = email
+	s.tokenHash = tokenHash
+	s.expiresAt = expiresAt
+	return s.createErr
+}
+
+func (s *passwordResetAuthStore) PasswordResetTokenValid(context.Context, string, time.Time) (bool, error) {
+	return s.tokenValid, nil
+}
+func (s *passwordResetAuthStore) ResetPassword(_ context.Context, tokenHash string, passwordHash string, _ time.Time) error {
+	s.resetTokenHash = tokenHash
+	s.passwordHash = passwordHash
+	return s.resetErr
+}
 
 type signupAuthStore struct {
 	requestAuthStore
@@ -348,7 +593,7 @@ func (requestAuthStore) FindUserBySessionHash(_ context.Context, tokenHash strin
 	}
 	return User{}, ErrUnauthorized
 }
-func (requestAuthStore) CreateSession(context.Context, string, string, time.Time) error {
+func (requestAuthStore) CreateSession(context.Context, string, string, string, time.Time) error {
 	return errors.New("unused")
 }
 func (requestAuthStore) DeleteSession(context.Context, string) error { return errors.New("unused") }
@@ -369,6 +614,33 @@ func (requestAuthStore) FindUserByAPITokenHash(_ context.Context, tokenHash stri
 }
 func (requestAuthStore) UpdateTheme(context.Context, string, string) (User, error) {
 	return User{}, errors.New("unused")
+}
+func (requestAuthStore) ConsumePasswordResetAttempt(context.Context, string, string, time.Time, time.Duration, int) (time.Duration, error) {
+	return 0, errors.New("unused")
+}
+func (requestAuthStore) ConsumePasswordResetConfirmationAttempt(context.Context, string, string, time.Time, time.Duration, int) (time.Duration, error) {
+	return 0, errors.New("unused")
+}
+func (requestAuthStore) QueuePasswordResetRequest(context.Context, string, time.Time) error {
+	return errors.New("unused")
+}
+func (requestAuthStore) ClaimPasswordResetRequest(context.Context, time.Time) (PasswordResetRequest, error) {
+	return PasswordResetRequest{}, errors.New("unused")
+}
+func (requestAuthStore) CompletePasswordResetRequest(context.Context, string, time.Time) error {
+	return errors.New("unused")
+}
+func (requestAuthStore) RetryPasswordResetRequest(context.Context, string, time.Time) error {
+	return errors.New("unused")
+}
+func (requestAuthStore) CreatePasswordResetToken(context.Context, string, string, time.Time) error {
+	return errors.New("unused")
+}
+func (requestAuthStore) PasswordResetTokenValid(context.Context, string, time.Time) (bool, error) {
+	return false, errors.New("unused")
+}
+func (requestAuthStore) ResetPassword(context.Context, string, string, time.Time) error {
+	return errors.New("unused")
 }
 
 type themeAuthStore struct {
