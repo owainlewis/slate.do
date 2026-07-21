@@ -18,6 +18,7 @@ Agents can suggest, update, and execute work, but Slate should make it hard to c
 
 ## Docs
 
+- [Install and use the Slate CLI](docs/cli.md)
 - [PRD](docs/prd.md)
 - [Initial static prototype](list-app-mockup.html)
 
@@ -49,8 +50,11 @@ Open `http://localhost:8080`.
 
 ## CLI
 
+Install the latest release on macOS or Linux:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/main/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
 export SLATE_API_TOKEN=slate_...
 slate auth status
 slate boards list
@@ -61,19 +65,9 @@ slate tasks claim <task-id>
 slate tasks status <task-id> needs_review
 ```
 
-Run the install command again to upgrade to the latest release. It installs to
-`~/.local/bin` by default. Set `SLATE_INSTALL_DIR` to choose another directory:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/main/install.sh | SLATE_INSTALL_DIR=/usr/local/bin sh
-```
-
-The CLI uses `https://slate.do` by default. Set `SLATE_BASE_URL` only for a
-different deployment, such as `http://localhost:8080` during development.
-
-Run `slate help` for an overview or `slate help boards`, `slate help lists`,
-and `slate help tasks` for every supported command and flag. Successful output
-is always JSON so humans and agents can use the same interface.
+See the full [CLI guide](docs/cli.md) for installation options, upgrades,
+authentication, and setup instructions for Claude Code, Codex, and other
+shell-based agents. The same guide is published at [slate.do/cli](https://slate.do/cli).
 
 ## Deploy
 
