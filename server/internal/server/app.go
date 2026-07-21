@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -17,11 +18,17 @@ type App struct {
 	boards *boards.Handler
 }
 
-func NewApp(static fs.FS, db *database.Pool, cookieSecure bool, inviteCode ...string) *App {
+func (a *App) RunPasswordResetWorker(ctx context.Context) {
+	if a.auth != nil {
+		a.auth.RunPasswordResetWorker(ctx)
+	}
+}
+
+func NewApp(static fs.FS, db *database.Pool, cookieSecure bool, options auth.Options) *App {
 	app := &App{static: static, db: db}
 	if db != nil {
 		authStore := auth.NewPGStore(db)
-		app.auth = auth.NewService(authStore, cookieSecure, inviteCode...)
+		app.auth = auth.NewServiceWithOptions(authStore, cookieSecure, options)
 		app.boards = boards.NewHandler(boards.NewStore(db))
 	}
 	return app
@@ -35,6 +42,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", a.login)
 	mux.HandleFunc("POST /api/v1/auth/register", a.register)
 	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
+	mux.HandleFunc("POST /api/v1/auth/password-reset/request", a.requestPasswordReset)
+	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", a.resetPassword)
 	mux.HandleFunc("GET /api/v1/api-tokens", a.session(a.auth.ListAPITokens))
 	mux.HandleFunc("POST /api/v1/api-tokens", a.session(a.auth.CreateAPIToken))
 	mux.HandleFunc("DELETE /api/v1/api-tokens/{id}", a.session(a.auth.RevokeAPIToken))
@@ -60,8 +69,13 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/agent/tasks/{id}/status", a.user(a.boards.AgentStatus))
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/done", a.user(a.boards.AgentDone))
 	mux.HandleFunc("GET /early-access", a.earlyAccess)
+	mux.HandleFunc("GET /reset-password", a.resetPasswordPage)
 	mux.Handle("/", StaticHandler(a.static))
 	return mux
+}
+
+func (a *App) resetPasswordPage(w http.ResponseWriter, r *http.Request) {
+	serveFile(w, r, a.static, "index.html")
 }
 
 func (a *App) earlyAccess(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +125,20 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auth.Logout(w, r)
+}
+
+func (a *App) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	if !a.ready(w) {
+		return
+	}
+	a.auth.RequestPasswordReset(w, r)
+}
+
+func (a *App) resetPassword(w http.ResponseWriter, r *http.Request) {
+	if !a.ready(w) {
+		return
+	}
+	a.auth.ResetPassword(w, r)
 }
 
 func (a *App) user(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {

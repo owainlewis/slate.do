@@ -118,33 +118,54 @@ func (s *PGStore) CreateInvitedMember(ctx context.Context, email string, passwor
 }
 
 func (s *PGStore) ConsumeSignupAttempt(ctx context.Context, ipHash string, emailHash string, now time.Time, window time.Duration, limit int) (time.Duration, error) {
+	return s.consumeRateLimit(ctx, "signup_rate_limits", []rateLimitKey{{"ip", ipHash}, {"email", emailHash}}, now, window, limit)
+}
+
+func (s *PGStore) ConsumePasswordResetAttempt(ctx context.Context, ipHash string, emailHash string, now time.Time, window time.Duration, limit int) (time.Duration, error) {
+	return s.consumeRateLimit(ctx, "password_reset_rate_limits", []rateLimitKey{{"ip", ipHash}, {"email", emailHash}}, now, window, limit)
+}
+
+func (s *PGStore) ConsumePasswordResetConfirmationAttempt(ctx context.Context, ipHash string, tokenHash string, now time.Time, window time.Duration, limit int) (time.Duration, error) {
+	return s.consumeRateLimit(ctx, "password_reset_confirmation_rate_limits", []rateLimitKey{{"ip", ipHash}, {"token", tokenHash}}, now, window, limit)
+}
+
+type rateLimitKey struct {
+	dimension string
+	hash      string
+}
+
+func (s *PGStore) consumeRateLimit(ctx context.Context, table string, keys []rateLimitKey, now time.Time, window time.Duration, limit int) (time.Duration, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "DELETE FROM signup_rate_limits WHERE window_started_at < ($1::timestamptz - interval '24 hours')", now); err != nil {
+	if table != "signup_rate_limits" && table != "password_reset_rate_limits" && table != "password_reset_confirmation_rate_limits" {
+		return 0, fmt.Errorf("unsupported rate limit table")
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE window_started_at < ($1::timestamptz - interval '24 hours')", now); err != nil {
 		return 0, err
 	}
 
 	retryAfter := time.Duration(0)
-	for _, key := range []struct{ dimension, hash string }{{"ip", ipHash}, {"email", emailHash}} {
+	for _, key := range keys {
 		var attempts int
 		var started time.Time
-		err := tx.QueryRow(ctx, `
-			INSERT INTO signup_rate_limits (dimension, key_hash, window_started_at, attempts)
+		query := `
+			INSERT INTO ` + table + ` (dimension, key_hash, window_started_at, attempts)
 			VALUES ($1, $2, $3, 1)
 			ON CONFLICT (dimension, key_hash) DO UPDATE SET
 				window_started_at = CASE
-					WHEN signup_rate_limits.window_started_at <= $3 - $4::interval THEN $3
-					ELSE signup_rate_limits.window_started_at
+					WHEN ` + table + `.window_started_at <= $3 - $4::interval THEN $3
+					ELSE ` + table + `.window_started_at
 				END,
 				attempts = CASE
-					WHEN signup_rate_limits.window_started_at <= $3 - $4::interval THEN 1
-					ELSE signup_rate_limits.attempts + 1
+					WHEN ` + table + `.window_started_at <= $3 - $4::interval THEN 1
+					ELSE ` + table + `.attempts + 1
 				END
 			RETURNING attempts, window_started_at
-		`, key.dimension, key.hash, now, fmt.Sprintf("%f seconds", window.Seconds())).Scan(&attempts, &started)
+		`
+		err := tx.QueryRow(ctx, query, key.dimension, key.hash, now, fmt.Sprintf("%f seconds", window.Seconds())).Scan(&attempts, &started)
 		if err != nil {
 			return 0, err
 		}
@@ -162,6 +183,158 @@ func (s *PGStore) ConsumeSignupAttempt(ctx context.Context, ipHash string, email
 		return retryAfter, ErrRateLimited
 	}
 	return 0, nil
+}
+
+func (s *PGStore) QueuePasswordResetRequest(ctx context.Context, email string, now time.Time) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO password_reset_requests (email, available_at)
+		VALUES ($1, $2)
+	`, email, now)
+	return err
+}
+
+func (s *PGStore) ClaimPasswordResetRequest(ctx context.Context, now time.Time) (PasswordResetRequest, error) {
+	var request PasswordResetRequest
+	err := s.db.QueryRow(ctx, `
+		WITH next_request AS (
+			SELECT id
+			FROM password_reset_requests
+			WHERE processed_at IS NULL
+				AND available_at <= $1
+				AND (claimed_at IS NULL OR claimed_at < $1 - interval '5 minutes')
+			ORDER BY available_at, created_at
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		)
+		UPDATE password_reset_requests r
+		SET claimed_at = $1, attempts = attempts + 1
+		FROM next_request
+		WHERE r.id = next_request.id
+		RETURNING r.id::text, r.email, r.attempts
+	`, now).Scan(&request.ID, &request.Email, &request.Attempts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PasswordResetRequest{}, ErrNoPendingReset
+	}
+	return request, err
+}
+
+func (s *PGStore) CompletePasswordResetRequest(ctx context.Context, id string, now time.Time) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE password_reset_requests
+		SET processed_at = $2, claimed_at = NULL
+		WHERE id = $1 AND processed_at IS NULL
+	`, id, now)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `
+		DELETE FROM password_reset_requests
+		WHERE processed_at < $1::timestamptz - interval '24 hours'
+	`, now)
+	return err
+}
+
+func (s *PGStore) RetryPasswordResetRequest(ctx context.Context, id string, availableAt time.Time) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE password_reset_requests
+		SET claimed_at = NULL,
+			available_at = $2,
+			processed_at = CASE WHEN attempts >= 5 THEN now() ELSE NULL END
+		WHERE id = $1 AND processed_at IS NULL
+	`, id, availableAt)
+	return err
+}
+
+func (s *PGStore) CreatePasswordResetToken(ctx context.Context, email string, tokenHash string, expiresAt time.Time) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "DELETE FROM password_reset_tokens WHERE expires_at < now() - interval '24 hours'"); err != nil {
+		return err
+	}
+	var userID string
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text FROM users
+		WHERE email = $1 AND disabled_at IS NULL
+		FOR UPDATE
+	`, email).Scan(&userID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalidAuth
+	} else if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = now()
+		WHERE user_id = $1 AND used_at IS NULL
+	`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3)
+	`, userID, tokenHash, expiresAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PGStore) PasswordResetTokenValid(ctx context.Context, tokenHash string, now time.Time) (bool, error) {
+	var valid bool
+	err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM password_reset_tokens t
+			JOIN users u ON u.id = t.user_id
+			WHERE t.token_hash = $1
+				AND t.used_at IS NULL
+				AND t.expires_at > $2
+				AND u.disabled_at IS NULL
+		)
+	`, tokenHash, now).Scan(&valid)
+	return valid, err
+}
+
+func (s *PGStore) ResetPassword(ctx context.Context, tokenHash string, passwordHash string, now time.Time) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var userID string
+	if err := tx.QueryRow(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = $2
+		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
+		RETURNING user_id::text
+	`, tokenHash, now).Scan(&userID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalidResetToken
+	} else if err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $2, updated_at = $3
+		WHERE id = $1 AND disabled_at IS NULL
+	`, userID, passwordHash, now)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrInvalidResetToken
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM sessions WHERE user_id = $1", userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = $2
+		WHERE user_id = $1 AND used_at IS NULL
+	`, userID, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PGStore) FindUserByEmail(ctx context.Context, email string) (UserWithPassword, error) {

@@ -85,7 +85,7 @@ steps:
         image_tag="$_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID"
         image="$$(gcloud artifacts docker images describe "$$image_tag" --format='value(image_summary.fully_qualified_digest)')"
         test -n "$$image"
-        runtime_secrets="DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest"
+        runtime_secrets="DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest,RESEND_API_KEY=slate-resend-api-key:latest"
         existing_service="$$(gcloud run services list --region "$_REGION" --filter='metadata.name=slate' --format='value(metadata.name)')"
         existing_env_names=""
         if [ "$$existing_service" = slate ]; then
@@ -115,9 +115,11 @@ steps:
           --region "$_REGION" \
           --platform managed \
           --no-invoker-iam-check \
+          --no-cpu-throttling \
+          --min 1 \
           --set-cloudsql-instances "$PROJECT_ID:$_REGION:slate-postgres-ew1" \
           --ingress all \
-          --set-env-vars COOKIE_SECURE=true \
+          --set-env-vars 'COOKIE_SECURE=true,APP_BASE_URL=https://slate.do,RESEND_FROM=Slate <passwords@mail.slate.do>' \
           --set-secrets "$$runtime_secrets" \
           --quiet
 

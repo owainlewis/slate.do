@@ -7,6 +7,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("COOKIE_SECURE", "")
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("INVITE_CODE", "")
+	t.Setenv("APP_BASE_URL", "")
+	t.Setenv("RESEND_API_KEY", "")
+	t.Setenv("RESEND_FROM", "")
 
 	cfg := FromEnv()
 	if cfg.Port != "8080" {
@@ -20,6 +23,23 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.InviteCode != "" {
 		t.Fatalf("InviteCode = %q, want empty when unset", cfg.InviteCode)
+	}
+	if cfg.AppBaseURL != "https://slate.do" {
+		t.Fatalf("AppBaseURL = %q, want production URL", cfg.AppBaseURL)
+	}
+	if cfg.ResendAPIKey != "" || cfg.ResendFrom != "" {
+		t.Fatalf("Resend config should be empty by default")
+	}
+}
+
+func TestFromEnvPasswordResetConfiguration(t *testing.T) {
+	t.Setenv("APP_BASE_URL", " https://example.com ")
+	t.Setenv("RESEND_API_KEY", " re_secret ")
+	t.Setenv("RESEND_FROM", " Slate <passwords@example.com> ")
+
+	cfg := FromEnv()
+	if cfg.AppBaseURL != "https://example.com" || cfg.ResendAPIKey != "re_secret" || cfg.ResendFrom != "Slate <passwords@example.com>" {
+		t.Fatalf("password reset config = %#v", cfg)
 	}
 }
 

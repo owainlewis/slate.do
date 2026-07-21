@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"net/netip"
@@ -22,21 +23,28 @@ import (
 )
 
 const (
-	CookieName       = "slate_session"
-	sessionDuration  = 30 * 24 * time.Hour
-	signupWindow     = 15 * time.Minute
-	signupLimit      = 5
-	minPasswordLen   = 8
-	maxPasswordBytes = 72
+	CookieName            = "slate_session"
+	sessionDuration       = 30 * 24 * time.Hour
+	signupWindow          = 15 * time.Minute
+	signupLimit           = 5
+	passwordResetDuration = time.Hour
+	passwordResetWindow   = 15 * time.Minute
+	passwordResetLimit    = 5
+	passwordConfirmWindow = 15 * time.Minute
+	passwordConfirmLimit  = 10
+	minPasswordLen        = 8
+	maxPasswordBytes      = 72
 )
 
 var (
-	ErrEmailTaken     = errors.New("email already exists")
-	ErrInvalidAuth    = errors.New("invalid email or password")
-	ErrUnauthorized   = errors.New("unauthorized")
-	ErrAdminExists    = errors.New("admin already exists")
-	ErrRateLimited    = errors.New("registration rate limit reached")
-	ErrMemberNotFound = errors.New("member account not found")
+	ErrEmailTaken        = errors.New("email already exists")
+	ErrInvalidAuth       = errors.New("invalid email or password")
+	ErrUnauthorized      = errors.New("unauthorized")
+	ErrAdminExists       = errors.New("admin already exists")
+	ErrRateLimited       = errors.New("registration rate limit reached")
+	ErrMemberNotFound    = errors.New("member account not found")
+	ErrInvalidResetToken = errors.New("invalid or expired password reset token")
+	ErrNoPendingReset    = errors.New("no pending password reset request")
 )
 
 type User struct {
@@ -65,6 +73,12 @@ type MemberAccount struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 }
 
+type PasswordResetRequest struct {
+	ID       string
+	Email    string
+	Attempts int
+}
+
 type Store interface {
 	CreateAdmin(ctx context.Context, email string, passwordHash string) (User, error)
 	CreateInvitedMember(ctx context.Context, email string, passwordHash string, sessionHash string, expiresAt time.Time) (User, error)
@@ -78,13 +92,30 @@ type Store interface {
 	RevokeAPIToken(ctx context.Context, userID string, id string) error
 	FindUserByAPITokenHash(ctx context.Context, tokenHash string, now time.Time) (User, error)
 	UpdateTheme(ctx context.Context, userID string, theme string) (User, error)
+	ConsumePasswordResetAttempt(ctx context.Context, ipHash string, emailHash string, now time.Time, window time.Duration, limit int) (time.Duration, error)
+	ConsumePasswordResetConfirmationAttempt(ctx context.Context, ipHash string, tokenHash string, now time.Time, window time.Duration, limit int) (time.Duration, error)
+	QueuePasswordResetRequest(ctx context.Context, email string, now time.Time) error
+	ClaimPasswordResetRequest(ctx context.Context, now time.Time) (PasswordResetRequest, error)
+	CompletePasswordResetRequest(ctx context.Context, id string, now time.Time) error
+	RetryPasswordResetRequest(ctx context.Context, id string, availableAt time.Time) error
+	CreatePasswordResetToken(ctx context.Context, email string, tokenHash string, expiresAt time.Time) error
+	PasswordResetTokenValid(ctx context.Context, tokenHash string, now time.Time) (bool, error)
+	ResetPassword(ctx context.Context, tokenHash string, passwordHash string, now time.Time) error
+}
+
+type Options struct {
+	InviteCode          string
+	AppBaseURL          string
+	PasswordResetSender PasswordResetSender
 }
 
 type Service struct {
-	store        Store
-	cookieSecure bool
-	inviteCode   string
-	now          func() time.Time
+	store               Store
+	cookieSecure        bool
+	inviteCode          string
+	appBaseURL          string
+	passwordResetSender PasswordResetSender
+	now                 func() time.Time
 }
 
 func NewService(store Store, cookieSecure bool, inviteCode ...string) *Service {
@@ -92,11 +123,17 @@ func NewService(store Store, cookieSecure bool, inviteCode ...string) *Service {
 	if len(inviteCode) > 0 {
 		configuredCode = inviteCode[0]
 	}
+	return NewServiceWithOptions(store, cookieSecure, Options{InviteCode: configuredCode})
+}
+
+func NewServiceWithOptions(store Store, cookieSecure bool, options Options) *Service {
 	return &Service{
-		store:        store,
-		cookieSecure: cookieSecure,
-		inviteCode:   configuredCode,
-		now:          time.Now,
+		store:               store,
+		cookieSecure:        cookieSecure,
+		inviteCode:          options.InviteCode,
+		appBaseURL:          strings.TrimRight(strings.TrimSpace(options.AppBaseURL), "/"),
+		passwordResetSender: options.PasswordResetSender,
+		now:                 time.Now,
 	}
 }
 
@@ -234,6 +271,159 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meResponse{Authenticated: true, User: &account.User})
+}
+
+func (s *Service) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	if !validateAuthPost(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	var input struct {
+		Email string `json:"email"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	email := normalizeEmail(input.Email)
+	if email == "" || !validEmail(email) {
+		writeError(w, http.StatusBadRequest, "enter a valid email address")
+		return
+	}
+	if s.passwordResetSender == nil || s.appBaseURL == "" {
+		writeError(w, http.StatusServiceUnavailable, "password reset is temporarily unavailable")
+		return
+	}
+	if _, err := s.store.ConsumePasswordResetAttempt(r.Context(), hashToken(clientIP(r)), hashToken(email), s.now(), passwordResetWindow, passwordResetLimit); err != nil {
+		if !errors.Is(err, ErrRateLimited) {
+			slog.Error("password reset rate limit failed", "error", err)
+		}
+		writePasswordResetAccepted(w)
+		return
+	}
+	if err := s.store.QueuePasswordResetRequest(r.Context(), email, s.now()); err != nil {
+		slog.Error("password reset request queue failed", "error", err)
+	}
+	writePasswordResetAccepted(w)
+}
+
+func (s *Service) RunPasswordResetWorker(ctx context.Context) {
+	if s == nil || s.passwordResetSender == nil || s.appBaseURL == "" {
+		return
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		processed, err := s.processPasswordResetRequest(ctx)
+		if err != nil {
+			slog.Error("password reset worker failed", "error", err)
+		}
+		if processed && err == nil {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Service) processPasswordResetRequest(ctx context.Context) (bool, error) {
+	now := s.now()
+	request, err := s.store.ClaimPasswordResetRequest(ctx, now)
+	if errors.Is(err, ErrNoPendingReset) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	retry := func(processErr error) (bool, error) {
+		delay := time.Duration(request.Attempts) * time.Minute
+		if delay > time.Hour {
+			delay = time.Hour
+		}
+		if err := s.store.RetryPasswordResetRequest(ctx, request.ID, now.Add(delay)); err != nil {
+			return true, err
+		}
+		slog.Error("password reset delivery failed", "error", processErr, "attempt", request.Attempts)
+		return true, nil
+	}
+	token, err := randomToken("reset")
+	if err != nil {
+		return retry(err)
+	}
+	if err := s.store.CreatePasswordResetToken(ctx, request.Email, hashToken(token), now.Add(passwordResetDuration)); errors.Is(err, ErrInvalidAuth) {
+		return true, s.store.CompletePasswordResetRequest(ctx, request.ID, now)
+	} else if err != nil {
+		return retry(err)
+	}
+	resetURL := s.appBaseURL + "/reset-password#token=" + url.QueryEscape(token)
+	idempotencyKey := "password-reset-" + request.ID + "-" + strconv.Itoa(request.Attempts)
+	if err := s.passwordResetSender.SendPasswordReset(ctx, request.Email, resetURL, idempotencyKey); err != nil {
+		return retry(err)
+	}
+	return true, s.store.CompletePasswordResetRequest(ctx, request.ID, now)
+}
+
+func writePasswordResetAccepted(w http.ResponseWriter) {
+	writeJSON(w, http.StatusAccepted, map[string]string{"message": "If an account exists for that email, a password reset link is on its way."})
+}
+
+func (s *Service) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	if !validateAuthPost(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	var input struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if strings.TrimSpace(input.Token) == "" {
+		writeError(w, http.StatusBadRequest, "reset link is invalid or has expired")
+		return
+	}
+	if len([]rune(input.Password)) < minPasswordLen || len([]byte(input.Password)) > maxPasswordBytes {
+		writeError(w, http.StatusBadRequest, "password must be at least 12 characters and no more than 72 bytes")
+		return
+	}
+	if retryAfter, err := s.store.ConsumePasswordResetConfirmationAttempt(r.Context(), hashToken(clientIP(r)), hashToken(input.Token), s.now(), passwordConfirmWindow, passwordConfirmLimit); errors.Is(err, ErrRateLimited) {
+		retrySeconds := (retryAfter + time.Second - 1) / time.Second
+		if retrySeconds < 1 {
+			retrySeconds = 1
+		}
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(retrySeconds), 10))
+		writeError(w, http.StatusTooManyRequests, "too many reset attempts; try again later")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "password reset is temporarily unavailable")
+		return
+	}
+	valid, err := s.store.PasswordResetTokenValid(r.Context(), hashToken(input.Token), s.now())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "password could not be reset")
+		return
+	}
+	if !valid {
+		writeError(w, http.StatusBadRequest, "reset link is invalid or has expired")
+		return
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "password could not be reset")
+		return
+	}
+	if err := s.store.ResetPassword(r.Context(), hashToken(input.Token), string(passwordHash), s.now()); errors.Is(err, ErrInvalidResetToken) {
+		writeError(w, http.StatusBadRequest, "reset link is invalid or has expired")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "password could not be reset")
+		return
+	}
+	clearSessionCookie(w, s.cookieSecure)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {

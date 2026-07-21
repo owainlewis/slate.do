@@ -117,6 +117,103 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	}
 }
 
+func TestPasswordResetTokensAreSingleUseAndRevokeSessions(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run auth store integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPGStore(db)
+	email := fmt.Sprintf("reset-%d@slate.test", time.Now().UnixNano())
+	user, err := store.CreateAdmin(ctx, email, "old-password-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
+	now := time.Now().UTC()
+	if err := store.CreateSession(ctx, user.ID, "active-session", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreatePasswordResetToken(ctx, email, "old-token", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreatePasswordResetToken(ctx, email, "current-token", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if valid, err := store.PasswordResetTokenValid(ctx, "current-token", now); err != nil || !valid {
+		t.Fatalf("current token valid = %v, error = %v", valid, err)
+	}
+	if err := store.ResetPassword(ctx, "old-token", "new-password-hash", now); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("superseded token error = %v", err)
+	}
+	if err := store.ResetPassword(ctx, "current-token", "new-password-hash", now); err != nil {
+		t.Fatal(err)
+	}
+	account, err := store.FindUserByEmail(ctx, email)
+	if err != nil || account.PasswordHash != "new-password-hash" {
+		t.Fatalf("updated account = %#v, error = %v", account, err)
+	}
+	var sessions int
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM sessions WHERE user_id = $1", user.ID).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Fatalf("sessions = %d, want 0", sessions)
+	}
+	if err := store.ResetPassword(ctx, "current-token", "another-password-hash", now); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("reused token error = %v", err)
+	}
+	if err := store.CreatePasswordResetToken(ctx, email, "expired-token", now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResetPassword(ctx, "expired-token", "another-password-hash", now); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("expired token error = %v", err)
+	}
+
+	if err := store.QueuePasswordResetRequest(ctx, "unknown@example.com", now); err != nil {
+		t.Fatal(err)
+	}
+	request, err := store.ClaimPasswordResetRequest(ctx, now)
+	if err != nil || request.Email != "unknown@example.com" || request.Attempts != 1 {
+		t.Fatalf("claimed request = %#v, error = %v", request, err)
+	}
+	retryAt := now.Add(time.Minute)
+	if err := store.RetryPasswordResetRequest(ctx, request.ID, retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimPasswordResetRequest(ctx, now); !errors.Is(err, ErrNoPendingReset) {
+		t.Fatalf("early retry error = %v", err)
+	}
+	retried, err := store.ClaimPasswordResetRequest(ctx, retryAt)
+	if err != nil || retried.ID != request.ID || retried.Attempts != 2 {
+		t.Fatalf("retried request = %#v, error = %v", retried, err)
+	}
+	if err := store.CompletePasswordResetRequest(ctx, retried.ID, retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimPasswordResetRequest(ctx, retryAt); !errors.Is(err, ErrNoPendingReset) {
+		t.Fatalf("completed request claim error = %v", err)
+	}
+
+	for attempt := 1; attempt <= passwordConfirmLimit; attempt++ {
+		if _, err := store.ConsumePasswordResetConfirmationAttempt(ctx, "ip-"+user.ID, "token-"+user.ID, now, passwordConfirmWindow, passwordConfirmLimit); err != nil {
+			t.Fatalf("confirmation attempt %d: %v", attempt, err)
+		}
+	}
+	if _, err := store.ConsumePasswordResetConfirmationAttempt(ctx, "ip-"+user.ID, "token-"+user.ID, now, passwordConfirmWindow, passwordConfirmLimit); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("confirmation rate limit error = %v", err)
+	}
+}
+
 func TestDisableSerializesWithSessionAndAPITokenCreation(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

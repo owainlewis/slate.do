@@ -14,6 +14,9 @@ type Config struct {
 	AdminEmail    string
 	AdminPassword string
 	InviteCode    string
+	AppBaseURL    string
+	ResendAPIKey  string
+	ResendFrom    string
 }
 
 func FromEnv() Config {
@@ -27,6 +30,9 @@ func FromEnv() Config {
 		AdminEmail:    adminEmail,
 		AdminPassword: adminPassword,
 		InviteCode:    os.Getenv("INVITE_CODE"),
+		AppBaseURL:    env("APP_BASE_URL", "https://slate.do"),
+		ResendAPIKey:  strings.TrimSpace(os.Getenv("RESEND_API_KEY")),
+		ResendFrom:    strings.TrimSpace(os.Getenv("RESEND_FROM")),
 	}
 }
 

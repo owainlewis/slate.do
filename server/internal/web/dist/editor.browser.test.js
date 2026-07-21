@@ -290,9 +290,61 @@ test("early access submits credentials in the body and opens the app", async t =
 	assert.deepEqual(registration.body, { email: "member@example.com", password: "abcd1234", inviteCode: "private-invite-code" });
 });
 
+test("password reset request and confirmation work without exposing the token in the URL", async t => {
+	let resetRequest;
+	let resetConfirmation;
+	const server = http.createServer(async (request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		if (url.pathname === "/api/v1/me") return json(response, { authenticated: false });
+		if (url.pathname === "/api/v1/auth/password-reset/request" && request.method === "POST") {
+			let body = "";
+			for await (const chunk of request) body += chunk;
+			resetRequest = JSON.parse(body);
+			return accepted(response, { message: "If an account exists for that email, a password reset link is on its way." });
+		}
+		if (url.pathname === "/api/v1/auth/password-reset/confirm" && request.method === "POST") {
+			let body = "";
+			for await (const chunk of request) body += chunk;
+			resetConfirmation = JSON.parse(body);
+			return json(response, { ok: true });
+		}
+		if (url.pathname === "/" || url.pathname === "/reset-password" || url.pathname === "/index.html") return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	const baseURL = `http://127.0.0.1:${server.address().port}`;
+	await page.goto(baseURL);
+	await page.getByRole("button", { name: "Log in" }).first().click();
+	await page.getByRole("button", { name: "Forgot your password?" }).click();
+	await page.getByLabel("Email").fill("person@example.com");
+	await page.getByRole("button", { name: "Send reset link" }).click();
+	await page.getByRole("status").filter({ hasText: "If an account exists" }).waitFor();
+	assert.deepEqual(resetRequest, { email: "person@example.com" });
+
+	await page.goto(`${baseURL}/reset-password#token=reset_secret`);
+	await page.getByLabel("New password").fill("a new secure password");
+	assert.equal(page.url(), `${baseURL}/reset-password`);
+	await page.getByRole("button", { name: "Reset password" }).click();
+	await page.getByRole("status").filter({ hasText: "Password reset. Sign in" }).waitFor();
+	assert.deepEqual(resetConfirmation, { token: "reset_secret", password: "a new secure password" });
+	assert.equal(page.url(), `${baseURL}/`);
+});
+
 function json(response, body) {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
+}
+
+function accepted(response, body) {
+	response.writeHead(202, { "Content-Type": "application/json" });
+	response.end(JSON.stringify(body));
 }
 
 function conflict(response, code, error) {
