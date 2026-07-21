@@ -359,6 +359,7 @@ function appHTML() {
   const flowMode = state.boardMode === "flow";
   const calendarMode = state.boardMode === "calendar";
   const todayMode = state.boardMode === "today";
+  const headerDays = calendarMode ? weekDays() : daysInWeek(new Date());
   const boardLimitReached = state.boards.length >= state.maxBoards;
   const listLimitReached = lists.length >= state.maxListsPerBoard;
   return `
@@ -387,8 +388,7 @@ function appHTML() {
       </aside>
       <div class="main">
         <header class="topbar">
-          <input class="title-input" id="board-title" aria-label="Board name" value="${escapeAttr(board?.name || "")}">
-          <span class="week">${calendarMode ? weekLabel() : new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
+          <span class="week">${formatWeekHeading(headerDays)}</span>
           <div class="top-actions">
             <div class="view-switch" aria-label="Board view">
               <button data-board-mode="lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}" title="Lists">${icon("rows")}<span>Lists</span></button>
@@ -860,7 +860,6 @@ function bindApp() {
     render();
     if (list) document.querySelector(`[data-bucket="${list.id}"] input[data-bucket-name]`)?.focus();
   };
-  document.querySelector("#board-title").addEventListener("change", async e => { await api.patch(`/api/v1/boards/${state.board.id}`, { name: e.target.value }); await reload(); });
   document.querySelectorAll("[data-bucket-name]").forEach(el => el.addEventListener("change", async e => { await api.patch(`/api/v1/buckets/${el.dataset.bucketName}`, { name: e.target.value }); await reload(); }));
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
@@ -929,7 +928,9 @@ function bindDetail() {
     const triggers = [...document.querySelectorAll("[data-open-task]")];
     const trigger = triggers.find(element => element.dataset.openTask === preferredTaskID);
     const addInput = document.querySelector(`[data-add-task="${bucketID}"] input[name="title"]`);
-    (trigger || triggers[0] || addInput || document.querySelector("#board-title"))?.focus();
+    const activeView = document.querySelector('[data-board-mode][aria-pressed="true"]');
+    const selectedBoard = document.querySelector(`[data-board="${state.board?.id}"]`);
+    (trigger || triggers[0] || addInput || activeView || selectedBoard)?.focus();
   };
   const setDetailBusy = busy => {
     detailBusy = busy;
@@ -1356,7 +1357,11 @@ function startOfWeek(value) {
 }
 
 function weekDays() {
-  const start = calendarWeekStart();
+  return daysInWeek(calendarWeekStart());
+}
+
+function daysInWeek(value) {
+  const start = startOfWeek(value);
   return Array.from({ length: 7 }, (_, index) => addDays(start, index));
 }
 
@@ -1383,6 +1388,28 @@ function parseDateKey(value) {
 
 function weekLabel() {
   return formatWeekLabel(weekDays());
+}
+
+function formatWeekHeading(days) {
+  const first = days[0];
+  const last = days[6];
+  const firstLabel = `${first.toLocaleDateString(undefined, { month: "long" })} ${ordinal(first.getDate())}`;
+  const lastLabel = `${last.toLocaleDateString(undefined, { month: "long" })} ${ordinal(last.getDate())} ${last.getFullYear()}`;
+  const firstYear = first.getFullYear() === last.getFullYear() ? "" : ` ${first.getFullYear()}`;
+  return `Week ${isoWeekNumber(first)} (${firstLabel}${firstYear} – ${lastLabel})`;
+}
+
+function isoWeekNumber(value) {
+  const date = new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+}
+
+function ordinal(value) {
+  const remainder = value % 100;
+  if (remainder >= 11 && remainder <= 13) return `${value}th`;
+  return `${value}${{ 1: "st", 2: "nd", 3: "rd" }[value % 10] || "th"}`;
 }
 
 function formatWeekLabel(days) {
