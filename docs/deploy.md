@@ -21,13 +21,39 @@ Open `http://localhost:8080`.
 
 1. Set `PROJECT_ID=slate-do-production`.
 2. Set `DB_PASSWORD`, `DATABASE_URL`, and `SESSION_SECRET`.
-3. Run `scripts/gcp-bootstrap.sh`.
-4. Run `scripts/gcp-deploy.sh`.
-5. Connect the GitHub repo to Cloud Build.
-6. Create a Cloud Build trigger on pushes to `main` using `cloudbuild.yaml`.
+3. Run `scripts/gcp-bootstrap.sh` once for a new project.
+4. Connect the GitHub repo to Cloud Build.
+5. Create the `slate-main-deploy` Cloud Build trigger for `^main$` using `cloudbuild.yaml`.
+6. Run `scripts/gcp-deploy.sh` only when a manual recovery deploy is needed.
 
-The Cloud Run service is `slate`.
-The Cloud SQL instance is `slate-postgres` and uses PostgreSQL 18.
+After authorizing the Cloud Build GitHub App for the repository, create the trigger once:
+
+```bash
+PROJECT_ID=slate-do-production
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+BUILD_SERVICE_ACCOUNT="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$BUILD_SERVICE_ACCOUNT" \
+  --role=roles/cloudbuild.builds.viewer \
+  --condition=None
+gcloud builds triggers create github \
+  --project="$PROJECT_ID" \
+  --region=global \
+  --name=slate-main-deploy \
+  --repo-owner=owainlewis \
+  --repo-name=slate.do \
+  --branch-pattern='^main$' \
+  --build-config=cloudbuild.yaml \
+  --include-logs-with-status \
+  --service-account="projects/$PROJECT_ID/serviceAccounts/$BUILD_SERVICE_ACCOUNT"
+```
+
+Every push to `main` runs the Go tests, builds and pushes a build-unique image, resolves it to an immutable digest, executes a per-commit migration job, deploys the service only after migrations pass, verifies the deployed digest, and checks `https://slate.do/api/health`. A failed test, build, migration, deploy, or health check stops the pipeline. Builds can compile in parallel, but a Cloud Storage lock serializes migrations and service deployment. After acquiring the lock, stale builds stop before changing production, so an older overlapping build cannot replace a newer release. An abandoned lock is removed only after Cloud Build confirms its owning build is no longer running. The build service account therefore needs `roles/cloudbuild.builds.viewer` in addition to its deploy, Artifact Registry, Secret Manager, logging, and Cloud Storage permissions.
+
+The migration job and service attach the production Cloud SQL instance in Europe West 1 because `slate-database-url` uses that socket. Deploys always replace the complete required secret mapping. They add `INVITE_CODE` only when `slate-invite-code:latest` is accessible. If the live service already uses `INVITE_CODE` but that version becomes inaccessible, deployment fails instead of silently disabling early-access registration.
+
+The production Cloud Run service is `slate` in `europe-west1`; the `slate.do` domain mapping routes to it.
+The Cloud SQL instance is `slate-postgres-ew1` in `europe-west1` and uses PostgreSQL 18.
 The required runtime secrets are `slate-database-url` and `slate-session-secret`. Invite registration is off by default. To enable it, create a separate Secret Manager secret and expose its latest version to the service as `INVITE_CODE`. Never put the code in source, command history, a URL, or a non-secret environment file.
 `OWNER_EMAIL` and `OWNER_PASSWORD` remain supported as legacy aliases.
 
@@ -42,14 +68,14 @@ Configure the Cloud Run service with a Secret Manager reference:
 ```bash
 gcloud secrets create slate-invite-code --replication-policy=automatic
 gcloud secrets versions add slate-invite-code --data-file=-
-gcloud run services update slate --region=europe-west2 \
+gcloud run services update slate --region=europe-west1 \
   --update-secrets INVITE_CODE=slate-invite-code:latest
 ```
 
 Enter the secret value on standard input when prompted. To rotate it, add a new secret version and deploy a new Cloud Run revision. The old code stops working as soon as all traffic uses the new revision. To disable registration, remove the mapping and deploy a new revision:
 
 ```bash
-gcloud run services update slate --region=europe-west2 \
+gcloud run services update slate --region=europe-west1 \
   --remove-secrets INVITE_CODE
 ```
 

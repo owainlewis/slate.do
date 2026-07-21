@@ -2,8 +2,8 @@
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-slate-do-production}"
-REGION="${REGION:-europe-west2}"
-INSTANCE="${INSTANCE:-slate-postgres}"
+REGION="${REGION:-europe-west1}"
+INSTANCE="${INSTANCE:-slate-postgres-ew1}"
 DB_NAME="${DB_NAME:-slate}"
 DB_USER="${DB_USER:-slate}"
 
