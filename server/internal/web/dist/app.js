@@ -85,7 +85,7 @@ const state = {
   settings: false,
   view: "home",
   error: "",
-  notice: "",
+  authNotice: "",
   resetToken: "",
   goalErrors: {},
   newToken: "",
@@ -94,7 +94,7 @@ const state = {
   flowListId: "",
   weekStart: "",
   theme: "",
-  notice: null,
+  moveNotice: null,
 };
 
 const themes = [
@@ -330,7 +330,7 @@ function loginHTML() {
         <input id="login-password" name="password" type="password" autocomplete="current-password" required>
         <button class="primary" type="submit">Sign in</button>
         <button class="auth-link" id="forgot-password" type="button">Forgot your password?</button>
-        <p class="notice" role="status">${escapeHTML(state.notice)}</p>
+        <p class="notice" role="status">${escapeHTML(state.authNotice)}</p>
         <p class="error" role="alert">${escapeHTML(state.error)}</p>
       </form>
     </section>`;
@@ -346,7 +346,7 @@ function forgotPasswordHTML() {
         <label class="login-label" for="reset-email">Email</label>
         <input id="reset-email" name="email" type="email" autocomplete="email" required>
         <button class="primary" type="submit">Send reset link</button>
-        <p class="notice reset-notice" role="status">${escapeHTML(state.notice)}</p>
+        <p class="notice reset-notice" role="status">${escapeHTML(state.authNotice)}</p>
         <button class="auth-link" id="back-to-login" type="button">Back to sign in</button>
         <p class="error" role="alert">${escapeHTML(state.error)}</p>
       </form>
@@ -519,7 +519,7 @@ function appHTML() {
           </div>
         </header>
         ${statusErrorHTML(state.error)}
-        ${statusNoticeHTML(state.notice)}
+        ${statusNoticeHTML(state.moveNotice)}
         ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
         ${footerHTML(board, todayMode)}
       </div>
@@ -846,7 +846,7 @@ function bindLogin() {
   document.querySelector("#forgot-password").onclick = () => {
 	state.view = "forgot-password";
 	state.error = "";
-	state.notice = "";
+	state.authNotice = "";
 	render();
   };
 }
@@ -861,10 +861,10 @@ function bindForgotPassword() {
 	try {
 	  const result = await api.post("/api/v1/auth/password-reset/request", { email: form.get("email") });
 	  state.error = "";
-	  state.notice = result.message;
+	  state.authNotice = result.message;
 	  formElement.reset();
 	} catch (err) {
-	  state.notice = "";
+	  state.authNotice = "";
 	  state.error = err.message;
 	}
 	render();
@@ -883,7 +883,8 @@ function bindResetPassword() {
 	  authVersion += 1;
 	  resetAuthenticatedState();
 	  state.resetToken = "";
-	  state.notice = "Password reset. Sign in with your new password.";
+	  state.error = "";
+	  state.authNotice = "Password reset. Sign in with your new password.";
 	  history.replaceState({}, "", "/");
 	  state.view = "login";
 	} catch (err) {
@@ -962,14 +963,14 @@ function bindApp() {
   };
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = async () => { await loadBoard(el.dataset.board); render(); });
   document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
-    const notice = state.notice;
+    const notice = state.moveNotice;
     if (!notice) return;
     await loadBoard(notice.boardId);
     state.selectedTask = findTask(notice.taskId);
-    state.notice = null;
+    state.moveNotice = null;
     render();
   });
-  document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.notice = null; render(); });
+  document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.moveNotice = null; render(); });
   document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
   document.querySelector("#settings").onclick = async () => { await openSettings(true); };
   document.querySelector("#logout").onclick = logout;
@@ -1272,7 +1273,7 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
       if (task.kind === "action" && !task.done) sourceList.openCount = Math.max(0, (sourceList.openCount || 0) - 1);
     }
     state.selectedTask = null;
-    state.notice = {
+    state.moveNotice = {
       message: `Moved to ${destinationBoard.name} / ${destinationList.name}`,
       boardId: moved.boardId,
       taskId: moved.id,
