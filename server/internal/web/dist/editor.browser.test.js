@@ -290,6 +290,187 @@ test("early access submits credentials in the body and opens the app", async t =
 	assert.deepEqual(registration.body, { email: "member@example.com", password: "abcd1234", inviteCode: "private-invite-code" });
 });
 
+test("logging out and into another account cannot show the previous account's data", async t => {
+	let authenticatedAccount = "account-a";
+	const boardRequestsAfterLogout = [];
+	let loggedOut = false;
+	let loginRequests = 0;
+	let releaseLogout;
+	let releaseSlowBoard;
+	const logoutResponse = new Promise(resolve => { releaseLogout = resolve; });
+	const slowBoardResponse = new Promise(resolve => { releaseSlowBoard = resolve; });
+	const accounts = {
+		"account-a": {
+			user: { id: "account-a", email: "first@example.com", theme: "dark" },
+			boards: [
+				{ id: "board-a", name: "Account A private board", maxTasksPerList: 20, buckets: [] },
+				{ id: "board-a-slow", name: "Account A delayed board", maxTasksPerList: 20, buckets: [] },
+			],
+		},
+		"account-b": {
+			user: { id: "account-b", email: "second@example.com", theme: "light" },
+			boards: [{ id: "board-b", name: "Account B board", maxTasksPerList: 20, buckets: [] }],
+		},
+	};
+	const server = http.createServer(async (request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		const account = accounts[authenticatedAccount];
+		if (url.pathname === "/api/v1/me") return json(response, account ? { authenticated: true, user: account.user } : { authenticated: false });
+		if (url.pathname === "/api/v1/auth/logout" && request.method === "POST") {
+			authenticatedAccount = "";
+			loggedOut = true;
+			await logoutResponse;
+			return json(response, { ok: true });
+		}
+		if (url.pathname === "/api/v1/auth/login" && request.method === "POST") {
+			loginRequests += 1;
+			authenticatedAccount = "account-b";
+			return json(response, { authenticated: true });
+		}
+		if (url.pathname === "/api/v1/boards") return json(response, { boards: account.boards, maxBoards: 5 });
+		if (url.pathname.startsWith("/api/v1/boards/")) {
+			if (loggedOut) boardRequestsAfterLogout.push(url.pathname);
+			if (url.pathname === "/api/v1/boards/board-a-slow") {
+				await slowBoardResponse;
+				return json(response, accounts["account-a"].boards[1]);
+			}
+			const board = account.boards.find(item => url.pathname === `/api/v1/boards/${item.id}`);
+			if (board) return json(response, board);
+			response.writeHead(404, { "Content-Type": "application/json" });
+			return response.end(JSON.stringify({ error: "board not found" }));
+		}
+		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	await page.goto(`http://127.0.0.1:${server.address().port}`);
+	await page.getByText("Account A private board", { exact: true }).first().waitFor();
+
+	await page.getByRole("button", { name: "Account A delayed board", exact: true }).click();
+	await page.getByRole("button", { name: "Sign out", exact: true }).click();
+	await page.getByText("Signing out…", { exact: true }).waitFor();
+	assert.equal(await page.getByRole("button", { name: "Log in", exact: true }).count(), 0);
+	releaseLogout();
+	await page.getByRole("button", { name: "Log in", exact: true }).first().click();
+	await page.getByLabel("Email", { exact: true }).fill("second@example.com");
+	await page.getByLabel("Password", { exact: true }).fill("account-b-password");
+	await page.getByRole("button", { name: "Sign in", exact: true }).click();
+	await page.getByText("Account B board", { exact: true }).first().waitFor();
+	assert.equal(loginRequests, 1);
+	const delayedResponse = page.waitForResponse(response => response.url().endsWith("/api/v1/boards/board-a-slow"));
+	releaseSlowBoard();
+	await delayedResponse;
+	await page.waitForTimeout(50);
+
+	assert.deepEqual(boardRequestsAfterLogout, ["/api/v1/boards/board-b"]);
+	assert.equal(await page.getByText("Account A private board", { exact: true }).count(), 0);
+	assert.equal(await page.getByText("Account A delayed board", { exact: true }).count(), 0);
+	assert.equal(await page.getByText("Account B board", { exact: true }).count(), 1);
+});
+
+test("concurrent login submissions create only one authenticated session", async t => {
+	let authenticated = false;
+	let loginRequests = 0;
+	let releaseLogin;
+	const loginResponse = new Promise(resolve => { releaseLogin = resolve; });
+	const defaultBoard = { id: "board-one", name: "Single session board", maxTasksPerList: 20, buckets: [] };
+	const server = http.createServer(async (request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		if (url.pathname === "/api/v1/me") return json(response, authenticated ? {
+			authenticated: true,
+			user: { id: "account-one", email: "person@example.com", theme: "light" },
+		} : { authenticated: false });
+		if (url.pathname === "/api/v1/auth/login" && request.method === "POST") {
+			loginRequests += 1;
+			await loginResponse;
+			authenticated = true;
+			return json(response, { authenticated: true });
+		}
+		if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
+		if (url.pathname === "/api/v1/boards") return json(response, { boards: [defaultBoard], maxBoards: 5 });
+		if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
+		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	await page.goto(`http://127.0.0.1:${server.address().port}`);
+	await page.getByRole("button", { name: "Log in", exact: true }).first().click();
+	await page.getByLabel("Email", { exact: true }).fill("person@example.com");
+	await page.getByLabel("Password", { exact: true }).fill("correct-password");
+	const submit = page.getByRole("button", { name: "Sign in", exact: true });
+	await submit.click();
+	await submit.click();
+	await page.waitForTimeout(50);
+	assert.equal(loginRequests, 1);
+	releaseLogin();
+	await page.getByText("Single session board", { exact: true }).first().waitFor();
+	assert.equal(loginRequests, 1);
+});
+
+test("failed logout keeps account data hidden and requires a retry", async t => {
+	let logoutAttempts = 0;
+	const defaultBoard = { id: "board-one", name: "Private account board", maxTasksPerList: 20, buckets: [] };
+	const server = http.createServer((request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		if (url.pathname === "/api/v1/me") return json(response, {
+			authenticated: true,
+			user: { id: "account-one", email: "person@example.com", theme: "light" },
+		});
+		if (url.pathname === "/api/v1/auth/logout" && request.method === "POST") {
+			logoutAttempts += 1;
+			if (logoutAttempts === 1) {
+				response.writeHead(503, { "Content-Type": "application/json" });
+				return response.end(JSON.stringify({ error: "temporarily unavailable" }));
+			}
+			return json(response, { ok: true });
+		}
+		if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
+		if (url.pathname === "/api/v1/boards") return json(response, { boards: [defaultBoard], maxBoards: 5 });
+		if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
+		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	await page.goto(`http://127.0.0.1:${server.address().port}`);
+	await page.getByText("Private account board", { exact: true }).first().waitFor();
+	await page.getByRole("button", { name: "Settings", exact: true }).click();
+	await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
+	await page.getByRole("button", { name: "Sign out", exact: true }).click();
+	await page.getByText("Sign out failed.", { exact: true }).waitFor();
+	await page.goBack();
+	await page.goForward();
+	await page.getByRole("button", { name: "Try again", exact: true }).waitFor();
+
+	assert.equal(await page.getByText("Private account board", { exact: true }).count(), 0);
+	assert.equal(await page.getByRole("button", { name: "Log in", exact: true }).count(), 0);
+	assert.equal(await page.getByRole("button", { name: "Sign in", exact: true }).count(), 0);
+	assert.equal(await page.getByText("Your session may still be active", { exact: false }).count(), 1);
+	await page.getByRole("button", { name: "Try again", exact: true }).click();
+	await page.getByRole("button", { name: "Log in", exact: true }).first().waitFor();
+	assert.equal(logoutAttempts, 2);
+});
+
 test("password reset request and confirmation work without exposing the token in the URL", async t => {
 	let resetRequest;
 	let resetConfirmation;

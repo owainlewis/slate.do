@@ -64,7 +64,7 @@ test("early access form shows every required field and password requirements", (
   assert.match(html, /name="password" type="password"[^>]*minlength="8"[^>]*maxlength="72"/);
   assert.match(html, /Use at least 8 characters, up to 72 bytes/);
   assert.match(html, /name="inviteCode" type="password"/);
-  assert.match(source, /api\.post\("\/api\/v1\/auth\/register"/);
+  assert.match(source, /establishAuthenticatedSession\("\/api\/v1\/auth\/register"/);
   assert.doesNotMatch(source, /early-access\?[^"'`]*/);
 });
 
@@ -331,6 +331,228 @@ test("plain-text API errors remain readable", () => {
     error => error.message === "method not allowed",
   );
   assert.equal(app.decodeResponseBody('{"ok":true}', true).ok, true);
+});
+
+test("switching accounts clears old account data and loads only the new account's board", async () => {
+  const requestedPaths = [];
+  app.requestedPaths = requestedPaths;
+  vm.runInContext(`
+    state.me = { id: "account-a", theme: "dark" };
+    state.boards = [{ id: "board-a", name: "Account A board" }];
+    state.board = { id: "board-a", name: "Account A board", buckets: [{ id: "list-a", tasks: [{ id: "secret-a" }] }] };
+    state.selectedTask = { id: "secret-a" };
+    state.settings = true;
+    state.tokens = [{ id: "token-a" }];
+    state.newToken = "secret-token-a";
+    state.goalErrors = { "list-a": "old error" };
+    state.flowListId = "list-a";
+    state.weekStart = "2026-07-20";
+    api.get = async path => {
+      requestedPaths.push(path);
+      if (path === "/api/v1/boards") return { boards: [{ id: "board-b", name: "Account B board" }], maxBoards: 5 };
+      if (path === "/api/v1/boards/board-b") return { id: "board-b", name: "Account B board", buckets: [] };
+      throw new Error("unexpected request for " + path);
+    };
+  `, app);
+
+  app.beginAuthenticatedSession({
+    id: "account-b",
+    theme: "light",
+    entitlement: { limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } },
+  });
+  await app.loadBoards();
+
+  assert.deepEqual(requestedPaths, ["/api/v1/boards", "/api/v1/boards/board-b"]);
+  assert.deepEqual(
+    JSON.parse(vm.runInContext(`JSON.stringify({
+      me: state.me.id,
+      boards: state.boards.map(board => board.id),
+      board: state.board.id,
+      selectedTask: state.selectedTask,
+      settings: state.settings,
+      tokens: state.tokens,
+      newToken: state.newToken,
+      goalErrors: state.goalErrors,
+      flowListId: state.flowListId,
+      weekStart: state.weekStart,
+    })`, app)),
+    {
+      me: "account-b",
+      boards: ["board-b"],
+      board: "board-b",
+      selectedTask: null,
+      settings: false,
+      tokens: [],
+      newToken: "",
+      goalErrors: {},
+      flowListId: "",
+      weekStart: "",
+    },
+  );
+});
+
+test("a delayed board response from an old account cannot overwrite the new account", async () => {
+  let releaseOldBoard;
+  app.oldBoardResponse = new Promise(resolve => { releaseOldBoard = resolve; });
+  app.releaseOldBoard = releaseOldBoard;
+  vm.runInContext(`
+    authVersion = 20;
+    state.me = { id: "account-a", theme: "dark" };
+    state.boards = [{ id: "board-a", name: "Account A board" }];
+    state.board = { id: "board-a", name: "Account A board", buckets: [] };
+    api.get = async path => {
+      if (path === "/api/v1/boards/board-a") {
+        await oldBoardResponse;
+        return { id: "board-a", name: "Account A private board", buckets: [] };
+      }
+      if (path === "/api/v1/boards") return { boards: [{ id: "board-b", name: "Account B board" }], maxBoards: 5 };
+      if (path === "/api/v1/boards/board-b") return { id: "board-b", name: "Account B board", buckets: [] };
+      throw new Error("unexpected request for " + path);
+    };
+  `, app);
+
+  const oldLoad = app.loadBoard("board-a");
+  app.beginAuthenticatedSession({ id: "account-b", theme: "light" });
+  await app.loadBoards();
+  app.releaseOldBoard();
+  assert.equal(await oldLoad, false);
+
+  assert.equal(vm.runInContext("state.me.id", app), "account-b");
+  assert.equal(vm.runInContext("state.board.id", app), "board-b");
+});
+
+test("delayed token metadata from an old account is discarded", async () => {
+  let releaseOldTokens;
+  app.oldTokensResponse = new Promise(resolve => { releaseOldTokens = resolve; });
+  app.releaseOldTokens = releaseOldTokens;
+  vm.runInContext(`
+    authVersion = 30;
+    state.me = { id: "account-a" };
+    state.tokens = [];
+    api.get = async path => {
+      if (path !== "/api/v1/api-tokens") throw new Error("unexpected request for " + path);
+      await oldTokensResponse;
+      return { tokens: [{ id: "token-a", name: "Account A agent" }] };
+    };
+  `, app);
+
+  const oldLoad = app.loadTokens();
+  app.beginAuthenticatedSession({ id: "account-b", theme: "light" });
+  app.releaseOldTokens();
+
+  assert.equal(await oldLoad, false);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.tokens)", app)), []);
+});
+
+test("a delayed raw API token from an old account is discarded", async () => {
+  let releaseOldTokenCreation;
+  app.oldTokenCreationResponse = new Promise(resolve => { releaseOldTokenCreation = resolve; });
+  app.releaseOldTokenCreation = releaseOldTokenCreation;
+  vm.runInContext(`
+    authVersion = 40;
+    state.me = { id: "account-a" };
+    state.newToken = "";
+    api.post = async path => {
+      if (path !== "/api/v1/api-tokens") throw new Error("unexpected request for " + path);
+      await oldTokenCreationResponse;
+      return { token: "slate_account_a_secret" };
+    };
+  `, app);
+
+  const oldCreation = app.createAPIToken("Account A agent");
+  app.beginAuthenticatedSession({ id: "account-b", theme: "light" });
+  app.releaseOldTokenCreation();
+
+  assert.equal(await oldCreation, false);
+  assert.equal(vm.runInContext("state.newToken", app), "");
+});
+
+test("a delayed board deletion from an old account cannot create data in the new account", async () => {
+  let releaseOldDelete;
+  const posts = [];
+  app.oldDeleteResponse = new Promise(resolve => { releaseOldDelete = resolve; });
+  app.releaseOldDelete = releaseOldDelete;
+  app.boardDeletePosts = posts;
+  app.confirm = () => true;
+  vm.runInContext(`
+    authVersion = 50;
+    state.me = { id: "account-a" };
+    state.boards = [{ id: "board-a", name: "Account A board" }];
+    state.board = { id: "board-a", name: "Account A board", buckets: [] };
+    api.del = async path => {
+      if (path !== "/api/v1/boards/board-a") throw new Error("unexpected delete for " + path);
+      await oldDeleteResponse;
+      return { ok: true };
+    };
+    api.post = async (path, input) => {
+      boardDeletePosts.push({ path, input });
+      return { id: "unexpected-board" };
+    };
+  `, app);
+
+  const oldDelete = app.deleteBoard("board-a");
+  app.beginAuthenticatedSession({ id: "account-b", theme: "light" });
+  app.releaseOldDelete();
+  await oldDelete;
+
+  assert.deepEqual(posts, []);
+  assert.equal(vm.runInContext("state.me.id", app), "account-b");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.boards)", app)), []);
+  assert.equal(vm.runInContext("state.board", app), null);
+});
+
+test("API responses from an old session cannot resume mutation continuations", async () => {
+  let releaseOldMutation;
+  let continued = false;
+  app.oldMutationResponse = new Promise(resolve => { releaseOldMutation = resolve; });
+  app.releaseOldMutation = releaseOldMutation;
+  app.fetch = async () => {
+    await app.oldMutationResponse;
+    return { ok: true, text: async () => '{"ok":true}' };
+  };
+  vm.runInContext(`authVersion = 60; state.me = { id: "account-a" };`, app);
+
+  const oldMutation = vm.runInContext(`api.request("/api/v1/tasks/task-a", { method: "PATCH", body: '{"done":true}' })`, app).then(() => { continued = true; });
+  app.beginAuthenticatedSession({ id: "account-b", theme: "light" });
+  app.releaseOldMutation();
+  await Promise.race([oldMutation, new Promise(resolve => setTimeout(resolve, 20))]);
+
+  assert.equal(continued, false);
+});
+
+test("a stale theme request cannot block theme saves in the new session", async () => {
+  let releaseOldTheme;
+  let markOldThemeStarted;
+  const fetchCalls = [];
+  app.oldThemeResponse = new Promise(resolve => { releaseOldTheme = resolve; });
+  app.oldThemeStarted = new Promise(resolve => { markOldThemeStarted = resolve; });
+  app.releaseOldTheme = releaseOldTheme;
+  app.themeFetchCalls = fetchCalls;
+  app.fetch = async (path, options) => {
+    fetchCalls.push({ path, body: options.body });
+    if (fetchCalls.length === 1) {
+      markOldThemeStarted();
+      await app.oldThemeResponse;
+    }
+    const theme = JSON.parse(options.body).theme;
+    return { ok: true, text: async () => JSON.stringify({ id: theme === "dark" ? "account-a" : "account-b", theme }) };
+  };
+  vm.runInContext(`
+    api.patch = (path, input) => api.request(path, { method: "PATCH", body: JSON.stringify(input) });
+    render = () => {};
+    authVersion = 70;
+    beginAuthenticatedSession({ id: "account-a", theme: "light" });
+  `, app);
+
+  app.updateTheme("dark");
+  await app.oldThemeStarted;
+  app.beginAuthenticatedSession({ id: "account-b", theme: "dark" });
+  app.releaseOldTheme();
+  await app.updateTheme("light");
+
+  assert.equal(fetchCalls.length, 2);
+  assert.equal(vm.runInContext("state.me.id", app), "account-b");
+  assert.equal(vm.runInContext("state.theme", app), "light");
 });
 
 test("one theme holds when switching between boards", () => {
