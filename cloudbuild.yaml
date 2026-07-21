@@ -47,22 +47,32 @@ steps:
             break
           fi
 
-          if lock_details="$$(gcloud storage objects describe "$$lock_uri" --format='value(generation)' 2>/dev/null)"; then
-            owner="$$(gcloud storage cat "$$lock_uri" 2>/dev/null || true)"
-            owner_status="$$(gcloud builds describe "$$owner" --project "$PROJECT_ID" --format='value(status)' 2>/dev/null || true)"
-            case "$$owner_status" in
-              QUEUED|PENDING|WORKING)
-                echo "Waiting for production deployment lock held by build $$owner"
-                ;;
-              SUCCESS|FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
-                echo "Removing abandoned production deployment lock from build $$owner"
-                gcloud storage rm "$$lock_uri" --if-generation-match="$$lock_details" --quiet || true
-                ;;
-              *)
-                echo "Could not verify production deployment lock owner $$owner; waiting safely" >&2
-                ;;
-            esac
+          if ! lock_details="$$(gcloud storage objects describe "$$lock_uri" --format='value(generation)' 2>/dev/null)"; then
+            if printf '%s' "$BUILD_ID" | gcloud storage cp - "$$lock_uri" --if-generation-match=0 --quiet 2>/tmp/slate-lock-error; then
+              lock_generation="$$(gcloud storage objects describe "$$lock_uri" --format='value(generation)')"
+              break
+            fi
+            if ! lock_details="$$(gcloud storage objects describe "$$lock_uri" --format='value(generation)' 2>/dev/null)"; then
+              echo "Unable to create or inspect the production deployment lock" >&2
+              grep . /tmp/slate-lock-error >&2 || true
+              exit 1
+            fi
           fi
+
+          owner="$$(gcloud storage cat "$$lock_uri" 2>/dev/null || true)"
+          owner_status="$$(gcloud builds describe "$$owner" --project "$PROJECT_ID" --format='value(status)' 2>/dev/null || true)"
+          case "$$owner_status" in
+            QUEUED|PENDING|WORKING)
+              echo "Waiting for production deployment lock held by build $$owner"
+              ;;
+            SUCCESS|FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
+              echo "Removing abandoned production deployment lock from build $$owner"
+              gcloud storage rm "$$lock_uri" --if-generation-match="$$lock_details" --quiet || true
+              ;;
+            *)
+              echo "Could not verify production deployment lock owner $$owner; waiting safely" >&2
+              ;;
+          esac
           sleep 10
         done
 

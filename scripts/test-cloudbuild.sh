@@ -40,6 +40,7 @@ assert_contains cloudbuild.yaml 'slate-migrate-$SHORT_SHA'
 assert_contains cloudbuild.yaml '_REGION: europe-west1'
 assert_contains cloudbuild.yaml 'slate.lock'
 assert_contains cloudbuild.yaml '--if-generation-match=0'
+assert_contains cloudbuild.yaml 'Unable to create or inspect the production deployment lock'
 assert_contains cloudbuild.yaml 'Waiting for production deployment lock'
 assert_contains cloudbuild.yaml 'Could not verify production deployment lock owner'
 assert_contains cloudbuild.yaml 'SUCCESS|FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED'
@@ -50,3 +51,9 @@ assert_contains cloudbuild.yaml 'image_summary.fully_qualified_digest'
 assert_contains cloudbuild.yaml 'go test ./...'
 assert_not_contains cloudbuild.yaml '-lc'
 assert_contains docs/deploy.md 'roles/cloudbuild.builds.viewer'
+
+lock_attempts="$(grep -c -- '--if-generation-match=0' cloudbuild.yaml)"
+if [ "$lock_attempts" -ne 2 ]; then
+  printf 'cloudbuild.yaml must attempt lock creation twice, found %s attempts\n' "$lock_attempts" >&2
+  exit 1
+fi
