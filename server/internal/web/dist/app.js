@@ -22,12 +22,27 @@ function icon(name, cls = "") {
 
 const api = {
   async request(path, options = {}) {
-    const res = await fetch(path, {
-      credentials: "include",
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-      ...options,
-    });
-    const text = await res.text();
+    const sessionVersion = authVersion;
+    let res;
+    try {
+      res = await fetch(path, {
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options,
+      });
+    } catch (err) {
+      if (sessionVersion !== authVersion) return new Promise(() => {});
+      throw err;
+    }
+    if (sessionVersion !== authVersion) return new Promise(() => {});
+    let text;
+    try {
+      text = await res.text();
+    } catch (err) {
+      if (sessionVersion !== authVersion) return new Promise(() => {});
+      throw err;
+    }
+    if (sessionVersion !== authVersion) return new Promise(() => {});
     const data = decodeResponseBody(text, res.ok);
     if (!res.ok) throw new Error(data.error || "Request failed");
     return data;
@@ -57,6 +72,8 @@ const goalSaveChains = new Map();
 let themeSaveChain = Promise.resolve();
 let themeChangeVersion = 0;
 let authVersion = 0;
+let logoutRequest = null;
+let authenticationRequest = null;
 
 const state = {
   me: null,
@@ -97,18 +114,13 @@ const FLOW_STATES = [
 async function boot() {
   try {
     const me = await api.get("/api/v1/me");
-    state.me = me.authenticated ? me.user : null;
+    if (me.authenticated) beginAuthenticatedSession(me.user);
     if (location.pathname === "/reset-password") {
       state.resetToken = new URLSearchParams(location.hash.slice(1)).get("token") || "";
       history.replaceState({}, "", "/reset-password");
       state.view = "reset-password";
     } else if (state.me) {
-      state.maxBoards = proLimits().boards;
-      state.maxListsPerBoard = proLimits().listsPerBoard;
-      authVersion += 1;
-      state.theme = themeFor(state.me.theme);
-      await loadBoards();
-      state.view = "app";
+      if (await loadBoards()) state.view = "app";
 	} else if (location.pathname === "/early-access") {
 	  state.view = "early-access";
     }
@@ -120,30 +132,118 @@ async function boot() {
 }
 
 async function loadBoards(selectId) {
+  const sessionVersion = authVersion;
   const data = await api.get("/api/v1/boards");
+  if (sessionVersion !== authVersion) return false;
   state.boards = data.boards;
   state.maxBoards = data.maxBoards || proLimits().boards;
-  const nextId = selectId || state.board?.id || state.boards[0]?.id;
+  const requestedId = selectId || state.board?.id;
+  const nextId = state.boards.some(board => board.id === requestedId) ? requestedId : state.boards[0]?.id;
   if (nextId) {
-    await loadBoard(nextId);
+    if (!await loadBoard(nextId, sessionVersion)) return false;
   } else {
     state.board = null;
   }
+  return true;
 }
 
-async function loadBoard(id) {
-  state.board = await api.get(`/api/v1/boards/${id}`);
-  const staleNames = (state.board.buckets || []).filter(list => list.name === "New bucket");
-  if (staleNames.length) {
-    await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
-    state.board = await api.get(`/api/v1/boards/${id}`);
+function resetAuthenticatedState() {
+  goalSaveChains.clear();
+  themeSaveChain = Promise.resolve();
+  themeChangeVersion += 1;
+  state.me = null;
+  state.boards = [];
+  state.maxBoards = DEFAULT_MAX_BOARDS;
+  state.maxListsPerBoard = DEFAULT_MAX_LISTS_PER_BOARD;
+  state.board = null;
+  state.selectedTask = null;
+  state.settings = false;
+  state.error = "";
+  state.notice = "";
+  state.goalErrors = {};
+  state.newToken = "";
+  state.tokens = [];
+  state.boardMode = "lists";
+  state.flowListId = "";
+  state.weekStart = "";
+  state.theme = "";
+}
+
+function beginAuthenticatedSession(user) {
+  authVersion += 1;
+  resetAuthenticatedState();
+  state.me = user;
+  state.maxBoards = proLimits().boards;
+  state.maxListsPerBoard = proLimits().listsPerBoard;
+  state.theme = themeFor(user.theme);
+}
+
+async function establishAuthenticatedSession(path, input) {
+  if (authenticationRequest) return false;
+  const request = (async () => {
+    if (logoutRequest) await logoutRequest;
+    await api.post(path, input);
+    const me = await api.get("/api/v1/me");
+    beginAuthenticatedSession(me.user);
+    return loadBoards();
+  })();
+  authenticationRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (authenticationRequest === request) authenticationRequest = null;
   }
-  if (!(state.board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
+}
+
+async function logout() {
+  if (logoutRequest) return logoutRequest;
+  authVersion += 1;
+  resetAuthenticatedState();
+  state.view = "logging-out";
+  if (location.hash === "#settings") history.replaceState({}, "", location.pathname);
+  render();
+  const request = api.post("/api/v1/auth/logout").then(() => {
+    state.view = "home";
+    render();
+  }).catch(() => {
+    state.error = "Sign out failed. Your session may still be active. Try again.";
+    state.view = "logout-error";
+    render();
+  }).finally(() => {
+    if (logoutRequest === request) logoutRequest = null;
+  });
+  logoutRequest = request;
+  return request;
+}
+
+async function loadBoard(id, sessionVersion = authVersion) {
+  let board = await api.get(`/api/v1/boards/${id}`);
+  if (sessionVersion !== authVersion) return false;
+  const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
+  if (staleNames.length) {
+    try {
+      await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
+      if (sessionVersion !== authVersion) return false;
+      board = await api.get(`/api/v1/boards/${id}`);
+    } catch (err) {
+      if (sessionVersion !== authVersion) return false;
+      throw err;
+    }
+    if (sessionVersion !== authVersion) return false;
+  }
+  state.board = board;
+  if (!(board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
   state.selectedTask = state.selectedTask ? findTask(state.selectedTask.id) : null;
+  return true;
 }
 
 function render() {
   const root = document.querySelector("#app");
+	if (state.view === "logging-out" || state.view === "logout-error") {
+	  root.innerHTML = logoutStatusHTML();
+	  bindLogoutStatus();
+	  return;
+	}
 	if (state.view === "forgot-password" && !state.me) {
 	  root.innerHTML = forgotPasswordHTML();
 	  bindForgotPassword();
@@ -176,6 +276,23 @@ function render() {
   }
   root.innerHTML = appHTML();
   bindApp();
+}
+
+function logoutStatusHTML() {
+  const failed = state.view === "logout-error";
+  return `
+    <section class="login">
+      <div>
+        <div class="brand">slate<span>.do</span></div>
+        <h1>${failed ? "Sign out failed." : "Signing out…"}</h1>
+        <p>${failed ? escapeHTML(state.error) : "Clearing your session."}</p>
+        ${failed ? '<button class="primary" id="retry-logout" type="button">Try again</button>' : ""}
+      </div>
+    </section>`;
+}
+
+function bindLogoutStatus() {
+  document.querySelector("#retry-logout")?.addEventListener("click", logout);
 }
 
 function earlyAccessHTML() {
@@ -682,13 +799,12 @@ function bindLogin() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      await api.post("/api/v1/auth/login", { email: form.get("email"), password: form.get("password") });
+      const authenticated = await establishAuthenticatedSession("/api/v1/auth/login", {
+        email: form.get("email"),
+        password: form.get("password"),
+      });
+      if (!authenticated) return;
       state.error = "";
-      const me = await api.get("/api/v1/me");
-      authVersion += 1;
-      state.me = me.user;
-      state.theme = themeFor(state.me.theme);
-      await loadBoards();
       state.view = "app";
     } catch (err) {
       state.error = err.message;
@@ -733,9 +849,8 @@ function bindResetPassword() {
 	try {
 	  await api.post("/api/v1/auth/password-reset/confirm", { token: state.resetToken, password: form.get("password") });
 	  authVersion += 1;
-	  state.me = null;
+	  resetAuthenticatedState();
 	  state.resetToken = "";
-	  state.error = "";
 	  state.notice = "Password reset. Sign in with your new password.";
 	  history.replaceState({}, "", "/");
 	  state.view = "login";
@@ -756,17 +871,13 @@ function bindEarlyAccess() {
 	event.preventDefault();
 	const form = new FormData(event.currentTarget);
 	try {
-	  await api.post("/api/v1/auth/register", {
+	  const authenticated = await establishAuthenticatedSession("/api/v1/auth/register", {
 		email: form.get("email"),
 		password: form.get("password"),
 		inviteCode: form.get("inviteCode"),
 	  });
+	  if (!authenticated) return;
 	  state.error = "";
-	  const me = await api.get("/api/v1/me");
-	  authVersion += 1;
-	  state.me = me.user;
-	  state.theme = themeFor(state.me.theme);
-	  await loadBoards();
 	  history.replaceState({}, "", "/");
 	  state.view = "app";
 	} catch (err) {
@@ -820,7 +931,7 @@ function bindApp() {
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = async () => { await loadBoard(el.dataset.board); render(); });
   document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
   document.querySelector("#settings").onclick = async () => { await openSettings(true); };
-  document.querySelector("#logout").onclick = async () => { authVersion += 1; await api.post("/api/v1/auth/logout"); state.me = null; state.view = "home"; render(); };
+  document.querySelector("#logout").onclick = logout;
   document.querySelector("#new-board").onclick = async () => {
     if (state.boards.length >= state.maxBoards) return;
     let board;
@@ -864,18 +975,24 @@ function bindApp() {
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
     const id = el.dataset.bucketGoal;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
     const list = state.board.buckets.find(item => item.id === el.dataset.bucketGoal);
     if (list) list.goal = goal;
     delete state.goalErrors[id];
     clearTimeout(el.goalSaveTimer);
     el.goalSaveTimer = setTimeout(() => {
+      if (!sessionIsCurrent(sessionVersion, userID)) return;
       const previous = goalSaveChains.get(id) || Promise.resolve();
-      const next = previous.catch(() => {}).then(() => api.patch(`/api/v1/buckets/${id}`, { goal }));
+      const next = previous.catch(() => {}).then(() => {
+        if (!sessionIsCurrent(sessionVersion, userID)) return;
+        return api.patch(`/api/v1/buckets/${id}`, { goal });
+      });
       goalSaveChains.set(id, next);
       next.then(() => {
-        if (goalSaveChains.get(id) === next) delete state.goalErrors[id];
+        if (sessionIsCurrent(sessionVersion, userID) && goalSaveChains.get(id) === next) delete state.goalErrors[id];
       }).catch(err => {
-        if (goalSaveChains.get(id) === next) {
+        if (sessionIsCurrent(sessionVersion, userID) && goalSaveChains.get(id) === next) {
           state.goalErrors[id] = err.message;
           render();
         }
@@ -904,16 +1021,24 @@ function bindApp() {
 async function deleteBoard(id) {
   const board = state.boards.find(item => item.id === id);
   if (!board || !confirm(`Delete "${board.name}" and all its lists and items?`)) return;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
   await api.del(`/api/v1/boards/${id}`);
+  if (!sessionIsCurrent(sessionVersion, userID)) return;
   state.selectedTask = null;
   state.board = null;
-  await loadBoards();
+  if (!await loadBoards()) return;
+  if (!sessionIsCurrent(sessionVersion, userID)) return;
   if (!state.board) {
     const next = await api.post("/api/v1/boards", { name: "Today", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
     await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Inbox", isInbox: true });
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
     await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Focus" });
-    await loadBoards(next.id);
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    if (!await loadBoards(next.id)) return;
   }
+  if (!sessionIsCurrent(sessionVersion, userID)) return;
   render();
 }
 
@@ -1016,7 +1141,7 @@ function bindDetail() {
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#back").onclick = closeSettings;
-  document.querySelector("#settings-logout").onclick = async () => { authVersion += 1; await api.post("/api/v1/auth/logout"); state.me = null; state.settings = false; state.view = "home"; render(); };
+  document.querySelector("#settings-logout").onclick = logout;
   document.querySelector("#settings-list-limit")?.addEventListener("change", async e => {
     const update = listLimitUpdate(state.board.id, e.target.value);
     e.target.value = update.next;
@@ -1040,18 +1165,24 @@ async function bindSettings() {
   document.querySelector("#token-form").addEventListener("submit", async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const data = await api.post("/api/v1/api-tokens", { name: form.get("name") });
-    state.newToken = data.token;
-    await loadTokens();
-    render();
+    if (await createAPIToken(form.get("name"))) render();
   });
-  document.querySelectorAll("[data-revoke]").forEach(el => el.onclick = async () => { await api.del(`/api/v1/api-tokens/${el.dataset.revoke}`); await loadTokens(); render(); });
+  document.querySelectorAll("[data-revoke]").forEach(el => el.onclick = async () => {
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    await api.del(`/api/v1/api-tokens/${el.dataset.revoke}`);
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    if (await loadTokens(sessionVersion, userID)) render();
+  });
 }
 
 async function openSettings(pushHistory) {
+  if (!state.me || state.view === "logging-out" || state.view === "logout-error") return;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  if (!await loadTokens(sessionVersion, userID)) return;
   state.settings = true;
   state.view = "app";
-  await loadTokens();
   if (pushHistory && location.hash !== "#settings") history.pushState({ settings: true }, "", "#settings");
   render();
 }
@@ -1322,9 +1453,24 @@ async function dropBucket(bucketId, index) {
   await reload();
 }
 
-async function loadTokens() {
+function sessionIsCurrent(sessionVersion, userID) {
+  return sessionVersion === authVersion && state.me?.id === userID;
+}
+
+async function loadTokens(sessionVersion = authVersion, userID = state.me?.id) {
   const data = await api.get("/api/v1/api-tokens");
+  if (!sessionIsCurrent(sessionVersion, userID)) return false;
   state.tokens = data.tokens;
+  return true;
+}
+
+async function createAPIToken(name) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const data = await api.post("/api/v1/api-tokens", { name });
+  if (!sessionIsCurrent(sessionVersion, userID)) return false;
+  state.newToken = data.token;
+  return loadTokens(sessionVersion, userID);
 }
 
 async function reload() {
@@ -1494,6 +1640,11 @@ function escapeAttr(value) {
 }
 
 window.addEventListener("popstate", async () => {
+  if (state.view === "logging-out" || state.view === "logout-error") {
+    if (location.hash === "#settings") history.replaceState({}, "", location.pathname);
+    render();
+    return;
+  }
   if (location.hash === "#settings") {
     await openSettings(false);
     return;
