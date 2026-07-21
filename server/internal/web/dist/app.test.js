@@ -318,6 +318,26 @@ test("detail presents a focused, accessible editor with clear actions", () => {
   assert.match(html, /Home list/);
 });
 
+test("detail offers a board, list, and position move flow", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board", name: "Current" }, { id: "other", name: "Other" }];
+    state.board = { id: "board", name: "Current", buckets: [{ id: "list", name: "Inbox", openCount: 1, limitCount: 20, tasks: [{ id: "task", bucketId: "list", title: "Move me", kind: "action", status: "queued", done: false }] }] };
+  `, app);
+  const task = vm.runInContext("state.board.buckets[0].tasks[0]", app);
+  const html = app.detailHTML(task);
+
+  assert.match(html, /id="open-move"[^>]*>[^<]*<span>Current \/ Inbox<\/span><b>Move…<\/b>/);
+  assert.match(html, /id="move-board"/);
+  assert.match(html, /id="move-list"/);
+  assert.match(html, /id="move-position"/);
+  assert.match(html, /id="move-item"[^>]*>Move item<\/button>/);
+
+  const fullBoard = vm.runInContext(`({ id: "full", buckets: [{ id: "full-list", name: "Full", openCount: 20, limitCount: 20, tasks: [] }] })`, app);
+  assert.match(app.moveListOptionsHTML(fullBoard, task), /value="full-list"[^>]*disabled[^>]*>Full \(20\/20 full\)<\/option>/);
+  const reference = vm.runInContext(`({ ...state.board.buckets[0].tasks[0], kind: "reference" })`, app);
+  assert.doesNotMatch(app.moveListOptionsHTML(fullBoard, reference), /disabled/);
+});
+
 test("footer reports live Working and Review counts", () => {
   const html = app.footerHTML(board, false);
   assert.match(html, /1 working/);

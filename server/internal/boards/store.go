@@ -518,6 +518,123 @@ func (s *Store) UpdateTaskForHuman(ctx context.Context, userID string, id string
 	return s.updateTask(ctx, userID, id, input, true)
 }
 
+func (s *Store) MoveTask(ctx context.Context, userID string, id string, input MoveTaskInput) (Task, error) {
+	bucketID := clean(input.BucketID)
+	if bucketID == "" {
+		return Task{}, fmt.Errorf("%w: destination list is required", ErrInvalidData)
+	}
+	if input.Position == nil || *input.Position < 0 {
+		return Task{}, fmt.Errorf("%w: position must be zero or greater", ErrInvalidData)
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Task{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	// A user's moves are serialized so two cross-list moves cannot interleave
+	// their source and destination order rewrites.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":task-move"); err != nil {
+		return Task{}, err
+	}
+	current, err := lockedTask(ctx, tx, userID, id)
+	if err != nil {
+		return Task{}, err
+	}
+	destination, err := lockedBucket(ctx, tx, userID, bucketID)
+	if err != nil {
+		return Task{}, err
+	}
+	if current.BucketID != destination.ID && current.Kind == KindAction && !current.Done {
+		if err := checkTaskCapacity(ctx, tx, destination, current.ID, false); err != nil {
+			return Task{}, err
+		}
+	}
+
+	destinationIDs, err := orderedTaskIDs(ctx, tx, destination.ID, current.ID)
+	if err != nil {
+		return Task{}, err
+	}
+	if *input.Position > len(destinationIDs) {
+		return Task{}, fmt.Errorf("%w: position is outside the destination list", ErrInvalidData)
+	}
+	destinationIDs = insertID(destinationIDs, current.ID, *input.Position)
+
+	if current.BucketID != destination.ID {
+		sourceIDs, err := orderedTaskIDs(ctx, tx, current.BucketID, current.ID)
+		if err != nil {
+			return Task{}, err
+		}
+		if err := updateTaskLocation(ctx, tx, current.ID, destination, *input.Position); err != nil {
+			return Task{}, err
+		}
+		if err := writeTaskOrder(ctx, tx, sourceIDs); err != nil {
+			return Task{}, err
+		}
+	}
+	if err := writeTaskOrder(ctx, tx, destinationIDs); err != nil {
+		return Task{}, err
+	}
+
+	moved, err := taskByID(ctx, tx, current.ID)
+	if err != nil {
+		return Task{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Task{}, err
+	}
+	return moved, nil
+}
+
+func orderedTaskIDs(ctx context.Context, tx pgx.Tx, bucketID string, exceptID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id::text
+		FROM tasks
+		WHERE bucket_id = $1 AND id <> $2
+		ORDER BY sort_order, created_at
+		FOR UPDATE
+	`, bucketID, exceptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func insertID(ids []string, id string, position int) []string {
+	ids = append(ids, "")
+	copy(ids[position+1:], ids[position:])
+	ids[position] = id
+	return ids
+}
+
+func updateTaskLocation(ctx context.Context, tx pgx.Tx, taskID string, destination Bucket, position int) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET board_id = $2, bucket_id = $3, sort_order = $4, updated_at = now()
+		WHERE id = $1
+	`, taskID, destination.BoardID, destination.ID, position)
+	return err
+}
+
+func writeTaskOrder(ctx context.Context, tx pgx.Tx, ids []string) error {
+	for position, id := range ids {
+		if _, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1, updated_at = now() WHERE id = $2", position, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) updateTask(ctx context.Context, userID string, id string, input UpdateTaskInput, allowWorking bool) (Task, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {

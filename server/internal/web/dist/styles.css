@@ -661,6 +661,30 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
 .field textarea { resize: vertical; min-height: 86px; }
+.location-button {
+  width: 100%;
+  min-height: 37px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--ink);
+  text-align: left;
+}
+.location-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.location-button b { color: var(--accent); font-size: 12px; }
+.location-button:hover { border-color: var(--accent); }
+.move-panel { margin-top: 14px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: color-mix(in srgb, var(--card) 94%, var(--panel)); }
+.move-panel[hidden] { display: none; }
+.move-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.move-panel-head span { color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+.move-panel-head h3 { margin: 2px 0 0; font-size: 16px; }
+.move-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.move-panel-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
 .detail-error { margin: 10px 0 0; min-height: 18px; }
 .detail-actions {
   display: flex;
@@ -675,6 +699,10 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .toggles { display: flex; gap: 10px; }
 .toggles label { display: flex; align-items: center; gap: 6px; color: var(--soft); font-weight: 600; }
 .toggles input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+.status-notice { margin: 0 24px; padding: 9px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 8%, var(--card)); color: var(--soft); font-size: 12px; }
+.status-notice span { flex: 1; }
+.status-notice button { border: 0; background: transparent; color: var(--accent); font-weight: 650; }
+.status-notice #dismiss-notice { width: 24px; height: 24px; padding: 4px; color: var(--faint); }
 
 /* ---------- Login ---------- */
 .login {
@@ -1374,6 +1402,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .detail-title { font-size: 22px; }
   .detail-description { min-height: 130px; }
   .detail-properties { grid-template-columns: 1fr; gap: 12px; }
+  .move-fields { grid-template-columns: 1fr; }
   .detail-actions { padding: 12px; }
   .detail-actions .danger { padding-left: 6px; padding-right: 6px; }
 }
