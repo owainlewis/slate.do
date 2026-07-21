@@ -8,6 +8,7 @@ const filename = path.join(__dirname, "app.js");
 const source = fs.readFileSync(filename, "utf8").replace(/\nboot\(\);\s*$/, "");
 const styles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
 const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+const cliGuide = fs.readFileSync(path.join(__dirname, "cli.html"), "utf8");
 const favicon = fs.readFileSync(path.join(__dirname, "favicon.svg"), "utf8");
 const app = { console, Date, window: { addEventListener() {} } };
 vm.createContext(app);
@@ -41,6 +42,19 @@ test("theme palettes use neutral surfaces and an indigo accent", () => {
 test("brand wordmark has no gap before the domain", () => {
   assert.match(styles, /\.brand \{[^}]*gap: 0;/);
   assert.match(styles, /\.brand::before \{[^}]*margin-right: 8px;/);
+});
+
+test("the landing page links to the CLI guide", () => {
+  const html = app.landingHTML();
+  assert.match(html, /href="\/cli">CLI guide<\/a>/);
+});
+
+test("the CLI guide covers installation, authentication, and agent workflows", () => {
+  assert.match(cliGuide, /curl -fsSL https:\/\/raw\.githubusercontent\.com\/owainlewis\/slate\.do\/main\/install\.sh \| sh/);
+  assert.match(cliGuide, /export SLATE_API_TOKEN=slate_\.\.\./);
+  assert.match(cliGuide, /slate tasks claim &lt;task-id&gt;/);
+  assert.match(cliGuide, /CLAUDE\.md/);
+  assert.match(cliGuide, /AGENTS\.md/);
 });
 
 test("early access form shows every required field and password requirements", () => {

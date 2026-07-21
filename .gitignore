@@ -6,4 +6,5 @@ dist/
 server/internal/web/dist/*
 !server/internal/web/dist/app.test.js
 !server/internal/web/dist/editor.browser.test.js
+!server/internal/web/dist/cli.html
 build/

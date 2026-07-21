@@ -36,6 +36,16 @@ func StaticHandler(content fs.FS) http.Handler {
 			files.ServeHTTP(w, r)
 			return
 		}
+		if path.Ext(name) == "" {
+			htmlName := name + ".html"
+			if ok, err := exists(content, htmlName); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			} else if ok {
+				serveFile(w, r, content, htmlName)
+				return
+			}
+		}
 		if path.Ext(name) != "" {
 			http.NotFound(w, r)
 			return

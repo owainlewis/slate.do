@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install the Slate CLI</title>
+  <meta name="description" content="Install the Slate CLI and connect Claude Code, Codex, and other coding agents to your Slate plan.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="docs-body">
+  <section class="landing docs-page">
+    <nav class="landing-nav">
+      <a class="brand docs-brand" href="/">slate<span>.do</span></a>
+      <div class="docs-nav-actions">
+        <a href="https://github.com/owainlewis/slate.do" rel="noreferrer">GitHub</a>
+        <a class="nav-action" href="/">Open Slate</a>
+      </div>
+    </nav>
+
+    <main class="docs-shell">
+      <aside class="docs-toc" aria-label="On this page">
+        <p>CLI guide</p>
+        <a href="#install">Install</a>
+        <a href="#authenticate">Authenticate</a>
+        <a href="#commands">Basic commands</a>
+        <a href="#agents">Coding agents</a>
+        <a href="#upgrade">Upgrade</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-hero">
+          <p class="docs-eyebrow">Slate CLI</p>
+          <h1>Your plan, available to every agent.</h1>
+          <p>Install Slate from the terminal, connect your account, and let Claude Code, Codex, or any shell-based agent pull and update work.</p>
+        </header>
+
+        <section id="install" class="docs-section">
+          <h2>Install in one line</h2>
+          <p>The installer supports macOS and Linux on Intel and ARM. It downloads the matching release, verifies its SHA-256 checksum, and installs <code>slate</code> to <code>~/.local/bin</code>.</p>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/main/install.sh | sh</code></pre>
+          <p>If needed, add the install directory to your path, then verify Slate:</p>
+          <pre><code>export PATH="$HOME/.local/bin:$PATH"
+slate version
+slate help</code></pre>
+          <div class="docs-note">
+            <strong>Prefer to inspect the script?</strong>
+            <p>Open <a href="https://github.com/owainlewis/slate.do/blob/main/install.sh">install.sh on GitHub</a> before running it. The installer requires <code>curl</code>, <code>tar</code>, and either <code>sha256sum</code> or <code>shasum</code>.</p>
+          </div>
+
+          <h3>Pin a release</h3>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/v1.0.0/install.sh | SLATE_VERSION=v1.0.0 sh</code></pre>
+          <p>Set <code>SLATE_INSTALL_DIR</code> to install elsewhere. Windows users can use the Linux installer inside WSL.</p>
+        </section>
+
+        <section id="authenticate" class="docs-section">
+          <h2>Connect your account</h2>
+          <ol>
+            <li>Sign in to Slate and open <strong>Settings</strong>.</li>
+            <li>Under <strong>API tokens</strong>, create a token and copy it.</li>
+            <li>Export it in the terminal where you will run Slate or start your agent.</li>
+          </ol>
+          <pre><code>export SLATE_API_TOKEN=slate_...
+slate auth status</code></pre>
+          <div class="docs-note">
+            <strong>Keep the token private.</strong>
+            <p>Do not put it in <code>CLAUDE.md</code>, <code>AGENTS.md</code>, source code, or a committed <code>.env</code> file.</p>
+          </div>
+        </section>
+
+        <section id="commands" class="docs-section">
+          <h2>Find and manage work</h2>
+          <p>Slate's data and workflow commands return JSON, including the IDs needed by later commands.</p>
+          <pre><code>slate boards list
+slate lists list --board &lt;board-id&gt;
+slate tasks pull --limit 5
+slate tasks get &lt;task-id&gt;</code></pre>
+          <p>Create a task with enough context for an agent to execute it:</p>
+          <pre><code>slate tasks create \
+  --list &lt;list-id&gt; \
+  --title "Draft launch note" \
+  --description "Write the first version" \
+  --date 2026-07-21</code></pre>
+          <p>Run <code>slate help boards</code>, <code>slate help lists</code>, or <code>slate help tasks</code> for every command and flag.</p>
+        </section>
+
+        <section id="agents" class="docs-section">
+          <h2>Use Slate with Claude Code and Codex</h2>
+          <p>Start the agent from the shell where the token is available. Use <code>codex</code> in place of <code>claude</code> for Codex.</p>
+          <pre><code>export SLATE_API_TOKEN=slate_...
+claude</code></pre>
+          <p>Add this workflow to <code>CLAUDE.md</code> or <code>AGENTS.md</code>. Keep the token in the environment, not in the file.</p>
+          <pre><code>## Slate workflow
+
+- Run `slate tasks pull` to find queued work.
+- Claim a task with `slate tasks claim &lt;task-id&gt;` before starting.
+- Only continue when the claim succeeds.
+- Read full context with `slate tasks get &lt;task-id&gt;`.
+- When work is ready for review, run
+  `slate tasks status &lt;task-id&gt; needs_review`.
+- After acceptance, run `slate tasks done &lt;task-id&gt;`.
+- Treat output as JSON and preserve IDs exactly.</code></pre>
+          <p>Claims are atomic. If another agent already claimed the task, Slate rejects the second claim so the agent can select different work.</p>
+        </section>
+
+        <section id="upgrade" class="docs-section">
+          <h2>Upgrade or uninstall</h2>
+          <p>Run the one-line installer again to upgrade. It only replaces the existing binary after checksum verification succeeds.</p>
+          <p>Remove a default installation with:</p>
+          <pre><code>rm "$HOME/.local/bin/slate"</code></pre>
+        </section>
+
+        <section id="troubleshooting" class="docs-section">
+          <h2>Troubleshooting</h2>
+          <dl class="docs-troubleshooting">
+            <dt><code>slate: command not found</code></dt>
+            <dd>Add <code>~/.local/bin</code> to <code>PATH</code>, then open a new terminal.</dd>
+            <dt><code>SLATE_API_TOKEN is required</code></dt>
+            <dd>Create a token in Slate Settings and export it before starting the agent.</dd>
+            <dt><code>unauthorized</code></dt>
+            <dd>The token is missing, invalid, or revoked. Create a new one and run <code>slate auth status</code>.</dd>
+          </dl>
+          <p>See the <a href="https://github.com/owainlewis/slate.do/releases/tag/v1.0.0">v1.0.0 release</a> for archives and checksums, or browse the <a href="https://github.com/owainlewis/slate.do/releases/latest">latest release</a>.</p>
+        </section>
+      </article>
+    </main>
+
+    <footer class="landing-footer">
+      <span>slate.do</span>
+      <div class="docs-footer-links">
+        <a href="/">Home</a>
+        <a href="https://github.com/owainlewis/slate.do/blob/main/docs/cli.md">Read on GitHub</a>
+      </div>
+    </footer>
+  </section>
+</body>
+</html>

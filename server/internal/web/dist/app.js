@@ -261,7 +261,10 @@ function landingHTML() {
     <section class="landing">
       <nav class="landing-nav">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-        ${signedIn ? `<button class="nav-action" id="landing-open">Open app</button>` : `<button class="nav-action" id="landing-login">Log in</button>`}
+        <div class="landing-nav-actions">
+          <a href="/cli">CLI guide</a>
+          ${signedIn ? `<button class="nav-action" id="landing-open">Open app</button>` : `<button class="nav-action" id="landing-login">Log in</button>`}
+        </div>
       </nav>
       <main class="landing-main">
         <section class="landing-hero">
@@ -340,7 +343,10 @@ function landingHTML() {
       </main>
       <footer class="landing-footer">
         <span>slate.do</span>
-        <a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>
+        <div class="landing-footer-links">
+          <a href="/cli">CLI guide</a>
+          <a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>
+        </div>
       </footer>
     </section>`;
 }
