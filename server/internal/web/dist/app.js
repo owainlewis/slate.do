@@ -228,8 +228,8 @@ function forgotPasswordHTML() {
         <label class="login-label" for="reset-email">Email</label>
         <input id="reset-email" name="email" type="email" autocomplete="email" required>
         <button class="primary" type="submit">Send reset link</button>
+        <p class="notice reset-notice" role="status">${escapeHTML(state.notice)}</p>
         <button class="auth-link" id="back-to-login" type="button">Back to sign in</button>
-        <p class="notice" role="status">${escapeHTML(state.notice)}</p>
         <p class="error" role="alert">${escapeHTML(state.error)}</p>
       </form>
     </section>`;

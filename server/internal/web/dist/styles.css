@@ -726,6 +726,9 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .login .form-help { margin: -7px 0 14px; font-size: 12px; }
 .login .auth-link { width: 100%; margin-top: 14px; border: 0; background: transparent; color: var(--soft); cursor: pointer; }
 .login .auth-link:hover { color: var(--ink); }
+.login .reset-notice { min-height: 0; margin: 18px 0 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 7%, var(--card)); color: var(--ink); font-size: 14px; }
+.login .reset-notice:empty { display: none; }
+.login .reset-notice:not(:empty) + .auth-link { margin-top: 12px; }
 .error { color: var(--danger); min-height: 20px; }
 .notice { color: var(--soft); min-height: 20px; }
 
