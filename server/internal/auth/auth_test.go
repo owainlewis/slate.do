@@ -353,6 +353,22 @@ func TestResetPasswordHashesPasswordAndRejectsReusedToken(t *testing.T) {
 	}
 }
 
+func TestResetPasswordEnforcesSharedPasswordMinimum(t *testing.T) {
+	store := &passwordResetAuthStore{tokenValid: true}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password-reset/confirm", strings.NewReader(`{"token":"reset_secret","password":"abc1234"}`))
+	rec := httptest.NewRecorder()
+
+	service.ResetPassword(rec, req)
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at least 8 characters") {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if store.passwordHash != "" || store.resetTokenHash != "" {
+		t.Fatalf("password hash = %q, reset hash = %q", store.passwordHash, store.resetTokenHash)
+	}
+}
+
 func TestResetPasswordRateLimitRunsBeforeBcryptAndMutation(t *testing.T) {
 	store := &passwordResetAuthStore{tokenValid: true, rateErr: ErrRateLimited}
 	service := NewService(store, false)
@@ -577,7 +593,7 @@ func (requestAuthStore) FindUserBySessionHash(_ context.Context, tokenHash strin
 	}
 	return User{}, ErrUnauthorized
 }
-func (requestAuthStore) CreateSession(context.Context, string, string, time.Time) error {
+func (requestAuthStore) CreateSession(context.Context, string, string, string, time.Time) error {
 	return errors.New("unused")
 }
 func (requestAuthStore) DeleteSession(context.Context, string) error { return errors.New("unused") }

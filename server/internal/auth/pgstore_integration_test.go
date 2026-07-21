@@ -100,7 +100,7 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	if _, err := store.FindUserByEmail(ctx, email); !errors.Is(err, ErrInvalidAuth) {
 		t.Fatalf("disabled password lookup error = %v", err)
 	}
-	if err := store.CreateSession(ctx, user.ID, "disabled-session", time.Now().Add(time.Hour)); !errors.Is(err, ErrUnauthorized) {
+	if err := store.CreateSession(ctx, user.ID, string(passwordHash), "disabled-session", time.Now().Add(time.Hour)); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("session creation while disabled error = %v, want ErrUnauthorized", err)
 	}
 	if _, err := store.CreateAPIToken(ctx, user.ID, "disabled-token", "disabled-api-hash"); !errors.Is(err, ErrUnauthorized) {
@@ -140,7 +140,7 @@ func TestPasswordResetTokensAreSingleUseAndRevokeSessions(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
 	now := time.Now().UTC()
-	if err := store.CreateSession(ctx, user.ID, "active-session", now.Add(time.Hour)); err != nil {
+	if err := store.CreateSession(ctx, user.ID, "old-password-hash", "active-session", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CreatePasswordResetToken(ctx, email, "old-token", now.Add(time.Hour)); err != nil {
@@ -214,6 +214,69 @@ func TestPasswordResetTokensAreSingleUseAndRevokeSessions(t *testing.T) {
 	}
 }
 
+func TestPasswordResetSerializesWithStaleLoginSessionCreation(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run auth store integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPGStore(db)
+	email := fmt.Sprintf("reset-race-%d@slate.test", time.Now().UnixNano())
+	currentHash := "password-hash-0"
+	user, err := store.CreateAdmin(ctx, email, currentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
+
+	for iteration := 1; iteration <= 20; iteration++ {
+		now := time.Now().UTC()
+		tokenHash := fmt.Sprintf("reset-race-token-%d-%d", now.UnixNano(), iteration)
+		sessionHash := fmt.Sprintf("reset-race-session-%d-%d", now.UnixNano(), iteration)
+		newHash := fmt.Sprintf("password-hash-%d", iteration)
+		if err := store.CreatePasswordResetToken(ctx, email, tokenHash, now.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		var wait sync.WaitGroup
+		wait.Add(2)
+		var resetErr, sessionErr error
+		go func(expectedHash string) {
+			defer wait.Done()
+			<-start
+			sessionErr = store.CreateSession(ctx, user.ID, expectedHash, sessionHash, now.Add(time.Hour))
+		}(currentHash)
+		go func() {
+			defer wait.Done()
+			<-start
+			resetErr = store.ResetPassword(ctx, tokenHash, newHash, now)
+		}()
+		close(start)
+		wait.Wait()
+
+		if resetErr != nil {
+			t.Fatalf("iteration %d reset: %v", iteration, resetErr)
+		}
+		if sessionErr != nil && !errors.Is(sessionErr, ErrUnauthorized) {
+			t.Fatalf("iteration %d session: %v", iteration, sessionErr)
+		}
+		if _, err := store.FindUserBySessionHash(ctx, sessionHash, now); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("iteration %d stale login session survived reset: %v", iteration, err)
+		}
+		currentHash = newHash
+	}
+}
+
 func TestDisableSerializesWithSessionAndAPITokenCreation(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -254,7 +317,7 @@ func TestDisableSerializesWithSessionAndAPITokenCreation(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			sessionErr = store.CreateSession(ctx, user.ID, sessionHash, time.Now().Add(time.Hour))
+			sessionErr = store.CreateSession(ctx, user.ID, "hash", sessionHash, time.Now().Add(time.Hour))
 		}()
 		go func() {
 			defer wait.Done()
@@ -306,7 +369,7 @@ func TestInviteSignupRollsBackEveryRecordWhenSessionInsertFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", admin.ID) })
-	if err := store.CreateSession(ctx, admin.ID, "force-signup-rollback", time.Now().Add(time.Hour)); err != nil {
+	if err := store.CreateSession(ctx, admin.ID, "hash", "force-signup-rollback", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.CreateInvitedMember(ctx, email, "password-hash", "force-signup-rollback", time.Now().Add(time.Hour)); err == nil {
@@ -353,7 +416,7 @@ func TestPGStoreResolvesProEntitlementForEveryAuthenticationPath(t *testing.T) {
 
 	expiresAt := time.Now().Add(time.Hour)
 	sessionHash := fmt.Sprintf("session-hash-%d", time.Now().UnixNano())
-	if err := store.CreateSession(ctx, admin.ID, sessionHash, expiresAt); err != nil {
+	if err := store.CreateSession(ctx, admin.ID, "hash", sessionHash, expiresAt); err != nil {
 		t.Fatal(err)
 	}
 	bySession, err := store.FindUserBySessionHash(ctx, sessionHash, time.Now())

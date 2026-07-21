@@ -85,7 +85,7 @@ type Store interface {
 	ConsumeSignupAttempt(ctx context.Context, ipHash string, emailHash string, now time.Time, window time.Duration, limit int) (time.Duration, error)
 	FindUserByEmail(ctx context.Context, email string) (UserWithPassword, error)
 	FindUserBySessionHash(ctx context.Context, tokenHash string, now time.Time) (User, error)
-	CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error
+	CreateSession(ctx context.Context, userID string, expectedPasswordHash string, tokenHash string, expiresAt time.Time) error
 	DeleteSession(ctx context.Context, tokenHash string) error
 	ListAPITokens(ctx context.Context, userID string) ([]APIToken, error)
 	CreateAPIToken(ctx context.Context, userID string, name string, tokenHash string) (APIToken, error)
@@ -267,7 +267,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
-	if !s.createSession(w, r, account.User) {
+	if !s.createSession(w, r, account.User, account.PasswordHash) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meResponse{Authenticated: true, User: &account.User})
@@ -386,7 +386,7 @@ func (s *Service) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len([]rune(input.Password)) < minPasswordLen || len([]byte(input.Password)) > maxPasswordBytes {
-		writeError(w, http.StatusBadRequest, "password must be at least 12 characters and no more than 72 bytes")
+		writeError(w, http.StatusBadRequest, "password must be at least 8 characters and no more than 72 bytes")
 		return
 	}
 	if retryAfter, err := s.store.ConsumePasswordResetConfirmationAttempt(r.Context(), hashToken(clientIP(r)), hashToken(input.Token), s.now(), passwordConfirmWindow, passwordConfirmLimit); errors.Is(err, ErrRateLimited) {
@@ -580,14 +580,14 @@ func (s *Service) RevokeAPIToken(w http.ResponseWriter, r *http.Request, user Us
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (s *Service) createSession(w http.ResponseWriter, r *http.Request, user User) bool {
+func (s *Service) createSession(w http.ResponseWriter, r *http.Request, user User, expectedPasswordHash string) bool {
 	token, err := randomToken("sess")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "session could not be created")
 		return false
 	}
 	expiresAt := s.now().Add(sessionDuration)
-	if err := s.store.CreateSession(r.Context(), user.ID, hashToken(token), expiresAt); err != nil {
+	if err := s.store.CreateSession(r.Context(), user.ID, expectedPasswordHash, hashToken(token), expiresAt); err != nil {
 		if errors.Is(err, ErrUnauthorized) {
 			clearSessionCookie(w, s.cookieSecure)
 			writeError(w, http.StatusUnauthorized, "invalid email or password")

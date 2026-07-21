@@ -245,8 +245,8 @@ function resetPasswordHTML() {
         ${hasToken ? `
           <p>Your new password will sign you out on other devices.</p>
           <label class="login-label" for="new-password">New password</label>
-          <input id="new-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="72" aria-describedby="new-password-requirements" required>
-          <p class="form-help" id="new-password-requirements">Use at least 12 characters, up to 72 bytes.</p>
+          <input id="new-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="72" aria-describedby="new-password-requirements" required>
+          <p class="form-help" id="new-password-requirements">Use at least 8 characters, up to 72 bytes.</p>
           <button class="primary" type="submit">Reset password</button>
         ` : `<p class="error" role="alert">This reset link is invalid. Request a new one.</p>`}
         <button class="auth-link" id="reset-back-to-login" type="button">Back to sign in</button>

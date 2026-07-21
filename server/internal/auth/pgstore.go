@@ -371,16 +371,16 @@ func (s *PGStore) FindUserBySessionHash(ctx context.Context, tokenHash string, n
 	return user, err
 }
 
-func (s *PGStore) CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error {
+func (s *PGStore) CreateSession(ctx context.Context, userID string, expectedPasswordHash string, tokenHash string, expiresAt time.Time) error {
 	tag, err := s.db.Exec(ctx, `
 		WITH active_user AS (
 			SELECT id FROM users
-			WHERE id = $1 AND disabled_at IS NULL
+			WHERE id = $1 AND password_hash = $2 AND disabled_at IS NULL
 			FOR UPDATE
 		)
 		INSERT INTO sessions (user_id, token_hash, expires_at)
-		SELECT id, $2, $3 FROM active_user
-	`, userID, tokenHash, expiresAt)
+		SELECT id, $3, $4 FROM active_user
+	`, userID, expectedPasswordHash, tokenHash, expiresAt)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrUnauthorized
 	}
