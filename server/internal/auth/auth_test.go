@@ -150,7 +150,7 @@ func TestUpdateThemeRejectsUnknownTheme(t *testing.T) {
 func TestRegisterCreatesInvitedProMemberAndSessionCookie(t *testing.T) {
 	store := &signupAuthStore{}
 	service := NewService(store, false, "correct horse battery staple")
-	req := httptest.NewRequest(http.MethodPost, "https://slate.test/api/v1/auth/register", strings.NewReader(`{"email":" NEW@Example.com ","password":"a secure password","inviteCode":"correct horse battery staple"}`))
+	req := httptest.NewRequest(http.MethodPost, "https://slate.test/api/v1/auth/register", strings.NewReader(`{"email":" NEW@Example.com ","password":"abcd1234","inviteCode":"correct horse battery staple"}`))
 	req.Host = "slate.test"
 	req.Header.Set("Origin", "https://slate.test")
 	req.Header.Set("X-Forwarded-For", "203.0.113.9, 35.191.0.1")
@@ -161,7 +161,7 @@ func TestRegisterCreatesInvitedProMemberAndSessionCookie(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if store.email != "new@example.com" || store.passwordHash == "a secure password" || store.sessionHash == "" {
+	if store.email != "new@example.com" || store.passwordHash == "abcd1234" || store.sessionHash == "" {
 		t.Fatalf("stored signup = email %q, password %q, session %q", store.email, store.passwordHash, store.sessionHash)
 	}
 	if store.ipHash != hashToken("203.0.113.9") || store.emailHash != hashToken("new@example.com") {
@@ -172,7 +172,7 @@ func TestRegisterCreatesInvitedProMemberAndSessionCookie(t *testing.T) {
 	if len(cookies) != 1 || cookies[0].Name != CookieName || !cookies[0].HttpOnly || cookies[0].Value == "" {
 		t.Fatalf("cookies = %#v", cookies)
 	}
-	if strings.Contains(rec.Body.String(), "correct horse battery staple") || strings.Contains(rec.Body.String(), "a secure password") {
+	if strings.Contains(rec.Body.String(), "correct horse battery staple") || strings.Contains(rec.Body.String(), "abcd1234") {
 		t.Fatal("response exposed credentials")
 	}
 }
@@ -187,7 +187,7 @@ func TestRegisterFailsSafely(t *testing.T) {
 	}{
 		{"missing configuration", "", `{"email":"new@example.com","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{}, http.StatusNotFound},
 		{"invalid code", "secret", `{"email":"new@example.com","password":"a secure password","inviteCode":"wrong"}`, &signupAuthStore{}, http.StatusUnauthorized},
-		{"short password", "secret", `{"email":"new@example.com","password":"short","inviteCode":"secret"}`, &signupAuthStore{}, http.StatusBadRequest},
+		{"seven-character password", "secret", `{"email":"new@example.com","password":"abc1234","inviteCode":"secret"}`, &signupAuthStore{}, http.StatusBadRequest},
 		{"invalid email", "secret", `{"email":"not-an-email","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{}, http.StatusBadRequest},
 		{"duplicate email", "secret", `{"email":"new@example.com","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{createErr: ErrEmailTaken}, http.StatusConflict},
 		{"rate limited", "secret", `{"email":"new@example.com","password":"a secure password","inviteCode":"secret"}`, &signupAuthStore{rateErr: ErrRateLimited}, http.StatusTooManyRequests},
