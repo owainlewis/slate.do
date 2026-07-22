@@ -128,6 +128,90 @@ func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T
 	}
 }
 
+func TestMoveTaskAcrossBoardsPreservesMetadataAndOrdersBothLists(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	sourceBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.CreateBucket(ctx, userID, sourceBoard.ID, CreateBucketInput{Name: "Ideas"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Destination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := store.CreateBucket(ctx, userID, destinationBoard.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Before"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moving, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{
+		Title: "Move me", Description: "Keep this context", ScheduledDate: "2026-07-25",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "After"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Last"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	position := 1
+	moved, err := store.MoveTask(ctx, userID, moving.ID, MoveTaskInput{BucketID: destination.ID, Position: &position})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.BoardID != destinationBoard.ID || moved.BucketID != destination.ID || moved.SortOrder != position {
+		t.Fatalf("moved location = board %q, list %q, position %d", moved.BoardID, moved.BucketID, moved.SortOrder)
+	}
+	if moved.Title != moving.Title || moved.Description != moving.Description || moved.ScheduledDate != moving.ScheduledDate || moved.Status != moving.Status {
+		t.Fatalf("moved metadata = %#v, want metadata from %#v", moved, moving)
+	}
+	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, last.ID})
+
+	invalidPosition := 4
+	if _, err := store.MoveTask(ctx, userID, moving.ID, MoveTaskInput{BucketID: source.ID, Position: &invalidPosition}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("invalid position error = %v, want ErrInvalidData", err)
+	}
+	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, last.ID})
+}
+
+func assertTaskOrder(t *testing.T, store *Store, ctx context.Context, userID string, bucketID string, want []string) {
+	t.Helper()
+	bucket, err := store.GetBucket(ctx, userID, bucketID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(bucket.Tasks))
+	for index, task := range bucket.Tasks {
+		got[index] = task.ID
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("task order = %v, want %v", got, want)
+	}
+}
+
 func TestProLimitLocksPreserveAccountOwnershipIsolation(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -167,6 +251,10 @@ func TestProLimitLocksPreserveAccountOwnershipIsolation(t *testing.T) {
 	}
 	if _, err := store.UpdateTask(ctx, otherID, otherTask.ID, UpdateTaskInput{BucketID: &ownerList.ID}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-account move error = %v, want ErrNotFound", err)
+	}
+	position := 0
+	if _, err := store.MoveTask(ctx, otherID, otherTask.ID, MoveTaskInput{BucketID: ownerList.ID, Position: &position}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-account atomic move error = %v, want ErrNotFound", err)
 	}
 	unchanged, err := store.GetTask(ctx, otherID, otherTask.ID)
 	if err != nil {

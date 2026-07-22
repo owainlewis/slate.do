@@ -62,6 +62,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   let deleted = false;
   let hidden = false;
   let patchCount = 0;
+  const patchBodies = [];
   let releaseFirstFailure;
   const firstFailure = new Promise(resolve => { releaseFirstFailure = resolve; });
   const server = http.createServer(async (request, response) => {
@@ -71,6 +72,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
     if (url.pathname === "/api/v1/boards/board-one") return json(response, board(deleted || hidden));
     if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
       patchCount += 1;
+      patchBodies.push(await requestJSON(request));
       if (patchCount === 1) {
         await firstFailure;
         response.writeHead(500, { "Content-Type": "application/json" });
@@ -133,6 +135,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   await save.click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
   assert.equal(patchCount, 2);
+  assert.equal(patchBodies[1].status, "queued");
   assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "Improve the vault");
 
   await taskButton.click();
@@ -157,6 +160,128 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   await page.getByRole("dialog").waitFor({ state: "detached" });
   assert.equal(patchCount, 3);
   assert.equal(await page.evaluate(() => document.activeElement?.dataset.boardMode), "flow");
+});
+
+test("an item can move to a chosen position on another board", async t => {
+  let moved = false;
+  let moveBody;
+  let saveBody;
+  let currentTask = { ...task };
+  const destinationTask = { ...task, id: "destination-task", boardId: "board-two", bucketId: "list-target", title: "Already there" };
+  const sourceBoard = () => ({
+    id: "board-one", name: "Business", maxTasksPerList: 20,
+    buckets: [{ id: "list-one", boardId: "board-one", name: "Ideas", openCount: moved ? 0 : 1, limitCount: 20, tasks: moved ? [] : [currentTask] }],
+  });
+  const targetBoard = () => ({
+    id: "board-two", name: "Website", maxTasksPerList: 20,
+    buckets: [{
+      id: "list-target", boardId: "board-two", name: "Ready", openCount: moved ? 2 : 1, limitCount: 20,
+      tasks: moved ? [destinationTask, { ...currentTask, boardId: "board-two", bucketId: "list-target", sortOrder: 1 }] : [destinationTask],
+    }],
+  });
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
+    if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }, { id: "board-two", name: "Website" }] });
+    if (url.pathname === "/api/v1/boards/board-one") return json(response, sourceBoard());
+    if (url.pathname === "/api/v1/boards/board-two") {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      return json(response, targetBoard());
+    }
+    if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
+      saveBody = await requestJSON(request);
+      currentTask = { ...currentTask, ...saveBody };
+      return json(response, currentTask);
+    }
+    if (url.pathname === "/api/v1/tasks/task-one/move" && request.method === "POST") {
+      moveBody = await requestJSON(request);
+      moved = true;
+      return json(response, { ...currentTask, boardId: "board-two", bucketId: "list-target", sortOrder: 1 });
+    }
+    if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Edited before moving");
+  await page.locator("#detail-date").fill("2026-07-30");
+  await page.getByRole("button", { name: /Move…/ }).click();
+  await page.getByLabel("Board", { exact: true }).selectOption("board-two");
+  assert.equal(await page.locator("#move-list").textContent(), "Loading lists…");
+  assert.equal(await page.getByRole("button", { name: "Move item", exact: true }).isDisabled(), true);
+  await page.getByLabel("List", { exact: true }).selectOption("list-target");
+  await page.getByLabel("Position", { exact: true }).selectOption("1");
+  await page.getByRole("button", { name: "Move item", exact: true }).click();
+
+  await page.getByText("Moved to Website / Ready", { exact: true }).waitFor();
+  assert.equal(saveBody.title, "Edited before moving");
+  assert.equal(saveBody.scheduledDate, "2026-07-30");
+  assert.deepEqual(moveBody, { bucketId: "list-target", position: 1 });
+  assert.equal(await page.getByRole("button", { name: "Improve the vault", exact: true }).count(), 0);
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await page.getByRole("dialog").waitFor();
+  assert.equal(await page.getByRole("textbox", { name: "Title", exact: true }).inputValue(), "Edited before moving");
+});
+
+test("a committed move stays successful when the source board refresh fails", { timeout: 10000 }, async t => {
+  let moved = false;
+  const sourceBoard = {
+    id: "board-one", name: "Business", maxTasksPerList: 20,
+    buckets: [{ id: "list-one", boardId: "board-one", name: "Ideas", openCount: 1, limitCount: 20, tasks: [task] }],
+  };
+  const targetBoard = {
+    id: "board-two", name: "Website", maxTasksPerList: 20,
+    buckets: [{ id: "list-target", boardId: "board-two", name: "Ready", openCount: 0, limitCount: 20, tasks: [] }],
+  };
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
+    if (url.pathname === "/api/v1/boards") {
+      if (moved) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "Refresh failed" }));
+      }
+      return json(response, { boards: [{ id: "board-one", name: "Business" }, { id: "board-two", name: "Website" }] });
+    }
+    if (url.pathname === "/api/v1/boards/board-one") return json(response, sourceBoard);
+    if (url.pathname === "/api/v1/boards/board-two") return json(response, targetBoard);
+    if (url.pathname === "/api/v1/tasks/task-one/move" && request.method === "POST") {
+      await requestJSON(request);
+      moved = true;
+      return json(response, { ...task, boardId: "board-two", bucketId: "list-target", sortOrder: 0 });
+    }
+    if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => {
+    server.closeAllConnections();
+    server.close(resolve);
+  }));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
+  await page.getByRole("button", { name: /Move…/ }).click();
+  await page.getByLabel("Board", { exact: true }).selectOption("board-two");
+  await page.getByLabel("List", { exact: true }).selectOption("list-target");
+  await page.getByRole("button", { name: "Move item", exact: true }).click();
+
+  await page.getByText("Moved to Website / Ready", { exact: true }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "The item was moved, but this board could not be refreshed." }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Improve the vault", exact: true }).count(), 0);
 });
 
 test("Pro resource limits block obvious actions and show server rejection messages", async t => {
@@ -549,6 +674,12 @@ function accepted(response, body) {
 function conflict(response, code, error) {
 	response.writeHead(409, { "Content-Type": "application/json" });
 	response.end(JSON.stringify({ code, error }));
+}
+
+async function requestJSON(request) {
+	let body = "";
+	for await (const chunk of request) body += chunk;
+	return JSON.parse(body);
 }
 
 function file(response, name, type) {

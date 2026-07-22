@@ -101,6 +101,11 @@ type UpdateTaskInput struct {
 	SortOrder     *int    `json:"sortOrder"`
 }
 
+type MoveTaskInput struct {
+	BucketID string `json:"bucketId"`
+	Position *int   `json:"position"`
+}
+
 type TaskFilter struct {
 	BoardID     string
 	BucketID    string

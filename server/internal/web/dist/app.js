@@ -85,7 +85,7 @@ const state = {
   settings: false,
   view: "home",
   error: "",
-  notice: "",
+  authNotice: "",
   resetToken: "",
   goalErrors: {},
   newToken: "",
@@ -94,6 +94,7 @@ const state = {
   flowListId: "",
   weekStart: "",
   theme: "",
+  moveNotice: null,
 };
 
 const themes = [
@@ -329,7 +330,7 @@ function loginHTML() {
         <input id="login-password" name="password" type="password" autocomplete="current-password" required>
         <button class="primary" type="submit">Sign in</button>
         <button class="auth-link" id="forgot-password" type="button">Forgot your password?</button>
-        <p class="notice" role="status">${escapeHTML(state.notice)}</p>
+        <p class="notice" role="status">${escapeHTML(state.authNotice)}</p>
         <p class="error" role="alert">${escapeHTML(state.error)}</p>
       </form>
     </section>`;
@@ -345,7 +346,7 @@ function forgotPasswordHTML() {
         <label class="login-label" for="reset-email">Email</label>
         <input id="reset-email" name="email" type="email" autocomplete="email" required>
         <button class="primary" type="submit">Send reset link</button>
-        <p class="notice reset-notice" role="status">${escapeHTML(state.notice)}</p>
+        <p class="notice reset-notice" role="status">${escapeHTML(state.authNotice)}</p>
         <button class="auth-link" id="back-to-login" type="button">Back to sign in</button>
         <p class="error" role="alert">${escapeHTML(state.error)}</p>
       </form>
@@ -518,6 +519,7 @@ function appHTML() {
           </div>
         </header>
         ${statusErrorHTML(state.error)}
+        ${statusNoticeHTML(state.moveNotice)}
         ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
         ${footerHTML(board, todayMode)}
       </div>
@@ -700,11 +702,18 @@ function detailHTML(task) {
             <textarea class="detail-description" id="detail-description" name="description" placeholder="Add a description…">${escapeHTML(task.description || "")}</textarea>
             <div class="detail-properties" aria-label="Item properties">
               <div class="field"><label for="detail-status">State</label><select id="detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
-              <div class="field"><label for="detail-list">List</label><select id="detail-list" name="bucketId">
-                ${state.board.buckets.map(b => `<option value="${b.id}" ${b.id === task.bucketId ? "selected" : ""}>${escapeHTML(b.name)}</option>`).join("")}
-              </select></div>
+              <div class="field"><label>Location</label><button class="location-button" id="open-move" type="button"><span>${escapeHTML(state.board.name)} / ${escapeHTML(list?.name || "List")}</span><b>Move…</b></button></div>
               <div class="field"><label for="detail-date">Plan for</label><input id="detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
             </div>
+            <section class="move-panel" id="move-panel" aria-labelledby="move-heading" hidden>
+              <div class="move-panel-head"><div><span>Change location</span><h3 id="move-heading">Move item</h3></div><button class="detail-close" id="close-move" type="button" aria-label="Close move options">${icon("x")}</button></div>
+              <div class="move-fields">
+                <div class="field"><label for="move-board">Board</label><select id="move-board">${state.boards.map(board => `<option value="${board.id}" ${board.id === state.board.id ? "selected" : ""}>${escapeHTML(board.name)}</option>`).join("")}</select></div>
+                <div class="field"><label for="move-list">List</label><select id="move-list">${moveListOptionsHTML(state.board, task)}</select></div>
+                <div class="field"><label for="move-position">Position</label><select id="move-position">${movePositionOptionsHTML(list, task)}</select></div>
+              </div>
+              <div class="move-panel-actions"><button class="primary" id="move-item" type="button">Move item</button></div>
+            </section>
             <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
           </div>
           <footer class="detail-actions">
@@ -717,6 +726,24 @@ function detailHTML(task) {
         </form>
       </section>
     </div>`;
+}
+
+function moveListOptionsHTML(board, task, selectedID = task.bucketId) {
+  return (board?.buckets || []).map(list => {
+    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+    const full = task.kind === "action" && !task.done && list.id !== task.bucketId && (list.openCount || 0) >= limit;
+    return `<option value="${list.id}" ${list.id === selectedID ? "selected" : ""} ${full ? "disabled" : ""}>${escapeHTML(list.name)}${full ? ` (${list.openCount}/${limit} full)` : ""}</option>`;
+  }).join("");
+}
+
+function movePositionOptionsHTML(list, task) {
+  const listTasks = list?.tasks || [];
+  const tasks = listTasks.filter(item => item.id !== task.id);
+  const currentIndex = list?.id === task.bucketId ? Math.max(0, listTasks.findIndex(item => item.id === task.id)) : tasks.length;
+  return Array.from({ length: tasks.length + 1 }, (_, index) => {
+    const suffix = index === 0 ? " (top)" : index === tasks.length ? " (bottom)" : "";
+    return `<option value="${index}" ${index === currentIndex ? "selected" : ""}>${index + 1}${suffix}</option>`;
+  }).join("");
 }
 
 function statusOptionsHTML(selected) {
@@ -734,6 +761,11 @@ function footerHTML(board, todayMode) {
 
 function statusErrorHTML(error) {
   return error ? `<p class="status-error" role="alert">${escapeHTML(error)}</p>` : "";
+}
+
+function statusNoticeHTML(notice) {
+  if (!notice) return "";
+  return `<div class="status-notice" role="status"><span>${escapeHTML(notice.message)}</span><button id="view-moved-item" type="button">View</button><button id="dismiss-notice" type="button" aria-label="Dismiss">${icon("x")}</button></div>`;
 }
 
 function settingsHTML() {
@@ -814,7 +846,7 @@ function bindLogin() {
   document.querySelector("#forgot-password").onclick = () => {
 	state.view = "forgot-password";
 	state.error = "";
-	state.notice = "";
+	state.authNotice = "";
 	render();
   };
 }
@@ -829,10 +861,10 @@ function bindForgotPassword() {
 	try {
 	  const result = await api.post("/api/v1/auth/password-reset/request", { email: form.get("email") });
 	  state.error = "";
-	  state.notice = result.message;
+	  state.authNotice = result.message;
 	  formElement.reset();
 	} catch (err) {
-	  state.notice = "";
+	  state.authNotice = "";
 	  state.error = err.message;
 	}
 	render();
@@ -851,7 +883,8 @@ function bindResetPassword() {
 	  authVersion += 1;
 	  resetAuthenticatedState();
 	  state.resetToken = "";
-	  state.notice = "Password reset. Sign in with your new password.";
+	  state.error = "";
+	  state.authNotice = "Password reset. Sign in with your new password.";
 	  history.replaceState({}, "", "/");
 	  state.view = "login";
 	} catch (err) {
@@ -929,6 +962,15 @@ function bindApp() {
     sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
   };
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = async () => { await loadBoard(el.dataset.board); render(); });
+  document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
+    const notice = state.moveNotice;
+    if (!notice) return;
+    await loadBoard(notice.boardId);
+    state.selectedTask = findTask(notice.taskId);
+    state.moveNotice = null;
+    render();
+  });
+  document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.moveNotice = null; render(); });
   document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
   document.querySelector("#settings").onclick = async () => { await openSettings(true); };
   document.querySelector("#logout").onclick = logout;
@@ -1049,6 +1091,23 @@ function bindDetail() {
   const taskID = state.selectedTask.id;
   const bucketID = state.selectedTask.bucketId;
   let detailBusy = false;
+  const detailInput = () => {
+    const form = new FormData(formElement);
+    return {
+      title: form.get("title"),
+      description: form.get("description"),
+      scheduledDate: form.get("scheduledDate"),
+      status: form.get("status"),
+    };
+  };
+  let savedDetail = JSON.stringify(detailInput());
+  const savePendingChanges = async () => {
+    const input = detailInput();
+    const serialized = JSON.stringify(input);
+    if (serialized === savedDetail) return;
+    await api.patch(`/api/v1/tasks/${taskID}/status`, input);
+    savedDetail = serialized;
+  };
   const focusAfterDetail = (preferredTaskID = taskID) => {
     const triggers = [...document.querySelectorAll("[data-open-task]")];
     const trigger = triggers.find(element => element.dataset.openTask === preferredTaskID);
@@ -1059,7 +1118,7 @@ function bindDetail() {
   };
   const setDetailBusy = busy => {
     detailBusy = busy;
-    document.querySelectorAll("[data-close-detail], #delete-task, #detail-form button[type=submit]").forEach(element => { element.disabled = busy; });
+    document.querySelectorAll("[data-close-detail], #delete-task, #detail-form button, #detail-form select").forEach(element => { element.disabled = busy; });
   };
   const closeDetail = () => {
     if (detailBusy) return;
@@ -1090,6 +1149,7 @@ function bindDetail() {
     }
   });
   document.querySelector("#detail-title").focus();
+  bindMovePanel({ taskID, task: state.selectedTask, setDetailBusy, savePendingChanges });
   document.querySelector("#delete-task").onclick = async () => {
     if (!confirm("Delete this item?")) return;
     const visibleTaskIDs = [...document.querySelectorAll("[data-open-task]")].map(element => element.dataset.openTask);
@@ -1111,18 +1171,11 @@ function bindDetail() {
   formElement.addEventListener("submit", async event => {
     event.preventDefault();
     if (detailBusy) return;
+    const input = detailInput();
     setDetailBusy(true);
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     submit.textContent = "Saving…";
-    const form = new FormData(event.currentTarget);
     try {
-      const input = {
-        title: form.get("title"),
-        description: form.get("description"),
-        scheduledDate: form.get("scheduledDate"),
-        bucketId: form.get("bucketId"),
-        status: form.get("status"),
-      };
       await api.patch(`/api/v1/tasks/${taskID}/status`, input);
       state.error = "";
       state.selectedTask = null;
@@ -1136,6 +1189,113 @@ function bindDetail() {
       submit.textContent = "Save changes";
     }
   });
+}
+
+function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
+  const panel = document.querySelector("#move-panel");
+  const boardSelect = document.querySelector("#move-board");
+  const listSelect = document.querySelector("#move-list");
+  const positionSelect = document.querySelector("#move-position");
+  const moveButton = document.querySelector("#move-item");
+  const loadedBoards = new Map([[state.board.id, state.board]]);
+  const showError = message => {
+    state.error = message;
+    document.querySelector(".detail-error").textContent = message;
+  };
+  const selectedList = () => loadedBoards.get(boardSelect.value)?.buckets?.find(list => list.id === listSelect.value);
+  const refreshPositions = () => {
+    const available = selectedList() && !listSelect.selectedOptions[0]?.disabled;
+    positionSelect.innerHTML = available ? movePositionOptionsHTML(selectedList(), task) : "";
+    positionSelect.disabled = !available;
+    moveButton.disabled = !available;
+  };
+  const refreshLists = (board, selectedID = "") => {
+    listSelect.innerHTML = moveListOptionsHTML(board, task, selectedID);
+    const firstAvailable = [...listSelect.options].find(option => !option.disabled);
+    if (!listSelect.selectedOptions[0] || listSelect.selectedOptions[0].disabled) {
+      listSelect.value = firstAvailable?.value || "";
+    }
+    listSelect.disabled = !firstAvailable;
+    refreshPositions();
+  };
+
+  document.querySelector("#open-move").onclick = () => {
+    panel.hidden = false;
+    boardSelect.focus();
+  };
+  document.querySelector("#close-move").onclick = () => {
+    panel.hidden = true;
+    document.querySelector("#open-move").focus();
+  };
+  boardSelect.onchange = async () => {
+    const destinationBoardID = boardSelect.value;
+    try {
+      boardSelect.disabled = true;
+      listSelect.disabled = true;
+      positionSelect.disabled = true;
+      moveButton.disabled = true;
+      listSelect.innerHTML = '<option value="">Loading lists…</option>';
+      positionSelect.innerHTML = "";
+      let board = loadedBoards.get(destinationBoardID);
+      if (!board) {
+        board = await api.get(`/api/v1/boards/${destinationBoardID}`);
+        loadedBoards.set(board.id, board);
+      }
+      state.error = "";
+      document.querySelector(".detail-error").textContent = "";
+      refreshLists(board);
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      boardSelect.disabled = false;
+    }
+  };
+  listSelect.onchange = refreshPositions;
+  moveButton.onclick = async () => {
+    const destinationBoard = loadedBoards.get(boardSelect.value);
+    const destinationList = selectedList();
+    if (!destinationBoard || !destinationList) {
+      showError("Choose a destination list before moving this item.");
+      return;
+    }
+    moveButton.textContent = "Saving…";
+    const savePromise = savePendingChanges();
+    setDetailBusy(true);
+    let moved;
+    try {
+      await savePromise;
+      moveButton.textContent = "Moving…";
+      moved = await api.post(`/api/v1/tasks/${taskID}/move`, {
+        bucketId: destinationList.id,
+        position: Number(positionSelect.value),
+      });
+    } catch (err) {
+      showError(err.message);
+      setDetailBusy(false);
+      moveButton.textContent = "Move item";
+      return;
+    }
+
+    const sourceBoardID = state.board.id;
+    const sourceList = state.board.buckets.find(list => list.id === task.bucketId);
+    if (sourceList) {
+      sourceList.tasks = (sourceList.tasks || []).filter(item => item.id !== taskID);
+      if (task.kind === "action" && !task.done) sourceList.openCount = Math.max(0, (sourceList.openCount || 0) - 1);
+    }
+    state.selectedTask = null;
+    state.moveNotice = {
+      message: `Moved to ${destinationBoard.name} / ${destinationList.name}`,
+      boardId: moved.boardId,
+      taskId: moved.id,
+    };
+    state.error = "";
+    try {
+      await loadBoards(sourceBoardID);
+    } catch {
+      state.error = "The item was moved, but this board could not be refreshed.";
+    }
+    render();
+  };
 }
 
 async function bindSettings() {

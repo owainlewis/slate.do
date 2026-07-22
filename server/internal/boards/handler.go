@@ -157,6 +157,18 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	writeJSON(w, http.StatusOK, task)
 }
 
+func (h *Handler) MoveTask(w http.ResponseWriter, r *http.Request, user auth.User) {
+	var input MoveTaskInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	task, err := h.store.MoveTask(r.Context(), user.ID, r.PathValue("id"), input)
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
 func (h *Handler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input struct {
 		Title         *string `json:"title"`
