@@ -1260,7 +1260,7 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submit
       }
       state.error = "";
       document.querySelector(".detail-error").textContent = "";
-      refreshLists(board);
+      refreshLists(board, destinationBoardID === sourceBoardID ? task.bucketId : "");
     } catch (err) {
       showError(err.message);
     } finally {

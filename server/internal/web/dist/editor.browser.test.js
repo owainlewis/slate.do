@@ -167,10 +167,14 @@ test("saving an item moves it to the chosen position on another board", async t 
   let moveBody;
   let saveBody;
   let currentTask = { ...task };
+  const sourceTask = { ...task, id: "source-task", title: "Keep me first" };
   const destinationTask = { ...task, id: "destination-task", boardId: "board-two", bucketId: "list-target", title: "Already there" };
   const sourceBoard = () => ({
     id: "board-one", name: "Business", maxTasksPerList: 20,
-    buckets: [{ id: "list-one", boardId: "board-one", name: "Ideas", openCount: moved ? 0 : 1, limitCount: 20, tasks: moved ? [] : [currentTask] }],
+    buckets: [
+      { id: "list-inbox", boardId: "board-one", name: "Inbox", openCount: 0, limitCount: 20, tasks: [] },
+      { id: "list-one", boardId: "board-one", name: "Ideas", openCount: moved ? 1 : 2, limitCount: 20, tasks: moved ? [sourceTask] : [sourceTask, currentTask] },
+    ],
   });
   const targetBoard = () => ({
     id: "board-two", name: "Website", maxTasksPerList: 20,
@@ -223,15 +227,27 @@ test("saving an item moves it to the chosen position on another board", async t 
   assert.equal(moveBody, undefined);
   assert.equal(saveBody, undefined);
   await page.getByLabel("List", { exact: true }).selectOption("list-target");
-  await page.getByLabel("Position", { exact: true }).selectOption("1");
-  assert.equal(await save.isEnabled(), true);
+  await page.getByLabel("Board", { exact: true }).selectOption("board-one");
+  assert.equal(await page.getByLabel("List", { exact: true }).inputValue(), "list-one");
+  assert.equal(await page.getByLabel("Position", { exact: true }).inputValue(), "1");
   await save.click();
-
-  await page.getByText("Moved to Website / Ready", { exact: true }).waitFor();
+  await page.getByRole("dialog").waitFor({ state: "detached" });
+  assert.equal(moveBody, undefined);
   assert.equal(saveBody.title, "Edited before moving");
   assert.equal(saveBody.scheduledDate, "2026-07-30");
+
+  await page.locator('[data-open-task="task-one"]').click();
+  await page.getByRole("button", { name: /Move…/ }).click();
+  await page.getByLabel("Board", { exact: true }).selectOption("board-two");
+  await page.getByLabel("List", { exact: true }).selectOption("list-target");
+  await page.getByLabel("Position", { exact: true }).selectOption("1");
+  const moveSave = page.getByRole("button", { name: "Save changes", exact: true });
+  assert.equal(await moveSave.isEnabled(), true);
+  await moveSave.click();
+
+  await page.getByText("Moved to Website / Ready", { exact: true }).waitFor();
   assert.deepEqual(moveBody, { bucketId: "list-target", position: 1 });
-  assert.equal(await page.getByRole("button", { name: "Improve the vault", exact: true }).count(), 0);
+  assert.equal(await page.locator('[data-open-task="task-one"]').count(), 0);
   await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("dialog").waitFor();
   assert.equal(await page.getByRole("textbox", { name: "Title", exact: true }).inputValue(), "Edited before moving");
