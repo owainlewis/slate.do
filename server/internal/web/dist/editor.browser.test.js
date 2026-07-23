@@ -162,7 +162,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   assert.equal(await page.evaluate(() => document.activeElement?.dataset.boardMode), "flow");
 });
 
-test("an item can move to a chosen position on another board", async t => {
+test("saving an item moves it to the chosen position on another board", async t => {
   let moved = false;
   let moveBody;
   let saveBody;
@@ -215,11 +215,17 @@ test("an item can move to a chosen position on another board", async t => {
   await page.locator("#detail-date").fill("2026-07-30");
   await page.getByRole("button", { name: /Move…/ }).click();
   await page.getByLabel("Board", { exact: true }).selectOption("board-two");
+  const save = page.getByRole("button", { name: "Save changes", exact: true });
   assert.equal(await page.locator("#move-list").textContent(), "Loading lists…");
   assert.equal(await page.getByRole("button", { name: "Move item", exact: true }).isDisabled(), true);
+  assert.equal(await save.isDisabled(), true);
+  await page.keyboard.press("Control+Enter");
+  assert.equal(moveBody, undefined);
+  assert.equal(saveBody, undefined);
   await page.getByLabel("List", { exact: true }).selectOption("list-target");
   await page.getByLabel("Position", { exact: true }).selectOption("1");
-  await page.getByRole("button", { name: "Move item", exact: true }).click();
+  assert.equal(await save.isEnabled(), true);
+  await save.click();
 
   await page.getByText("Moved to Website / Ready", { exact: true }).waitFor();
   assert.equal(saveBody.title, "Edited before moving");

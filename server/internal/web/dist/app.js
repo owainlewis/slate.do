@@ -1088,6 +1088,7 @@ function bindDetail() {
   if (!state.selectedTask) return;
   const overlay = document.querySelector("[data-detail-overlay]");
   const formElement = document.querySelector("#detail-form");
+  const submitButton = formElement.querySelector('button[type="submit"]');
   const taskID = state.selectedTask.id;
   const bucketID = state.selectedTask.bucketId;
   let detailBusy = false;
@@ -1133,7 +1134,7 @@ function bindDetail() {
     if (event.key === "Escape") closeDetail();
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      if (!detailBusy) formElement.requestSubmit();
+      if (!detailBusy && !moveController.isLoading()) formElement.requestSubmit();
     }
     if (event.key === "Tab") {
       const focusable = [...overlay.querySelectorAll("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)")];
@@ -1149,7 +1150,7 @@ function bindDetail() {
     }
   });
   document.querySelector("#detail-title").focus();
-  bindMovePanel({ taskID, task: state.selectedTask, setDetailBusy, savePendingChanges });
+  const moveController = bindMovePanel({ taskID, task: state.selectedTask, setDetailBusy, savePendingChanges, submitButton });
   document.querySelector("#delete-task").onclick = async () => {
     if (!confirm("Delete this item?")) return;
     const visibleTaskIDs = [...document.querySelectorAll("[data-open-task]")].map(element => element.dataset.openTask);
@@ -1170,10 +1171,14 @@ function bindDetail() {
   };
   formElement.addEventListener("submit", async event => {
     event.preventDefault();
-    if (detailBusy) return;
+    if (detailBusy || moveController.isLoading()) return;
+    const submit = submitButton;
+    if (moveController.hasPendingMove()) {
+      await moveController.move({ button: submit, idleText: "Save changes" });
+      return;
+    }
     const input = detailInput();
     setDetailBusy(true);
-    const submit = event.currentTarget.querySelector('button[type="submit"]');
     submit.textContent = "Saving…";
     try {
       await api.patch(`/api/v1/tasks/${taskID}/status`, input);
@@ -1191,18 +1196,28 @@ function bindDetail() {
   });
 }
 
-function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
+function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submitButton }) {
   const panel = document.querySelector("#move-panel");
   const boardSelect = document.querySelector("#move-board");
   const listSelect = document.querySelector("#move-list");
   const positionSelect = document.querySelector("#move-position");
   const moveButton = document.querySelector("#move-item");
   const loadedBoards = new Map([[state.board.id, state.board]]);
+  const sourceBoardID = state.board.id;
+  const sourceList = state.board.buckets.find(list => list.id === task.bucketId);
+  const sourcePosition = Math.max(0, (sourceList?.tasks || []).findIndex(item => item.id === task.id));
+  let destinationLoading = false;
   const showError = message => {
     state.error = message;
     document.querySelector(".detail-error").textContent = message;
   };
+  const isLoading = () => destinationLoading;
   const selectedList = () => loadedBoards.get(boardSelect.value)?.buckets?.find(list => list.id === listSelect.value);
+  const hasPendingMove = () => (
+    boardSelect.value !== sourceBoardID
+    || listSelect.value !== task.bucketId
+    || Number(positionSelect.value) !== sourcePosition
+  );
   const refreshPositions = () => {
     const available = selectedList() && !listSelect.selectedOptions[0]?.disabled;
     positionSelect.innerHTML = available ? movePositionOptionsHTML(selectedList(), task) : "";
@@ -1230,6 +1245,8 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
   boardSelect.onchange = async () => {
     const destinationBoardID = boardSelect.value;
     try {
+      destinationLoading = true;
+      submitButton.disabled = true;
       boardSelect.disabled = true;
       listSelect.disabled = true;
       positionSelect.disabled = true;
@@ -1247,24 +1264,26 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
     } catch (err) {
       showError(err.message);
     } finally {
+      destinationLoading = false;
+      submitButton.disabled = false;
       boardSelect.disabled = false;
     }
   };
   listSelect.onchange = refreshPositions;
-  moveButton.onclick = async () => {
+  const move = async ({ button = moveButton, idleText = "Move item" } = {}) => {
     const destinationBoard = loadedBoards.get(boardSelect.value);
     const destinationList = selectedList();
     if (!destinationBoard || !destinationList) {
       showError("Choose a destination list before moving this item.");
       return;
     }
-    moveButton.textContent = "Saving…";
+    button.textContent = "Saving…";
     const savePromise = savePendingChanges();
     setDetailBusy(true);
     let moved;
     try {
       await savePromise;
-      moveButton.textContent = "Moving…";
+      button.textContent = "Moving…";
       moved = await api.post(`/api/v1/tasks/${taskID}/move`, {
         bucketId: destinationList.id,
         position: Number(positionSelect.value),
@@ -1272,12 +1291,10 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
     } catch (err) {
       showError(err.message);
       setDetailBusy(false);
-      moveButton.textContent = "Move item";
+      button.textContent = idleText;
       return;
     }
 
-    const sourceBoardID = state.board.id;
-    const sourceList = state.board.buckets.find(list => list.id === task.bucketId);
     if (sourceList) {
       sourceList.tasks = (sourceList.tasks || []).filter(item => item.id !== taskID);
       if (task.kind === "action" && !task.done) sourceList.openCount = Math.max(0, (sourceList.openCount || 0) - 1);
@@ -1296,6 +1313,8 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges }) {
     }
     render();
   };
+  moveButton.onclick = () => move();
+  return { hasPendingMove, isLoading, move };
 }
 
 async function bindSettings() {
