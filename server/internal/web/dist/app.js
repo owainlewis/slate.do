@@ -499,6 +499,7 @@ function appHTML() {
             </div>
           </section>
           <section class="nav-sec nav-sec-footer">
+            ${themeSwitchHTML(theme)}
             <button class="plain-btn icon-label" id="settings">${icon("gear")}<span>Settings</span></button>
             <button class="plain-btn icon-label" id="logout">${icon("signOut")}<span>Sign out</span></button>
           </section>
@@ -525,6 +526,14 @@ function appHTML() {
       </div>
       ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
     </section>`;
+}
+
+function themeSwitchHTML(theme) {
+  return `
+    <div class="theme-switch ${theme}" role="group" aria-label="Theme">
+      <span class="theme-switch-thumb" aria-hidden="true"></span>
+      ${themes.map(item => `<button type="button" data-set-theme="${item.id}" class="${theme === item.id ? "on" : ""}" aria-pressed="${theme === item.id}" title="${item.label} theme">${icon(item.id === "dark" ? "moon" : "sun")}<span>${item.label}</span></button>`).join("")}
+    </div>`;
 }
 
 function boardRowHTML(board) {
@@ -790,15 +799,6 @@ function settingsHTML() {
           ${statusErrorHTML(state.error)}
           <section class="settings-section">
             <div class="settings-section-head">
-              <h2>Appearance</h2>
-              <p>Theme across Slate</p>
-            </div>
-            <div class="seg settings-theme">
-              ${themes.map(item => `<button data-settings-theme="${item.id}" class="${theme === item.id ? "on" : ""}">${icon(item.id === "dark" ? "moon" : "sun")}<span>${item.label}</span></button>`).join("")}
-            </div>
-          </section>
-          <section class="settings-section">
-            <div class="settings-section-head">
               <h2>Lists</h2>
         <p>Max active items per list on this board</p>
             </div>
@@ -961,6 +961,15 @@ function bindApp() {
     sidebarToggle.setAttribute("aria-expanded", String(open));
     sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
   };
+  document.querySelectorAll("[data-set-theme]").forEach(el => el.onclick = async () => {
+    if (el.dataset.setTheme === currentTheme()) return;
+    try {
+      await updateTheme(el.dataset.setTheme);
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  });
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = async () => { await loadBoard(el.dataset.board); render(); });
   document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
     const notice = state.moveNotice;
@@ -1332,14 +1341,6 @@ async function bindSettings() {
       state.error = err.message;
     }
     render();
-  });
-  document.querySelectorAll("[data-settings-theme]").forEach(el => el.onclick = async () => {
-    try {
-      await updateTheme(el.dataset.settingsTheme);
-    } catch (err) {
-      state.error = err.message;
-      render();
-    }
   });
   document.querySelector("#token-form").addEventListener("submit", async event => {
     event.preventDefault();
