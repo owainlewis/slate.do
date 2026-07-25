@@ -123,6 +123,9 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   for (const [mode, label] of [["lists", "Lists"], ["flow", "Flow"], ["calendar", "Week"], ["today", "Today"]]) {
     assert.match(html, new RegExp(`data-board-mode="${mode}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
+  assert.match(html, /data-set-theme="light"[\s\S]*?<span>Light<\/span>/);
+  assert.match(html, /data-set-theme="dark"[\s\S]*?<span>Dark<\/span>/);
+  assert.match(html, /class="theme-switch light"[\s\S]*?id="settings"/);
   assert.match(html, /id="settings"[\s\S]*?<span>Settings<\/span>/);
   assert.match(html, /id="logout"[\s\S]*?<span>Sign out<\/span>/);
   assert.doesNotMatch(html, /class="board-settings"/);
@@ -131,8 +134,7 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   assert.match(settings, /id="settings-list-limit"[^>]*value="12"/);
 	assert.match(settings, /Max active items per list on this board/);
 	assert.match(settings, /aria-label="Max active items per list"[^>]*max="20"/);
-  assert.match(settings, /data-settings-theme="light"[\s\S]*?<span>Light<\/span>/);
-  assert.match(settings, /data-settings-theme="dark"[\s\S]*?<span>Dark<\/span>/);
+  assert.doesNotMatch(settings, /data-set-theme=/);
   vm.runInContext(`state.boards = []; state.board = null;`, app);
 });
 
@@ -595,7 +597,8 @@ test("one theme holds when switching between boards", () => {
   assert.match(app.appHTML(), /class="shell theme-dark"/);
   vm.runInContext(`state.board = { id: "other-board", name: "Other board", backgroundValue: "charcoal", buckets: [] }`, app);
   assert.match(app.appHTML(), /class="shell theme-dark"/);
-  assert.match(app.settingsHTML(), /Theme across Slate/);
+  assert.match(app.appHTML(), /class="theme-switch dark"/);
+  assert.match(app.appHTML(), /data-set-theme="dark"[^>]*class="on"/);
 });
 
 test("changing theme updates the user preference once", async () => {
