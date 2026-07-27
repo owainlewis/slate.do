@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -145,6 +146,54 @@ func TestUpdateThemeRejectsUnknownTheme(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest || store.theme != "" {
 		t.Fatalf("status = %d, theme = %q", rec.Code, store.theme)
+	}
+}
+
+func TestCreateAgentReturnsPlainTokenOnceAndStoresOnlyHash(t *testing.T) {
+	store := &agentAuthStore{requestAuthStore: requestAuthStore{}}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"displayName":"Research Bot"}`))
+	rec := httptest.NewRecorder()
+
+	service.CreateAgent(rec, req, User{ID: "owner"})
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response createAgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(response.Token, "slate_agent_") {
+		t.Fatalf("token = %q", response.Token)
+	}
+	if store.tokenHash != hashToken(response.Token) || strings.Contains(store.tokenHash, response.Token) {
+		t.Fatalf("stored token hash = %q", store.tokenHash)
+	}
+	listRec := httptest.NewRecorder()
+	service.ListAgents(listRec, httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil), User{ID: "owner"})
+	if strings.Contains(listRec.Body.String(), response.Token) || strings.Contains(listRec.Body.String(), store.tokenHash) {
+		t.Fatal("agent list exposed token material")
+	}
+}
+
+func TestAgentLifecycleIsOwnerScoped(t *testing.T) {
+	store := &agentAuthStore{requestAuthStore: requestAuthStore{}}
+	service := NewService(store, false)
+	agentID := "11111111-1111-4111-8111-111111111111"
+
+	revoke := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+agentID+"/token", nil)
+	revoke.SetPathValue("id", agentID)
+	service.RevokeAgentToken(httptest.NewRecorder(), revoke, User{ID: "owner-a"})
+	if store.revokedOwner != "owner-a" || store.revokedAgent != agentID {
+		t.Fatalf("revoke scope = %q, %q", store.revokedOwner, store.revokedAgent)
+	}
+
+	remove := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+agentID, nil)
+	remove.SetPathValue("id", agentID)
+	service.DeleteAgent(httptest.NewRecorder(), remove, User{ID: "owner-b"})
+	if store.deletedOwner != "owner-b" || store.deletedAgent != agentID {
+		t.Fatalf("delete scope = %q, %q", store.deletedOwner, store.deletedAgent)
 	}
 }
 
@@ -646,6 +695,34 @@ func (requestAuthStore) ResetPassword(context.Context, string, string, time.Time
 type themeAuthStore struct {
 	requestAuthStore
 	theme string
+}
+
+type agentAuthStore struct {
+	requestAuthStore
+	tokenHash    string
+	revokedOwner string
+	revokedAgent string
+	deletedOwner string
+	deletedAgent string
+}
+
+func (s *agentAuthStore) ListAgents(context.Context, string) ([]AgentUser, error) {
+	return []AgentUser{{ID: "11111111-1111-4111-8111-111111111111", DisplayName: "Research Bot"}}, nil
+}
+
+func (s *agentAuthStore) CreateAgent(_ context.Context, _ string, displayName string, tokenHash string) (AgentUser, error) {
+	s.tokenHash = tokenHash
+	return AgentUser{ID: "11111111-1111-4111-8111-111111111111", DisplayName: displayName}, nil
+}
+
+func (s *agentAuthStore) RevokeAgentToken(_ context.Context, userID string, agentID string) error {
+	s.revokedOwner, s.revokedAgent = userID, agentID
+	return nil
+}
+
+func (s *agentAuthStore) DeleteAgent(_ context.Context, userID string, agentID string) error {
+	s.deletedOwner, s.deletedAgent = userID, agentID
+	return nil
 }
 
 func (s *themeAuthStore) UpdateTheme(_ context.Context, userID string, theme string) (User, error) {

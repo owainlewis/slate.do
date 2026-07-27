@@ -399,16 +399,16 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 		return Task{}, fmt.Errorf("%w: idempotency key must be 200 characters or fewer", ErrInvalidData)
 	}
 	if idempotencyKey != "" {
-		fingerprint, err := taskCreateFingerprint(bucketID, title, input.Description, scheduledDate, kind, input.OverrideLimit)
+		fingerprint, err := taskCreateFingerprint(bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, input.OverrideLimit)
 		if err != nil {
 			return Task{}, err
 		}
-		return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, idempotencyKey, fingerprint, input.OverrideLimit)
+		return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, idempotencyKey, fingerprint, input.OverrideLimit)
 	}
-	return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, "", "", input.OverrideLimit)
+	return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", "", input.OverrideLimit)
 }
 
-func (s *Store) createTask(ctx context.Context, userID string, bucketID string, title string, description string, scheduledDate string, kind string, key string, fingerprint string, overrideLimit bool) (Task, error) {
+func (s *Store) createTask(ctx context.Context, userID string, bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, key string, fingerprint string, overrideLimit bool) (Task, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Task{}, err
@@ -444,7 +444,11 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 	if err := checkTaskCapacity(ctx, tx, bucket, "", overrideLimit); err != nil {
 		return Task{}, err
 	}
-	task, err := insertTask(ctx, tx, bucket, title, description, scheduledDate, kind)
+	assigneeAgentID, err = activeAgentAssignment(ctx, tx, userID, assigneeAgentID)
+	if err != nil {
+		return Task{}, err
+	}
+	task, err := insertTask(ctx, tx, bucket, title, description, scheduledDate, kind, assigneeAgentID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -466,16 +470,56 @@ type queryRower interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string, description string, scheduledDate string, kind string) (Task, error) {
+func activeAgentAssignment(ctx context.Context, db queryRower, userID string, agentID string) (string, error) {
+	agentID = clean(agentID)
+	if agentID == "" {
+		return "", nil
+	}
+	if !validUUID(agentID) {
+		return "", fmt.Errorf("%w: agent assignee not found", ErrInvalidData)
+	}
+	var id string
+	err := db.QueryRow(ctx, `
+		SELECT id::text
+		FROM agent_users
+		WHERE owner_user_id = $1 AND id = $2 AND deleted_at IS NULL
+	`, userID, agentID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: agent assignee not found", ErrInvalidData)
+	}
+	return id, err
+}
+
+func validUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, character := range value {
+		switch index {
+		case 8, 13, 18, 23:
+			if character != '-' {
+				return false
+			}
+		default:
+			if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string, description string, scheduledDate string, kind string, assigneeAgentID string) (Task, error) {
 	row := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, status, sort_order)
+		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, status, assignee_agent_id, sort_order)
 		VALUES (
-			$1, $2, $3, $4, NULLIF($5, '')::date, $6, $7,
+			$1, $2, $3, $4, NULLIF($5, '')::date, $6, $7, NULLIF($8, '')::uuid,
 			COALESCE((SELECT max(sort_order) + 1 FROM tasks WHERE bucket_id = $2), 0)
 		)
 		RETURNING id::text, board_id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, done, status, sort_order, created_at, updated_at
-	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusQueued)
+			, COALESCE(assignee_agent_id::text, '')
+	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusQueued, assigneeAgentID)
 	return scanTask(row)
 }
 
@@ -483,7 +527,7 @@ func taskByID(ctx context.Context, db queryRower, id string) (Task, error) {
 	row := db.QueryRow(ctx, `
 		SELECT id::text, board_id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, done,
-			status, sort_order, created_at, updated_at
+			status, sort_order, created_at, updated_at, COALESCE(assignee_agent_id::text, '')
 		FROM tasks
 		WHERE id = $1
 	`, id)
@@ -494,15 +538,16 @@ func taskByID(ctx context.Context, db queryRower, id string) (Task, error) {
 	return task, err
 }
 
-func taskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, overrideLimit bool) (string, error) {
+func taskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, overrideLimit bool) (string, error) {
 	raw, err := json.Marshal(struct {
-		BucketID      string `json:"bucketId"`
-		Title         string `json:"title"`
-		Description   string `json:"description"`
-		ScheduledDate string `json:"scheduledDate"`
-		Kind          string `json:"kind"`
-		OverrideLimit bool   `json:"overrideLimit"`
-	}{bucketID, title, description, scheduledDate, kind, overrideLimit})
+		BucketID        string `json:"bucketId"`
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		ScheduledDate   string `json:"scheduledDate"`
+		Kind            string `json:"kind"`
+		AssigneeAgentID string `json:"assigneeAgentId"`
+		OverrideLimit   bool   `json:"overrideLimit"`
+	}{bucketID, title, description, scheduledDate, kind, strings.TrimSpace(assigneeAgentID), overrideLimit})
 	if err != nil {
 		return "", err
 	}
@@ -511,11 +556,15 @@ func taskCreateFingerprint(bucketID string, title string, description string, sc
 }
 
 func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input UpdateTaskInput) (Task, error) {
-	return s.updateTask(ctx, userID, id, input, false)
+	return s.updateTask(ctx, userID, "", id, input, false)
 }
 
 func (s *Store) UpdateTaskForHuman(ctx context.Context, userID string, id string, input UpdateTaskInput) (Task, error) {
-	return s.updateTask(ctx, userID, id, input, true)
+	return s.updateTask(ctx, userID, "", id, input, true)
+}
+
+func (s *Store) UpdateTaskForAgent(ctx context.Context, userID string, agentID string, id string, input UpdateTaskInput) (Task, error) {
+	return s.updateTask(ctx, userID, agentID, id, input, false)
 }
 
 func (s *Store) MoveTask(ctx context.Context, userID string, id string, input MoveTaskInput) (Task, error) {
@@ -635,13 +684,13 @@ func writeTaskOrder(ctx context.Context, tx pgx.Tx, ids []string) error {
 	return nil
 }
 
-func (s *Store) updateTask(ctx context.Context, userID string, id string, input UpdateTaskInput, allowWorking bool) (Task, error) {
+func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID string, id string, input UpdateTaskInput, allowWorking bool) (Task, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Task{}, err
 	}
 	defer tx.Rollback(ctx)
-	current, err := lockedTask(ctx, tx, userID, id)
+	current, err := lockedTaskForAgent(ctx, tx, userID, requiredAgentID, id)
 	if err != nil {
 		return Task{}, err
 	}
@@ -694,6 +743,12 @@ func (s *Store) updateTask(ctx context.Context, userID string, id string, input 
 	if input.SortOrder != nil {
 		current.SortOrder = *input.SortOrder
 	}
+	if input.AssigneeAgentID != nil {
+		current.AssigneeAgentID, err = activeAgentAssignment(ctx, tx, userID, *input.AssigneeAgentID)
+		if err != nil {
+			return Task{}, err
+		}
+	}
 	if current.Title == "" {
 		return Task{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
 	}
@@ -711,14 +766,16 @@ func (s *Store) updateTask(ctx context.Context, userID string, id string, input 
 		UPDATE tasks t
 		SET board_id = $3, bucket_id = $4, title = $5, description = $6,
 			scheduled_date = NULLIF($7, '')::date, kind = $8,
-			done = $9, status = $10, sort_order = $11, updated_at = now()
+			done = $9, status = $10, sort_order = $11,
+			assignee_agent_id = NULLIF($12, '')::uuid, updated_at = now()
 		FROM boards b
 		WHERE b.id = t.board_id AND b.user_id = $1 AND t.id = $2
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at
+			t.status, t.sort_order, t.created_at, t.updated_at,
+			COALESCE(t.assignee_agent_id::text, '')
 	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Description, current.ScheduledDate, current.Kind, current.Done,
-		current.Status, current.SortOrder)
+		current.Status, current.SortOrder, current.AssigneeAgentID)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
@@ -733,6 +790,20 @@ func (s *Store) updateTask(ctx context.Context, userID string, id string, input 
 }
 
 func (s *Store) ClaimTask(ctx context.Context, userID string, id string) (Task, error) {
+	return s.claimTask(ctx, userID, "", id)
+}
+
+func (s *Store) ClaimTaskForAgent(ctx context.Context, userID string, agentID string, id string) (Task, error) {
+	return s.claimTask(ctx, userID, agentID, id)
+}
+
+func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id string) (Task, error) {
+	agentSQL := ""
+	args := []any{userID, id, StatusWorking, StatusQueued, KindAction}
+	if agentID != "" {
+		args = append(args, agentID)
+		agentSQL = " AND t.assignee_agent_id = $6"
+	}
 	row := s.db.QueryRow(ctx, `
 		UPDATE tasks t
 		SET status = $3, updated_at = now()
@@ -743,10 +814,12 @@ func (s *Store) ClaimTask(ctx context.Context, userID string, id string) (Task, 
 			AND t.done = false
 			AND t.kind = $5
 			AND t.status = $4
+			`+agentSQL+`
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at
-	`, userID, id, StatusWorking, StatusQueued, KindAction)
+			t.status, t.sort_order, t.created_at, t.updated_at,
+			COALESCE(t.assignee_agent_id::text, '')
+	`, args...)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrTaskUnavailable
@@ -799,7 +872,8 @@ func (s *Store) GetTask(ctx context.Context, userID string, id string) (Task, er
 	row := s.db.QueryRow(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at
+			t.status, t.sort_order, t.created_at, t.updated_at,
+			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2
@@ -834,6 +908,10 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 		args = append(args, KindAction)
 		doneSQL += fmt.Sprintf(" AND t.kind = $%d", len(args))
 	}
+	if filter.AssigneeAgentID != "" {
+		args = append(args, filter.AssigneeAgentID)
+		doneSQL += fmt.Sprintf(" AND t.assignee_agent_id = $%d", len(args))
+	}
 	limit := filter.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 100
@@ -842,7 +920,8 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 	query := `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at
+			t.status, t.sort_order, t.created_at, t.updated_at,
+			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1` + doneSQL + `
@@ -931,15 +1010,27 @@ func lockedBucket(ctx context.Context, tx pgx.Tx, userID string, id string) (Buc
 }
 
 func lockedTask(ctx context.Context, tx pgx.Tx, userID string, id string) (Task, error) {
+	return lockedTaskForAgent(ctx, tx, userID, "", id)
+}
+
+func lockedTaskForAgent(ctx context.Context, tx pgx.Tx, userID string, agentID string, id string) (Task, error) {
+	agentSQL := ""
+	args := []any{userID, id}
+	if agentID != "" {
+		args = append(args, agentID)
+		agentSQL = " AND t.assignee_agent_id = $3"
+	}
 	row := tx.QueryRow(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at
+			t.status, t.sort_order, t.created_at, t.updated_at,
+			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2
+			`+agentSQL+`
 		FOR UPDATE OF t
-	`, userID, id)
+	`, args...)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
@@ -970,7 +1061,8 @@ func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID str
 	rows, err := s.db.Query(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at
+			t.status, t.sort_order, t.created_at, t.updated_at,
+			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.bucket_id = $2
@@ -1040,6 +1132,7 @@ func scanTask(row rowScanner) (Task, error) {
 		&task.ID, &task.BoardID, &task.BucketID, &task.Title, &task.Description, &task.ScheduledDate, &task.Kind, &task.Done,
 		&task.Status,
 		&task.SortOrder, &task.CreatedAt, &task.UpdatedAt,
+		&task.AssigneeAgentID,
 	)
 	return task, err
 }

@@ -52,6 +52,80 @@ func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
 	assertConcurrentResults(t, taskResults, defaultMaxTasksPerList, ErrActiveItemLimit)
 }
 
+func TestAgentAssignmentsAreAccountScopedAndSurviveSoftDelete(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	ownerID := createIntegrationUser(t, ctx, db)
+	otherID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
+	})
+
+	var ownerAgentID, otherAgentID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO agent_users (owner_user_id, display_name, token_hash)
+		VALUES ($1, 'Owner agent', $2)
+		RETURNING id::text
+	`, ownerID, fmt.Sprintf("owner-agent-%d", time.Now().UnixNano())).Scan(&ownerAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `
+		INSERT INTO agent_users (owner_user_id, display_name, token_hash)
+		VALUES ($1, 'Other agent', $2)
+		RETURNING id::text
+	`, otherID, fmt.Sprintf("other-agent-%d", time.Now().UnixNano())).Scan(&otherAgentID); err != nil {
+		t.Fatal(err)
+	}
+
+	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Agent work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Queue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, ownerID, list.ID, CreateTaskInput{Title: "Assigned", AssigneeAgentID: ownerAgentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.AssigneeAgentID != ownerAgentID {
+		t.Fatalf("assignee = %q, want %q", task.AssigneeAgentID, ownerAgentID)
+	}
+	if _, err := store.CreateTask(ctx, ownerID, list.ID, CreateTaskInput{Title: "Malformed", AssigneeAgentID: "not-a-uuid"}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("malformed create assignment error = %v", err)
+	}
+	if _, err := store.CreateTask(ctx, ownerID, list.ID, CreateTaskInput{Title: "Cross account", AssigneeAgentID: otherAgentID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("cross-account assignment error = %v", err)
+	}
+	malformed := "not-a-uuid"
+	if _, err := store.UpdateTask(ctx, ownerID, task.ID, UpdateTaskInput{AssigneeAgentID: &malformed}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("malformed update assignment error = %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, ownerID, TaskFilter{AssigneeAgentID: ownerAgentID})
+	if err != nil || len(tasks) != 1 || tasks[0].ID != task.ID {
+		t.Fatalf("assigned queue = %#v, error = %v", tasks, err)
+	}
+	if _, err := store.ClaimTaskForAgent(ctx, ownerID, otherAgentID, task.ID); !errors.Is(err, ErrTaskUnavailable) {
+		t.Fatalf("other agent claim error = %v", err)
+	}
+	if _, err := store.ClaimTaskForAgent(ctx, ownerID, ownerAgentID, task.ID); err != nil {
+		t.Fatalf("assigned agent claim: %v", err)
+	}
+
+	if _, err := db.Exec(ctx, "UPDATE agent_users SET deleted_at = now(), revoked_at = now() WHERE id = $1", ownerAgentID); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.GetTask(ctx, ownerID, task.ID)
+	if err != nil || loaded.AssigneeAgentID != ownerAgentID {
+		t.Fatalf("assignment after soft delete = %#v, error = %v", loaded, err)
+	}
+	if _, err := store.UpdateTask(ctx, ownerID, task.ID, UpdateTaskInput{AssigneeAgentID: &ownerAgentID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("deleted agent reassignment error = %v", err)
+	}
+}
+
 func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

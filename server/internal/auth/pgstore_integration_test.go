@@ -436,6 +436,70 @@ func TestPGStoreResolvesProEntitlementForEveryAuthenticationPath(t *testing.T) {
 	assertProAdminEntitlement(t, byToken)
 }
 
+func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run auth store integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPGStore(db)
+	email := fmt.Sprintf("agent-owner-%d@slate.test", time.Now().UnixNano())
+	owner, err := store.CreateAdmin(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", owner.ID) })
+
+	tokenHash := fmt.Sprintf("agent-token-%d", time.Now().UnixNano())
+	agent, err := store.CreateAgent(ctx, owner.ID, "Research Bot", tokenHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateAgent(ctx, owner.ID, "research bot", tokenHash+"-duplicate"); !errors.Is(err, ErrAgentNameTaken) {
+		t.Fatalf("case-insensitive duplicate error = %v", err)
+	}
+
+	identity, err := store.FindUserByAPITokenHash(ctx, tokenHash, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ID != owner.ID || identity.AgentID != agent.ID || identity.Role != "agent" || identity.DisplayName != agent.DisplayName || identity.Email != "" {
+		t.Fatalf("agent identity = %#v", identity)
+	}
+	if identity.Entitlement.Plan != entitlements.PlanPro {
+		t.Fatalf("agent entitlement = %#v", identity.Entitlement)
+	}
+
+	if err := store.RevokeAgentToken(ctx, owner.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FindUserByAPITokenHash(ctx, tokenHash, time.Now()); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("revoked agent token error = %v", err)
+	}
+	if err := store.DeleteAgent(ctx, "00000000-0000-0000-0000-000000000000", agent.ID); !errors.Is(err, ErrAgentNotFound) {
+		t.Fatalf("cross-account delete error = %v", err)
+	}
+	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := store.ListAgents(ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 || agents[0].DeletedAt == nil || agents[0].RevokedAt == nil {
+		t.Fatalf("deleted agent = %#v", agents)
+	}
+}
+
 func assertProAdminEntitlement(t *testing.T, user User) {
 	t.Helper()
 	if user.Role != "admin" || user.Entitlement.Plan != entitlements.PlanPro || user.Entitlement.Source != entitlements.SourceAdmin {

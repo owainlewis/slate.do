@@ -246,6 +246,56 @@ test("list items show compact state treatment", () => {
   assert.match(done, /class="task action done"/);
 });
 
+test("agent assignments use safe deterministic avatars across task and detail views", () => {
+  vm.runInContext(`
+    state.agents = [
+      { id: "agent-one", displayName: "<Research Bot>" },
+      { id: "agent-old", displayName: "Old Bot", deletedAt: "2026-07-27T00:00:00Z" },
+    ];
+    state.boards = [{ id: "board", name: "Board" }];
+    state.board = {
+      id: "board", name: "Board",
+      buckets: [{ id: "list", name: "List", tasks: [] }],
+    };
+  `, app);
+  const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", done: false, scheduledDate: "", assigneeAgentId: "agent-one" };
+  const taskHTML = app.taskHTML(assigned);
+  assert.match(taskHTML, /class="avatar tone-\d avatar-small/);
+  assert.match(taskHTML, />&lt;B<\/span>/);
+  assert.doesNotMatch(taskHTML, /<Research Bot>/);
+
+  const detail = app.detailHTML({ ...assigned, assigneeAgentId: "agent-old" });
+  assert.match(detail, /id="detail-assignee" name="assigneeAgentId"/);
+  assert.match(detail, /value="agent-one"/);
+  assert.match(detail, /value="agent-old" selected disabled>Old Bot \(inactive\)/);
+
+  vm.runInContext(`state.agents = [];`, app);
+  const unavailable = app.detailHTML({ ...assigned, assigneeAgentId: "agent-one" });
+  assert.match(unavailable, /value="agent-one" selected>Assigned agent unavailable/);
+  assert.doesNotMatch(unavailable, /value="" selected>Unassigned/);
+
+  const first = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
+  const second = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
+  assert.equal(first, second);
+  vm.runInContext(`state.agents = []; state.boards = []; state.board = null;`, app);
+});
+
+test("settings supports primary profile and one-time agent token management", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
+    state.agents = [{ id: "agent", displayName: "Builder Bot" }];
+    state.newAgentToken = "slate_agent_secret";
+  `, app);
+  const html = app.settingsHTML();
+  assert.match(html, /id="profile-form"/);
+  assert.match(html, /aria-label="Your display name" value="Owain Lewis"/);
+  assert.match(html, /id="agent-form"/);
+  assert.match(html, /slate_agent_secret/);
+  assert.match(html, /data-revoke-agent="agent"/);
+  assert.match(html, /data-delete-agent="agent"/);
+  vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = "";`, app);
+});
+
 const board = {
   buckets: [
     {

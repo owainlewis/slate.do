@@ -683,6 +683,91 @@ test("password reset request and confirmation work without exposing the token in
 	assert.equal(page.url(), `${baseURL}/`);
 });
 
+test("agent users can be created, assigned with an avatar, revoked, and safely deleted", async t => {
+  let agents = [];
+  let currentTask = { ...task };
+  let failAgentLoadOnce = false;
+  const agentID = "11111111-1111-4111-8111-111111111111";
+  const currentBoard = () => ({
+    id: "board-one", name: "Business", maxTasksPerList: 20,
+    buckets: [{ id: "list-one", boardId: "board-one", name: "AI Engineer", goal: "", openCount: 1, limitCount: 20, tasks: [currentTask] }],
+  });
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" } });
+    if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }] });
+    if (url.pathname === "/api/v1/boards/board-one") return json(response, currentBoard());
+    if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
+    if (url.pathname === "/api/v1/agents" && request.method === "GET") {
+      if (failAgentLoadOnce) {
+        failAgentLoadOnce = false;
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "agents temporarily unavailable" }));
+      }
+      return json(response, { agents });
+    }
+    if (url.pathname === "/api/v1/agents" && request.method === "POST") {
+      const input = await requestJSON(request);
+      const agent = { id: agentID, displayName: input.displayName, createdAt: "2026-07-27T00:00:00Z" };
+      agents = [agent];
+      return json(response, { ...agent, token: "slate_agent_create_once" });
+    }
+    if (url.pathname === `/api/v1/agents/${agentID}/token` && request.method === "DELETE") {
+      agents = [{ ...agents[0], revokedAt: "2026-07-27T01:00:00Z" }];
+      return json(response, { ok: true });
+    }
+    if (url.pathname === `/api/v1/agents/${agentID}` && request.method === "DELETE") {
+      agents = [{ ...agents[0], deletedAt: "2026-07-27T02:00:00Z" }];
+      return json(response, { ok: true });
+    }
+    if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
+      currentTask = { ...currentTask, ...await requestJSON(request) };
+      return json(response, currentTask);
+    }
+    if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+  await page.goto(`http://127.0.0.1:${server.address().port}`);
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByPlaceholder("Agent name").fill("Builder Bot");
+  await page.getByRole("button", { name: "Create agent", exact: true }).click();
+  await page.getByText("slate_agent_create_once", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Board", exact: true }).click();
+
+  await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
+  await page.getByLabel("Agent", { exact: true }).selectOption(agentID);
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  const assignedAvatar = page.locator(".task-assignee .avatar");
+  await assignedAvatar.waitFor();
+  assert.equal(await assignedAvatar.getAttribute("title"), "Builder Bot");
+
+  failAgentLoadOnce = true;
+  await page.reload();
+  await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
+  assert.equal(await page.getByLabel("Agent", { exact: true }).inputValue(), agentID);
+  await page.getByLabel("Title", { exact: true }).fill("Improve the vault safely");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  assert.equal(currentTask.assigneeAgentId, agentID);
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Revoke token", exact: true }).click();
+  await page.getByText("Token revoked", { exact: true }).waitFor();
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByText("Inactive", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Board", exact: true }).click();
+  assert.equal(await page.locator(".task-assignee .avatar").getAttribute("title"), "Builder Bot (inactive)");
+});
+
 function json(response, body) {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
