@@ -88,6 +88,10 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	if _, err := store.CreateAPIToken(ctx, user.ID, "operator-test", "api-hash"); err != nil {
 		t.Fatal(err)
 	}
+	agent, err := store.CreateAgent(ctx, user.ID, "Operator Bot", "agent-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.SetMemberDisabled(ctx, email, true); err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +100,9 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	}
 	if _, err := store.FindUserByAPITokenHash(ctx, "api-hash", time.Now()); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("disabled API token error = %v", err)
+	}
+	if _, err := store.FindUserByAPITokenHash(ctx, "agent-hash", time.Now()); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("disabled agent token error = %v", err)
 	}
 	if _, err := store.FindUserByEmail(ctx, email); !errors.Is(err, ErrInvalidAuth) {
 		t.Fatalf("disabled password lookup error = %v", err)
@@ -106,6 +113,9 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	if _, err := store.CreateAPIToken(ctx, user.ID, "disabled-token", "disabled-api-hash"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("API token creation while disabled error = %v, want ErrUnauthorized", err)
 	}
+	if _, err := store.CreateAgent(ctx, user.ID, "Disabled Bot", "disabled-agent-hash"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("agent creation while disabled error = %v, want ErrUnauthorized", err)
+	}
 	if err := store.SetMemberDisabled(ctx, email, false); err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +124,16 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	}
 	if _, err := store.FindUserBySessionHash(ctx, "session-hash", time.Now()); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("revoked session restored after enable: %v", err)
+	}
+	if _, err := store.FindUserByAPITokenHash(ctx, "agent-hash", time.Now()); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("revoked agent token restored after enable: %v", err)
+	}
+	agents, err := store.ListAgents(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 || agents[0].ID != agent.ID || agents[0].RevokedAt == nil {
+		t.Fatalf("disabled account agent = %#v", agents)
 	}
 }
 
@@ -277,7 +297,7 @@ func TestPasswordResetSerializesWithStaleLoginSessionCreation(t *testing.T) {
 	}
 }
 
-func TestDisableSerializesWithSessionAndAPITokenCreation(t *testing.T) {
+func TestDisableSerializesWithSessionAPITokenAndAgentCreation(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("set SLATE_TEST_DATABASE_URL to run auth store integration tests")
@@ -305,10 +325,12 @@ func TestDisableSerializesWithSessionAndAPITokenCreation(t *testing.T) {
 		}
 		sessionHash := fmt.Sprintf("race-session-%d-%d", time.Now().UnixNano(), iteration)
 		tokenHash := fmt.Sprintf("race-token-%d-%d", time.Now().UnixNano(), iteration)
+		agentHash := fmt.Sprintf("race-agent-%d-%d", time.Now().UnixNano(), iteration)
 		start := make(chan struct{})
 		var wait sync.WaitGroup
-		wait.Add(3)
-		var disableErr, sessionErr, tokenErr error
+		wait.Add(4)
+		var disableErr, sessionErr, tokenErr, agentErr error
+		var agent AgentUser
 		go func() {
 			defer wait.Done()
 			<-start
@@ -324,6 +346,11 @@ func TestDisableSerializesWithSessionAndAPITokenCreation(t *testing.T) {
 			<-start
 			_, tokenErr = store.CreateAPIToken(ctx, user.ID, "race", tokenHash)
 		}()
+		go func() {
+			defer wait.Done()
+			<-start
+			agent, agentErr = store.CreateAgent(ctx, user.ID, fmt.Sprintf("Race Agent %d", iteration), agentHash)
+		}()
 		close(start)
 		wait.Wait()
 		if disableErr != nil {
@@ -335,6 +362,9 @@ func TestDisableSerializesWithSessionAndAPITokenCreation(t *testing.T) {
 		if tokenErr != nil && !errors.Is(tokenErr, ErrUnauthorized) {
 			t.Fatalf("iteration %d token: %v", iteration, tokenErr)
 		}
+		if agentErr != nil && !errors.Is(agentErr, ErrUnauthorized) {
+			t.Fatalf("iteration %d agent: %v", iteration, agentErr)
+		}
 		if err := store.SetMemberDisabled(ctx, email, false); err != nil {
 			t.Fatal(err)
 		}
@@ -343,6 +373,14 @@ func TestDisableSerializesWithSessionAndAPITokenCreation(t *testing.T) {
 		}
 		if _, err := store.FindUserByAPITokenHash(ctx, tokenHash, time.Now()); !errors.Is(err, ErrUnauthorized) {
 			t.Fatalf("iteration %d API token survived re-enable: %v", iteration, err)
+		}
+		if _, err := store.FindUserByAPITokenHash(ctx, agentHash, time.Now()); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("iteration %d agent token survived re-enable: %v", iteration, err)
+		}
+		if agentErr == nil {
+			if err := store.DeleteAgent(ctx, user.ID, agent.ID); err != nil {
+				t.Fatalf("iteration %d delete agent: %v", iteration, err)
+			}
 		}
 	}
 }

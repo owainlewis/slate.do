@@ -626,6 +626,13 @@ func (s *PGStore) SetMemberDisabled(ctx context.Context, email string, disabled 
 		if _, err := tx.Exec(ctx, "UPDATE api_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", userID); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE agent_users
+			SET revoked_at = now(), updated_at = now()
+			WHERE owner_user_id = $1 AND deleted_at IS NULL AND revoked_at IS NULL
+		`, userID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
