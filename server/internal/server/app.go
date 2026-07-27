@@ -70,6 +70,13 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/agent/tasks/{id}/status", a.user(a.boards.AgentStatus))
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/done", a.user(a.boards.AgentDone))
 	mux.HandleFunc("GET /early-access", a.earlyAccess)
+	mux.HandleFunc("GET /early-access/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/early-access/" {
+			http.NotFound(w, r)
+			return
+		}
+		a.earlyAccess(w, r)
+	})
 	mux.HandleFunc("GET /reset-password", a.resetPasswordPage)
 	mux.Handle("/", StaticHandler(a.static))
 	return mux
