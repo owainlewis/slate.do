@@ -181,7 +181,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   font-weight: 600;
   color: var(--faint);
 }
-.page-row, .plain-btn, .board-select, .board-delete {
+.page-row, .plain-btn, .board-select {
   width: 100%;
   border: 0;
   background: transparent;
@@ -204,18 +204,47 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .board-select { flex: 1; min-width: 0; display: flex; align-items: center; color: var(--soft); }
 .board-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-row.on .board-select { color: var(--ink); font-weight: 600; }
-.board-delete {
+.board-actions {
+  display: flex;
+  align-items: center;
+}
+.board-actions button, .board-rename-controls button {
   width: 28px;
+  height: 28px;
   flex: 0 0 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 7px 0;
+  padding: 0;
   opacity: 0;
   color: var(--faint);
 }
-.board-row:hover .board-delete, .board-delete:focus-visible { opacity: 1; }
-.board-delete:hover { color: var(--danger); }
+.board-row:hover .board-actions button, .board-actions button:focus-visible { opacity: 1; }
+.board-actions button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.board-actions [data-delete-board]:hover { color: var(--danger); }
+.board-row-editing { display: block; padding: 4px 5px 3px; }
+.board-rename { min-width: 0; }
+.board-rename-controls { display: flex; align-items: center; }
+.board-rename-controls input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 5px 7px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+}
+.board-rename-controls input:focus { border-color: var(--accent); outline: 0; }
+.board-rename-controls input[aria-invalid="true"] { border-color: var(--danger); }
+.board-rename-controls button { opacity: 1; }
+.board-rename-controls button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.board-rename-error { min-height: 0; margin: 2px 4px 0; font-size: 10px; line-height: 1.35; }
+.board-rename-error:empty { display: none; }
 .seg { display: flex; gap: 2px; background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: var(--radius); padding: 2px; }
 .seg button { flex: 1; border: 0; background: none; border-radius: var(--radius-sm); padding: 7px 0; color: var(--soft); font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 7px; }
 .seg button .icon { width: 14px; height: 14px; color: var(--faint); }
@@ -1387,7 +1416,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   }
   .settings-page .nav-sec { margin-left: auto; display: flex; align-items: center; gap: 2px; }
   .settings-page .page-row, .settings-page .plain-btn { width: auto; white-space: nowrap; }
-  .board-delete { opacity: 1; }
+  .board-actions button { opacity: 1; }
   .bucket-menu .icon-btn { opacity: 1; }
   .bucket-goal { opacity: 1; }
   .main { width: 100%; }
