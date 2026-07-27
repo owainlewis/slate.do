@@ -37,18 +37,19 @@ type Bucket struct {
 }
 
 type Task struct {
-	ID            string    `json:"id"`
-	BoardID       string    `json:"boardId"`
-	BucketID      string    `json:"bucketId"`
-	Title         string    `json:"title"`
-	Description   string    `json:"description"`
-	ScheduledDate string    `json:"scheduledDate"`
-	Kind          string    `json:"kind"`
-	Done          bool      `json:"done"`
-	Status        string    `json:"status"`
-	SortOrder     int       `json:"sortOrder"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID              string    `json:"id"`
+	BoardID         string    `json:"boardId"`
+	BucketID        string    `json:"bucketId"`
+	Title           string    `json:"title"`
+	Description     string    `json:"description"`
+	ScheduledDate   string    `json:"scheduledDate"`
+	Kind            string    `json:"kind"`
+	Done            bool      `json:"done"`
+	Status          string    `json:"status"`
+	AssigneeAgentID string    `json:"assigneeAgentId,omitempty"`
+	SortOrder       int       `json:"sortOrder"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 type CreateBoardInput struct {
@@ -82,23 +83,25 @@ type UpdateBucketInput struct {
 }
 
 type CreateTaskInput struct {
-	Title          string `json:"title"`
-	Description    string `json:"description"`
-	ScheduledDate  string `json:"scheduledDate"`
-	Kind           string `json:"kind"`
-	OverrideLimit  bool   `json:"overrideLimit"`
-	IdempotencyKey string `json:"-"`
+	Title           string `json:"title"`
+	Description     string `json:"description"`
+	ScheduledDate   string `json:"scheduledDate"`
+	Kind            string `json:"kind"`
+	OverrideLimit   bool   `json:"overrideLimit"`
+	AssigneeAgentID string `json:"assigneeAgentId"`
+	IdempotencyKey  string `json:"-"`
 }
 
 type UpdateTaskInput struct {
-	Title         *string `json:"title"`
-	Description   *string `json:"description"`
-	ScheduledDate *string `json:"scheduledDate"`
-	Kind          *string `json:"kind"`
-	BucketID      *string `json:"bucketId"`
-	Done          *bool   `json:"done"`
-	Status        *string `json:"status"`
-	SortOrder     *int    `json:"sortOrder"`
+	Title           *string `json:"title"`
+	Description     *string `json:"description"`
+	ScheduledDate   *string `json:"scheduledDate"`
+	Kind            *string `json:"kind"`
+	BucketID        *string `json:"bucketId"`
+	Done            *bool   `json:"done"`
+	Status          *string `json:"status"`
+	AssigneeAgentID *string `json:"assigneeAgentId"`
+	SortOrder       *int    `json:"sortOrder"`
 }
 
 type MoveTaskInput struct {
@@ -107,10 +110,11 @@ type MoveTaskInput struct {
 }
 
 type TaskFilter struct {
-	BoardID     string
-	BucketID    string
-	Status      string
-	Done        *bool
-	Limit       int
-	ActionsOnly bool
+	BoardID         string
+	BucketID        string
+	Status          string
+	Done            *bool
+	Limit           int
+	ActionsOnly     bool
+	AssigneeAgentID string
 }

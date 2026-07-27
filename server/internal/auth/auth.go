@@ -45,6 +45,8 @@ var (
 	ErrMemberNotFound    = errors.New("member account not found")
 	ErrInvalidResetToken = errors.New("invalid or expired password reset token")
 	ErrNoPendingReset    = errors.New("no pending password reset request")
+	ErrAgentLimit        = errors.New("agent user limit reached")
+	ErrAgentNotFound     = errors.New("agent not found")
 )
 
 type User struct {
@@ -52,6 +54,8 @@ type User struct {
 	Email       string                   `json:"email"`
 	Role        string                   `json:"role"`
 	Theme       string                   `json:"theme"`
+	DisplayName string                   `json:"displayName"`
+	AgentID     string                   `json:"agentId,omitempty"`
 	Entitlement entitlements.Entitlement `json:"entitlement"`
 }
 
@@ -65,6 +69,15 @@ type APIToken struct {
 	Name       string     `json:"name"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
+}
+
+type AgentUser struct {
+	ID          string     `json:"id"`
+	DisplayName string     `json:"displayName"`
+	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
+	DeletedAt   *time.Time `json:"deletedAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
 }
 
 type MemberAccount struct {
@@ -101,6 +114,17 @@ type Store interface {
 	CreatePasswordResetToken(ctx context.Context, email string, tokenHash string, expiresAt time.Time) error
 	PasswordResetTokenValid(ctx context.Context, tokenHash string, now time.Time) (bool, error)
 	ResetPassword(ctx context.Context, tokenHash string, passwordHash string, now time.Time) error
+}
+
+type profileStore interface {
+	UpdateProfile(ctx context.Context, userID string, theme *string, displayName *string) (User, error)
+}
+
+type agentStore interface {
+	ListAgents(ctx context.Context, userID string) ([]AgentUser, error)
+	CreateAgent(ctx context.Context, userID string, displayName string, tokenHash string) (AgentUser, error)
+	RevokeAgentToken(ctx context.Context, userID string, agentID string) error
+	DeleteAgent(ctx context.Context, userID string, agentID string) error
 }
 
 type Options struct {
@@ -455,18 +479,47 @@ func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User)
 		return
 	}
 	var input struct {
-		Theme string `json:"theme"`
+		Theme       *string `json:"theme"`
+		DisplayName *string `json:"displayName"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Theme != "light" && input.Theme != "dark" {
-		writeError(w, http.StatusBadRequest, "theme must be light or dark")
+	if input.Theme == nil && input.DisplayName == nil {
+		writeError(w, http.StatusBadRequest, "theme or display name is required")
 		return
 	}
-	updated, err := s.store.UpdateTheme(r.Context(), user.ID, input.Theme)
+	if input.Theme != nil {
+		if *input.Theme != "light" && *input.Theme != "dark" {
+			writeError(w, http.StatusBadRequest, "theme must be light or dark")
+			return
+		}
+	}
+	if input.DisplayName != nil {
+		displayName := strings.TrimSpace(*input.DisplayName)
+		if displayName == "" {
+			writeError(w, http.StatusBadRequest, "display name is required")
+			return
+		}
+		if len([]rune(displayName)) > 80 {
+			writeError(w, http.StatusBadRequest, "display name must be 80 characters or fewer")
+			return
+		}
+		input.DisplayName = &displayName
+	}
+	store, ok := s.store.(profileStore)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "profile could not be updated")
+		return
+	}
+	updated, err := store.UpdateProfile(r.Context(), user.ID, input.Theme, input.DisplayName)
+	if errors.Is(err, ErrUnauthorized) {
+		clearSessionCookie(w, s.cookieSecure)
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "theme could not be updated")
+		writeError(w, http.StatusInternalServerError, "profile could not be updated")
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -575,6 +628,121 @@ func (s *Service) RevokeAPIToken(w http.ResponseWriter, r *http.Request, user Us
 	err := s.store.RevokeAPIToken(r.Context(), user.ID, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "API token could not be revoked")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Service) ListAgents(w http.ResponseWriter, r *http.Request, user User) {
+	store, ok := s.store.(agentStore)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "agents could not be loaded")
+		return
+	}
+	agents, err := store.ListAgents(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "agents could not be loaded")
+		return
+	}
+	if agents == nil {
+		agents = []AgentUser{}
+	}
+	writeJSON(w, http.StatusOK, map[string][]AgentUser{"agents": agents})
+}
+
+func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User) {
+	if !validateAuthPost(w, r) {
+		return
+	}
+	var input struct {
+		DisplayName string `json:"displayName"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	displayName := strings.TrimSpace(input.DisplayName)
+	if displayName == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	if len([]rune(displayName)) > 80 {
+		writeError(w, http.StatusBadRequest, "agent name must be 80 characters or fewer")
+		return
+	}
+	plain, err := randomToken("slate_agent")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "agent could not be created")
+		return
+	}
+	store, ok := s.store.(agentStore)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "agent could not be created")
+		return
+	}
+	agent, err := store.CreateAgent(r.Context(), user.ID, displayName, hashToken(plain))
+	if errors.Is(err, ErrAgentLimit) {
+		writeCodedError(w, http.StatusConflict, "agent_limit_reached", "Only one agent user is allowed per account for now. Delete the current agent before creating another.")
+		return
+	}
+	if errors.Is(err, ErrUnauthorized) {
+		clearSessionCookie(w, s.cookieSecure)
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "agent could not be created")
+		return
+	}
+	writeJSON(w, http.StatusCreated, createAgentResponse{Token: plain, AgentUser: agent})
+}
+
+func (s *Service) RevokeAgentToken(w http.ResponseWriter, r *http.Request, user User) {
+	if !validateSameOrigin(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if !validID(id) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	store, ok := s.store.(agentStore)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "agent token could not be revoked")
+		return
+	}
+	err := store.RevokeAgentToken(r.Context(), user.ID, id)
+	if errors.Is(err, ErrAgentNotFound) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "agent token could not be revoked")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Service) DeleteAgent(w http.ResponseWriter, r *http.Request, user User) {
+	if !validateSameOrigin(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if !validID(id) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	store, ok := s.store.(agentStore)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "agent could not be deleted")
+		return
+	}
+	err := store.DeleteAgent(r.Context(), user.ID, id)
+	if errors.Is(err, ErrAgentNotFound) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "agent could not be deleted")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -741,6 +909,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+func writeCodedError(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "error": message})
+}
+
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -789,4 +961,9 @@ type apiTokenInput struct {
 type createAPITokenResponse struct {
 	Token string `json:"token"`
 	APIToken
+}
+
+type createAgentResponse struct {
+	Token string `json:"token"`
+	AgentUser
 }

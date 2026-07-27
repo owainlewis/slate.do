@@ -150,7 +150,13 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	task, err := h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), input)
+	var task Task
+	var err error
+	if user.AgentID != "" {
+		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), input)
+	} else {
+		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), input)
+	}
 	if handleStoreError(w, err) {
 		return
 	}
@@ -171,12 +177,13 @@ func (h *Handler) MoveTask(w http.ResponseWriter, r *http.Request, user auth.Use
 
 func (h *Handler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input struct {
-		Title         *string `json:"title"`
-		Description   *string `json:"description"`
-		ScheduledDate *string `json:"scheduledDate"`
-		Kind          *string `json:"kind"`
-		BucketID      *string `json:"bucketId"`
-		Status        *string `json:"status"`
+		Title           *string `json:"title"`
+		Description     *string `json:"description"`
+		ScheduledDate   *string `json:"scheduledDate"`
+		Kind            *string `json:"kind"`
+		BucketID        *string `json:"bucketId"`
+		Status          *string `json:"status"`
+		AssigneeAgentID *string `json:"assigneeAgentId"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -187,7 +194,7 @@ func (h *Handler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request, user 
 	}
 	task, err := h.store.UpdateTaskForHuman(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{
 		Title: input.Title, Description: input.Description, ScheduledDate: input.ScheduledDate,
-		Kind: input.Kind, BucketID: input.BucketID, Status: input.Status,
+		Kind: input.Kind, BucketID: input.BucketID, Status: input.Status, AssigneeAgentID: input.AssigneeAgentID,
 	})
 	if handleStoreError(w, err) {
 		return
@@ -246,6 +253,9 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 		filter.Status = StatusQueued
 	}
 	filter.ActionsOnly = true
+	if user.AgentID != "" {
+		filter.AssigneeAgentID = user.AgentID
+	}
 	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "tasks could not be loaded")
@@ -258,7 +268,13 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 }
 
 func (h *Handler) AgentClaim(w http.ResponseWriter, r *http.Request, user auth.User) {
-	task, err := h.store.ClaimTask(r.Context(), user.ID, r.PathValue("id"))
+	var task Task
+	var err error
+	if user.AgentID != "" {
+		task, err = h.store.ClaimTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+	} else {
+		task, err = h.store.ClaimTask(r.Context(), user.ID, r.PathValue("id"))
+	}
 	if handleStoreError(w, err) {
 		return
 	}
@@ -272,7 +288,13 @@ func (h *Handler) AgentStatus(w http.ResponseWriter, r *http.Request, user auth.
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	task, err := h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
+	var task Task
+	var err error
+	if user.AgentID != "" {
+		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
+	} else {
+		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
+	}
 	if handleStoreError(w, err) {
 		return
 	}
@@ -282,7 +304,13 @@ func (h *Handler) AgentStatus(w http.ResponseWriter, r *http.Request, user auth.
 func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.User) {
 	status := StatusDone
 	done := true
-	task, err := h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &status, Done: &done})
+	var task Task
+	var err error
+	if user.AgentID != "" {
+		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &status, Done: &done})
+	} else {
+		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &status, Done: &done})
+	}
 	if handleStoreError(w, err) {
 		return
 	}

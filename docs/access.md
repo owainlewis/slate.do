@@ -33,3 +33,11 @@ The authenticated user response exposes the resolved plan, source, and the serve
 Completed items do not count toward the active-item maximum. A board can configure a lower Max active items per list value as a working constraint. API input cannot configure a value above 20. An explicit override can bypass only the lower working constraint, never the Pro maximum.
 
 All resource limits are enforced transactionally on the server for browser, CLI, idempotent, and agent requests. UI checks explain obvious over-limit actions but are not an authorization boundary. Every query and mutation continues to scope resources to the authenticated account owner.
+
+## Agent identities
+
+An account owner can create named agent identities without an email, password, registration, or browser session. Creation returns a single `slate_agent_...` token once; Slate stores only its SHA-256 hash. An agent token resolves to its owning account for board, list, and task authorization, and to its agent identity for assigned-work filtering. It cannot cross account boundaries.
+
+Each account can have one non-deleted agent identity for now. A revoked agent still occupies that slot. The database enforces the limit under concurrent requests. Agent tokens can be revoked independently. Deleting an agent is a soft delete that also revokes its token, removes it from future assignment choices, and frees the slot for a replacement. Existing assignments keep the inactive identity so task history remains understandable.
+
+Slate does not currently have a vetted image upload or object-storage pipeline. Primary users and agent identities therefore use deterministic initials-and-colour avatars derived from their stored identity. Display names are escaped before rendering. Uploaded files and external avatar URLs are intentionally unsupported until image validation, processing, scanning, and durable storage are designed.

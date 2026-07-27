@@ -92,6 +92,8 @@ const state = {
   goalErrors: {},
   newToken: "",
   tokens: [],
+  agents: [],
+  newAgentToken: "",
   boardMode: "lists",
   flowListId: "",
   weekStart: "",
@@ -212,6 +214,8 @@ async function applyRoute() {
   try {
     if (!await loadBoardList(version)) return;
     if (routeVersion !== version) return;
+    await loadAgents(true, authVersion, state.me?.id, version);
+    if (routeVersion !== version) return;
 
     if (route.name === "app") {
       const first = state.boards[0]?.id;
@@ -311,6 +315,8 @@ function resetAuthenticatedState() {
   state.goalErrors = {};
   state.newToken = "";
   state.tokens = [];
+  state.agents = [];
+  state.newAgentToken = "";
   state.boardMode = "lists";
   state.flowListId = "";
   state.weekStart = "";
@@ -711,6 +717,7 @@ function appHTML() {
         <header class="topbar">
           <span class="week">${formatWeekHeading(headerDays)}</span>
           <div class="top-actions">
+            <span class="current-user">${avatarHTML(state.me, { small: true })}<span>${escapeHTML(state.me?.displayName || state.me?.email || "")}</span></span>
             <div class="view-switch" aria-label="Board view">
               <button data-board-mode="lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}" title="Lists">${icon("rows")}<span>Lists</span></button>
               <button data-board-mode="flow" aria-pressed="${flowMode}" class="${flowMode ? "on" : ""}" title="Flow">${icon("kanban")}<span>Flow</span></button>
@@ -798,14 +805,44 @@ function proLimits() {
   };
 }
 
+function avatarInitials(displayName) {
+  const parts = String(displayName || "?").trim().split(/\s+/).filter(Boolean);
+  return (parts.length > 1 ? `${parts[0][0]}${parts[parts.length - 1][0]}` : parts[0]?.slice(0, 2) || "?").toUpperCase();
+}
+
+function avatarTone(id) {
+  let hash = 0;
+  for (const character of String(id || "")) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
+  return Math.abs(hash) % 6;
+}
+
+function avatarHTML(identity, options = {}) {
+  if (!identity) return "";
+  const name = identity.displayName || identity.email || "User";
+  const inactive = Boolean(identity.deletedAt);
+  const label = inactive ? `${name} (inactive)` : name;
+  return `<span class="avatar tone-${avatarTone(identity.id)} ${options.small ? "avatar-small" : ""} ${inactive ? "avatar-inactive" : ""}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">${escapeHTML(avatarInitials(name))}</span>`;
+}
+
+function taskAgent(task) {
+  return state.agents.find(agent => agent.id === task.assigneeAgentId);
+}
+
+function taskAssigneeHTML(task, showName = false) {
+  const agent = taskAgent(task);
+  if (!agent) return "";
+  return `<span class="task-assignee">${avatarHTML(agent, { small: true })}${showName ? `<span>${escapeHTML(agent.displayName)}${agent.deletedAt ? " (inactive)" : ""}</span>` : ""}</span>`;
+}
+
 function taskHTML(task) {
   return `
     <li class="task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
       <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
-      <button class="task-body task-open" type="button" data-open-task="${task.id}">
+      <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <div class="task-title">${escapeHTML(task.title)}${taskStateBadgeHTML(task)}</div>
         ${task.scheduledDate ? `<span class="task-date">${formatTaskDate(task.scheduledDate)}</span>` : ""}
       </button>
+      ${taskAssigneeHTML(task)}
     </li>`;
 }
 
@@ -847,9 +884,9 @@ function flowCardHTML(item) {
   const { task, list } = item;
   return `
     <li class="flow-card ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <button class="task-open flow-card-open" type="button" data-open-task="${task.id}">
+      <button class="task-open flow-card-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <span class="flow-card-title">${escapeHTML(task.title)}</span>
-        <span class="flow-card-meta"><span>${escapeHTML(list.name)}</span>${task.scheduledDate ? `<span>${formatTaskDate(task.scheduledDate)}</span>` : ""}</span>
+        <span class="flow-card-meta"><span>${escapeHTML(list.name)}</span>${task.scheduledDate ? `<span>${formatTaskDate(task.scheduledDate)}</span>` : ""}${taskAssigneeHTML(task, true)}</span>
       </button>
     </li>`;
 }
@@ -893,10 +930,11 @@ function calendarTaskHTML(item) {
   return `
     <li class="task calendar-task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
       <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
-      <button class="task-body task-open" type="button" data-open-task="${task.id}">
+      <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <div class="task-title">${escapeHTML(task.title)}</div>
         <span class="task-list-name">${escapeHTML(list.name)}</span>
       </button>
+      ${taskAssigneeHTML(task)}
     </li>`;
 }
 
@@ -929,6 +967,7 @@ function detailHTML(task) {
             <textarea class="detail-description" id="detail-description" name="description" placeholder="Add a description…">${escapeHTML(task.description || "")}</textarea>
             <div class="detail-properties" aria-label="Item properties">
               <div class="field"><label for="detail-status">State</label><select id="detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
+              <div class="field"><label for="detail-assignee">Agent</label><select id="detail-assignee" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
               <div class="field"><label>Location</label><button class="location-button" id="open-move" type="button"><span>${escapeHTML(state.board.name)} / ${escapeHTML(list?.name || "List")}</span><b>Move…</b></button></div>
               <div class="field"><label for="detail-date">Plan for</label><input id="detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
             </div>
@@ -953,6 +992,17 @@ function detailHTML(task) {
         </form>
       </section>
     </div>`;
+}
+
+function agentOptionsHTML(selectedID = "") {
+  const selectedExists = state.agents.some(agent => agent.id === selectedID);
+  return [
+    `<option value="" ${selectedID ? "" : "selected"}>Unassigned</option>`,
+    ...state.agents
+      .filter(agent => !agent.deletedAt || agent.id === selectedID)
+      .map(agent => `<option value="${escapeAttr(agent.id)}" ${agent.id === selectedID ? "selected" : ""} ${agent.deletedAt ? "disabled" : ""}>${escapeHTML(agent.displayName)}${agent.deletedAt ? " (inactive)" : ""}</option>`),
+    selectedID && !selectedExists ? `<option value="${escapeAttr(selectedID)}" selected>Assigned agent unavailable</option>` : "",
+  ].join("");
 }
 
 function moveListOptionsHTML(board, task, selectedID = task.bucketId) {
@@ -997,6 +1047,7 @@ function statusNoticeHTML(notice) {
 
 function settingsHTML() {
   const theme = currentTheme();
+  const liveAgents = state.agents.filter(agent => !agent.deletedAt);
   return `
     <section class="settings-page theme-${theme}">
       <aside class="sidebar">
@@ -1015,6 +1066,17 @@ function settingsHTML() {
             </div>
           </div>
           ${statusErrorHTML(state.error)}
+          <section class="settings-section profile-settings">
+            <div class="settings-section-head">
+              <h2>Profile</h2>
+              <p>Your generated avatar is shared with the agent identity style</p>
+            </div>
+            <form id="profile-form" class="profile-form">
+              ${avatarHTML(state.me)}
+              <input name="displayName" aria-label="Your display name" value="${escapeAttr(state.me?.displayName || state.me?.email?.split("@")[0] || "")}" maxlength="80" required>
+              <button class="secondary" type="submit">Save profile</button>
+            </form>
+          </section>
           <section class="settings-section">
             <div class="settings-section-head">
               <h2>Lists</h2>
@@ -1022,6 +1084,27 @@ function settingsHTML() {
             </div>
             <div class="limit-control settings-limit">
         <input id="settings-list-limit" aria-label="Max active items per list" type="number" min="1" max="${proLimits().activeItemsPerList}" value="${state.board?.maxTasksPerList || DEFAULT_LIST_LIMIT}">
+            </div>
+          </section>
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h2>Agent users</h2>
+              <p>Create named identities for assigned work. Tokens are shown once.</p>
+            </div>
+            ${liveAgents.length ? `<p class="agent-limit" id="agent-limit">One agent user per account for now. Delete the current agent to create a replacement.</p>` : `
+              <form id="agent-form" class="token-form">
+                <input name="displayName" placeholder="Agent name" maxlength="80" required>
+                <button class="primary" type="submit">Create agent</button>
+              </form>`}
+            ${state.newAgentToken ? `<div class="new-token"><label>New agent token. Copy it now.</label><code>${escapeHTML(state.newAgentToken)}</code></div>` : ""}
+            <div class="agent-list">
+              ${state.agents.length ? state.agents.map(agent => `
+                <div class="agent-row ${agent.deletedAt ? "inactive" : ""}">
+                  ${avatarHTML(agent)}
+                  <span><b>${escapeHTML(agent.displayName)}</b><small>${agent.deletedAt ? "Inactive" : agent.revokedAt ? "Token revoked" : "Active"}</small></span>
+                  ${agent.deletedAt ? "" : agent.revokedAt ? "" : `<button class="secondary" data-revoke-agent="${agent.id}">Revoke token</button>`}
+                  ${agent.deletedAt ? "" : `<button class="danger" data-delete-agent="${agent.id}">Delete</button>`}
+                </div>`).join("") : `<div class="empty-state"><p>No agent users yet.</p></div>`}
             </div>
           </section>
           <section class="settings-section">
@@ -1397,6 +1480,7 @@ function bindDetail() {
       description: form.get("description"),
       scheduledDate: form.get("scheduledDate"),
       status: form.get("status"),
+      assigneeAgentId: form.get("assigneeAgentId"),
     };
   };
   let savedDetail = JSON.stringify(detailInput());
@@ -1619,6 +1703,17 @@ async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#back").onclick = closeSettings;
   document.querySelector("#settings-logout").onclick = logout;
+  document.querySelector("#profile-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const displayName = new FormData(event.currentTarget).get("displayName");
+    try {
+      state.me = await api.patch("/api/v1/me", { displayName });
+      state.error = "";
+    } catch (err) {
+      state.error = err.message;
+    }
+    render();
+  });
   document.querySelector("#settings-list-limit")?.addEventListener("change", async e => {
     const update = listLimitUpdate(state.board.id, e.target.value);
     e.target.value = update.next;
@@ -1636,6 +1731,29 @@ async function bindSettings() {
     const form = new FormData(event.currentTarget);
     if (await createAPIToken(form.get("name"))) render();
   });
+  document.querySelector("#agent-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    if (await createAgent(form.get("displayName"))) render();
+  });
+  document.querySelectorAll("[data-revoke-agent]").forEach(el => el.onclick = async () => {
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    await api.del(`/api/v1/agents/${el.dataset.revokeAgent}/token`);
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    state.newAgentToken = "";
+    if (await loadAgents(false, sessionVersion, userID)) render();
+  });
+  document.querySelectorAll("[data-delete-agent]").forEach(el => el.onclick = async () => {
+    const agent = state.agents.find(item => item.id === el.dataset.deleteAgent);
+    if (!agent || !confirm(`Delete agent "${agent.displayName}"? Existing assignments will remain visible.`)) return;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    await api.del(`/api/v1/agents/${agent.id}`);
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    state.newAgentToken = "";
+    if (await loadAgents(false, sessionVersion, userID)) render();
+  });
   document.querySelectorAll("[data-revoke]").forEach(el => el.onclick = async () => {
     const sessionVersion = authVersion;
     const userID = state.me?.id;
@@ -1652,6 +1770,7 @@ function openSettings() {
 
 function closeSettings() {
   state.newToken = "";
+  state.newAgentToken = "";
   return navigate(state.board ? boardPath(state.board.id) : APP_PATH);
 }
 
@@ -1911,6 +2030,42 @@ async function loadTokens(sessionVersion = authVersion, userID = state.me?.id, e
   return true;
 }
 
+async function loadAgents(optional = false, sessionVersion = authVersion, userID = state.me?.id, expectedRouteVersion) {
+  try {
+    const data = await api.get("/api/v1/agents");
+    if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+    state.agents = data.agents;
+    return true;
+  } catch (err) {
+    if (optional) return false;
+    throw err;
+  }
+}
+
+async function createAgent(displayName) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  try {
+    const data = await api.post("/api/v1/agents", { displayName });
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    const { token, ...agent } = data;
+    state.newAgentToken = token;
+    state.agents = [...state.agents.filter(item => item.id !== agent.id), agent];
+    state.error = "";
+    try {
+      await loadAgents(false, sessionVersion, userID);
+    } catch {
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      state.error = "Agent created. Copy the token now; the agent list could not be refreshed.";
+    }
+    return true;
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    state.error = err.message;
+    return false;
+  }
+}
+
 async function createAPIToken(name) {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
@@ -2090,6 +2245,7 @@ window.addEventListener("popstate", async () => {
   // Sign-out is in flight; the URL it lands on is decided when it finishes.
   if (state.view === "logging-out" || state.view === "logout-error") return;
   state.newToken = "";
+  state.newAgentToken = "";
   await applyRoute();
 });
 

@@ -116,4 +116,4 @@ go run ./server/cmd/slate accounts disable person@example.com
 go run ./server/cmd/slate accounts enable person@example.com
 ```
 
-Disabling a member immediately deletes all sessions and revokes all API tokens. Re-enabling permits a new password login, but does not restore revoked sessions or tokens.
+Disabling a member immediately deletes all sessions and revokes all API and agent tokens. Re-enabling permits a new password login, but does not restore revoked sessions or tokens.

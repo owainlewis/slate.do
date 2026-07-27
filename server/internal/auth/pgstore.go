@@ -28,10 +28,10 @@ func (s *PGStore) CreateAdmin(ctx context.Context, email string, passwordHash st
 	defer tx.Rollback(ctx)
 	var user User
 	err = tx.QueryRow(ctx, `
-		INSERT INTO users (email, password_hash, role)
-		VALUES ($1, $2, 'admin')
-		RETURNING id::text, email, role, theme
-	`, email, passwordHash).Scan(&user.ID, &user.Email, &user.Role, &user.Theme)
+		INSERT INTO users (email, password_hash, role, display_name)
+		VALUES ($1, $2, 'admin', split_part($1, '@', 1))
+		RETURNING id::text, email, role, theme, display_name
+	`, email, passwordHash).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName)
 	if uniqueViolation(err) {
 		return User{}, ErrEmailTaken
 	}
@@ -60,10 +60,10 @@ func (s *PGStore) CreateInvitedMember(ctx context.Context, email string, passwor
 
 	var user User
 	err = tx.QueryRow(ctx, `
-		INSERT INTO users (email, password_hash, role)
-		VALUES ($1, $2, 'member')
-		RETURNING id::text, email, role, theme
-	`, email, passwordHash).Scan(&user.ID, &user.Email, &user.Role, &user.Theme)
+		INSERT INTO users (email, password_hash, role, display_name)
+		VALUES ($1, $2, 'member', split_part($1, '@', 1))
+		RETURNING id::text, email, role, theme, display_name
+	`, email, passwordHash).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName)
 	if uniqueViolation(err) {
 		return User{}, ErrEmailTaken
 	}
@@ -340,12 +340,12 @@ func (s *PGStore) ResetPassword(ctx context.Context, tokenHash string, passwordH
 func (s *PGStore) FindUserByEmail(ctx context.Context, email string) (UserWithPassword, error) {
 	var user UserWithPassword
 	err := s.db.QueryRow(ctx, `
-		SELECT u.id::text, u.email, u.role, u.theme, u.password_hash,
+		SELECT u.id::text, u.email, u.role, u.theme, u.display_name, u.password_hash,
 			COALESCE(e.plan, ''), COALESCE(e.source, '')
 		FROM users u
 		LEFT JOIN entitlements e ON e.user_id = u.id
 		WHERE u.email = $1 AND u.disabled_at IS NULL
-	`, email).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.PasswordHash,
+	`, email).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName, &user.PasswordHash,
 		&user.Entitlement.Plan, &user.Entitlement.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserWithPassword{}, ErrInvalidAuth
@@ -357,12 +357,12 @@ func (s *PGStore) FindUserByEmail(ctx context.Context, email string) (UserWithPa
 func (s *PGStore) FindUserBySessionHash(ctx context.Context, tokenHash string, now time.Time) (User, error) {
 	var user User
 	err := s.db.QueryRow(ctx, `
-		SELECT u.id::text, u.email, u.role, u.theme, e.plan, e.source
+		SELECT u.id::text, u.email, u.role, u.theme, u.display_name, e.plan, e.source
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		JOIN entitlements e ON e.user_id = u.id AND e.plan = 'pro'
 		WHERE s.token_hash = $1 AND s.expires_at > $2 AND u.disabled_at IS NULL
-	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme,
+	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName,
 		&user.Entitlement.Plan, &user.Entitlement.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUnauthorized
@@ -445,14 +445,30 @@ func (s *PGStore) RevokeAPIToken(ctx context.Context, userID string, id string) 
 func (s *PGStore) FindUserByAPITokenHash(ctx context.Context, tokenHash string, now time.Time) (User, error) {
 	var user User
 	err := s.db.QueryRow(ctx, `
-		UPDATE api_tokens t
-		SET last_used_at = $2
-		FROM users u, entitlements e
-		WHERE t.user_id = u.id AND e.user_id = u.id AND e.plan = 'pro'
-			AND u.disabled_at IS NULL
-			AND t.token_hash = $1 AND t.revoked_at IS NULL
-		RETURNING u.id::text, u.email, u.role, u.theme, e.plan, e.source
-	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme,
+		WITH human_token AS (
+			UPDATE api_tokens t
+			SET last_used_at = $2
+			FROM users u, entitlements e
+			WHERE t.user_id = u.id AND e.user_id = u.id AND e.plan = 'pro'
+				AND u.disabled_at IS NULL
+				AND t.token_hash = $1 AND t.revoked_at IS NULL
+			RETURNING u.id, u.email, u.role, u.theme, u.display_name, e.plan, e.source
+		), agent_token AS (
+			UPDATE agent_users a
+			SET last_used_at = $2, updated_at = $2
+			FROM users u, entitlements e
+			WHERE a.owner_user_id = u.id AND e.user_id = u.id AND e.plan = 'pro'
+				AND u.disabled_at IS NULL
+				AND a.token_hash = $1 AND a.revoked_at IS NULL AND a.deleted_at IS NULL
+			RETURNING u.id, u.theme, a.id AS agent_id, a.display_name, e.plan, e.source
+		)
+		SELECT id::text, email, role, theme, display_name, '' AS agent_id, plan, source
+		FROM human_token
+		UNION ALL
+		SELECT id::text, '', 'agent', theme, display_name, agent_id::text, plan, source
+		FROM agent_token
+		LIMIT 1
+	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName, &user.AgentID,
 		&user.Entitlement.Plan, &user.Entitlement.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUnauthorized
@@ -462,20 +478,101 @@ func (s *PGStore) FindUserByAPITokenHash(ctx context.Context, tokenHash string, 
 }
 
 func (s *PGStore) UpdateTheme(ctx context.Context, userID string, theme string) (User, error) {
+	return s.UpdateProfile(ctx, userID, &theme, nil)
+}
+
+func (s *PGStore) UpdateProfile(ctx context.Context, userID string, theme *string, displayName *string) (User, error) {
 	var user User
 	err := s.db.QueryRow(ctx, `
 		UPDATE users u
-		SET theme = $2, updated_at = now()
+		SET theme = CASE WHEN $2 THEN $3 ELSE u.theme END,
+			display_name = CASE WHEN $4 THEN $5 ELSE u.display_name END,
+			updated_at = now()
 		FROM entitlements e
 		WHERE u.id = $1 AND e.user_id = u.id AND e.plan = 'pro' AND u.disabled_at IS NULL
-		RETURNING u.id::text, u.email, u.role, u.theme, e.plan, e.source
-	`, userID, theme).Scan(&user.ID, &user.Email, &user.Role, &user.Theme,
+		RETURNING u.id::text, u.email, u.role, u.theme, u.display_name, e.plan, e.source
+	`, userID, theme != nil, stringValue(theme), displayName != nil, stringValue(displayName)).Scan(
+		&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName,
 		&user.Entitlement.Plan, &user.Entitlement.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUnauthorized
 	}
 	setEntitlementLimits(&user)
 	return user, err
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, display_name, last_used_at, revoked_at, deleted_at, created_at
+		FROM agent_users
+		WHERE owner_user_id = $1
+		ORDER BY deleted_at NULLS FIRST, lower(display_name), created_at
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var agents []AgentUser
+	for rows.Next() {
+		var agent AgentUser
+		if err := rows.Scan(&agent.ID, &agent.DisplayName, &agent.LastUsedAt, &agent.RevokedAt, &agent.DeletedAt, &agent.CreatedAt); err != nil {
+			return nil, err
+		}
+		agents = append(agents, agent)
+	}
+	return agents, rows.Err()
+}
+
+func (s *PGStore) CreateAgent(ctx context.Context, userID string, displayName string, tokenHash string) (AgentUser, error) {
+	var agent AgentUser
+	err := s.db.QueryRow(ctx, `
+		WITH active_user AS (
+			SELECT id FROM users
+			WHERE id = $1 AND disabled_at IS NULL
+			FOR UPDATE
+		)
+		INSERT INTO agent_users (owner_user_id, display_name, token_hash)
+		SELECT id, $2, $3 FROM active_user
+		RETURNING id::text, display_name, last_used_at, revoked_at, deleted_at, created_at
+	`, userID, displayName, tokenHash).Scan(&agent.ID, &agent.DisplayName, &agent.LastUsedAt, &agent.RevokedAt, &agent.DeletedAt, &agent.CreatedAt)
+	if constraintViolation(err, "agent_users_one_active_per_owner_idx") {
+		return AgentUser{}, ErrAgentLimit
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AgentUser{}, ErrUnauthorized
+	}
+	return agent, err
+}
+
+func (s *PGStore) RevokeAgentToken(ctx context.Context, userID string, agentID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE agent_users
+		SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
+		WHERE owner_user_id = $1 AND id = $2 AND deleted_at IS NULL
+	`, userID, agentID)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrAgentNotFound
+	}
+	return err
+}
+
+func (s *PGStore) DeleteAgent(ctx context.Context, userID string, agentID string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE agent_users
+		SET revoked_at = COALESCE(revoked_at, now()), deleted_at = now(), updated_at = now()
+		WHERE owner_user_id = $1 AND id = $2 AND deleted_at IS NULL
+	`, userID, agentID)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrAgentNotFound
+	}
+	return err
 }
 
 func (s *PGStore) ListMembers(ctx context.Context) ([]MemberAccount, error) {
@@ -529,6 +626,13 @@ func (s *PGStore) SetMemberDisabled(ctx context.Context, email string, disabled 
 		if _, err := tx.Exec(ctx, "UPDATE api_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", userID); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE agent_users
+			SET revoked_at = now(), updated_at = now()
+			WHERE owner_user_id = $1 AND deleted_at IS NULL AND revoked_at IS NULL
+		`, userID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -542,4 +646,9 @@ func setEntitlementLimits(user *User) {
 func uniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func constraintViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }

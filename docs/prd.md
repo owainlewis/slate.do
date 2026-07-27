@@ -132,11 +132,11 @@ The full task detail view should include:
 
 ## Agents
 
-List items do not have owners or assignees.
+List items can optionally be assigned to a named agent identity.
 
-Any queued item can be picked up by the human or by an agent.
+An account owner creates an agent identity and receives its token once. An agent's queued-task feed contains only work assigned to that identity.
 
-A valid workspace API token can pull any queued task. Claiming a task changes its internal workflow status to `working`.
+A valid account API token can still pull any queued task. Claiming a task changes its internal workflow status to `working`.
 
 Example CLI flow:
 
@@ -150,9 +150,10 @@ The API returns open queued tasks.
 Example query:
 
 ```text
-workspace token is valid
+account or agent token is valid
 done = false
 status = "queued"
+assignee = authenticated agent when using an agent token
 ```
 
 This keeps agent collaboration simple.
@@ -180,7 +181,7 @@ Core agent operations:
 - Mark a task as needs review.
 - Mark a task as done.
 
-The API should not require an agent account.
+The API supports either an account token or a lightweight named agent identity with its own revocable token.
 
 ## MVP
 
@@ -199,13 +200,12 @@ The first app version should include:
 - Workflow status controls for human and agent coordination.
 - Local persistence or simple database persistence.
 - Global workspace API token.
+- Named agent identities, per-agent tokens, and optional assignment.
 - CLI pull for queued tasks.
 
 Out of scope:
 
 - User roles.
-- Agent accounts.
-- Per-agent tokens.
 - Team permissions.
 - Nested items.
 - Comments.

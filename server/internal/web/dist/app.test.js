@@ -321,6 +321,86 @@ test("list items show compact state treatment", () => {
   assert.match(done, /class="task action done"/);
 });
 
+test("agent assignments use safe deterministic avatars across task and detail views", () => {
+  vm.runInContext(`
+    state.agents = [
+      { id: "agent-one", displayName: "<Research Bot>" },
+      { id: "agent-old", displayName: "Old Bot", deletedAt: "2026-07-27T00:00:00Z" },
+    ];
+    state.boards = [{ id: "board", name: "Board" }];
+    state.board = {
+      id: "board", name: "Board",
+      buckets: [{ id: "list", name: "List", tasks: [] }],
+    };
+  `, app);
+  const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", done: false, scheduledDate: "", assigneeAgentId: "agent-one" };
+  const taskHTML = app.taskHTML(assigned);
+  assert.match(taskHTML, /class="avatar tone-\d avatar-small/);
+  assert.match(taskHTML, />&lt;B<\/span>/);
+  assert.doesNotMatch(taskHTML, /<Research Bot>/);
+
+  const detail = app.detailHTML({ ...assigned, assigneeAgentId: "agent-old" });
+  assert.match(detail, /id="detail-assignee" name="assigneeAgentId"/);
+  assert.match(detail, /value="agent-one"/);
+  assert.match(detail, /value="agent-old" selected disabled>Old Bot \(inactive\)/);
+
+  vm.runInContext(`state.agents = [];`, app);
+  const unavailable = app.detailHTML({ ...assigned, assigneeAgentId: "agent-one" });
+  assert.match(unavailable, /value="agent-one" selected>Assigned agent unavailable/);
+  assert.doesNotMatch(unavailable, /value="" selected>Unassigned/);
+
+  const first = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
+  const second = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
+  assert.equal(first, second);
+  vm.runInContext(`state.agents = []; state.boards = []; state.board = null;`, app);
+});
+
+test("settings supports primary profile and one-time agent token management", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
+    state.agents = [{ id: "agent", displayName: "Builder Bot" }];
+    state.newAgentToken = "slate_agent_secret";
+  `, app);
+  const html = app.settingsHTML();
+  assert.match(html, /id="profile-form"/);
+  assert.match(html, /aria-label="Your display name" value="Owain Lewis"/);
+  assert.doesNotMatch(html, /id="agent-form"/);
+  assert.match(html, /id="agent-limit">One agent user per account for now/);
+  assert.match(html, /slate_agent_secret/);
+  assert.match(html, /data-revoke-agent="agent"/);
+  assert.match(html, /data-delete-agent="agent"/);
+  vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", revokedAt: "2026-07-27T00:00:00Z" }];`, app);
+  assert.match(app.settingsHTML(), /id="agent-limit"/);
+  vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", deletedAt: "2026-07-27T00:00:00Z" }];`, app);
+  assert.match(app.settingsHTML(), /id="agent-form"/);
+  vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = "";`, app);
+});
+
+test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
+  vm.runInContext(`
+    authVersion = 12;
+    state.me = { id: "owner" };
+    state.agents = [];
+    state.newAgentToken = "";
+    state.error = "";
+    api.post = async path => {
+      if (path !== "/api/v1/agents") throw new Error("unexpected POST " + path);
+      return { id: "agent", displayName: "Builder Bot", token: "slate_agent_copy_now" };
+    };
+    api.get = async path => {
+      if (path !== "/api/v1/agents") throw new Error("unexpected GET " + path);
+      throw new Error("agents temporarily unavailable");
+    };
+  `, app);
+
+  assert.equal(await app.createAgent("Builder Bot"), true);
+  assert.equal(vm.runInContext("state.newAgentToken", app), "slate_agent_copy_now");
+  assert.equal(vm.runInContext("state.agents[0].id", app), "agent");
+  assert.equal(vm.runInContext(`"token" in state.agents[0]`, app), false);
+  assert.match(vm.runInContext("state.error", app), /Agent created.*could not be refreshed/);
+  vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = ""; state.error = "";`, app);
+});
+
 const board = {
   buckets: [
     {
@@ -880,6 +960,7 @@ function router({ signedIn = false, boards = [], url = "/" } = {}) {
   };
   context.render = () => rendered.push(vm.runInContext("state.view + (state.settings ? \":settings\" : \"\")", context));
   context.realLoadTokens = context.loadTokens;
+  context.realLoadAgents = context.loadAgents;
   context.loadTokens = async () => true;
   context.boardRequests = [];
 
@@ -887,6 +968,7 @@ function router({ signedIn = false, boards = [], url = "/" } = {}) {
     state.me = ${signedIn ? '{ id: "owner", theme: "light" }' : "null"};
     api.get = async path => {
       if (path === "/api/v1/boards") return { boards: ${JSON.stringify(boards)} };
+      if (path === "/api/v1/agents") return { agents: [] };
       const id = path.replace("/api/v1/boards/", "");
       boardRequests.push(id);
       return { id, name: id, buckets: [] };
@@ -1210,6 +1292,37 @@ test("a stale settings token response cannot overwrite newer settings data", asy
   assert.deepEqual(tokenIds, ["new"]);
   assert.equal(it.url(), "/app/settings");
   assert.equal(it.view(), "app:settings");
+});
+
+test("a stale agent response cannot overwrite newer route data", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseOldAgents;
+  it.context.oldAgentsResponse = new Promise(resolve => { releaseOldAgents = resolve; });
+  it.context.loadAgents = it.context.realLoadAgents;
+  vm.runInContext(`
+    let agentRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
+      if (path === "/api/v1/agents" && ++agentRequests === 1) return oldAgentsResponse;
+      if (path === "/api/v1/agents") return { agents: [{ id: "new" }] };
+      if (path.startsWith("/api/v1/boards/")) {
+        const id = path.replace("/api/v1/boards/", "");
+        return { id, name: id, buckets: [] };
+      }
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleRoute = it.go("/app/boards/board_1");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_2");
+  releaseOldAgents({ agents: [{ id: "old" }] });
+  await staleRoute;
+
+  const agentIDs = JSON.parse(vm.runInContext("JSON.stringify(state.agents.map(agent => agent.id))", it.context));
+  assert.deepEqual(agentIDs, ["new"]);
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.board(), "board_2");
 });
 
 test("back and forward move between landing, boards, and settings", async () => {
