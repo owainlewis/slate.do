@@ -446,7 +446,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .tone-4 { background: #7656a5; }
 .tone-5 { background: #3d708f; }
 .task-assignee { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); font-size: 11px; }
-.current-user { display: inline-flex; align-items: center; gap: 7px; color: var(--soft); font-size: 12px; font-weight: 600; }
+.current-user { display: inline-flex; align-items: center; }
 .item-dot { flex: 0 0 auto; width: 16px; height: 20px; display: grid; place-items: center; }
 .item-dot::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
 .task-title { overflow-wrap: anywhere; line-height: 1.35; display: flex; align-items: center; gap: 6px; }
@@ -1360,22 +1360,34 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .settings-section-head h2 { margin: 0 0 4px; font-size: 16px; }
 .settings-section-head p { margin: 0; color: var(--faint); font-size: 12px; }
 .profile-form { display: flex; align-items: center; gap: 10px; }
-.profile-form input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: var(--radius-sm); padding: 9px 10px; }
-.agent-list { border-top: 1px solid var(--line); }
-.agent-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.profile-form input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: var(--radius-sm); padding: 8px 10px; }
+.settings-page .settings-submit,
+.settings-page .settings-row-actions button {
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 12px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.settings-page .settings-submit { align-self: center; }
+.agent-list { border-top: 1px solid var(--line-2); }
+.agent-row { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 8px 2px; border-bottom: 1px solid var(--line-2); }
 .agent-row > span:not(.avatar) { flex: 1; min-width: 0; display: grid; gap: 2px; }
-.agent-row b { overflow: hidden; text-overflow: ellipsis; }
-.agent-row small { color: var(--faint); }
+.agent-row b { overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.agent-row small { color: var(--faint); font-size: 11px; }
 .agent-row.inactive { opacity: .72; }
-.agent-limit { margin: 0 0 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; color: var(--soft); background: color-mix(in srgb, var(--ink) 3%, transparent); font-size: 12px; }
+.agent-limit { margin: 0 0 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; color: var(--soft); background: color-mix(in srgb, var(--ink) 3%, transparent); font-size: 11px; }
+.settings-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.settings-row-actions .danger { color: var(--faint); }
+.settings-row-actions .danger:hover, .settings-row-actions .danger:focus-visible { color: var(--danger); }
 .settings-limit { width: min(120px, 100%); }
-.token-form { display: flex; gap: 8px; margin-bottom: 18px; }
+.token-form { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .token-form input {
   flex: 1;
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 10px;
+  padding: 8px 10px;
   background: var(--card);
   color: var(--ink);
   outline: 0;
@@ -1384,8 +1396,8 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .new-token { border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: var(--radius); padding: 12px; margin-bottom: 18px; }
 .new-token label { display: block; margin-bottom: 6px; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
 .new-token code { display: block; overflow-wrap: anywhere; }
-.token-list { border-top: 1px solid var(--line); }
-.token-row { display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line); padding: 6px 0; }
+.token-list { border-top: 1px solid var(--line-2); }
+.token-row { display: flex; gap: 8px; align-items: center; min-height: 44px; border-bottom: 1px solid var(--line-2); padding: 6px 2px; }
 .token-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .token-row code { font-size: 12px; overflow-wrap: anywhere; }
 
@@ -1489,11 +1501,14 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .docs-section h2 { font-size: 29px; }
   .docs-section pre { margin-left: -4px; margin-right: -4px; padding: 16px; }
   .token-form { flex-direction: column; }
+  .token-form { align-items: stretch; }
+  .token-form .settings-submit { align-self: flex-start; }
   .profile-form { align-items: stretch; flex-wrap: wrap; }
   .profile-form input { flex-basis: calc(100% - 48px); }
-  .profile-form button { margin-left: 44px; }
+  .profile-form button { align-self: flex-start; margin-left: 44px; }
   .agent-row { flex-wrap: wrap; }
   .agent-row > span:not(.avatar) { flex-basis: calc(100% - 48px); }
+  .agent-row .settings-row-actions { width: 100%; padding-left: 32px; justify-content: flex-start; }
   .settings-head { margin-bottom: 18px; }
   .settings-section { padding: 18px 0; }
   .detail-overlay { padding: 0; align-items: stretch; }

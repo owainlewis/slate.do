@@ -717,7 +717,7 @@ function appHTML() {
         <header class="topbar">
           <span class="week">${formatWeekHeading(headerDays)}</span>
           <div class="top-actions">
-            <span class="current-user">${avatarHTML(state.me, { small: true })}<span>${escapeHTML(state.me?.displayName || state.me?.email || "")}</span></span>
+            <span class="current-user">${avatarHTML(state.me, { small: true })}</span>
             <div class="view-switch" aria-label="Board view">
               <button data-board-mode="lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}" title="Lists">${icon("rows")}<span>Lists</span></button>
               <button data-board-mode="flow" aria-pressed="${flowMode}" class="${flowMode ? "on" : ""}" title="Flow">${icon("kanban")}<span>Flow</span></button>
@@ -1074,7 +1074,7 @@ function settingsHTML() {
             <form id="profile-form" class="profile-form">
               ${avatarHTML(state.me)}
               <input name="displayName" aria-label="Your display name" value="${escapeAttr(state.me?.displayName || state.me?.email?.split("@")[0] || "")}" maxlength="80" required>
-              <button class="secondary" type="submit">Save profile</button>
+              <button class="secondary settings-submit" type="submit">Save profile</button>
             </form>
           </section>
           <section class="settings-section">
@@ -1094,16 +1094,18 @@ function settingsHTML() {
             ${liveAgents.length ? `<p class="agent-limit" id="agent-limit">One agent user per account for now. Delete the current agent to create a replacement.</p>` : `
               <form id="agent-form" class="token-form">
                 <input name="displayName" placeholder="Agent name" maxlength="80" required>
-                <button class="primary" type="submit">Create agent</button>
+                <button class="primary settings-submit" type="submit">Create agent</button>
               </form>`}
             ${state.newAgentToken ? `<div class="new-token"><label>New agent token. Copy it now.</label><code>${escapeHTML(state.newAgentToken)}</code></div>` : ""}
             <div class="agent-list">
               ${state.agents.length ? state.agents.map(agent => `
                 <div class="agent-row ${agent.deletedAt ? "inactive" : ""}">
-                  ${avatarHTML(agent)}
-                  <span><b>${escapeHTML(agent.displayName)}</b><small>${agent.deletedAt ? "Inactive" : agent.revokedAt ? "Token revoked" : "Active"}</small></span>
-                  ${agent.deletedAt ? "" : agent.revokedAt ? "" : `<button class="secondary" data-revoke-agent="${agent.id}">Revoke token</button>`}
-                  ${agent.deletedAt ? "" : `<button class="danger" data-delete-agent="${agent.id}">Delete</button>`}
+                  ${avatarHTML(agent, { small: true })}
+                  <span><b>${escapeHTML(agent.displayName)}</b><small class="agent-status">${agent.deletedAt ? "Inactive" : agent.revokedAt ? "Token revoked" : "Active"}</small></span>
+                  ${agent.deletedAt ? "" : `<div class="settings-row-actions">
+                    ${agent.revokedAt ? "" : `<button class="secondary" data-revoke-agent="${agent.id}">Revoke token</button>`}
+                    <button class="danger" data-delete-agent="${agent.id}">Delete</button>
+                  </div>`}
                 </div>`).join("") : `<div class="empty-state"><p>No agent users yet.</p></div>`}
             </div>
           </section>
@@ -1114,11 +1116,11 @@ function settingsHTML() {
             </div>
             <form id="token-form" class="token-form">
               <input name="name" placeholder="Token name" required>
-              <button class="primary" type="submit">Create token</button>
+              <button class="primary settings-submit" type="submit">Create token</button>
             </form>
             ${state.newToken ? `<div class="new-token"><label>New token</label><code>${escapeHTML(state.newToken)}</code></div>` : ""}
             <div class="token-list">
-              ${state.tokens.length ? state.tokens.map(t => `<div class="token-row"><span>${escapeHTML(t.name)}</span><button class="danger" data-revoke="${t.id}">Revoke</button></div>`).join("") : `<div class="empty-state"><p>No active tokens.</p></div>`}
+              ${state.tokens.length ? state.tokens.map(t => `<div class="token-row"><span>${escapeHTML(t.name)}</span><div class="settings-row-actions"><button class="danger" data-revoke="${t.id}">Revoke</button></div></div>`).join("") : `<div class="empty-state"><p>No active tokens.</p></div>`}
             </div>
           </section>
         </section>

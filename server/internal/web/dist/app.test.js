@@ -376,6 +376,19 @@ test("settings supports primary profile and one-time agent token management", ()
   vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = "";`, app);
 });
 
+test("the board header shows the current user avatar without their name", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
+    state.board = { id: "board", name: "Business", maxTasksPerList: 20, buckets: [] };
+    state.boards = [{ id: "board", name: "Business" }];
+  `, app);
+  const html = app.appHTML();
+  const currentUser = html.match(/<span class="current-user">([\s\S]*?)<\/span>\s*<div class="view-switch"/)?.[1] || "";
+  assert.match(currentUser, /class="avatar/);
+  assert.doesNotMatch(currentUser, />Owain Lewis</);
+  vm.runInContext(`state.me = null; state.board = null; state.boards = [];`, app);
+});
+
 test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
   vm.runInContext(`
     authVersion = 12;
