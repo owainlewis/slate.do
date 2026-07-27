@@ -37,7 +37,12 @@ func TestStaticHandlerServesAppShellForFrontendRoutesOnly(t *testing.T) {
 	}
 	handler := StaticHandler(fs.FS(content))
 
-	shell := []string{"/", "/login", "/app", "/app/settings", "/app/boards/board_123", "/early-access", "/reset-password"}
+	shell := []string{
+		"/", "/login", "/app", "/app/settings",
+		"/app/settings/profile", "/app/settings/board", "/app/settings/agents", "/app/settings/api",
+		"/app/settings/unknown", "/app/settings/unknown/nested",
+		"/app/boards/board_123", "/early-access", "/reset-password",
+	}
 	for _, target := range shell {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))

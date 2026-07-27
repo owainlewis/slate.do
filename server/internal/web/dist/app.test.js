@@ -205,11 +205,13 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   assert.match(html, /id="logout"[\s\S]*?<span>Sign out<\/span>/);
   assert.doesNotMatch(html, /class="board-settings"/);
 
-  const settings = app.settingsHTML();
-  assert.match(settings, /id="settings-list-limit"[^>]*value="12"/);
-	assert.match(settings, /Max active items per list on this board/);
-	assert.match(settings, /aria-label="Max active items per list"[^>]*max="20"/);
-  assert.doesNotMatch(settings, /data-set-theme=/);
+  vm.runInContext(`state.settingsPage = "board";`, app);
+  const boardSettings = app.settingsHTML();
+  assert.match(boardSettings, /id="settings-list-limit"[^>]*value="12"/);
+	assert.match(boardSettings, /Max active items per list on this board/);
+	assert.match(boardSettings, /aria-label="Max active items per list"[^>]*max="20"/);
+  assert.doesNotMatch(boardSettings, /data-set-theme=/);
+  vm.runInContext(`state.settingsPage = "profile";`, app);
   vm.runInContext(`state.boards = []; state.board = null;`, app);
 });
 
@@ -355,25 +357,58 @@ test("agent assignments use safe deterministic avatars across task and detail vi
   vm.runInContext(`state.agents = []; state.boards = []; state.board = null;`, app);
 });
 
-test("settings supports primary profile and one-time agent token management", () => {
+test("settings pages isolate profile, board, agent, and personal API controls", () => {
   vm.runInContext(`
     state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
+    state.board = { id: "board", name: "Business", maxTasksPerList: 12, buckets: [] };
     state.agents = [{ id: "agent", displayName: "Builder Bot" }];
+    state.tokens = [{ id: "token", name: "CLI" }];
     state.newAgentToken = "slate_agent_secret";
+    state.newToken = "slate_personal_secret";
+    state.settingsPage = "profile";
   `, app);
-  const html = app.settingsHTML();
-  assert.match(html, /id="profile-form"/);
-  assert.match(html, /aria-label="Your display name" value="Owain Lewis"/);
-  assert.doesNotMatch(html, /id="agent-form"/);
-  assert.match(html, /id="agent-limit">One agent user per account for now/);
-  assert.match(html, /slate_agent_secret/);
-  assert.match(html, /data-revoke-agent="agent"/);
-  assert.match(html, /data-delete-agent="agent"/);
+  const profile = app.settingsHTML();
+  assert.match(profile, /<h1>Profile<\/h1>/);
+  assert.match(profile, /id="profile-form"/);
+  assert.match(profile, /aria-label="Your display name" value="Owain Lewis"/);
+  assert.doesNotMatch(profile, /settings-list-limit|agent-limit|token-form|slate_agent_secret|slate_personal_secret/);
+
+  vm.runInContext(`state.settingsPage = "board";`, app);
+  const boardSettings = app.settingsHTML();
+  assert.match(boardSettings, /<h1>Board<\/h1>/);
+  assert.match(boardSettings, /id="settings-list-limit"/);
+  assert.doesNotMatch(boardSettings, /profile-form|agent-limit|token-form|slate_agent_secret|slate_personal_secret/);
+
+  vm.runInContext(`state.settingsPage = "agents";`, app);
+  const agents = app.settingsHTML();
+  assert.match(agents, /<h1>Agents<\/h1>/);
+  assert.doesNotMatch(agents, /id="agent-form"/);
+  assert.match(agents, /id="agent-limit">One agent user per account for now/);
+  assert.match(agents, /slate_agent_secret/);
+  assert.match(agents, /data-revoke-agent="agent"/);
+  assert.match(agents, /data-delete-agent="agent"/);
+  assert.doesNotMatch(agents, /profile-form|settings-list-limit|token-form|slate_personal_secret/);
+  assert.match(agents, /href="\/app\/settings\/agents" aria-current="page"/);
   vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", revokedAt: "2026-07-27T00:00:00Z" }];`, app);
   assert.match(app.settingsHTML(), /id="agent-limit"/);
   vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", deletedAt: "2026-07-27T00:00:00Z" }];`, app);
   assert.match(app.settingsHTML(), /id="agent-form"/);
-  vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = "";`, app);
+
+  vm.runInContext(`state.settingsPage = "api";`, app);
+  const apiSettings = app.settingsHTML();
+  assert.match(apiSettings, /<h1>API access<\/h1>/);
+  assert.match(apiSettings, /id="token-form"/);
+  assert.match(apiSettings, /slate_personal_secret/);
+  assert.doesNotMatch(apiSettings, /profile-form|settings-list-limit|agent-limit|slate_agent_secret/);
+
+  for (const html of [profile, boardSettings, agents, apiSettings]) {
+    assert.match(html, /<nav class="settings-nav" aria-label="Settings">/);
+    assert.match(html, />Back to board<\/span>/);
+    assert.match(html, /aria-label="Account actions"/);
+    assert.equal((html.match(/aria-current="page"/g) || []).length, 1);
+    assert.doesNotMatch(html, /<h1>Settings<\/h1>/);
+  }
+  vm.runInContext(`state.me = null; state.board = null; state.agents = []; state.tokens = []; state.newAgentToken = ""; state.newToken = ""; state.settingsPage = "profile";`, app);
 });
 
 test("the board header shows the current user avatar without their name", () => {
@@ -412,6 +447,54 @@ test("successful agent creation keeps the one-time token when metadata refresh f
   assert.equal(vm.runInContext(`"token" in state.agents[0]`, app), false);
   assert.match(vm.runInContext("state.error", app), /Agent created.*could not be refreshed/);
   vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = ""; state.error = "";`, app);
+});
+
+test("pending settings credentials stay isolated and remain recoverable on their owner page", async () => {
+  let releaseToken;
+  let releaseAgent;
+  app.pendingTokenResponse = new Promise(resolve => { releaseToken = resolve; });
+  app.pendingAgentResponse = new Promise(resolve => { releaseAgent = resolve; });
+  app.releasePendingToken = releaseToken;
+  app.releasePendingAgent = releaseAgent;
+  vm.runInContext(`
+    authVersion = 14;
+    routeVersion = 70;
+    state.me = { id: "owner" };
+    state.settings = true;
+    state.settingsPage = "api";
+    state.newToken = "";
+    state.newAgentToken = "";
+    state.tokens = [];
+    state.agents = [];
+    state.error = "";
+    api.post = async path => {
+      if (path === "/api/v1/api-tokens") return pendingTokenResponse;
+      if (path === "/api/v1/agents") return pendingAgentResponse;
+      throw new Error("unexpected POST " + path);
+    };
+  `, app);
+
+  const tokenCreation = app.createAPIToken("CLI", 70);
+  vm.runInContext(`routeVersion = 71; state.settingsPage = "profile";`, app);
+  app.releasePendingToken({ token: "slate_must_not_cross_routes" });
+  assert.equal(await tokenCreation, false);
+  assert.equal(vm.runInContext("state.newToken", app), "slate_must_not_cross_routes");
+  assert.doesNotMatch(app.settingsHTML(), /slate_must_not_cross_routes/);
+  vm.runInContext(`state.settingsPage = "api";`, app);
+  assert.match(app.settingsHTML(), /slate_must_not_cross_routes/);
+
+  vm.runInContext(`routeVersion = 80; state.settings = true; state.settingsPage = "agents";`, app);
+  const agentCreation = app.createAgent("Builder Bot", 80);
+  vm.runInContext(`routeVersion = 81; state.settings = false; state.settingsPage = "profile";`, app);
+  app.releasePendingAgent({ id: "agent", displayName: "Builder Bot", token: "slate_agent_must_not_cross_routes" });
+  assert.equal(await agentCreation, false);
+  assert.equal(vm.runInContext("state.newAgentToken", app), "slate_agent_must_not_cross_routes");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.agents.map(agent => agent.id))", app)), ["agent"]);
+  assert.doesNotMatch(app.settingsHTML(), /slate_agent_must_not_cross_routes/);
+  vm.runInContext(`state.settings = true; state.settingsPage = "agents";`, app);
+  assert.match(app.settingsHTML(), /slate_agent_must_not_cross_routes/);
+
+  vm.runInContext(`state.me = null; state.settings = false; state.settingsPage = "profile"; state.newToken = ""; state.newAgentToken = ""; state.agents = []; state.error = "";`, app);
 });
 
 const board = {
@@ -570,7 +653,8 @@ test("switching accounts clears old account data and loads only the new account'
       boards: state.boards.map(board => board.id),
       board: state.board.id,
       selectedTask: state.selectedTask,
-      settings: state.settings,
+    settings: state.settings,
+      settingsPage: state.settingsPage,
       tokens: state.tokens,
       newToken: state.newToken,
       goalErrors: state.goalErrors,
@@ -583,6 +667,7 @@ test("switching accounts clears old account data and loads only the new account'
       board: "board-b",
       selectedTask: null,
       settings: false,
+      settingsPage: "profile",
       tokens: [],
       newToken: "",
       goalErrors: {},
@@ -1010,7 +1095,10 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/"), { name: "home" });
   assert.deepEqual(route("/login"), { name: "login" });
   assert.deepEqual(route("/app"), { name: "app" });
-  assert.deepEqual(route("/app/settings"), { name: "settings" });
+  assert.deepEqual(route("/app/settings"), { name: "settings", settingsPage: "profile", redirect: true });
+  for (const page of ["profile", "board", "agents", "api"]) {
+    assert.deepEqual(route(`/app/settings/${page}`), { name: "settings", settingsPage: page });
+  }
   assert.deepEqual(route("/early-access"), { name: "early-access" });
   assert.deepEqual(route("/reset-password"), { name: "reset-password" });
   assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1" });
@@ -1020,15 +1108,16 @@ test("routes parse into the surface they name", () => {
   // Trailing slashes, queries, and fragments never change which route is named.
   assert.deepEqual(route("/app/"), { name: "app" });
   assert.deepEqual(route("/login?next=/app"), { name: "login" });
-  assert.deepEqual(route("/app/settings#token"), { name: "settings" });
+  assert.deepEqual(route("/app/settings#token"), { name: "settings", settingsPage: "profile", redirect: true });
 
-  for (const path of ["/nonsense", "/app/boards", "/app/boards/a/b", "/appleseed", "/cli"]) {
+  for (const path of ["/nonsense", "/app/boards", "/app/boards/a/b", "/app/settings/unknown", "/app/settings/profile/extra", "/appleseed", "/cli"]) {
     assert.equal(app.parseRoute(path).name, "not-found", path);
   }
 });
 
 test("only same-origin app paths survive as a login next target", () => {
   assert.equal(app.safeNextPath("/app/settings"), "/app/settings");
+  assert.equal(app.safeNextPath("/app/settings/agents"), "/app/settings/agents");
   assert.equal(app.safeNextPath("/app/boards/board_1"), "/app/boards/board_1");
   assert.equal(app.safeNextPath("/app/"), "/app");
 
@@ -1037,17 +1126,18 @@ test("only same-origin app paths survive as a login next target", () => {
   }
 
   assert.equal(app.loginPathFor("/app/settings"), "/login?next=%2Fapp%2Fsettings");
+  assert.equal(app.loginPathFor("/app/settings/api"), "/login?next=%2Fapp%2Fsettings%2Fapi");
   assert.equal(app.loginPathFor("/app"), "/login");
   assert.equal(app.loginPathFor("https://evil.example"), "/login");
 });
 
-test("signed-out visits to an app route redirect to login and keep the destination", async () => {
-  const it = router({ url: "/app/boards/board_1" });
-
-  await it.apply();
-
-  assert.equal(it.url(), "/login?next=%2Fapp%2Fboards%2Fboard_1");
-  assert.equal(it.view(), "login");
+test("signed-out visits to protected routes redirect to login and keep the exact destination", async () => {
+  for (const target of ["/app/boards/board_1", "/app/settings/profile", "/app/settings/board", "/app/settings/agents", "/app/settings/api"]) {
+    const it = router({ url: target });
+    await it.apply();
+    assert.equal(it.url(), `/login?next=${encodeURIComponent(target)}`);
+    assert.equal(it.view(), "login");
+  }
 });
 
 test("logging in returns to the requested route, defaulting to the app", async () => {
@@ -1056,8 +1146,9 @@ test("logging in returns to the requested route, defaulting to the app", async (
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/settings");
+  assert.equal(it.url(), "/app/settings/profile");
   assert.equal(it.view(), "app:settings");
+  assert.equal(it.depth(), 1, "the legacy settings path must be replaced by profile");
 
   const plain = router({ url: "/login", signedIn: true, boards: [{ id: "board_1" }] });
   await plain.apply();
@@ -1150,7 +1241,7 @@ test("a failed board-detail navigation renders an error for that board without r
   assert.equal(it.error(), "Board could not be loaded");
 });
 
-test("failed settings board and token loads render errors at the settings URL", async () => {
+test("failed settings board and token loads render route-owned errors at the requested page", async () => {
   const boardFailure = router({ url: "/", signedIn: true });
   vm.runInContext(`
     api.get = async path => {
@@ -1159,9 +1250,9 @@ test("failed settings board and token loads render errors at the settings URL", 
     };
   `, boardFailure.context);
 
-  await assert.doesNotReject(boardFailure.go("/app/settings"));
+  await assert.doesNotReject(boardFailure.go("/app/settings/board"));
 
-  assert.equal(boardFailure.url(), "/app/settings");
+  assert.equal(boardFailure.url(), "/app/settings/board");
   assert.equal(boardFailure.view(), "route-error");
   assert.equal(boardFailure.routeError(), "settings");
   assert.equal(boardFailure.error(), "Settings board could not be loaded");
@@ -1177,9 +1268,9 @@ test("failed settings board and token loads render errors at the settings URL", 
     };
   `, tokenFailure.context);
 
-  await assert.doesNotReject(tokenFailure.go("/app/settings"));
+  await assert.doesNotReject(tokenFailure.go("/app/settings/api"));
 
-  assert.equal(tokenFailure.url(), "/app/settings");
+  assert.equal(tokenFailure.url(), "/app/settings/api");
   assert.equal(tokenFailure.view(), "route-error");
   assert.equal(tokenFailure.routeError(), "settings");
   assert.equal(tokenFailure.error(), "Tokens could not be loaded");
@@ -1267,7 +1358,7 @@ test("a stale settings board load cannot overwrite newer board navigation", asyn
     };
   `, it.context);
 
-  const staleSettings = it.go("/app/settings");
+  const staleSettings = it.go("/app/settings/board");
   await new Promise(resolve => setImmediate(resolve));
   await it.go("/app/boards/board_2");
   releaseSettingsBoard({ id: "board_1", name: "Board one", buckets: [] });
@@ -1294,16 +1385,16 @@ test("a stale settings token response cannot overwrite newer settings data", asy
     };
   `, it.context);
 
-  const staleSettings = it.go("/app/settings");
+  const staleSettings = it.go("/app/settings/api");
   await new Promise(resolve => setImmediate(resolve));
   await it.go("/app/boards/board_1");
-  await it.go("/app/settings");
+  await it.go("/app/settings/api");
   releaseOldTokens({ tokens: [{ id: "old" }] });
   await staleSettings;
 
   const tokenIds = JSON.parse(vm.runInContext("JSON.stringify(state.tokens.map(token => token.id))", it.context));
   assert.deepEqual(tokenIds, ["new"]);
-  assert.equal(it.url(), "/app/settings");
+  assert.equal(it.url(), "/app/settings/api");
   assert.equal(it.view(), "app:settings");
 });
 
@@ -1347,7 +1438,7 @@ test("back and forward move between landing, boards, and settings", async () => 
   assert.equal(it.url(), "/app/boards/board_1");
   await it.go("/app/boards/board_2");
   assert.equal(it.board(), "board_2");
-  await it.go("/app/settings");
+  await it.go("/app/settings/profile");
   assert.equal(it.view(), "app:settings");
 
   await it.back();
@@ -1388,7 +1479,7 @@ test("the landing page stays public while signed in", async () => {
 });
 
 test("signing out from an app route lands on login", async () => {
-  const it = router({ url: "/app/settings", signedIn: true, boards: [{ id: "board_1" }] });
+  const it = router({ url: "/app/settings/profile", signedIn: true, boards: [{ id: "board_1" }] });
   await it.apply();
   assert.equal(it.view(), "app:settings");
   vm.runInContext(`api.post = async () => ({});`, it.context);

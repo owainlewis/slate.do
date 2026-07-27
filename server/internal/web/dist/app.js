@@ -85,6 +85,7 @@ const state = {
   renamingBoardId: "",
   selectedTask: null,
   settings: false,
+  settingsPage: "profile",
   view: "home",
   error: "",
   authNotice: "",
@@ -121,11 +122,21 @@ const HOME_PATH = "/";
 const LOGIN_PATH = "/login";
 const APP_PATH = "/app";
 const SETTINGS_PATH = "/app/settings";
+const SETTINGS_PAGES = [
+  { id: "profile", label: "Profile", title: "Profile", description: "Manage your primary identity and generated avatar." },
+  { id: "board", label: "Board", title: "Board", description: "Configure the selected board." },
+  { id: "agents", label: "Agents", title: "Agents", description: "Manage the agent identity and its one-time credential lifecycle." },
+  { id: "api", label: "API access", title: "API access", description: "Create and revoke personal tokens for the CLI and API." },
+];
 const EARLY_ACCESS_PATH = "/early-access";
 const RESET_PASSWORD_PATH = "/reset-password";
 
 function boardPath(id) {
   return `/app/boards/${encodeURIComponent(id)}`;
+}
+
+function settingsPath(page = "profile") {
+  return `${SETTINGS_PATH}/${page}`;
 }
 
 function normalizePath(value) {
@@ -144,7 +155,11 @@ function parseRoute(pathname) {
   if (path === EARLY_ACCESS_PATH) return { name: "early-access" };
   if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
   if (path === APP_PATH) return { name: "app" };
-  if (path === SETTINGS_PATH) return { name: "settings" };
+  if (path === SETTINGS_PATH) return { name: "settings", settingsPage: "profile", redirect: true };
+  const settings = /^\/app\/settings\/([^/]+)$/.exec(path);
+  if (settings && SETTINGS_PAGES.some(page => page.id === settings[1])) {
+    return { name: "settings", settingsPage: settings[1] };
+  }
   const board = /^\/app\/boards\/([^/]+)$/.exec(path);
   if (board) {
     try {
@@ -183,6 +198,8 @@ function syncPath(path) {
 }
 
 function navigate(path, options = {}) {
+  const nextRoute = parseRoute(path);
+  clearSettingsCredentialsLeaving(nextRoute.name === "settings" ? nextRoute.settingsPage : "");
   if (options.replace || currentPath() === normalizePath(path)) history.replaceState({}, "", path);
   else history.pushState({}, "", path);
   return applyRoute();
@@ -211,10 +228,11 @@ async function applyRoute() {
     return showRoute("login");
   }
   if (!state.me) return navigate(loginPathFor(currentPath()), { replace: true });
+  if (route.redirect) return navigate(settingsPath(route.settingsPage), { replace: true });
   try {
     if (!await loadBoardList(version)) return;
     if (routeVersion !== version) return;
-    await loadAgents(true, authVersion, state.me?.id, version);
+    await loadAgents(route.name !== "settings" || route.settingsPage !== "agents", authVersion, state.me?.id, version);
     if (routeVersion !== version) return;
 
     if (route.name === "app") {
@@ -229,13 +247,14 @@ async function applyRoute() {
       if (routeVersion !== version) return;
       return showRoute("app");
     }
-    // Settings reads limits off the selected board, so keep one loaded.
-    if (!state.board && state.boards[0] && !await loadBoard(state.boards[0].id, authVersion, version)) return;
+    // Only the Board page needs board details and only API access needs tokens.
+    if (route.settingsPage === "board" && !state.board && state.boards[0] && !await loadBoard(state.boards[0].id, authVersion, version)) return;
     if (routeVersion !== version) return;
-    if (!await loadTokens(authVersion, state.me?.id, version)) return;
+    if (route.settingsPage === "api" && !await loadTokens(authVersion, state.me?.id, version)) return;
     if (routeVersion !== version) return;
     state.view = "app";
     state.settings = true;
+    state.settingsPage = route.settingsPage;
     render();
   } catch (err) {
     if (routeVersion !== version) return;
@@ -249,6 +268,7 @@ async function applyRoute() {
 // Every other route clears it, so leaving /app/settings by any means closes it.
 function showRoute(view, before) {
   state.settings = false;
+  state.settingsPage = "profile";
   if (before) before();
   state.view = view;
   render();
@@ -285,14 +305,15 @@ async function loadBoardList(expectedRouteVersion) {
   return true;
 }
 
-async function loadBoards(selectId) {
+async function loadBoards(selectId, expectedRouteVersion) {
   const sessionVersion = authVersion;
-  if (!await loadBoardList()) return false;
+  if (!await loadBoardList(expectedRouteVersion)) return false;
   const requestedId = selectId || state.board?.id;
   const nextId = state.boards.some(board => board.id === requestedId) ? requestedId : state.boards[0]?.id;
   if (nextId) {
-    if (!await loadBoard(nextId, sessionVersion)) return false;
+    if (!await loadBoard(nextId, sessionVersion, expectedRouteVersion)) return false;
   } else {
+    if (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion) return false;
     state.board = null;
   }
   return true;
@@ -310,6 +331,7 @@ function resetAuthenticatedState() {
   state.renamingBoardId = "";
   state.selectedTask = null;
   state.settings = false;
+  state.settingsPage = "profile";
   state.error = "";
   state.notice = "";
   state.goalErrors = {};
@@ -431,7 +453,7 @@ function render() {
     return;
   }
   if (state.settings) {
-    syncPath(SETTINGS_PATH);
+    syncPath(settingsPath(state.settingsPage));
     root.innerHTML = settingsHTML();
     bindSettings();
     return;
@@ -470,7 +492,8 @@ function bindNotFound() {
 }
 
 function routeErrorHTML() {
-  const target = state.routeError?.name === "settings" ? "settings" : state.routeError?.name === "board" ? "this board" : "the app";
+  const settingsPage = SETTINGS_PAGES.find(page => page.id === state.routeError?.settingsPage);
+  const target = settingsPage ? `${settingsPage.title} settings` : state.routeError?.name === "settings" ? "settings" : state.routeError?.name === "board" ? "this board" : "the app";
   return `
     <section class="login">
       <div>
@@ -1047,13 +1070,74 @@ function statusNoticeHTML(notice) {
 
 function settingsHTML() {
   const theme = currentTheme();
+  const page = SETTINGS_PAGES.find(item => item.id === state.settingsPage) || SETTINGS_PAGES[0];
   const liveAgents = state.agents.filter(agent => !agent.deletedAt);
+  let content = "";
+  if (page.id === "profile") {
+    content = `
+      <section class="settings-section profile-settings" aria-label="Profile controls">
+        <form id="profile-form" class="profile-form">
+          ${avatarHTML(state.me)}
+          <input name="displayName" aria-label="Your display name" value="${escapeAttr(state.me?.displayName || state.me?.email?.split("@")[0] || "")}" maxlength="80" required>
+          <button class="secondary settings-submit" type="submit">Save profile</button>
+        </form>
+      </section>`;
+  } else if (page.id === "board") {
+    content = `
+      <section class="settings-section" aria-label="Board controls">
+        ${state.board ? `
+          <div class="settings-section-head">
+            <h2>${escapeHTML(state.board.name)}</h2>
+            <p>Max active items per list on this board</p>
+          </div>
+          <div class="limit-control settings-limit">
+            <input id="settings-list-limit" aria-label="Max active items per list" type="number" min="1" max="${proLimits().activeItemsPerList}" value="${state.board.maxTasksPerList || DEFAULT_LIST_LIMIT}">
+          </div>` : `<div class="empty-state"><p>Create a board to configure its list limit.</p></div>`}
+      </section>`;
+  } else if (page.id === "agents") {
+    content = `
+      <section class="settings-section" aria-label="Agent controls">
+        ${liveAgents.length ? `<p class="agent-limit" id="agent-limit">One agent user per account for now. Delete the current agent to create a replacement.</p>` : `
+          <form id="agent-form" class="token-form">
+            <input name="displayName" aria-label="Agent name" placeholder="Agent name" maxlength="80" required>
+            <button class="primary settings-submit" type="submit">Create agent</button>
+          </form>`}
+        ${state.newAgentToken ? `<div class="new-token"><label>New agent token. Copy it now.</label><code>${escapeHTML(state.newAgentToken)}</code></div>` : ""}
+        <div class="agent-list">
+          ${state.agents.length ? state.agents.map(agent => `
+            <div class="agent-row ${agent.deletedAt ? "inactive" : ""}">
+              ${avatarHTML(agent, { small: true })}
+              <span><b>${escapeHTML(agent.displayName)}</b><small class="agent-status">${agent.deletedAt ? "Inactive" : agent.revokedAt ? "Token revoked" : "Active"}</small></span>
+              ${agent.deletedAt ? "" : `<div class="settings-row-actions">
+                ${agent.revokedAt ? "" : `<button class="secondary" data-revoke-agent="${agent.id}">Revoke token</button>`}
+                <button class="danger" data-delete-agent="${agent.id}">Delete</button>
+              </div>`}
+            </div>`).join("") : `<div class="empty-state"><p>No agent users yet.</p></div>`}
+        </div>
+      </section>`;
+  } else {
+    content = `
+      <section class="settings-section" aria-label="API token controls">
+        <form id="token-form" class="token-form">
+          <input name="name" aria-label="Token name" placeholder="Token name" required>
+          <button class="primary settings-submit" type="submit">Create token</button>
+        </form>
+        ${state.newToken ? `<div class="new-token"><label>New token</label><code>${escapeHTML(state.newToken)}</code></div>` : ""}
+        <div class="token-list">
+          ${state.tokens.length ? state.tokens.map(t => `<div class="token-row"><span>${escapeHTML(t.name)}</span><div class="settings-row-actions"><button class="danger" data-revoke="${t.id}">Revoke</button></div></div>`).join("") : `<div class="empty-state"><p>No active tokens.</p></div>`}
+        </div>
+      </section>`;
+  }
   return `
     <section class="settings-page theme-${theme}">
-      <aside class="sidebar">
+      <aside class="sidebar settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-        <section class="nav-sec">
-          <button class="page-row on icon-label" id="back">${icon("chevronLeft")}<span>Board</span></button>
+        <p class="settings-sidebar-title">Settings</p>
+        <nav class="settings-nav" aria-label="Settings">
+          ${SETTINGS_PAGES.map(item => `<a class="page-row settings-nav-link ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" ${item.id === page.id ? 'aria-current="page"' : ""}>${item.label}</a>`).join("")}
+        </nav>
+        <section class="settings-actions" aria-label="Account actions">
+          <button class="plain-btn icon-label" id="back">${icon("chevronLeft")}<span>Back to board</span></button>
           <button class="plain-btn icon-label" id="settings-logout">${icon("signOut")}<span>Sign out</span></button>
         </section>
       </aside>
@@ -1062,67 +1146,12 @@ function settingsHTML() {
           <div class="settings-head">
             <div>
               <p>Owner settings</p>
-              <h1>Settings</h1>
+              <h1>${page.title}</h1>
+              <p class="settings-description">${page.description}</p>
             </div>
           </div>
           ${statusErrorHTML(state.error)}
-          <section class="settings-section profile-settings">
-            <div class="settings-section-head">
-              <h2>Profile</h2>
-              <p>Your generated avatar is shared with the agent identity style</p>
-            </div>
-            <form id="profile-form" class="profile-form">
-              ${avatarHTML(state.me)}
-              <input name="displayName" aria-label="Your display name" value="${escapeAttr(state.me?.displayName || state.me?.email?.split("@")[0] || "")}" maxlength="80" required>
-              <button class="secondary settings-submit" type="submit">Save profile</button>
-            </form>
-          </section>
-          <section class="settings-section">
-            <div class="settings-section-head">
-              <h2>Lists</h2>
-        <p>Max active items per list on this board</p>
-            </div>
-            <div class="limit-control settings-limit">
-        <input id="settings-list-limit" aria-label="Max active items per list" type="number" min="1" max="${proLimits().activeItemsPerList}" value="${state.board?.maxTasksPerList || DEFAULT_LIST_LIMIT}">
-            </div>
-          </section>
-          <section class="settings-section">
-            <div class="settings-section-head">
-              <h2>Agent users</h2>
-              <p>Create named identities for assigned work. Tokens are shown once.</p>
-            </div>
-            ${liveAgents.length ? `<p class="agent-limit" id="agent-limit">One agent user per account for now. Delete the current agent to create a replacement.</p>` : `
-              <form id="agent-form" class="token-form">
-                <input name="displayName" placeholder="Agent name" maxlength="80" required>
-                <button class="primary settings-submit" type="submit">Create agent</button>
-              </form>`}
-            ${state.newAgentToken ? `<div class="new-token"><label>New agent token. Copy it now.</label><code>${escapeHTML(state.newAgentToken)}</code></div>` : ""}
-            <div class="agent-list">
-              ${state.agents.length ? state.agents.map(agent => `
-                <div class="agent-row ${agent.deletedAt ? "inactive" : ""}">
-                  ${avatarHTML(agent, { small: true })}
-                  <span><b>${escapeHTML(agent.displayName)}</b><small class="agent-status">${agent.deletedAt ? "Inactive" : agent.revokedAt ? "Token revoked" : "Active"}</small></span>
-                  ${agent.deletedAt ? "" : `<div class="settings-row-actions">
-                    ${agent.revokedAt ? "" : `<button class="secondary" data-revoke-agent="${agent.id}">Revoke token</button>`}
-                    <button class="danger" data-delete-agent="${agent.id}">Delete</button>
-                  </div>`}
-                </div>`).join("") : `<div class="empty-state"><p>No agent users yet.</p></div>`}
-            </div>
-          </section>
-          <section class="settings-section">
-            <div class="settings-section-head">
-              <h2>API tokens</h2>
-              <p>Access for CLI and agent workflows</p>
-            </div>
-            <form id="token-form" class="token-form">
-              <input name="name" placeholder="Token name" required>
-              <button class="primary settings-submit" type="submit">Create token</button>
-            </form>
-            ${state.newToken ? `<div class="new-token"><label>New token</label><code>${escapeHTML(state.newToken)}</code></div>` : ""}
-            <div class="token-list">
-              ${state.tokens.length ? state.tokens.map(t => `<div class="token-row"><span>${escapeHTML(t.name)}</span><div class="settings-row-actions"><button class="danger" data-revoke="${t.id}">Revoke</button></div></div>`).join("") : `<div class="empty-state"><p>No active tokens.</p></div>`}
-            </div>
-          </section>
+          ${content}
         </section>
       </main>
     </section>`;
@@ -1703,77 +1732,97 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submit
 
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelectorAll(".settings-nav-link").forEach(el => el.onclick = event => {
+    event.preventDefault();
+    navigate(el.getAttribute("href"));
+  });
   document.querySelector("#back").onclick = closeSettings;
   document.querySelector("#settings-logout").onclick = logout;
-  document.querySelector("#profile-form").addEventListener("submit", async event => {
+  document.querySelector("#profile-form")?.addEventListener("submit", async event => {
     event.preventDefault();
+    const version = routeVersion;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
     const displayName = new FormData(event.currentTarget).get("displayName");
     try {
-      state.me = await api.patch("/api/v1/me", { displayName });
+      const user = await api.patch("/api/v1/me", { displayName });
+      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "profile")) return;
+      state.me = user;
       state.error = "";
     } catch (err) {
+      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "profile")) return;
       state.error = err.message;
     }
     render();
   });
   document.querySelector("#settings-list-limit")?.addEventListener("change", async e => {
+    const version = routeVersion;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
     const update = listLimitUpdate(state.board.id, e.target.value);
     e.target.value = update.next;
     try {
       await api.patch(update.path, update.input);
+      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "board")) return;
       state.error = "";
-      await loadBoards(state.board?.id);
+      if (!await loadBoards(state.board?.id, version)) return;
     } catch (err) {
+      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "board")) return;
       state.error = err.message;
     }
+    if (!settingsMutationIsCurrent(sessionVersion, userID, version, "board")) return;
     render();
   });
-  document.querySelector("#token-form").addEventListener("submit", async event => {
+  document.querySelector("#token-form")?.addEventListener("submit", async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    if (await createAPIToken(form.get("name"))) render();
+    const version = routeVersion;
+    if (await createAPIToken(form.get("name"), version) && settingsRouteIsCurrent(version, "api")) render();
   });
   document.querySelector("#agent-form")?.addEventListener("submit", async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    if (await createAgent(form.get("displayName"))) render();
+    const version = routeVersion;
+    if (await createAgent(form.get("displayName"), version) && settingsRouteIsCurrent(version, "agents")) render();
   });
   document.querySelectorAll("[data-revoke-agent]").forEach(el => el.onclick = async () => {
+    const version = routeVersion;
     const sessionVersion = authVersion;
     const userID = state.me?.id;
     await api.del(`/api/v1/agents/${el.dataset.revokeAgent}/token`);
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    if (!settingsMutationIsCurrent(sessionVersion, userID, version, "agents")) return;
     state.newAgentToken = "";
-    if (await loadAgents(false, sessionVersion, userID)) render();
+    if (await loadAgents(false, sessionVersion, userID, version) && settingsRouteIsCurrent(version, "agents")) render();
   });
   document.querySelectorAll("[data-delete-agent]").forEach(el => el.onclick = async () => {
     const agent = state.agents.find(item => item.id === el.dataset.deleteAgent);
     if (!agent || !confirm(`Delete agent "${agent.displayName}"? Existing assignments will remain visible.`)) return;
+    const version = routeVersion;
     const sessionVersion = authVersion;
     const userID = state.me?.id;
     await api.del(`/api/v1/agents/${agent.id}`);
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    if (!settingsMutationIsCurrent(sessionVersion, userID, version, "agents")) return;
     state.newAgentToken = "";
-    if (await loadAgents(false, sessionVersion, userID)) render();
+    if (await loadAgents(false, sessionVersion, userID, version) && settingsRouteIsCurrent(version, "agents")) render();
   });
   document.querySelectorAll("[data-revoke]").forEach(el => el.onclick = async () => {
+    const version = routeVersion;
     const sessionVersion = authVersion;
     const userID = state.me?.id;
     await api.del(`/api/v1/api-tokens/${el.dataset.revoke}`);
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
-    if (await loadTokens(sessionVersion, userID)) render();
+    if (!settingsMutationIsCurrent(sessionVersion, userID, version, "api")) return;
+    if (await loadTokens(sessionVersion, userID, version) && settingsRouteIsCurrent(version, "api")) render();
   });
 }
 
 function openSettings() {
   if (!state.me || state.view === "logging-out" || state.view === "logout-error") return;
-  return navigate(SETTINGS_PATH);
+  return navigate(settingsPath());
 }
 
 function closeSettings() {
-  state.newToken = "";
-  state.newAgentToken = "";
-  return navigate(state.board ? boardPath(state.board.id) : APP_PATH);
+  const boardID = state.board?.id || state.boards[0]?.id;
+  return navigate(boardID ? boardPath(boardID) : APP_PATH);
 }
 
 function showLogin() {
@@ -2025,6 +2074,20 @@ function sessionIsCurrent(sessionVersion, userID) {
   return sessionVersion === authVersion && state.me?.id === userID;
 }
 
+function settingsRouteIsCurrent(expectedRouteVersion, expectedPage) {
+  return expectedRouteVersion === routeVersion && state.settings && state.settingsPage === expectedPage;
+}
+
+function clearSettingsCredentialsLeaving(nextPage) {
+  if (state.settingsPage === "api" && nextPage !== "api") state.newToken = "";
+  if (state.settingsPage === "agents" && nextPage !== "agents") state.newAgentToken = "";
+}
+
+function settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, expectedPage) {
+  return sessionIsCurrent(sessionVersion, userID)
+    && (expectedRouteVersion === undefined || settingsRouteIsCurrent(expectedRouteVersion, expectedPage));
+}
+
 async function loadTokens(sessionVersion = authVersion, userID = state.me?.id, expectedRouteVersion) {
   const data = await api.get("/api/v1/api-tokens");
   if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
@@ -2044,7 +2107,7 @@ async function loadAgents(optional = false, sessionVersion = authVersion, userID
   }
 }
 
-async function createAgent(displayName) {
+async function createAgent(displayName, expectedRouteVersion) {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   try {
@@ -2053,28 +2116,30 @@ async function createAgent(displayName) {
     const { token, ...agent } = data;
     state.newAgentToken = token;
     state.agents = [...state.agents.filter(item => item.id !== agent.id), agent];
+    if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "agents")) return false;
     state.error = "";
     try {
-      await loadAgents(false, sessionVersion, userID);
+      await loadAgents(false, sessionVersion, userID, expectedRouteVersion);
     } catch {
-      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "agents")) return false;
       state.error = "Agent created. Copy the token now; the agent list could not be refreshed.";
     }
     return true;
   } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "agents")) return false;
     state.error = err.message;
     return false;
   }
 }
 
-async function createAPIToken(name) {
+async function createAPIToken(name, expectedRouteVersion) {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   const data = await api.post("/api/v1/api-tokens", { name });
   if (!sessionIsCurrent(sessionVersion, userID)) return false;
   state.newToken = data.token;
-  return loadTokens(sessionVersion, userID);
+  if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "api")) return false;
+  return loadTokens(sessionVersion, userID, expectedRouteVersion);
 }
 
 async function reload() {
@@ -2246,8 +2311,7 @@ function escapeAttr(value) {
 window.addEventListener("popstate", async () => {
   // Sign-out is in flight; the URL it lands on is decided when it finishes.
   if (state.view === "logging-out" || state.view === "logout-error") return;
-  state.newToken = "";
-  state.newAgentToken = "";
+  clearSettingsCredentialsLeaving(parseRoute(location.pathname).settingsPage || "");
   await applyRoute();
 });
 
