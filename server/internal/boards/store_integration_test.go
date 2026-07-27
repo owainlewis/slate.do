@@ -420,6 +420,59 @@ func TestUpdateBoardNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 	}
 }
 
+func TestConcurrentDisjointBoardUpdatesPreserveBothFields(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Business"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locker, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Rollback(ctx)
+	if _, err := locker.Exec(ctx, "SELECT id FROM boards WHERE id = $1 FOR UPDATE", board.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	name := "Growth plan"
+	limit := 12
+	results := make(chan error, 2)
+	go func() {
+		_, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{Name: &name})
+		results <- err
+	}()
+	go func() {
+		_, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &limit})
+		results <- err
+	}()
+
+	waitForBlockedBoardUpdates(t, ctx, db, 2)
+	if err := locker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	loaded, err := store.GetBoard(ctx, userID, board.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Name != name || loaded.MaxTasksPerList != limit {
+		t.Fatalf("board after disjoint updates = name %q, limit %d; want name %q, limit %d", loaded.Name, loaded.MaxTasksPerList, name, limit)
+	}
+}
+
 func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -792,4 +845,28 @@ func createIntegrationUser(t *testing.T, ctx context.Context, db *database.Pool)
 		t.Fatal(err)
 	}
 	return id
+}
+
+func waitForBlockedBoardUpdates(t *testing.T, ctx context.Context, db *database.Pool, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int
+		if err := db.QueryRow(ctx, `
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND pid <> pg_backend_pid()
+			  AND state = 'active'
+			  AND wait_event_type = 'Lock'
+			  AND query LIKE '%UPDATE boards%'
+		`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d blocked board updates", want)
 }
