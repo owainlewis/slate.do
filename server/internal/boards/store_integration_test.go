@@ -363,6 +363,116 @@ func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
 	}
 }
 
+func TestUpdateBoardNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	ownerID := createIntegrationUser(t, ctx, db)
+	otherID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
+	})
+
+	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Business"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Ideas"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTask(ctx, ownerID, list.ID, CreateTaskInput{Title: "Keep me"}); err != nil {
+		t.Fatal(err)
+	}
+
+	name := "  Growth plan  "
+	updated, err := store.UpdateBoard(ctx, ownerID, board.ID, UpdateBoardInput{Name: &name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "Growth plan" {
+		t.Fatalf("updated name = %q, want %q", updated.Name, "Growth plan")
+	}
+	loaded, err := store.GetBoard(ctx, ownerID, board.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Name != "Growth plan" || len(loaded.Buckets) != 1 || len(loaded.Buckets[0].Tasks) != 1 || loaded.Buckets[0].Tasks[0].Title != "Keep me" {
+		t.Fatalf("loaded board after rename = %#v", loaded)
+	}
+
+	blank := "   "
+	if _, err := store.UpdateBoard(ctx, ownerID, board.ID, UpdateBoardInput{Name: &blank}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("blank rename error = %v, want ErrInvalidData", err)
+	}
+	if _, err := store.UpdateBoard(ctx, otherID, board.ID, UpdateBoardInput{Name: &name}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-account rename error = %v, want ErrNotFound", err)
+	}
+	if _, err := store.UpdateBoard(ctx, ownerID, "00000000-0000-0000-0000-000000000000", UpdateBoardInput{Name: &name}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing board rename error = %v, want ErrNotFound", err)
+	}
+	unchanged, err := store.GetBoard(ctx, ownerID, board.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Name != "Growth plan" {
+		t.Fatalf("name after rejected renames = %q, want %q", unchanged.Name, "Growth plan")
+	}
+}
+
+func TestConcurrentDisjointBoardUpdatesPreserveBothFields(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Business"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locker, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Rollback(ctx)
+	if _, err := locker.Exec(ctx, "SELECT id FROM boards WHERE id = $1 FOR UPDATE", board.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	name := "Growth plan"
+	limit := 12
+	results := make(chan error, 2)
+	go func() {
+		_, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{Name: &name})
+		results <- err
+	}()
+	go func() {
+		_, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &limit})
+		results <- err
+	}()
+
+	waitForBlockedBoardUpdates(t, ctx, db, 2)
+	if err := locker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	loaded, err := store.GetBoard(ctx, userID, board.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Name != name || loaded.MaxTasksPerList != limit {
+		t.Fatalf("board after disjoint updates = name %q, limit %d; want name %q, limit %d", loaded.Name, loaded.MaxTasksPerList, name, limit)
+	}
+}
+
 func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -735,4 +845,28 @@ func createIntegrationUser(t *testing.T, ctx context.Context, db *database.Pool)
 		t.Fatal(err)
 	}
 	return id
+}
+
+func waitForBlockedBoardUpdates(t *testing.T, ctx context.Context, db *database.Pool, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int
+		if err := db.QueryRow(ctx, `
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND pid <> pg_backend_pid()
+			  AND state = 'active'
+			  AND wait_event_type = 'Lock'
+			  AND query LIKE '%UPDATE boards%'
+		`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d blocked board updates", want)
 }

@@ -109,6 +109,81 @@ test("sidebar separates board creation and explains the board limit", () => {
   vm.runInContext(`state.maxBoards = 10; state.boards = []; state.board = null;`, app);
 });
 
+test("board rows expose an inline rename form with save and cancel controls", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Business" }];
+    state.board = { id: "board-one", name: "Business", buckets: [] };
+    state.renamingBoardId = "";
+  `, app);
+
+  const row = app.boardRowHTML({ id: "board-one", name: "Business" });
+  assert.match(row, /data-start-rename-board="board-one"[^>]*aria-label="Rename Business"/);
+  assert.match(row, /data-delete-board="board-one"[^>]*aria-label="Delete Business"/);
+
+  vm.runInContext(`state.renamingBoardId = "board-one";`, app);
+  const editing = app.boardRowHTML({ id: "board-one", name: "Business" });
+  assert.match(editing, /data-rename-board="board-one"/);
+  assert.match(editing, /name="name" aria-label="Board name"/);
+  assert.match(editing, /aria-label="Save board name"/);
+  assert.match(editing, /aria-label="Cancel board rename"/);
+  assert.match(editing, /class="error board-rename-error"[^>]*role="alert"/);
+  assert.match(styles, /\.board-rename-controls input\[aria-invalid="true"\] \{ border-color: var\(--danger\); \}/);
+
+  vm.runInContext(`state.boards = []; state.board = null; state.renamingBoardId = "";`, app);
+});
+
+test("renaming trims and updates board names without replacing selected board content", async () => {
+  const calls = [];
+  app.renameCalls = calls;
+  vm.runInContext(`
+    authVersion = 7;
+    state.me = { id: "owner" };
+    state.boards = [{ id: "board-one", name: "Business", sortOrder: 0 }];
+    state.board = {
+      id: "board-one", name: "Business", sortOrder: 0,
+      buckets: [{ id: "list-one", name: "Ideas", tasks: [{ id: "task-one" }] }],
+    };
+    state.selectedTask = state.board.buckets[0].tasks[0];
+    state.boardMode = "flow";
+    state.renamingBoardId = "board-one";
+    api.patch = async (path, input) => {
+      renameCalls.push({ path, input });
+      return { id: "board-one", name: input.name, sortOrder: 0 };
+    };
+  `, app);
+
+  assert.equal(await app.renameBoard("board-one", "  Growth plan  "), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{ path: "/api/v1/boards/board-one", input: { name: "Growth plan" } }]);
+  assert.equal(vm.runInContext("state.boards[0].name", app), "Growth plan");
+  assert.equal(vm.runInContext("state.board.name", app), "Growth plan");
+  assert.equal(vm.runInContext("state.board.buckets[0].name", app), "Ideas");
+  assert.equal(vm.runInContext("state.selectedTask.id", app), "task-one");
+  assert.equal(vm.runInContext("state.boardMode", app), "flow");
+  assert.equal(vm.runInContext("state.renamingBoardId", app), "");
+
+  await assert.rejects(app.renameBoard("board-one", "   "), /Board name is required/);
+  assert.equal(calls.length, 1);
+  vm.runInContext(`state.me = null; state.boards = []; state.board = null; state.selectedTask = null;`, app);
+});
+
+test("a rejected board rename leaves local state unchanged", async () => {
+  vm.runInContext(`
+    authVersion = 8;
+    state.me = { id: "owner" };
+    state.boards = [{ id: "board-one", name: "Business" }];
+    state.board = { id: "board-one", name: "Business", buckets: [{ id: "list-one" }] };
+    state.renamingBoardId = "board-one";
+    api.patch = async () => { throw new Error("not found"); };
+  `, app);
+
+  await assert.rejects(app.renameBoard("board-one", "Growth"), /not found/);
+  assert.equal(vm.runInContext("state.boards[0].name", app), "Business");
+  assert.equal(vm.runInContext("state.board.name", app), "Business");
+  assert.equal(vm.runInContext("state.board.buckets[0].id", app), "list-one");
+  assert.equal(vm.runInContext("state.renamingBoardId", app), "board-one");
+  vm.runInContext(`state.me = null; state.boards = []; state.board = null; state.renamingBoardId = "";`, app);
+});
+
 test("primary navigation uses distinct icons and keeps readable labels", () => {
   vm.runInContext(`
     state.boards = [{ id: "board", name: "Board" }];

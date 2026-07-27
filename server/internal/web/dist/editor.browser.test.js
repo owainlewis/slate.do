@@ -58,6 +58,81 @@ function board(deleted) {
   };
 }
 
+test("a board can be renamed, cancelled, validated, and reloaded in place", async t => {
+  let boardName = "Business";
+  const patches = [];
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
+    if (url.pathname === "/api/v1/boards" && request.method === "GET") {
+      return json(response, { boards: [{ id: "board-one", name: boardName }] });
+    }
+    if (url.pathname === "/api/v1/boards/board-one" && request.method === "GET") {
+      return json(response, { ...board(false), name: boardName });
+    }
+    if (url.pathname === "/api/v1/boards/board-one" && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      patches.push(input);
+      const name = String(input.name || "").trim();
+      if (!name) {
+        response.writeHead(400, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "board name is required" }));
+      }
+      boardName = name;
+      return json(response, { id: "board-one", name: boardName });
+    }
+    if (isAppShell(url.pathname)) return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1024, height: 768 } });
+  await page.goto(`http://127.0.0.1:${server.address().port}/app`);
+  await page.getByRole("button", { name: "Improve the vault", exact: true }).waitFor();
+  const originalURL = page.url();
+  await page.getByRole("button", { name: "Flow", exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+
+  await page.getByRole("button", { name: "Rename Business", exact: true }).click();
+  const nameInput = page.getByRole("textbox", { name: "Board name", exact: true });
+  await nameInput.fill("Cancelled name");
+  await page.getByRole("button", { name: "Cancel board rename", exact: true }).click();
+  await page.getByRole("button", { name: "Rename Business", exact: true }).waitFor();
+  assert.deepEqual(patches, []);
+
+  await page.getByRole("button", { name: "Rename Business", exact: true }).click();
+  await nameInput.fill("Also cancelled");
+  await nameInput.press("Escape");
+  await page.getByRole("button", { name: "Rename Business", exact: true }).waitFor();
+  assert.deepEqual(patches, []);
+
+  await page.getByRole("button", { name: "Rename Business", exact: true }).click();
+  await nameInput.fill("   ");
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Board name is required." }).waitFor();
+  assert.equal(await nameInput.getAttribute("aria-invalid"), "true");
+  assert.deepEqual(patches, []);
+
+  await nameInput.fill("  Growth plan  ");
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await page.getByRole("button", { name: "Rename Growth plan", exact: true }).waitFor();
+  assert.deepEqual(patches, [{ name: "Growth plan" }]);
+  assert.equal(page.url(), originalURL);
+  assert.equal(await page.getByRole("button", { name: "Flow", exact: true }).getAttribute("aria-pressed"), "true");
+  await page.getByText("Improve the vault", { exact: true }).waitFor();
+
+  await page.reload();
+  await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+  await page.getByRole("button", { name: "Rename Growth plan", exact: true }).waitFor();
+  await page.getByText("Improve the vault", { exact: true }).waitFor();
+});
+
 test("editor prevents duplicate saves, preserves failures, and restores focus", async t => {
   let deleted = false;
   let hidden = false;
