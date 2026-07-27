@@ -866,13 +866,27 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
   const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
   await page.goto(`http://127.0.0.1:${server.address().port}/app`);
 
+  await page.locator(".current-user .avatar").waitFor();
+  assert.equal(await page.locator(".current-user .avatar").count(), 1);
+  assert.equal(await page.locator(".current-user > span:not(.avatar)").count(), 0);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const createAgentButton = page.getByRole("button", { name: "Create agent", exact: true });
+  const createTokenButton = page.getByRole("button", { name: "Create token", exact: true });
+  for (const button of [createAgentButton, createTokenButton]) {
+    const box = await button.boundingBox();
+    assert.ok(box && box.height >= 32 && box.height <= 36, "settings form actions should stay compact and usable");
+  }
   await page.getByPlaceholder("Agent name").fill("Builder Bot");
-  await page.getByRole("button", { name: "Create agent", exact: true }).click();
+  await createAgentButton.click();
   await page.getByText("slate_agent_create_once", { exact: true }).waitFor();
   await page.getByText(/Agent created.*could not be refreshed/).waitFor();
   await page.getByText(/One agent user per account for now/).waitFor();
   assert.equal(await page.getByPlaceholder("Agent name").count(), 0);
+  const agentActionBox = await page.getByRole("button", { name: "Revoke token", exact: true }).boundingBox();
+  assert.ok(agentActionBox && agentActionBox.height >= 32 && agentActionBox.height <= 36);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+  await page.setViewportSize({ width: 1100, height: 800 });
   await page.getByRole("button", { name: "Board", exact: true }).click();
 
   await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
