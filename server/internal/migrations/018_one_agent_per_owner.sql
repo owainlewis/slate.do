@@ -3,7 +3,7 @@ WITH ranked_agents AS (
 		id,
 		row_number() OVER (
 			PARTITION BY owner_user_id
-			ORDER BY created_at, id
+			ORDER BY revoked_at IS NOT NULL, created_at, id
 		) AS owner_position
 	FROM agent_users
 	WHERE deleted_at IS NULL

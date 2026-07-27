@@ -51,11 +51,11 @@ func TestOneAgentPerOwnerMigrationUpgradesExistingAgentSchema(t *testing.T) {
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO agent_users (id, owner_user_id, display_name, token_hash, revoked_at, created_at)
-		SELECT '10000000-0000-0000-0000-000000000001'::uuid, id, 'Oldest', 'oldest', NULL, TIMESTAMPTZ '2026-07-27 09:00:00Z' FROM users
+		SELECT '10000000-0000-0000-0000-000000000001'::uuid, id, 'Oldest revoked', 'oldest', TIMESTAMPTZ '2026-07-27 09:30:00Z', TIMESTAMPTZ '2026-07-27 09:00:00Z' FROM users
 		UNION ALL
-		SELECT '10000000-0000-0000-0000-000000000002'::uuid, id, 'Revoked', 'revoked', TIMESTAMPTZ '2026-07-27 09:30:00Z', TIMESTAMPTZ '2026-07-27 10:00:00Z' FROM users
+		SELECT '10000000-0000-0000-0000-000000000002'::uuid, id, 'Usable replacement', 'replacement', NULL, TIMESTAMPTZ '2026-07-27 10:00:00Z' FROM users
 		UNION ALL
-		SELECT '10000000-0000-0000-0000-000000000003'::uuid, id, 'Newest', 'newest', NULL, TIMESTAMPTZ '2026-07-27 11:00:00Z' FROM users;
+		SELECT '10000000-0000-0000-0000-000000000003'::uuid, id, 'Newer duplicate', 'newest', NULL, TIMESTAMPTZ '2026-07-27 11:00:00Z' FROM users;
 		INSERT INTO tasks (assignee_agent_id) VALUES ('10000000-0000-0000-0000-000000000003');
 	`); err != nil {
 		t.Fatal(err)
@@ -94,8 +94,18 @@ func TestOneAgentPerOwnerMigrationUpgradesExistingAgentSchema(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 3 || states[0].revoked || states[0].deleted || !states[1].revoked || !states[1].deleted || !states[2].revoked || !states[2].deleted {
+	if len(states) != 3 || !states[0].revoked || !states[0].deleted || states[1].revoked || states[1].deleted || !states[2].revoked || !states[2].deleted {
 		t.Fatalf("migrated agent states = %#v", states)
+	}
+	if states[1].id != "10000000-0000-0000-0000-000000000002" {
+		t.Fatalf("usable replacement was not preserved: %#v", states)
+	}
+	var usableTokenHash string
+	if err := tx.QueryRow(ctx, "SELECT token_hash FROM agent_users WHERE deleted_at IS NULL").Scan(&usableTokenHash); err != nil {
+		t.Fatal(err)
+	}
+	if usableTokenHash != "replacement" {
+		t.Fatalf("usable token hash = %q", usableTokenHash)
 	}
 
 	var assignedAgent string
