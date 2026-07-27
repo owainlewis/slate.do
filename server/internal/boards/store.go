@@ -189,41 +189,48 @@ func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoar
 }
 
 func (s *Store) UpdateBoard(ctx context.Context, userID string, id string, input UpdateBoardInput) (Board, error) {
-	current, err := s.GetBoard(ctx, userID, id)
-	if err != nil {
+	var ownedID string
+	if err := s.db.QueryRow(ctx, "SELECT id::text FROM boards WHERE user_id = $1 AND id = $2", userID, id).Scan(&ownedID); errors.Is(err, pgx.ErrNoRows) {
+		return Board{}, ErrNotFound
+	} else if err != nil {
 		return Board{}, err
 	}
+
+	var name *string
 	if input.Name != nil {
-		current.Name = clean(*input.Name)
-	}
-	if input.BackgroundKind != nil {
-		current.BackgroundKind = clean(*input.BackgroundKind)
-		if current.BackgroundKind == "" {
-			current.BackgroundKind = "plain"
+		value := clean(*input.Name)
+		if value == "" {
+			return Board{}, fmt.Errorf("%w: board name is required", ErrInvalidData)
 		}
+		name = &value
 	}
-	if input.BackgroundValue != nil {
-		current.BackgroundValue = *input.BackgroundValue
+
+	var backgroundKind *string
+	if input.BackgroundKind != nil {
+		value := clean(*input.BackgroundKind)
+		if value == "" {
+			value = "plain"
+		}
+		backgroundKind = &value
 	}
 	if input.MaxTasksPerList != nil {
 		if err := validateWorkingLimit(*input.MaxTasksPerList); err != nil {
 			return Board{}, err
 		}
-		current.MaxTasksPerList = *input.MaxTasksPerList
 	}
-	if input.SortOrder != nil {
-		current.SortOrder = *input.SortOrder
-	}
-	if current.Name == "" {
-		return Board{}, fmt.Errorf("%w: board name is required", ErrInvalidData)
-	}
+
 	var board Board
-	err = s.db.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		UPDATE boards
-		SET name = $3, background_kind = $4, background_value = $5, max_tasks_per_list = $6, sort_order = $7, updated_at = now()
+		SET name = COALESCE($3::text, name),
+		    background_kind = COALESCE($4::text, background_kind),
+		    background_value = COALESCE($5::text, background_value),
+		    max_tasks_per_list = COALESCE($6::integer, max_tasks_per_list),
+		    sort_order = COALESCE($7::integer, sort_order),
+		    updated_at = now()
 		WHERE user_id = $1 AND id = $2
 		RETURNING id::text, name, background_kind, background_value, max_tasks_per_list, sort_order, created_at, updated_at
-	`, userID, id, current.Name, current.BackgroundKind, current.BackgroundValue, current.MaxTasksPerList, current.SortOrder).Scan(
+	`, userID, id, name, backgroundKind, input.BackgroundValue, input.MaxTasksPerList, input.SortOrder).Scan(
 		&board.ID, &board.Name, &board.BackgroundKind, &board.BackgroundValue,
 		&board.MaxTasksPerList, &board.SortOrder, &board.CreatedAt, &board.UpdatedAt,
 	)

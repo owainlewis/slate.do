@@ -21,7 +21,8 @@ func StaticHandler(content fs.FS) http.Handler {
 			return
 		}
 
-		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		clean := path.Clean(r.URL.Path)
+		name := strings.TrimPrefix(clean, "/")
 		if name == "." || name == "" {
 			name = "index.html"
 		}
@@ -46,12 +47,26 @@ func StaticHandler(content fs.FS) http.Handler {
 				return
 			}
 		}
-		if path.Ext(name) != "" {
+		if path.Ext(name) != "" || !isAppRoute(clean) {
 			http.NotFound(w, r)
 			return
 		}
 		serveFile(w, r, content, "index.html")
 	})
+}
+
+// isAppRoute reports whether a path is a frontend route that must boot the
+// single-page app. Anything else is a genuine 404 rather than an empty shell.
+// These shapes mirror parseRoute in web/dist/app.js; keep the two in step.
+func isAppRoute(clean string) bool {
+	switch clean {
+	case "/", "/login", "/app", "/app/settings", "/early-access", "/reset-password":
+		return true
+	}
+	// A board id is one non-empty path segment. Whether it names a board the
+	// caller can see is the app's decision, not the file server's.
+	id, ok := strings.CutPrefix(clean, "/app/boards/")
+	return ok && id != "" && !strings.Contains(id, "/")
 }
 
 func exists(content fs.FS, name string) (bool, error) {
