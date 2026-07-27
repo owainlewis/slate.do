@@ -696,7 +696,7 @@ test("failed logout keeps account data hidden and requires a retry", async t => 
 	await page.goto(`http://127.0.0.1:${server.address().port}/app`);
 	await page.getByText("Private account board", { exact: true }).first().waitFor();
 	await page.getByRole("button", { name: "Settings", exact: true }).click();
-	await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
+	await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
 	await page.getByRole("button", { name: "Sign out", exact: true }).click();
 	await page.getByText("Sign out failed.", { exact: true }).waitFor();
 	await page.goBack();
@@ -742,18 +742,143 @@ test("route load failures replace stale UI and retry without changing history", 
 	const baseURL = `http://127.0.0.1:${server.address().port}`;
 	await page.goto(`${baseURL}/app`);
 	await page.getByRole("button", { name: "Settings", exact: true }).click();
+	await page.getByRole("link", { name: "API access", exact: true }).click();
 
-	await page.getByRole("heading", { name: "Couldn’t load settings.", exact: true }).waitFor();
-	assert.equal(page.url(), `${baseURL}/app/settings`);
+	await page.getByRole("heading", { name: "Couldn’t load API access settings.", exact: true }).waitFor();
+	assert.equal(page.url(), `${baseURL}/app/settings/api`);
 	assert.equal(await page.getByRole("alert").innerText(), "Tokens are unavailable");
 	assert.equal(await page.getByRole("button", { name: "Business", exact: true }).count(), 0, "the previous board must not remain visible");
 	assert.deepEqual(pageErrors, []);
 
 	failTokens = false;
 	await page.getByRole("button", { name: "Try again", exact: true }).click();
-	await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
-	assert.equal(page.url(), `${baseURL}/app/settings`);
+	await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
+	assert.equal(page.url(), `${baseURL}/app/settings/api`);
 	assert.deepEqual(pageErrors, []);
+});
+
+test("settings routes isolate pages and preserve navigation, refresh, and responsive layout", async t => {
+  const defaultBoard = { id: "board-one", name: "Business", maxTasksPerList: 12, buckets: [] };
+  let releaseBoardPatch;
+  let markBoardPatchStarted;
+  let releaseAgentCreation;
+  let markAgentCreationStarted;
+  let agents = [];
+  const boardPatchResponse = new Promise(resolve => { releaseBoardPatch = resolve; });
+  const boardPatchStarted = new Promise(resolve => { markBoardPatchStarted = resolve; });
+  const agentCreationResponse = new Promise(resolve => { releaseAgentCreation = resolve; });
+  const agentCreationStarted = new Promise(resolve => { markAgentCreationStarted = resolve; });
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me") return json(response, {
+      authenticated: true,
+      user: { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" },
+    });
+    if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }] });
+    if (url.pathname === "/api/v1/boards/board-one" && request.method === "PATCH") {
+      markBoardPatchStarted();
+      await boardPatchResponse;
+      response.writeHead(503, { "Content-Type": "application/json" });
+      return response.end(JSON.stringify({ error: "Board update failed" }));
+    }
+    if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
+    if (url.pathname === "/api/v1/agents" && request.method === "POST") {
+      const input = await requestJSON(request);
+      markAgentCreationStarted();
+      await agentCreationResponse;
+      const agent = { id: "agent-one", displayName: input.displayName };
+      agents = [agent];
+      return json(response, { ...agent, token: "slate_pending_agent_secret" });
+    }
+    if (url.pathname === "/api/v1/agents") return json(response, { agents });
+    if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
+    if (isAppShell(url.pathname)) return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const baseURL = `http://127.0.0.1:${server.address().port}`;
+
+  await page.goto(`${baseURL}/app/settings`);
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+  assert.equal(page.url(), `${baseURL}/app/settings/profile`);
+  assert.equal(await page.getByRole("textbox", { name: "Your display name", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("spinbutton", { name: "Max active items per list", exact: true }).count(), 0);
+  assert.equal(await page.locator('.settings-nav-link[aria-current="page"]').innerText(), "Profile");
+
+  await page.getByRole("link", { name: "Board", exact: true }).click();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
+  const listLimit = page.getByRole("spinbutton", { name: "Max active items per list", exact: true });
+  assert.equal(await listLimit.inputValue(), "12");
+  assert.equal(await page.getByRole("textbox", { name: "Your display name", exact: true }).count(), 0);
+  await listLimit.fill("13");
+  await listLimit.dispatchEvent("change");
+  await boardPatchStarted;
+  await page.getByRole("link", { name: "Profile", exact: true }).click();
+  releaseBoardPatch();
+  await page.waitForTimeout(25);
+  assert.equal(await page.getByRole("heading", { name: "Profile", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("alert").count(), 0, "a delayed Board error must not appear on Profile");
+
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  const agentName = page.getByRole("textbox", { name: "Agent name", exact: true });
+  assert.equal(await agentName.count(), 1);
+  assert.equal(await page.getByRole("textbox", { name: "Token name", exact: true }).count(), 0);
+  await agentName.fill("Builder Bot");
+  await page.getByRole("button", { name: "Create agent", exact: true }).click();
+  await agentCreationStarted;
+  await page.getByRole("link", { name: "Profile", exact: true }).click();
+  releaseAgentCreation();
+  await page.waitForTimeout(25);
+  assert.equal(await page.getByText("slate_pending_agent_secret", { exact: true }).count(), 0);
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
+  await page.getByText("slate_pending_agent_secret", { exact: true }).waitFor();
+  await page.getByText(/One agent user per account for now/).waitFor();
+  assert.equal(await page.getByRole("textbox", { name: "Agent name", exact: true }).count(), 0);
+  await page.locator(".settings-sidebar .brand").click();
+  await page.getByRole("button", { name: "Open app", exact: true }).first().click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
+  assert.equal(await page.getByText("slate_pending_agent_secret", { exact: true }).count(), 0, "leaving through the brand must clear the shown credential");
+  await page.getByText(/One agent user per account for now/).waitFor();
+
+  await page.getByRole("link", { name: "API access", exact: true }).click();
+  await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
+  assert.equal(await page.getByRole("textbox", { name: "Token name", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("textbox", { name: "Agent name", exact: true }).count(), 0);
+
+  await page.goBack();
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  await page.goForward();
+  await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
+  await page.reload();
+  await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
+  assert.equal(page.url(), `${baseURL}/app/settings/api`);
+
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
+      true,
+      `settings must not overflow at ${viewport.width}px`,
+    );
+  }
+
+  await page.goto(`${baseURL}/app/settings/unknown`);
+  await page.getByRole("heading", { name: "Not found.", exact: true }).waitFor();
+  assert.equal(page.url(), `${baseURL}/app/settings/unknown`);
+
+  await page.goto(`${baseURL}/app/settings/profile`);
+  await page.getByRole("button", { name: "Back to board", exact: true }).click();
+  await page.waitForURL(`${baseURL}/app/boards/board-one`);
+  assert.equal(page.url(), `${baseURL}/app/boards/board-one`);
 });
 
 test("password reset request and confirmation work without exposing the token in the URL", async t => {
@@ -870,12 +995,15 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
   assert.equal(await page.locator(".current-user .avatar").count(), 1);
   assert.equal(await page.locator(".current-user > span:not(.avatar)").count(), 0);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
   const createAgentButton = page.getByRole("button", { name: "Create agent", exact: true });
+  let box = await createAgentButton.boundingBox();
+  assert.ok(box && box.height >= 32 && box.height <= 36, "settings form actions should stay compact and usable");
+  await page.getByRole("link", { name: "API access", exact: true }).click();
   const createTokenButton = page.getByRole("button", { name: "Create token", exact: true });
-  for (const button of [createAgentButton, createTokenButton]) {
-    const box = await button.boundingBox();
-    assert.ok(box && box.height >= 32 && box.height <= 36, "settings form actions should stay compact and usable");
-  }
+  box = await createTokenButton.boundingBox();
+  assert.ok(box && box.height >= 32 && box.height <= 36, "settings form actions should stay compact and usable");
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
   await page.getByPlaceholder("Agent name").fill("Builder Bot");
   await createAgentButton.click();
   await page.getByText("slate_agent_create_once", { exact: true }).waitFor();
@@ -887,7 +1015,7 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
   await page.setViewportSize({ width: 1100, height: 800 });
-  await page.getByRole("button", { name: "Board", exact: true }).click();
+  await page.getByRole("button", { name: "Back to board", exact: true }).click();
 
   await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
   await page.getByLabel("Agent", { exact: true }).selectOption(agentID);
@@ -905,6 +1033,7 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
   assert.equal(currentTask.assigneeAgentId, agentID);
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
   await page.getByRole("button", { name: "Revoke token", exact: true }).click();
   await page.getByText("Token revoked", { exact: true }).waitFor();
   await page.getByText(/One agent user per account for now/).waitFor();
@@ -913,7 +1042,7 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
   await page.getByRole("button", { name: "Delete", exact: true }).click();
   await page.getByText("Inactive", { exact: true }).waitFor();
   await page.getByPlaceholder("Agent name").waitFor();
-  await page.getByRole("button", { name: "Board", exact: true }).click();
+  await page.getByRole("button", { name: "Back to board", exact: true }).click();
   assert.equal(await page.locator(".task-assignee .avatar").getAttribute("title"), "Builder Bot (inactive)");
 });
 
@@ -946,6 +1075,7 @@ function file(response, name, type) {
 // Mirrors the server's SPA fallback: every frontend route boots the same shell.
 function isAppShell(pathname) {
 	if (["/", "/index.html", "/login", "/app", "/app/settings", "/early-access", "/reset-password"].includes(pathname)) return true;
+	if (pathname.startsWith("/app/settings/")) return true;
 	const id = pathname.startsWith("/app/boards/") ? pathname.slice("/app/boards/".length) : "";
 	return Boolean(id) && !id.includes("/");
 }

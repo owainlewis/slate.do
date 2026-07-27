@@ -1349,11 +1349,16 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 
 /* ---------- Settings ---------- */
+.settings-sidebar-title { margin: 4px 10px 0; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; }
+.settings-nav-link { display: block; text-decoration: none; }
+.settings-actions { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
 .settings-main { flex: 1; min-width: 0; background: var(--bg); padding: 36px 44px; }
 .settings-panel { width: min(640px, 100%); }
 .settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 24px; }
-.settings-head p { margin: 0 0 6px; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+.settings-head p:not(.settings-description) { margin: 0 0 6px; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
 .settings-head h1 { margin: 0; font-weight: 700; font-size: 24px; letter-spacing: -.02em; }
+.settings-head .settings-description { margin: 7px 0 0; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .settings-section { padding: 20px 0; border-top: 1px solid var(--line); }
 .settings-section:first-of-type { border-top: 0; padding-top: 0; }
 .settings-section-head { margin-bottom: 14px; }
@@ -1436,18 +1441,21 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .shell .nav-sec-footer { margin-top: 0; }
   .settings-page .sidebar {
     width: 100%;
-    height: 56px;
-    flex: 0 0 56px;
+    height: auto;
+    flex: 0 0 auto;
     padding: 10px 14px;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    position: static;
+    align-items: stretch;
+    gap: 8px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    overflow: visible;
   }
-  .settings-page .nav-sec { margin-left: auto; display: flex; align-items: center; gap: 2px; }
-  .settings-page .page-row, .settings-page .plain-btn { width: auto; white-space: nowrap; }
+  .settings-page .settings-sidebar-title { margin-top: 0; }
+  .settings-page .settings-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .settings-page .settings-nav-link { min-width: 0; padding: 7px 4px; text-align: center; white-space: nowrap; }
+  .settings-page .settings-actions { margin-top: 2px; padding-top: 8px; flex-direction: row; justify-content: space-between; }
+  .settings-page .settings-actions .plain-btn { width: auto; white-space: nowrap; }
   .board-actions button { opacity: 1; }
   .bucket-menu .icon-btn { opacity: 1; }
   .bucket-goal { opacity: 1; }

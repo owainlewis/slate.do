@@ -63,6 +63,11 @@ func isAppRoute(clean string) bool {
 	case "/", "/login", "/app", "/app/settings", "/early-access", "/reset-password":
 		return true
 	}
+	// Settings subpaths must boot the app so valid pages can render and invalid
+	// pages can show the deliberate frontend not-found state.
+	if strings.HasPrefix(clean, "/app/settings/") {
+		return true
+	}
 	// A board id is one non-empty path segment. Whether it names a board the
 	// caller can see is the app's decision, not the file server's.
 	id, ok := strings.CutPrefix(clean, "/app/boards/")
