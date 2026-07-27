@@ -185,6 +185,8 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   const taskButton = page.getByRole("button", { name: "Improve the vault", exact: true });
   await taskButton.click();
   const title = page.getByRole("textbox", { name: "Title", exact: true });
+  const description = page.getByRole("textbox", { name: "Description", exact: true });
+  assert.equal(await description.evaluate(element => getComputedStyle(element).marginTop), "18px");
   await title.fill("Changed but unsaved");
   await page.keyboard.press("Control+Enter");
   await page.getByRole("button", { name: "Saving…", exact: true }).waitFor();
@@ -231,6 +233,14 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   assert.equal(await page.evaluate(() => document.activeElement?.id), "flow-list-filter");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('[data-open-task="task-one"]').click();
+  const mobileDescription = page.getByRole("textbox", { name: "Description", exact: true });
+  assert.equal(await mobileDescription.evaluate(element => getComputedStyle(element).marginTop), "18px");
+  const mobileDialog = await page.getByRole("dialog").boundingBox();
+  const mobileTitle = await page.getByRole("textbox", { name: "Title", exact: true }).boundingBox();
+  const mobileDescriptionBox = await mobileDescription.boundingBox();
+  assert.ok(mobileDialog && mobileTitle && mobileDescriptionBox);
+  assert.ok(mobileTitle.x >= mobileDialog.x && mobileTitle.x + mobileTitle.width <= mobileDialog.x + mobileDialog.width);
+  assert.ok(mobileDescriptionBox.x >= mobileDialog.x && mobileDescriptionBox.x + mobileDescriptionBox.width <= mobileDialog.x + mobileDialog.width);
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
   assert.equal(patchCount, 3);
