@@ -36,3 +36,33 @@ func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
 		})
 	}
 }
+
+func TestBoardUpdateRejectionsUseValidationAndNotFoundResponses(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		status  int
+		message string
+	}{
+		{"blank name", ErrInvalidData, http.StatusBadRequest, "invalid data"},
+		{"missing or unauthorized board", ErrNotFound, http.StatusNotFound, "not found"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			if !handleStoreError(recorder, test.err) {
+				t.Fatal("store error was not handled")
+			}
+			if recorder.Code != test.status {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.status)
+			}
+			var response map[string]string
+			if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+			if response["error"] != test.message {
+				t.Fatalf("error = %q, want %q", response["error"], test.message)
+			}
+		})
+	}
+}

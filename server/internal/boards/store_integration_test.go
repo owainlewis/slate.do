@@ -363,6 +363,63 @@ func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
 	}
 }
 
+func TestUpdateBoardNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	ownerID := createIntegrationUser(t, ctx, db)
+	otherID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
+	})
+
+	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Business"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Ideas"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTask(ctx, ownerID, list.ID, CreateTaskInput{Title: "Keep me"}); err != nil {
+		t.Fatal(err)
+	}
+
+	name := "  Growth plan  "
+	updated, err := store.UpdateBoard(ctx, ownerID, board.ID, UpdateBoardInput{Name: &name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "Growth plan" {
+		t.Fatalf("updated name = %q, want %q", updated.Name, "Growth plan")
+	}
+	loaded, err := store.GetBoard(ctx, ownerID, board.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Name != "Growth plan" || len(loaded.Buckets) != 1 || len(loaded.Buckets[0].Tasks) != 1 || loaded.Buckets[0].Tasks[0].Title != "Keep me" {
+		t.Fatalf("loaded board after rename = %#v", loaded)
+	}
+
+	blank := "   "
+	if _, err := store.UpdateBoard(ctx, ownerID, board.ID, UpdateBoardInput{Name: &blank}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("blank rename error = %v, want ErrInvalidData", err)
+	}
+	if _, err := store.UpdateBoard(ctx, otherID, board.ID, UpdateBoardInput{Name: &name}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-account rename error = %v, want ErrNotFound", err)
+	}
+	if _, err := store.UpdateBoard(ctx, ownerID, "00000000-0000-0000-0000-000000000000", UpdateBoardInput{Name: &name}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing board rename error = %v, want ErrNotFound", err)
+	}
+	unchanged, err := store.GetBoard(ctx, ownerID, board.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Name != "Growth plan" {
+		t.Fatalf("name after rejected renames = %q, want %q", unchanged.Name, "Growth plan")
+	}
+}
+
 func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

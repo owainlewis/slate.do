@@ -1,6 +1,7 @@
 const ICON_PATHS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+  pencil: '<path d="M4 20h4l10.7-10.7a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>',
   trash: '<path d="M4 7h16"/><path d="M9 7V4.6C9 3.7 9.7 3 10.6 3h2.8c.9 0 1.6.7 1.6 1.6V7"/><path d="M18.4 7l-.8 12.4a2 2 0 0 1-2 1.9H8.4a2 2 0 0 1-2-1.9L5.6 7"/><path d="M10 11v6M14 11v6"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chevronLeft: '<path d="M15 6l-6 6 6 6"/>',
@@ -81,6 +82,7 @@ const state = {
   maxBoards: 5,
   maxListsPerBoard: 9,
   board: null,
+  renamingBoardId: "",
   selectedTask: null,
   settings: false,
   view: "home",
@@ -157,6 +159,7 @@ function resetAuthenticatedState() {
   state.maxBoards = DEFAULT_MAX_BOARDS;
   state.maxListsPerBoard = DEFAULT_MAX_LISTS_PER_BOARD;
   state.board = null;
+  state.renamingBoardId = "";
   state.selectedTask = null;
   state.settings = false;
   state.error = "";
@@ -277,6 +280,16 @@ function render() {
   }
   root.innerHTML = appHTML();
   bindApp();
+}
+
+function renderKeepingSidebarOpen(open) {
+  render();
+  if (!open) return;
+  const sidebar = document.querySelector(".sidebar");
+  const toggle = document.querySelector("#sidebar-toggle");
+  sidebar?.classList.add("open");
+  toggle?.setAttribute("aria-expanded", "true");
+  toggle?.setAttribute("aria-label", "Close navigation");
 }
 
 function logoutStatusHTML() {
@@ -538,10 +551,26 @@ function themeSwitchHTML(theme) {
 
 function boardRowHTML(board) {
   const current = board.id === state.board?.id;
+  if (board.id === state.renamingBoardId) {
+    return `
+      <div class="board-row board-row-editing ${current ? "on" : ""}">
+        <form class="board-rename" data-rename-board="${board.id}" novalidate>
+          <div class="board-rename-controls">
+            <input name="name" aria-label="Board name" aria-describedby="board-rename-error-${board.id}" value="${escapeAttr(board.name)}" autocomplete="off">
+            <button type="submit" aria-label="Save board name" title="Save board name">${icon("check")}</button>
+            <button type="button" data-cancel-rename-board="${board.id}" aria-label="Cancel board rename" title="Cancel">${icon("x")}</button>
+          </div>
+          <p class="error board-rename-error" id="board-rename-error-${board.id}" role="alert"></p>
+        </form>
+      </div>`;
+  }
   return `
     <div class="board-row ${current ? "on" : ""}">
       <button class="board-select" data-board="${board.id}"><span>${escapeHTML(board.name)}</span></button>
-      <button class="board-delete" data-delete-board="${board.id}" title="Delete board">${icon("trash")}</button>
+      <div class="board-actions">
+        <button data-start-rename-board="${board.id}" aria-label="Rename ${escapeAttr(board.name)}" title="Rename board">${icon("pencil")}</button>
+        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="Delete board">${icon("trash")}</button>
+      </div>
     </div>`;
 }
 
@@ -971,6 +1000,15 @@ function bindApp() {
     }
   });
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = async () => { await loadBoard(el.dataset.board); render(); });
+  document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
+    const keepSidebarOpen = sidebar.classList.contains("open");
+    state.renamingBoardId = el.dataset.startRenameBoard;
+    renderKeepingSidebarOpen(keepSidebarOpen);
+    const input = document.querySelector(`[data-rename-board="${state.renamingBoardId}"] input[name="name"]`);
+    input?.focus();
+    input?.select();
+  });
+  document.querySelectorAll("[data-rename-board]").forEach(form => bindBoardRename(form));
   document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
     const notice = state.moveNotice;
     if (!notice) return;
@@ -1067,6 +1105,69 @@ function bindApp() {
   });
   bindDrag();
   bindDetail();
+}
+
+function bindBoardRename(form) {
+  const id = form.dataset.renameBoard;
+  const sidebarIsOpen = () => Boolean(form.closest(".sidebar")?.classList.contains("open"));
+  const input = form.querySelector('input[name="name"]');
+  const error = form.querySelector(".board-rename-error");
+  const controls = [...form.querySelectorAll("input, button")];
+  const cancel = () => {
+    const keepSidebarOpen = sidebarIsOpen();
+    state.renamingBoardId = "";
+    renderKeepingSidebarOpen(keepSidebarOpen);
+    document.querySelector(`[data-start-rename-board="${id}"]`)?.focus();
+  };
+  const showError = message => {
+    error.textContent = message;
+    input.setAttribute("aria-invalid", "true");
+    input.focus();
+  };
+  form.querySelector("[data-cancel-rename-board]").onclick = cancel;
+  input.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    cancel();
+  });
+  input.addEventListener("input", () => {
+    error.textContent = "";
+    input.removeAttribute("aria-invalid");
+  });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const name = input.value.trim();
+    if (!name) {
+      showError("Board name is required.");
+      return;
+    }
+    controls.forEach(control => { control.disabled = true; });
+    try {
+      if (!await renameBoard(id, name)) return;
+      const keepSidebarOpen = sidebarIsOpen();
+      renderKeepingSidebarOpen(keepSidebarOpen);
+      document.querySelector(`[data-start-rename-board="${id}"]`)?.focus();
+    } catch (err) {
+      controls.forEach(control => { control.disabled = false; });
+      showError(err.message);
+    }
+  });
+}
+
+async function renameBoard(id, name) {
+  const nextName = String(name ?? "").trim();
+  if (!nextName) throw new Error("Board name is required.");
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const updated = await api.patch(`/api/v1/boards/${id}`, { name: nextName });
+  if (!sessionIsCurrent(sessionVersion, userID)) return false;
+  state.boards = state.boards.map(board => board.id === id ? { ...board, ...updated } : board);
+  if (state.board?.id === id) {
+    state.board = { ...state.board, ...updated, buckets: state.board.buckets };
+  }
+  state.renamingBoardId = "";
+  state.error = "";
+  return true;
 }
 
 async function deleteBoard(id) {
