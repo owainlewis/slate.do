@@ -95,6 +95,7 @@ const state = {
   weekStart: "",
   theme: "",
   moveNotice: null,
+  routeError: null,
 };
 
 const themes = [
@@ -112,32 +113,175 @@ const FLOW_STATES = [
   { value: "done", label: "Done" },
 ];
 
+const HOME_PATH = "/";
+const LOGIN_PATH = "/login";
+const APP_PATH = "/app";
+const SETTINGS_PATH = "/app/settings";
+const EARLY_ACCESS_PATH = "/early-access";
+const RESET_PASSWORD_PATH = "/reset-password";
+
+function boardPath(id) {
+  return `/app/boards/${encodeURIComponent(id)}`;
+}
+
+function normalizePath(value) {
+  const path = String(value ?? "").split("?")[0].split("#")[0];
+  if (!path.startsWith("/")) return HOME_PATH;
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed || HOME_PATH;
+}
+
+// The single source of truth for which surface a URL names. Pure, so it is
+// testable without a DOM, and shared by boot, navigate, and popstate.
+function parseRoute(pathname) {
+  const path = normalizePath(pathname);
+  if (path === HOME_PATH) return { name: "home" };
+  if (path === LOGIN_PATH) return { name: "login" };
+  if (path === EARLY_ACCESS_PATH) return { name: "early-access" };
+  if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
+  if (path === APP_PATH) return { name: "app" };
+  if (path === SETTINGS_PATH) return { name: "settings" };
+  const board = /^\/app\/boards\/([^/]+)$/.exec(path);
+  if (board) {
+    try {
+      return { name: "board", boardId: decodeURIComponent(board[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
+  return { name: "not-found" };
+}
+
+function isProtectedRoute(name) {
+  return name === "app" || name === "board" || name === "settings";
+}
+
+// Only same-origin app paths may be returned to after login. Anything else,
+// including protocol-relative and backslash forms, falls back to the default.
+function safeNextPath(value) {
+  if (typeof value !== "string") return "";
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "";
+  const path = normalizePath(value);
+  return isProtectedRoute(parseRoute(path).name) ? path : "";
+}
+
+function loginPathFor(target) {
+  const next = safeNextPath(target);
+  return next && next !== APP_PATH ? `${LOGIN_PATH}?next=${encodeURIComponent(next)}` : LOGIN_PATH;
+}
+
+function currentPath() {
+  return normalizePath(location.pathname);
+}
+
+function syncPath(path) {
+  if (currentPath() !== normalizePath(path)) history.replaceState({}, "", path);
+}
+
+function navigate(path, options = {}) {
+  if (options.replace || currentPath() === normalizePath(path)) history.replaceState({}, "", path);
+  else history.pushState({}, "", path);
+  return applyRoute();
+}
+
+let routeVersion = 0;
+
+// Renders whatever surface the current URL names, redirecting when the URL is
+// not reachable in the current auth state. Every navigation funnels through here.
+async function applyRoute() {
+  const version = ++routeVersion;
+  const route = parseRoute(location.pathname);
+  state.selectedTask = route.name === "board" ? state.selectedTask : null;
+  state.error = "";
+  state.routeError = null;
+
+  if (route.name === "reset-password") return showRoute("reset-password", readResetToken);
+  if (route.name === "early-access") {
+    if (state.me) return navigate(APP_PATH, { replace: true });
+    return showRoute("early-access");
+  }
+  if (route.name === "home") return showRoute("home");
+  if (route.name === "not-found") return showRoute("not-found");
+  if (route.name === "login") {
+    if (state.me) return navigate(safeNextPath(new URLSearchParams(location.search).get("next")) || APP_PATH, { replace: true });
+    return showRoute("login");
+  }
+  if (!state.me) return navigate(loginPathFor(currentPath()), { replace: true });
+  try {
+    if (!await loadBoardList(version)) return;
+    if (routeVersion !== version) return;
+
+    if (route.name === "app") {
+      const first = state.boards[0]?.id;
+      if (first) return navigate(boardPath(first), { replace: true });
+      state.board = null;
+      return showRoute("app");
+    }
+    if (route.name === "board") {
+      if (!state.boards.some(board => board.id === route.boardId)) return showRoute("not-found");
+      if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
+      if (routeVersion !== version) return;
+      return showRoute("app");
+    }
+    // Settings reads limits off the selected board, so keep one loaded.
+    if (!state.board && state.boards[0] && !await loadBoard(state.boards[0].id, authVersion, version)) return;
+    if (routeVersion !== version) return;
+    if (!await loadTokens(authVersion, state.me?.id, version)) return;
+    if (routeVersion !== version) return;
+    state.view = "app";
+    state.settings = true;
+    render();
+  } catch (err) {
+    if (routeVersion !== version) return;
+    state.error = err.message;
+    state.routeError = route;
+    showRoute("route-error");
+  }
+}
+
+// Settings is the one surface that sets its own flag, immediately below.
+// Every other route clears it, so leaving /app/settings by any means closes it.
+function showRoute(view, before) {
+  state.settings = false;
+  if (before) before();
+  state.view = view;
+  render();
+}
+
+function readResetToken() {
+  if (!location.hash) return;
+  state.resetToken = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+  history.replaceState({}, "", RESET_PASSWORD_PATH);
+}
+
 async function boot() {
   try {
     const me = await api.get("/api/v1/me");
     if (me.authenticated) beginAuthenticatedSession(me.user);
-    if (location.pathname === "/reset-password") {
-      state.resetToken = new URLSearchParams(location.hash.slice(1)).get("token") || "";
-      history.replaceState({}, "", "/reset-password");
-      state.view = "reset-password";
-    } else if (state.me) {
-      if (await loadBoards()) state.view = "app";
-	} else if (location.pathname === "/early-access") {
-	  state.view = "early-access";
+    // Legacy /#settings deep link from before settings had its own route.
+    if (location.hash === "#settings") {
+      history.replaceState({}, "", state.me ? SETTINGS_PATH : HOME_PATH);
     }
-    if (location.hash === "#settings" && state.me) await openSettings(false);
+    await applyRoute();
+    return;
   } catch (err) {
     state.error = err.message;
   }
   render();
 }
 
-async function loadBoards(selectId) {
+async function loadBoardList(expectedRouteVersion) {
   const sessionVersion = authVersion;
   const data = await api.get("/api/v1/boards");
-  if (sessionVersion !== authVersion) return false;
+  if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   state.boards = data.boards;
   state.maxBoards = data.maxBoards || proLimits().boards;
+  return true;
+}
+
+async function loadBoards(selectId) {
+  const sessionVersion = authVersion;
+  if (!await loadBoardList()) return false;
   const requestedId = selectId || state.board?.id;
   const nextId = state.boards.some(board => board.id === requestedId) ? requestedId : state.boards[0]?.id;
   if (nextId) {
@@ -168,6 +312,7 @@ function resetAuthenticatedState() {
   state.flowListId = "";
   state.weekStart = "";
   state.theme = "";
+  state.routeError = null;
 }
 
 function beginAuthenticatedSession(user) {
@@ -186,7 +331,7 @@ async function establishAuthenticatedSession(path, input) {
     await api.post(path, input);
     const me = await api.get("/api/v1/me");
     beginAuthenticatedSession(me.user);
-    return loadBoards();
+    return true;
   })();
   authenticationRequest = request;
   try {
@@ -201,12 +346,8 @@ async function logout() {
   authVersion += 1;
   resetAuthenticatedState();
   state.view = "logging-out";
-  if (location.hash === "#settings") history.replaceState({}, "", location.pathname);
   render();
-  const request = api.post("/api/v1/auth/logout").then(() => {
-    state.view = "home";
-    render();
-  }).catch(() => {
+  const request = api.post("/api/v1/auth/logout").then(() => navigate(LOGIN_PATH, { replace: true })).catch(() => {
     state.error = "Sign out failed. Your session may still be active. Try again.";
     state.view = "logout-error";
     render();
@@ -217,20 +358,20 @@ async function logout() {
   return request;
 }
 
-async function loadBoard(id, sessionVersion = authVersion) {
+async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion) {
   let board = await api.get(`/api/v1/boards/${id}`);
-  if (sessionVersion !== authVersion) return false;
+  if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
   if (staleNames.length) {
     try {
       await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
-      if (sessionVersion !== authVersion) return false;
+      if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
       board = await api.get(`/api/v1/boards/${id}`);
     } catch (err) {
-      if (sessionVersion !== authVersion) return false;
+      if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
       throw err;
     }
-    if (sessionVersion !== authVersion) return false;
+    if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   }
   state.board = board;
   if (!(board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
@@ -260,6 +401,16 @@ function render() {
 	  bindEarlyAccess();
 	  return;
 	}
+  if (state.view === "not-found") {
+    root.innerHTML = notFoundHTML();
+    bindNotFound();
+    return;
+  }
+  if (state.view === "route-error") {
+    root.innerHTML = routeErrorHTML();
+    bindRouteError();
+    return;
+  }
   if (state.view === "home") {
     root.innerHTML = landingHTML();
     bindLanding();
@@ -271,12 +422,50 @@ function render() {
     return;
   }
   if (state.settings) {
+    syncPath(SETTINGS_PATH);
     root.innerHTML = settingsHTML();
     bindSettings();
     return;
   }
+  // Whenever a board is on screen its id belongs in the URL, however it was selected.
+  syncPath(state.board ? boardPath(state.board.id) : APP_PATH);
   root.innerHTML = appHTML();
   bindApp();
+}
+
+function notFoundHTML() {
+  return `
+    <section class="login">
+      <div>
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <h1>Not found.</h1>
+        <p>That page does not exist${state.me ? ", or the board is no longer available to you" : ""}.</p>
+        <button class="primary" id="not-found-continue" type="button">${state.me ? "Open app" : "Go to slate.do"}</button>
+      </div>
+    </section>`;
+}
+
+function bindNotFound() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelector("#not-found-continue").onclick = state.me ? openApp : goHome;
+}
+
+function routeErrorHTML() {
+  const target = state.routeError?.name === "settings" ? "settings" : state.routeError?.name === "board" ? "this board" : "the app";
+  return `
+    <section class="login">
+      <div>
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <h1>Couldn’t load ${target}.</h1>
+        <p class="error" role="alert">${escapeHTML(state.error || "Something went wrong. Try again.")}</p>
+        <button class="primary" id="route-error-retry" type="button">Try again</button>
+      </div>
+    </section>`;
+}
+
+function bindRouteError() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelector("#route-error-retry").onclick = applyRoute;
 }
 
 function logoutStatusHTML() {
@@ -837,7 +1026,9 @@ function bindLogin() {
       });
       if (!authenticated) return;
       state.error = "";
-      state.view = "app";
+      state.authNotice = "";
+      await navigate(safeNextPath(new URLSearchParams(location.search).get("next")) || APP_PATH, { replace: true });
+      return;
     } catch (err) {
       state.error = err.message;
     }
@@ -885,8 +1076,8 @@ function bindResetPassword() {
 	  state.resetToken = "";
 	  state.error = "";
 	  state.authNotice = "Password reset. Sign in with your new password.";
-	  history.replaceState({}, "", "/");
-	  state.view = "login";
+	  await navigate(LOGIN_PATH, { replace: true });
+	  return;
 	} catch (err) {
 	  state.error = err.message;
 	}
@@ -896,10 +1087,7 @@ function bindResetPassword() {
 
 function bindEarlyAccess() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
-  document.querySelector("#early-access-login").onclick = () => {
-	history.replaceState({}, "", "/");
-	showLogin();
-  };
+  document.querySelector("#early-access-login").onclick = showLogin;
   document.querySelector("#early-access-form").addEventListener("submit", async (event) => {
 	event.preventDefault();
 	const form = new FormData(event.currentTarget);
@@ -911,8 +1099,8 @@ function bindEarlyAccess() {
 	  });
 	  if (!authenticated) return;
 	  state.error = "";
-	  history.replaceState({}, "", "/");
-	  state.view = "app";
+	  await navigate(APP_PATH, { replace: true });
+	  return;
 	} catch (err) {
 	  state.error = err.message;
 	}
@@ -970,7 +1158,7 @@ function bindApp() {
       render();
     }
   });
-  document.querySelectorAll("[data-board]").forEach(el => el.onclick = async () => { await loadBoard(el.dataset.board); render(); });
+  document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
   document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
     const notice = state.moveNotice;
     if (!notice) return;
@@ -981,7 +1169,7 @@ function bindApp() {
   });
   document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.moveNotice = null; render(); });
   document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
-  document.querySelector("#settings").onclick = async () => { await openSettings(true); };
+  document.querySelector("#settings").onclick = openSettings;
   document.querySelector("#logout").onclick = logout;
   document.querySelector("#new-board").onclick = async () => {
     if (state.boards.length >= state.maxBoards) return;
@@ -1356,49 +1544,27 @@ async function bindSettings() {
   });
 }
 
-async function openSettings(pushHistory) {
+function openSettings() {
   if (!state.me || state.view === "logging-out" || state.view === "logout-error") return;
-  const sessionVersion = authVersion;
-  const userID = state.me?.id;
-  if (!await loadTokens(sessionVersion, userID)) return;
-  state.settings = true;
-  state.view = "app";
-  if (pushHistory && location.hash !== "#settings") history.pushState({ settings: true }, "", "#settings");
-  render();
+  return navigate(SETTINGS_PATH);
 }
 
 function closeSettings() {
-  state.settings = false;
   state.newToken = "";
-  state.view = "app";
-  if (location.hash === "#settings") history.replaceState({}, "", location.pathname);
-  render();
+  return navigate(state.board ? boardPath(state.board.id) : APP_PATH);
 }
 
 function showLogin() {
-  state.view = "login";
   state.error = "";
-  if (location.pathname === "/reset-password") history.replaceState({}, "", "/");
-  render();
+  return navigate(LOGIN_PATH);
 }
 
 function openApp() {
-  if (!state.me) {
-    showLogin();
-    return;
-  }
-  state.view = "app";
-  state.settings = false;
-  render();
+  return navigate(state.me ? APP_PATH : LOGIN_PATH);
 }
 
 function goHome() {
-  state.view = "home";
-  state.settings = false;
-  state.selectedTask = null;
-	if (location.pathname === "/early-access" || location.hash) history.replaceState({}, "", "/");
-	if (location.pathname === "/reset-password") history.replaceState({}, "", "/");
-  render();
+  return navigate(HOME_PATH);
 }
 
 async function addTask(event) {
@@ -1637,9 +1803,9 @@ function sessionIsCurrent(sessionVersion, userID) {
   return sessionVersion === authVersion && state.me?.id === userID;
 }
 
-async function loadTokens(sessionVersion = authVersion, userID = state.me?.id) {
+async function loadTokens(sessionVersion = authVersion, userID = state.me?.id, expectedRouteVersion) {
   const data = await api.get("/api/v1/api-tokens");
-  if (!sessionIsCurrent(sessionVersion, userID)) return false;
+  if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   state.tokens = data.tokens;
   return true;
 }
@@ -1820,21 +1986,10 @@ function escapeAttr(value) {
 }
 
 window.addEventListener("popstate", async () => {
-  if (state.view === "logging-out" || state.view === "logout-error") {
-    if (location.hash === "#settings") history.replaceState({}, "", location.pathname);
-    render();
-    return;
-  }
-  if (location.hash === "#settings") {
-    await openSettings(false);
-    return;
-  }
-  if (state.settings) {
-    state.settings = false;
-    state.newToken = "";
-    state.view = "app";
-    render();
-  }
+  // Sign-out is in flight; the URL it lands on is decided when it finishes.
+  if (state.view === "logging-out" || state.view === "logout-error") return;
+  state.newToken = "";
+  await applyRoute();
 });
 
 boot();

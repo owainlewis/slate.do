@@ -85,7 +85,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
       deleted = true;
       return json(response, { ok: true });
     }
-    if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+    if (isAppShell(url.pathname)) return html(response);
     if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
     if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
     response.writeHead(404).end();
@@ -96,7 +96,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1024, height: 768 } });
-  await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/app`);
 
   assert.equal(await page.getByRole("textbox", { name: "Board name" }).count(), 0);
   await page.locator(".week").filter({ hasText: /^Week \d+ \(.+\)$/ }).waitFor();
@@ -202,7 +202,7 @@ test("saving an item moves it to the chosen position on another board", async t 
       moved = true;
       return json(response, { ...currentTask, boardId: "board-two", bucketId: "list-target", sortOrder: 1 });
     }
-    if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+    if (isAppShell(url.pathname)) return html(response);
     if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
     if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
     response.writeHead(404).end();
@@ -213,7 +213,7 @@ test("saving an item moves it to the chosen position on another board", async t 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/app`);
   await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
   await page.getByRole("textbox", { name: "Title", exact: true }).fill("Edited before moving");
   await page.locator("#detail-date").fill("2026-07-30");
@@ -280,7 +280,7 @@ test("a committed move stays successful when the source board refresh fails", { 
       moved = true;
       return json(response, { ...task, boardId: "board-two", bucketId: "list-target", sortOrder: 0 });
     }
-    if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+    if (isAppShell(url.pathname)) return html(response);
     if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
     if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
     response.writeHead(404).end();
@@ -294,7 +294,7 @@ test("a committed move stays successful when the source board refresh fails", { 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/app`);
   await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
   await page.getByRole("button", { name: /Move…/ }).click();
   await page.getByLabel("Board", { exact: true }).selectOption("board-two");
@@ -330,7 +330,7 @@ test("Pro resource limits block obvious actions and show server rejection messag
 			return response.end(JSON.stringify({ code: "pro_board_limit_reached", error: "Pro allows up to 5 boards." }));
 		}
 		if (url.pathname === "/api/v1/boards/board-one") return json(response, limitedBoard);
-		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (isAppShell(url.pathname)) return html(response);
 		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
 		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
 		response.writeHead(404).end();
@@ -341,7 +341,7 @@ test("Pro resource limits block obvious actions and show server rejection messag
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
 	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-	await page.goto(`http://127.0.0.1:${server.address().port}`);
+	await page.goto(`http://127.0.0.1:${server.address().port}/app`);
 
 	await page.getByText("9 list Pro limit reached", { exact: true }).waitFor();
 	assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isDisabled(), true);
@@ -379,7 +379,7 @@ test("server limit rejections stay visible for board, list, and active-item crea
 		if (url.pathname === "/api/v1/boards" && request.method === "POST") return conflict(response, "pro_board_limit_reached", "Pro allows up to 5 boards.");
 		if (url.pathname === "/api/v1/boards/board-one/buckets" && request.method === "POST") return conflict(response, "pro_list_limit_reached", "Pro allows up to 9 lists per board.");
 		if (url.pathname === "/api/v1/buckets/list-0/tasks" && request.method === "POST") return conflict(response, "pro_active_item_limit_reached", "Max active items per list is 20 on Pro.");
-		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (isAppShell(url.pathname)) return html(response);
 		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
 		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
 		response.writeHead(404).end();
@@ -390,7 +390,7 @@ test("server limit rejections stay visible for board, list, and active-item crea
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
 	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-	await page.goto(`http://127.0.0.1:${server.address().port}`);
+	await page.goto(`http://127.0.0.1:${server.address().port}/app`);
 
 	for (const action of [
 		{ click: () => page.getByRole("button", { name: "New board", exact: true }).click(), message: "Pro allows up to 5 boards." },
@@ -421,7 +421,7 @@ test("early access submits credentials in the body and opens the app", async t =
 		}
 		if (url.pathname === "/api/v1/boards") return json(response, { boards: [defaultBoard], maxBoards: 5 });
 		if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
-		if (url.pathname === "/early-access" || url.pathname === "/index.html") return html(response);
+		if (isAppShell(url.pathname)) return html(response);
 		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
 		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
 		response.writeHead(404).end();
@@ -442,7 +442,7 @@ test("early access submits credentials in the body and opens the app", async t =
 	await page.getByRole("button", { name: "Create Pro account" }).click();
 	await page.getByText("Today", { exact: true }).first().waitFor();
 
-	assert.equal(page.url(), `http://127.0.0.1:${server.address().port}/`);
+	assert.equal(page.url(), `http://127.0.0.1:${server.address().port}/app/boards/board-one`);
 	assert.equal(registration.url, "/api/v1/auth/register");
 	assert.deepEqual(registration.body, { email: "member@example.com", password: "abcd1234", inviteCode: "private-invite-code" });
 });
@@ -496,7 +496,7 @@ test("logging out and into another account cannot show the previous account's da
 			response.writeHead(404, { "Content-Type": "application/json" });
 			return response.end(JSON.stringify({ error: "board not found" }));
 		}
-		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (isAppShell(url.pathname)) return html(response);
 		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
 		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
 		response.writeHead(404).end();
@@ -507,15 +507,15 @@ test("logging out and into another account cannot show the previous account's da
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
 	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-	await page.goto(`http://127.0.0.1:${server.address().port}`);
+	await page.goto(`http://127.0.0.1:${server.address().port}/app`);
 	await page.getByText("Account A private board", { exact: true }).first().waitFor();
 
 	await page.getByRole("button", { name: "Account A delayed board", exact: true }).click();
 	await page.getByRole("button", { name: "Sign out", exact: true }).click();
 	await page.getByText("Signing out…", { exact: true }).waitFor();
-	assert.equal(await page.getByRole("button", { name: "Log in", exact: true }).count(), 0);
+	assert.equal(await page.getByRole("button", { name: "Sign in", exact: true }).count(), 0);
 	releaseLogout();
-	await page.getByRole("button", { name: "Log in", exact: true }).first().click();
+	await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
 	await page.getByLabel("Email", { exact: true }).fill("second@example.com");
 	await page.getByLabel("Password", { exact: true }).fill("account-b-password");
 	await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -553,7 +553,7 @@ test("concurrent login submissions create only one authenticated session", async
 		if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
 		if (url.pathname === "/api/v1/boards") return json(response, { boards: [defaultBoard], maxBoards: 5 });
 		if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
-		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (isAppShell(url.pathname)) return html(response);
 		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
 		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
 		response.writeHead(404).end();
@@ -564,8 +564,7 @@ test("concurrent login submissions create only one authenticated session", async
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
 	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-	await page.goto(`http://127.0.0.1:${server.address().port}`);
-	await page.getByRole("button", { name: "Log in", exact: true }).first().click();
+	await page.goto(`http://127.0.0.1:${server.address().port}/app`);
 	await page.getByLabel("Email", { exact: true }).fill("person@example.com");
 	await page.getByLabel("Password", { exact: true }).fill("correct-password");
 	const submit = page.getByRole("button", { name: "Sign in", exact: true });
@@ -598,7 +597,7 @@ test("failed logout keeps account data hidden and requires a retry", async t => 
 		if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
 		if (url.pathname === "/api/v1/boards") return json(response, { boards: [defaultBoard], maxBoards: 5 });
 		if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
-		if (url.pathname === "/" || url.pathname === "/index.html") return html(response);
+		if (isAppShell(url.pathname)) return html(response);
 		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
 		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
 		response.writeHead(404).end();
@@ -609,7 +608,7 @@ test("failed logout keeps account data hidden and requires a retry", async t => 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
 	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-	await page.goto(`http://127.0.0.1:${server.address().port}`);
+	await page.goto(`http://127.0.0.1:${server.address().port}/app`);
 	await page.getByText("Private account board", { exact: true }).first().waitFor();
 	await page.getByRole("button", { name: "Settings", exact: true }).click();
 	await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
@@ -624,8 +623,52 @@ test("failed logout keeps account data hidden and requires a retry", async t => 
 	assert.equal(await page.getByRole("button", { name: "Sign in", exact: true }).count(), 0);
 	assert.equal(await page.getByText("Your session may still be active", { exact: false }).count(), 1);
 	await page.getByRole("button", { name: "Try again", exact: true }).click();
-	await page.getByRole("button", { name: "Log in", exact: true }).first().waitFor();
+	await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
 	assert.equal(logoutAttempts, 2);
+});
+
+test("route load failures replace stale UI and retry without changing history", async t => {
+	let failTokens = true;
+	const server = http.createServer(async (request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
+		if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }] });
+		if (url.pathname === "/api/v1/boards/board-one") return json(response, board(false));
+		if (url.pathname === "/api/v1/api-tokens") {
+			if (failTokens) {
+				response.writeHead(500, { "Content-Type": "application/json" });
+				return response.end(JSON.stringify({ error: "Tokens are unavailable" }));
+			}
+			return json(response, { tokens: [] });
+		}
+		if (isAppShell(url.pathname)) return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	const pageErrors = [];
+	page.on("pageerror", error => pageErrors.push(error.message));
+	const baseURL = `http://127.0.0.1:${server.address().port}`;
+	await page.goto(`${baseURL}/app`);
+	await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+	await page.getByRole("heading", { name: "Couldn’t load settings.", exact: true }).waitFor();
+	assert.equal(page.url(), `${baseURL}/app/settings`);
+	assert.equal(await page.getByRole("alert").innerText(), "Tokens are unavailable");
+	assert.equal(await page.getByRole("button", { name: "Business", exact: true }).count(), 0, "the previous board must not remain visible");
+	assert.deepEqual(pageErrors, []);
+
+	failTokens = false;
+	await page.getByRole("button", { name: "Try again", exact: true }).click();
+	await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
+	assert.equal(page.url(), `${baseURL}/app/settings`);
+	assert.deepEqual(pageErrors, []);
 });
 
 test("password reset request and confirmation work without exposing the token in the URL", async t => {
@@ -646,7 +689,7 @@ test("password reset request and confirmation work without exposing the token in
 			resetConfirmation = JSON.parse(body);
 			return json(response, { ok: true });
 		}
-		if (url.pathname === "/" || url.pathname === "/reset-password" || url.pathname === "/index.html") return html(response);
+		if (isAppShell(url.pathname)) return html(response);
 		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
 		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
 		response.writeHead(404).end();
@@ -680,7 +723,7 @@ test("password reset request and confirmation work without exposing the token in
 	await page.getByRole("button", { name: "Reset password" }).click();
 	await page.getByRole("status").filter({ hasText: "Password reset. Sign in" }).waitFor();
 	assert.deepEqual(resetConfirmation, { token: "reset_secret", password: "a new secure password" });
-	assert.equal(page.url(), `${baseURL}/`);
+	assert.equal(page.url(), `${baseURL}/login`);
 });
 
 function json(response, body) {
@@ -707,6 +750,13 @@ async function requestJSON(request) {
 function file(response, name, type) {
   response.writeHead(200, { "Content-Type": type });
   response.end(fs.readFileSync(path.join(dist, name)));
+}
+
+// Mirrors the server's SPA fallback: every frontend route boots the same shell.
+function isAppShell(pathname) {
+	if (["/", "/index.html", "/login", "/app", "/app/settings", "/early-access", "/reset-password"].includes(pathname)) return true;
+	const id = pathname.startsWith("/app/boards/") ? pathname.slice("/app/boards/".length) : "";
+	return Boolean(id) && !id.includes("/");
 }
 
 function html(response) {

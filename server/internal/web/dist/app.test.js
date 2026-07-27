@@ -84,7 +84,7 @@ test("password reset forms collect email and a secure replacement password", () 
   assert.match(reset, /Use at least 8 characters, up to 72 bytes/);
   assert.match(source, /api\.post\("\/api\/v1\/auth\/password-reset\/request"/);
   assert.match(source, /api\.post\("\/api\/v1\/auth\/password-reset\/confirm"/);
-  assert.match(source, /history\.replaceState\(\{\}, "", "\/reset-password"\)/);
+  assert.match(source, /history\.replaceState\(\{\}, "", RESET_PASSWORD_PATH\)/);
   vm.runInContext(`state.resetToken = ""`, app);
 });
 
@@ -778,4 +778,432 @@ test("single-column list drops use vertical position", () => {
   assert.equal(app.bucketDropIndexForRects(rects, 280, 20, true), 0);
   assert.equal(app.bucketDropIndexForRects(rects, 20, 90, true), 1);
   assert.equal(app.bucketDropIndexForRects(rects, 280, 210, true), 2);
+});
+
+// Each router test gets its own module instance so history and auth state
+// cannot leak between cases.
+function router({ signedIn = false, boards = [], url = "/" } = {}) {
+  const context = { console, Date, URLSearchParams, window: { addEventListener() {} } };
+  vm.createContext(context);
+  vm.runInContext(source, context, { filename });
+
+  const split = value => {
+    const [path, search = ""] = String(value).split("#")[0].split("?");
+    return { path, search: search ? `?${search}` : "" };
+  };
+  const entries = [split(url)];
+  const rendered = [];
+
+  context.location = {
+    get pathname() { return entries[entries.length - 1].path; },
+    get search() { return entries[entries.length - 1].search; },
+    hash: "",
+  };
+  context.history = {
+    pushState(_state, _title, value) { entries.push(split(value)); },
+    replaceState(_state, _title, value) { entries[entries.length - 1] = split(value); },
+  };
+  context.render = () => rendered.push(vm.runInContext("state.view + (state.settings ? \":settings\" : \"\")", context));
+  context.realLoadTokens = context.loadTokens;
+  context.loadTokens = async () => true;
+  context.boardRequests = [];
+
+  vm.runInContext(`
+    state.me = ${signedIn ? '{ id: "owner", theme: "light" }' : "null"};
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: ${JSON.stringify(boards)} };
+      const id = path.replace("/api/v1/boards/", "");
+      boardRequests.push(id);
+      return { id, name: id, buckets: [] };
+    };
+  `, context);
+
+  return {
+    context,
+    rendered,
+    url: () => entries[entries.length - 1].path + entries[entries.length - 1].search,
+    depth: () => entries.length,
+    view: () => rendered[rendered.length - 1],
+    board: () => vm.runInContext("state.board && state.board.id", context),
+    error: () => vm.runInContext("state.error", context),
+    routeError: () => vm.runInContext("state.routeError && state.routeError.name", context),
+    go: value => context.navigate(value),
+    apply: () => context.applyRoute(),
+    back: () => { entries.pop(); return context.applyRoute(); },
+  };
+}
+
+test("routes parse into the surface they name", () => {
+  // parseRoute returns objects from the vm realm, so compare plain copies.
+  const route = path => ({ ...app.parseRoute(path) });
+
+  assert.deepEqual(route("/"), { name: "home" });
+  assert.deepEqual(route("/login"), { name: "login" });
+  assert.deepEqual(route("/app"), { name: "app" });
+  assert.deepEqual(route("/app/settings"), { name: "settings" });
+  assert.deepEqual(route("/early-access"), { name: "early-access" });
+  assert.deepEqual(route("/reset-password"), { name: "reset-password" });
+  assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1" });
+  assert.deepEqual(route("/app/boards/a%20b"), { name: "board", boardId: "a b" });
+  assert.deepEqual(route("/app/boards/%ED%A0%80"), { name: "not-found" });
+
+  // Trailing slashes, queries, and fragments never change which route is named.
+  assert.deepEqual(route("/app/"), { name: "app" });
+  assert.deepEqual(route("/login?next=/app"), { name: "login" });
+  assert.deepEqual(route("/app/settings#token"), { name: "settings" });
+
+  for (const path of ["/nonsense", "/app/boards", "/app/boards/a/b", "/appleseed", "/cli"]) {
+    assert.equal(app.parseRoute(path).name, "not-found", path);
+  }
+});
+
+test("only same-origin app paths survive as a login next target", () => {
+  assert.equal(app.safeNextPath("/app/settings"), "/app/settings");
+  assert.equal(app.safeNextPath("/app/boards/board_1"), "/app/boards/board_1");
+  assert.equal(app.safeNextPath("/app/"), "/app");
+
+  for (const value of ["//evil.example", "https://evil.example/app", "/\\evil.example", "/app\\..", "/", "/login", "/nonsense", "", null, undefined]) {
+    assert.equal(app.safeNextPath(value), "", String(value));
+  }
+
+  assert.equal(app.loginPathFor("/app/settings"), "/login?next=%2Fapp%2Fsettings");
+  assert.equal(app.loginPathFor("/app"), "/login");
+  assert.equal(app.loginPathFor("https://evil.example"), "/login");
+});
+
+test("signed-out visits to an app route redirect to login and keep the destination", async () => {
+  const it = router({ url: "/app/boards/board_1" });
+
+  await it.apply();
+
+  assert.equal(it.url(), "/login?next=%2Fapp%2Fboards%2Fboard_1");
+  assert.equal(it.view(), "login");
+});
+
+test("logging in returns to the requested route, defaulting to the app", async () => {
+  const it = router({ url: "/login?next=%2Fapp%2Fsettings", boards: [{ id: "board_1" }] });
+  vm.runInContext(`state.me = { id: "owner", theme: "light" };`, it.context);
+
+  await it.apply();
+
+  assert.equal(it.url(), "/app/settings");
+  assert.equal(it.view(), "app:settings");
+
+  const plain = router({ url: "/login", signedIn: true, boards: [{ id: "board_1" }] });
+  await plain.apply();
+  assert.equal(plain.url(), "/app/boards/board_1");
+});
+
+test("a rejected next target falls back to the app rather than leaving the origin", async () => {
+  const it = router({ url: "/login?next=https%3A%2F%2Fevil.example", signedIn: true, boards: [{ id: "board_1" }] });
+
+  await it.apply();
+
+  assert.equal(it.url(), "/app/boards/board_1");
+});
+
+test("/app resolves to the first board, or stays put when there are none", async () => {
+  const withBoards = router({ url: "/app", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
+  await withBoards.apply();
+  assert.equal(withBoards.url(), "/app/boards/board_1");
+  assert.equal(withBoards.board(), "board_1");
+  assert.equal(withBoards.depth(), 1, "resolving /app must not add a history entry");
+
+  const empty = router({ url: "/app", signedIn: true, boards: [] });
+  await empty.apply();
+  assert.equal(empty.url(), "/app");
+  assert.equal(empty.view(), "app");
+  assert.equal(empty.board(), null);
+});
+
+test("a board deep link loads that board, and an unknown id is not found", async () => {
+  const it = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
+  await it.apply();
+  assert.equal(it.board(), "board_2");
+  assert.equal(it.view(), "app");
+
+  const missing = router({ url: "/app/boards/board_9", signedIn: true, boards: [{ id: "board_1" }] });
+  await missing.apply();
+  assert.equal(missing.view(), "not-found");
+  assert.equal(missing.url(), "/app/boards/board_9", "a not-found board keeps its URL rather than silently swapping boards");
+  assert.equal(missing.board(), null);
+});
+
+test("a failed board-list navigation renders an error for the requested URL and retries in place", async () => {
+  const boards = [{ id: "board_1" }, { id: "board_2" }];
+  const it = router({ url: "/app/boards/board_1", signedIn: true, boards });
+  await it.apply();
+  const depth = it.depth();
+  vm.runInContext(`api.get = async () => { throw new Error("Boards are unavailable"); };`, it.context);
+
+  await assert.doesNotReject(it.go("/app/boards/board_2"));
+
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.depth(), depth + 1);
+  assert.equal(it.view(), "route-error");
+  assert.equal(it.routeError(), "board");
+  assert.equal(it.error(), "Boards are unavailable");
+  assert.equal(it.board(), "board_1", "the previous board may remain cached but must not be rendered");
+
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: ${JSON.stringify(boards)} };
+      return { id: "board_2", name: "Board two", buckets: [] };
+    };
+  `, it.context);
+  await it.apply();
+
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.depth(), depth + 1, "retry must not add another history entry");
+  assert.equal(it.view(), "app");
+  assert.equal(it.board(), "board_2");
+  assert.equal(it.error(), "");
+});
+
+test("a failed board-detail navigation renders an error for that board without rejecting", async () => {
+  const boards = [{ id: "board_1" }, { id: "board_2" }];
+  const it = router({ url: "/app/boards/board_1", signedIn: true, boards });
+  await it.apply();
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: ${JSON.stringify(boards)} };
+      if (path === "/api/v1/boards/board_2") throw new Error("Board could not be loaded");
+      return { id: "board_1", name: "Board one", buckets: [] };
+    };
+  `, it.context);
+
+  await assert.doesNotReject(it.go("/app/boards/board_2"));
+
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.view(), "route-error");
+  assert.equal(it.routeError(), "board");
+  assert.equal(it.error(), "Board could not be loaded");
+});
+
+test("failed settings board and token loads render errors at the settings URL", async () => {
+  const boardFailure = router({ url: "/", signedIn: true });
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      throw new Error("Settings board could not be loaded");
+    };
+  `, boardFailure.context);
+
+  await assert.doesNotReject(boardFailure.go("/app/settings"));
+
+  assert.equal(boardFailure.url(), "/app/settings");
+  assert.equal(boardFailure.view(), "route-error");
+  assert.equal(boardFailure.routeError(), "settings");
+  assert.equal(boardFailure.error(), "Settings board could not be loaded");
+
+  const tokenFailure = router({ url: "/app/boards/board_1", signedIn: true, boards: [{ id: "board_1" }] });
+  await tokenFailure.apply();
+  tokenFailure.context.loadTokens = tokenFailure.context.realLoadTokens;
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/api-tokens") throw new Error("Tokens could not be loaded");
+      throw new Error("unexpected request: " + path);
+    };
+  `, tokenFailure.context);
+
+  await assert.doesNotReject(tokenFailure.go("/app/settings"));
+
+  assert.equal(tokenFailure.url(), "/app/settings");
+  assert.equal(tokenFailure.view(), "route-error");
+  assert.equal(tokenFailure.routeError(), "settings");
+  assert.equal(tokenFailure.error(), "Tokens could not be loaded");
+});
+
+test("a route failure during back navigation preserves the history destination", async () => {
+  const boards = [{ id: "board_1" }, { id: "board_2" }];
+  const it = router({ url: "/", signedIn: true, boards });
+  await it.apply();
+  await it.go("/app/boards/board_1");
+  await it.go("/app/boards/board_2");
+  const depth = it.depth();
+  vm.runInContext(`api.get = async () => { throw new Error("History destination unavailable"); };`, it.context);
+
+  await assert.doesNotReject(it.back());
+
+  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.depth(), depth - 1);
+  assert.equal(it.view(), "route-error");
+  assert.equal(it.routeError(), "board");
+  assert.equal(it.error(), "History destination unavailable");
+});
+
+test("a stale board response cannot overwrite newer route navigation", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseBoardOne;
+  const boardOneResponse = new Promise(resolve => { releaseBoardOne = resolve; });
+  it.context.boardOneResponse = boardOneResponse;
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
+      if (path === "/api/v1/boards/board_1") return boardOneResponse;
+      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleNavigation = it.go("/app/boards/board_1");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_2");
+  releaseBoardOne({ id: "board_1", name: "Board one", buckets: [] });
+  await staleNavigation;
+
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.board(), "board_2");
+  assert.equal(it.view(), "app");
+});
+
+test("a stale board-list response cannot overwrite newer route navigation", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseOldBoardList;
+  it.context.oldBoardListResponse = new Promise(resolve => { releaseOldBoardList = resolve; });
+  vm.runInContext(`
+    let boardListRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/boards" && ++boardListRequests === 1) return oldBoardListResponse;
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_2" }] };
+      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleNavigation = it.go("/app/boards/board_1");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_2");
+  releaseOldBoardList({ boards: [{ id: "board_1" }] });
+  await staleNavigation;
+
+  const boardIds = JSON.parse(vm.runInContext("JSON.stringify(state.boards.map(board => board.id))", it.context));
+  assert.deepEqual(boardIds, ["board_2"]);
+  assert.equal(it.board(), "board_2");
+  assert.equal(it.url(), "/app/boards/board_2");
+});
+
+test("a stale settings board load cannot overwrite newer board navigation", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseSettingsBoard;
+  it.context.settingsBoardResponse = new Promise(resolve => { releaseSettingsBoard = resolve; });
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
+      if (path === "/api/v1/boards/board_1") return settingsBoardResponse;
+      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleSettings = it.go("/app/settings");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_2");
+  releaseSettingsBoard({ id: "board_1", name: "Board one", buckets: [] });
+  await staleSettings;
+
+  assert.equal(it.board(), "board_2");
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.view(), "app");
+});
+
+test("a stale settings token response cannot overwrite newer settings data", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseOldTokens;
+  it.context.oldTokensResponse = new Promise(resolve => { releaseOldTokens = resolve; });
+  it.context.loadTokens = it.context.realLoadTokens;
+  vm.runInContext(`
+    let tokenRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
+      if (path === "/api/v1/api-tokens" && ++tokenRequests === 1) return oldTokensResponse;
+      if (path === "/api/v1/api-tokens") return { tokens: [{ id: "new" }] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleSettings = it.go("/app/settings");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_1");
+  await it.go("/app/settings");
+  releaseOldTokens({ tokens: [{ id: "old" }] });
+  await staleSettings;
+
+  const tokenIds = JSON.parse(vm.runInContext("JSON.stringify(state.tokens.map(token => token.id))", it.context));
+  assert.deepEqual(tokenIds, ["new"]);
+  assert.equal(it.url(), "/app/settings");
+  assert.equal(it.view(), "app:settings");
+});
+
+test("back and forward move between landing, boards, and settings", async () => {
+  const it = router({ url: "/", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
+  await it.apply();
+  assert.equal(it.view(), "home");
+
+  await it.go("/app");
+  assert.equal(it.url(), "/app/boards/board_1");
+  await it.go("/app/boards/board_2");
+  assert.equal(it.board(), "board_2");
+  await it.go("/app/settings");
+  assert.equal(it.view(), "app:settings");
+
+  await it.back();
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.view(), "app");
+  await it.back();
+  assert.equal(it.url(), "/app/boards/board_1");
+  await it.back();
+  assert.equal(it.url(), "/");
+  assert.equal(it.view(), "home");
+});
+
+test("selecting the same board twice does not stack history entries", async () => {
+  const it = router({ url: "/app/boards/board_1", signedIn: true, boards: [{ id: "board_1" }] });
+  await it.apply();
+  const depth = it.depth();
+
+  await it.go("/app/boards/board_1");
+
+  assert.equal(it.depth(), depth);
+});
+
+test("an authenticated visit to early access is sent to the app", async () => {
+  const it = router({ url: "/early-access", signedIn: true, boards: [{ id: "board_1" }] });
+
+  await it.apply();
+
+  assert.equal(it.url(), "/app/boards/board_1");
+});
+
+test("the landing page stays public while signed in", async () => {
+  const it = router({ url: "/", signedIn: true, boards: [{ id: "board_1" }] });
+
+  await it.apply();
+
+  assert.equal(it.view(), "home");
+  assert.equal(it.url(), "/");
+});
+
+test("signing out from an app route lands on login", async () => {
+  const it = router({ url: "/app/settings", signedIn: true, boards: [{ id: "board_1" }] });
+  await it.apply();
+  assert.equal(it.view(), "app:settings");
+  vm.runInContext(`api.post = async () => ({});`, it.context);
+
+  await it.context.logout();
+
+  assert.equal(it.url(), "/login");
+  assert.equal(it.view(), "login");
+  assert.equal(vm.runInContext("state.me", it.context), null);
+});
+
+test("unknown paths render not found without redirecting", async () => {
+  const it = router({ url: "/nonsense", signedIn: true, boards: [{ id: "board_1" }] });
+
+  await it.apply();
+
+  assert.equal(it.view(), "not-found");
+  assert.equal(it.url(), "/nonsense");
 });
