@@ -289,11 +289,41 @@ test("settings supports primary profile and one-time agent token management", ()
   const html = app.settingsHTML();
   assert.match(html, /id="profile-form"/);
   assert.match(html, /aria-label="Your display name" value="Owain Lewis"/);
-  assert.match(html, /id="agent-form"/);
+  assert.doesNotMatch(html, /id="agent-form"/);
+  assert.match(html, /id="agent-limit">One agent user per account for now/);
   assert.match(html, /slate_agent_secret/);
   assert.match(html, /data-revoke-agent="agent"/);
   assert.match(html, /data-delete-agent="agent"/);
+  vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", revokedAt: "2026-07-27T00:00:00Z" }];`, app);
+  assert.match(app.settingsHTML(), /id="agent-limit"/);
+  vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", deletedAt: "2026-07-27T00:00:00Z" }];`, app);
+  assert.match(app.settingsHTML(), /id="agent-form"/);
   vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = "";`, app);
+});
+
+test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
+  vm.runInContext(`
+    authVersion = 12;
+    state.me = { id: "owner" };
+    state.agents = [];
+    state.newAgentToken = "";
+    state.error = "";
+    api.post = async path => {
+      if (path !== "/api/v1/agents") throw new Error("unexpected POST " + path);
+      return { id: "agent", displayName: "Builder Bot", token: "slate_agent_copy_now" };
+    };
+    api.get = async path => {
+      if (path !== "/api/v1/agents") throw new Error("unexpected GET " + path);
+      throw new Error("agents temporarily unavailable");
+    };
+  `, app);
+
+  assert.equal(await app.createAgent("Builder Bot"), true);
+  assert.equal(vm.runInContext("state.newAgentToken", app), "slate_agent_copy_now");
+  assert.equal(vm.runInContext("state.agents[0].id", app), "agent");
+  assert.equal(vm.runInContext(`"token" in state.agents[0]`, app), false);
+  assert.match(vm.runInContext("state.error", app), /Agent created.*could not be refreshed/);
+  vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = ""; state.error = "";`, app);
 });
 
 const board = {

@@ -9,6 +9,111 @@ import (
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
 
+func TestOneAgentPerOwnerMigrationUpgradesExistingAgentSchema(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		SET LOCAL search_path TO pg_temp;
+		CREATE TEMP TABLE users (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			email text NOT NULL
+		);
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			status text NOT NULL DEFAULT 'queued',
+			done boolean NOT NULL DEFAULT false
+		);
+		INSERT INTO users (email) VALUES ('owner@example.com');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	migration17, err := files.ReadFile("017_agent_users.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(migration17)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_users (id, owner_user_id, display_name, token_hash, revoked_at, created_at)
+		SELECT '10000000-0000-0000-0000-000000000001'::uuid, id, 'Oldest', 'oldest', NULL, TIMESTAMPTZ '2026-07-27 09:00:00Z' FROM users
+		UNION ALL
+		SELECT '10000000-0000-0000-0000-000000000002'::uuid, id, 'Revoked', 'revoked', TIMESTAMPTZ '2026-07-27 09:30:00Z', TIMESTAMPTZ '2026-07-27 10:00:00Z' FROM users
+		UNION ALL
+		SELECT '10000000-0000-0000-0000-000000000003'::uuid, id, 'Newest', 'newest', NULL, TIMESTAMPTZ '2026-07-27 11:00:00Z' FROM users;
+		INSERT INTO tasks (assignee_agent_id) VALUES ('10000000-0000-0000-0000-000000000003');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	migration18, err := files.ReadFile("018_one_agent_per_owner.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(migration18)); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, revoked_at IS NOT NULL, deleted_at IS NOT NULL
+		FROM agent_users
+		ORDER BY created_at
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type agentState struct {
+		id      string
+		revoked bool
+		deleted bool
+	}
+	var states []agentState
+	for rows.Next() {
+		var state agentState
+		if err := rows.Scan(&state.id, &state.revoked, &state.deleted); err != nil {
+			t.Fatal(err)
+		}
+		states = append(states, state)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 3 || states[0].revoked || states[0].deleted || !states[1].revoked || !states[1].deleted || !states[2].revoked || !states[2].deleted {
+		t.Fatalf("migrated agent states = %#v", states)
+	}
+
+	var assignedAgent string
+	if err := tx.QueryRow(ctx, "SELECT assignee_agent_id::text FROM tasks").Scan(&assignedAgent); err != nil {
+		t.Fatal(err)
+	}
+	if assignedAgent != "10000000-0000-0000-0000-000000000003" {
+		t.Fatalf("assignment changed to %q", assignedAgent)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_users (owner_user_id, display_name, token_hash)
+		SELECT id, 'Blocked', 'blocked' FROM users
+	`); err == nil || !strings.Contains(err.Error(), "agent_users_one_active_per_owner_idx") {
+		t.Fatalf("second live agent error = %v", err)
+	}
+}
+
 func TestProEntitlementMigrationKeepsExistingAdminsUsable(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

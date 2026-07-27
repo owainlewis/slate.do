@@ -829,6 +829,7 @@ function statusNoticeHTML(notice) {
 
 function settingsHTML() {
   const theme = currentTheme();
+  const liveAgents = state.agents.filter(agent => !agent.deletedAt);
   return `
     <section class="settings-page theme-${theme}">
       <aside class="sidebar">
@@ -872,10 +873,11 @@ function settingsHTML() {
               <h2>Agent users</h2>
               <p>Create named identities for assigned work. Tokens are shown once.</p>
             </div>
-            <form id="agent-form" class="token-form">
-              <input name="displayName" placeholder="Agent name" maxlength="80" required>
-              <button class="primary" type="submit">Create agent</button>
-            </form>
+            ${liveAgents.length ? `<p class="agent-limit" id="agent-limit">One agent user per account for now. Delete the current agent to create a replacement.</p>` : `
+              <form id="agent-form" class="token-form">
+                <input name="displayName" placeholder="Agent name" maxlength="80" required>
+                <button class="primary" type="submit">Create agent</button>
+              </form>`}
             ${state.newAgentToken ? `<div class="new-token"><label>New agent token. Copy it now.</label><code>${escapeHTML(state.newAgentToken)}</code></div>` : ""}
             <div class="agent-list">
               ${state.agents.length ? state.agents.map(agent => `
@@ -1440,7 +1442,7 @@ async function bindSettings() {
     const form = new FormData(event.currentTarget);
     if (await createAPIToken(form.get("name"))) render();
   });
-  document.querySelector("#agent-form").addEventListener("submit", async event => {
+  document.querySelector("#agent-form")?.addEventListener("submit", async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     if (await createAgent(form.get("displayName"))) render();
@@ -1780,9 +1782,17 @@ async function createAgent(displayName) {
   try {
     const data = await api.post("/api/v1/agents", { displayName });
     if (!sessionIsCurrent(sessionVersion, userID)) return false;
-    state.newAgentToken = data.token;
+    const { token, ...agent } = data;
+    state.newAgentToken = token;
+    state.agents = [...state.agents.filter(item => item.id !== agent.id), agent];
     state.error = "";
-    return loadAgents(false, sessionVersion, userID);
+    try {
+      await loadAgents(false, sessionVersion, userID);
+    } catch {
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      state.error = "Agent created. Copy the token now; the agent list could not be refreshed.";
+    }
+    return true;
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID)) return false;
     state.error = err.message;

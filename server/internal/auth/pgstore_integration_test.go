@@ -434,6 +434,23 @@ func TestPGStoreResolvesProEntitlementForEveryAuthenticationPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertProAdminEntitlement(t, byToken)
+
+	theme := "dark"
+	displayName := "Updated Owner"
+	updated, err := store.UpdateProfile(ctx, admin.ID, &theme, &displayName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Theme != theme || updated.DisplayName != displayName {
+		t.Fatalf("updated profile = %#v", updated)
+	}
+	persisted, err := store.FindUserByEmail(ctx, email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.User.Theme != theme || persisted.User.DisplayName != displayName {
+		t.Fatalf("persisted profile = %#v", persisted.User)
+	}
 }
 
 func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T) {
@@ -464,8 +481,8 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateAgent(ctx, owner.ID, "research bot", tokenHash+"-duplicate"); !errors.Is(err, ErrAgentNameTaken) {
-		t.Fatalf("case-insensitive duplicate error = %v", err)
+	if _, err := store.CreateAgent(ctx, owner.ID, "Second Bot", tokenHash+"-duplicate"); !errors.Is(err, ErrAgentLimit) {
+		t.Fatalf("second active agent error = %v", err)
 	}
 
 	identity, err := store.FindUserByAPITokenHash(ctx, tokenHash, time.Now())
@@ -482,6 +499,9 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	if err := store.RevokeAgentToken(ctx, owner.ID, agent.ID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.CreateAgent(ctx, owner.ID, "Replacement before delete", tokenHash+"-revoked"); !errors.Is(err, ErrAgentLimit) {
+		t.Fatalf("revoked agent should still consume slot: %v", err)
+	}
 	if _, err := store.FindUserByAPITokenHash(ctx, tokenHash, time.Now()); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("revoked agent token error = %v", err)
 	}
@@ -497,6 +517,77 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	}
 	if len(agents) != 1 || agents[0].DeletedAt == nil || agents[0].RevokedAt == nil {
 		t.Fatalf("deleted agent = %#v", agents)
+	}
+	replacement, err := store.CreateAgent(ctx, owner.ID, "Replacement Bot", tokenHash+"-replacement")
+	if err != nil {
+		t.Fatalf("replacement after soft delete: %v", err)
+	}
+	if replacement.ID == agent.ID {
+		t.Fatalf("replacement reused deleted identity: %#v", replacement)
+	}
+}
+
+func TestConcurrentAgentCreationCannotExceedOneLiveAgent(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run auth store integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPGStore(db)
+	owner, err := store.CreateAdmin(ctx, fmt.Sprintf("agent-race-%d@slate.test", time.Now().UnixNano()), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", owner.ID) })
+
+	const attempts = 12
+	results := make(chan error, attempts)
+	var start sync.WaitGroup
+	start.Add(1)
+	var workers sync.WaitGroup
+	for index := range attempts {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			start.Wait()
+			_, err := store.CreateAgent(ctx, owner.ID, fmt.Sprintf("Agent %d", index), fmt.Sprintf("agent-race-token-%d-%d", time.Now().UnixNano(), index))
+			results <- err
+		}()
+	}
+	start.Done()
+	workers.Wait()
+	close(results)
+
+	successes := 0
+	limits := 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrAgentLimit):
+			limits++
+		default:
+			t.Fatalf("unexpected concurrent creation error: %v", err)
+		}
+	}
+	if successes != 1 || limits != attempts-1 {
+		t.Fatalf("concurrent results = %d success, %d limits", successes, limits)
+	}
+	var liveAgents int
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM agent_users WHERE owner_user_id = $1 AND deleted_at IS NULL", owner.ID).Scan(&liveAgents); err != nil {
+		t.Fatal(err)
+	}
+	if liveAgents != 1 {
+		t.Fatalf("live agents = %d, want 1", liveAgents)
 	}
 }
 

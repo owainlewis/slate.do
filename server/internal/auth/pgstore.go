@@ -478,14 +478,21 @@ func (s *PGStore) FindUserByAPITokenHash(ctx context.Context, tokenHash string, 
 }
 
 func (s *PGStore) UpdateTheme(ctx context.Context, userID string, theme string) (User, error) {
+	return s.UpdateProfile(ctx, userID, &theme, nil)
+}
+
+func (s *PGStore) UpdateProfile(ctx context.Context, userID string, theme *string, displayName *string) (User, error) {
 	var user User
 	err := s.db.QueryRow(ctx, `
 		UPDATE users u
-		SET theme = $2, updated_at = now()
+		SET theme = CASE WHEN $2 THEN $3 ELSE u.theme END,
+			display_name = CASE WHEN $4 THEN $5 ELSE u.display_name END,
+			updated_at = now()
 		FROM entitlements e
 		WHERE u.id = $1 AND e.user_id = u.id AND e.plan = 'pro' AND u.disabled_at IS NULL
 		RETURNING u.id::text, u.email, u.role, u.theme, u.display_name, e.plan, e.source
-	`, userID, theme).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName,
+	`, userID, theme != nil, stringValue(theme), displayName != nil, stringValue(displayName)).Scan(
+		&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName,
 		&user.Entitlement.Plan, &user.Entitlement.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUnauthorized
@@ -494,21 +501,11 @@ func (s *PGStore) UpdateTheme(ctx context.Context, userID string, theme string) 
 	return user, err
 }
 
-func (s *PGStore) UpdateDisplayName(ctx context.Context, userID string, displayName string) (User, error) {
-	var user User
-	err := s.db.QueryRow(ctx, `
-		UPDATE users u
-		SET display_name = $2, updated_at = now()
-		FROM entitlements e
-		WHERE u.id = $1 AND e.user_id = u.id AND e.plan = 'pro' AND u.disabled_at IS NULL
-		RETURNING u.id::text, u.email, u.role, u.theme, u.display_name, e.plan, e.source
-	`, userID, displayName).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName,
-		&user.Entitlement.Plan, &user.Entitlement.Source)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, ErrUnauthorized
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
 	}
-	setEntitlementLimits(&user)
-	return user, err
+	return *value
 }
 
 func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, error) {
@@ -545,8 +542,8 @@ func (s *PGStore) CreateAgent(ctx context.Context, userID string, displayName st
 		SELECT id, $2, $3 FROM active_user
 		RETURNING id::text, display_name, last_used_at, revoked_at, deleted_at, created_at
 	`, userID, displayName, tokenHash).Scan(&agent.ID, &agent.DisplayName, &agent.LastUsedAt, &agent.RevokedAt, &agent.DeletedAt, &agent.CreatedAt)
-	if uniqueViolation(err) {
-		return AgentUser{}, ErrAgentNameTaken
+	if constraintViolation(err, "agent_users_one_active_per_owner_idx") {
+		return AgentUser{}, ErrAgentLimit
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AgentUser{}, ErrUnauthorized
@@ -642,4 +639,9 @@ func setEntitlementLimits(user *User) {
 func uniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func constraintViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }

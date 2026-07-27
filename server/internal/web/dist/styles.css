@@ -1338,6 +1338,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .agent-row b { overflow: hidden; text-overflow: ellipsis; }
 .agent-row small { color: var(--faint); }
 .agent-row.inactive { opacity: .72; }
+.agent-limit { margin: 0 0 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; color: var(--soft); background: color-mix(in srgb, var(--ink) 3%, transparent); font-size: 12px; }
 .settings-limit { width: min(120px, 100%); }
 .token-form { display: flex; gap: 8px; margin-bottom: 18px; }
 .token-form input {

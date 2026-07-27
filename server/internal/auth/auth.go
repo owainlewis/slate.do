@@ -45,7 +45,7 @@ var (
 	ErrMemberNotFound    = errors.New("member account not found")
 	ErrInvalidResetToken = errors.New("invalid or expired password reset token")
 	ErrNoPendingReset    = errors.New("no pending password reset request")
-	ErrAgentNameTaken    = errors.New("agent name already exists")
+	ErrAgentLimit        = errors.New("agent user limit reached")
 	ErrAgentNotFound     = errors.New("agent not found")
 )
 
@@ -117,7 +117,7 @@ type Store interface {
 }
 
 type profileStore interface {
-	UpdateDisplayName(ctx context.Context, userID string, displayName string) (User, error)
+	UpdateProfile(ctx context.Context, userID string, theme *string, displayName *string) (User, error)
 }
 
 type agentStore interface {
@@ -489,16 +489,9 @@ func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User)
 		writeError(w, http.StatusBadRequest, "theme or display name is required")
 		return
 	}
-	updated := user
-	var err error
 	if input.Theme != nil {
 		if *input.Theme != "light" && *input.Theme != "dark" {
 			writeError(w, http.StatusBadRequest, "theme must be light or dark")
-			return
-		}
-		updated, err = s.store.UpdateTheme(r.Context(), user.ID, *input.Theme)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "theme could not be updated")
 			return
 		}
 	}
@@ -512,16 +505,22 @@ func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User)
 			writeError(w, http.StatusBadRequest, "display name must be 80 characters or fewer")
 			return
 		}
-		store, ok := s.store.(profileStore)
-		if !ok {
-			writeError(w, http.StatusInternalServerError, "display name could not be updated")
-			return
-		}
-		updated, err = store.UpdateDisplayName(r.Context(), user.ID, displayName)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "display name could not be updated")
-			return
-		}
+		input.DisplayName = &displayName
+	}
+	store, ok := s.store.(profileStore)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "profile could not be updated")
+		return
+	}
+	updated, err := store.UpdateProfile(r.Context(), user.ID, input.Theme, input.DisplayName)
+	if errors.Is(err, ErrUnauthorized) {
+		clearSessionCookie(w, s.cookieSecure)
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "profile could not be updated")
+		return
 	}
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -681,8 +680,8 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 		return
 	}
 	agent, err := store.CreateAgent(r.Context(), user.ID, displayName, hashToken(plain))
-	if errors.Is(err, ErrAgentNameTaken) {
-		writeError(w, http.StatusConflict, "an agent with that name already exists")
+	if errors.Is(err, ErrAgentLimit) {
+		writeCodedError(w, http.StatusConflict, "agent_limit_reached", "Only one agent user is allowed per account for now. Delete the current agent before creating another.")
 		return
 	}
 	if errors.Is(err, ErrUnauthorized) {
@@ -908,6 +907,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeCodedError(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "error": message})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

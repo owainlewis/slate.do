@@ -710,6 +710,7 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
       const input = await requestJSON(request);
       const agent = { id: agentID, displayName: input.displayName, createdAt: "2026-07-27T00:00:00Z" };
       agents = [agent];
+      failAgentLoadOnce = true;
       return json(response, { ...agent, token: "slate_agent_create_once" });
     }
     if (url.pathname === `/api/v1/agents/${agentID}/token` && request.method === "DELETE") {
@@ -741,6 +742,9 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
   await page.getByPlaceholder("Agent name").fill("Builder Bot");
   await page.getByRole("button", { name: "Create agent", exact: true }).click();
   await page.getByText("slate_agent_create_once", { exact: true }).waitFor();
+  await page.getByText(/Agent created.*could not be refreshed/).waitFor();
+  await page.getByText(/One agent user per account for now/).waitFor();
+  assert.equal(await page.getByPlaceholder("Agent name").count(), 0);
   await page.getByRole("button", { name: "Board", exact: true }).click();
 
   await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
@@ -761,9 +765,12 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Revoke token", exact: true }).click();
   await page.getByText("Token revoked", { exact: true }).waitFor();
+  await page.getByText(/One agent user per account for now/).waitFor();
+  assert.equal(await page.getByPlaceholder("Agent name").count(), 0);
   page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Delete", exact: true }).click();
   await page.getByText("Inactive", { exact: true }).waitFor();
+  await page.getByPlaceholder("Agent name").waitFor();
   await page.getByRole("button", { name: "Board", exact: true }).click();
   assert.equal(await page.locator(".task-assignee .avatar").getAttribute("title"), "Builder Bot (inactive)");
 });
