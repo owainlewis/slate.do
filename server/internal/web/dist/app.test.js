@@ -804,6 +804,7 @@ function router({ signedIn = false, boards = [], url = "/" } = {}) {
     replaceState(_state, _title, value) { entries[entries.length - 1] = split(value); },
   };
   context.render = () => rendered.push(vm.runInContext("state.view + (state.settings ? \":settings\" : \"\")", context));
+  context.realLoadTokens = context.loadTokens;
   context.loadTokens = async () => true;
   context.boardRequests = [];
 
@@ -842,6 +843,7 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/reset-password"), { name: "reset-password" });
   assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1" });
   assert.deepEqual(route("/app/boards/a%20b"), { name: "board", boardId: "a b" });
+  assert.deepEqual(route("/app/boards/%ED%A0%80"), { name: "not-found" });
 
   // Trailing slashes, queries, and fragments never change which route is named.
   assert.deepEqual(route("/app/"), { name: "app" });
@@ -923,6 +925,110 @@ test("a board deep link loads that board, and an unknown id is not found", async
   assert.equal(missing.view(), "not-found");
   assert.equal(missing.url(), "/app/boards/board_9", "a not-found board keeps its URL rather than silently swapping boards");
   assert.equal(missing.board(), null);
+});
+
+test("a stale board response cannot overwrite newer route navigation", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseBoardOne;
+  const boardOneResponse = new Promise(resolve => { releaseBoardOne = resolve; });
+  it.context.boardOneResponse = boardOneResponse;
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
+      if (path === "/api/v1/boards/board_1") return boardOneResponse;
+      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleNavigation = it.go("/app/boards/board_1");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_2");
+  releaseBoardOne({ id: "board_1", name: "Board one", buckets: [] });
+  await staleNavigation;
+
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.board(), "board_2");
+  assert.equal(it.view(), "app");
+});
+
+test("a stale board-list response cannot overwrite newer route navigation", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseOldBoardList;
+  it.context.oldBoardListResponse = new Promise(resolve => { releaseOldBoardList = resolve; });
+  vm.runInContext(`
+    let boardListRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/boards" && ++boardListRequests === 1) return oldBoardListResponse;
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_2" }] };
+      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleNavigation = it.go("/app/boards/board_1");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_2");
+  releaseOldBoardList({ boards: [{ id: "board_1" }] });
+  await staleNavigation;
+
+  const boardIds = JSON.parse(vm.runInContext("JSON.stringify(state.boards.map(board => board.id))", it.context));
+  assert.deepEqual(boardIds, ["board_2"]);
+  assert.equal(it.board(), "board_2");
+  assert.equal(it.url(), "/app/boards/board_2");
+});
+
+test("a stale settings board load cannot overwrite newer board navigation", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseSettingsBoard;
+  it.context.settingsBoardResponse = new Promise(resolve => { releaseSettingsBoard = resolve; });
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
+      if (path === "/api/v1/boards/board_1") return settingsBoardResponse;
+      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleSettings = it.go("/app/settings");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_2");
+  releaseSettingsBoard({ id: "board_1", name: "Board one", buckets: [] });
+  await staleSettings;
+
+  assert.equal(it.board(), "board_2");
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.view(), "app");
+});
+
+test("a stale settings token response cannot overwrite newer settings data", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseOldTokens;
+  it.context.oldTokensResponse = new Promise(resolve => { releaseOldTokens = resolve; });
+  it.context.loadTokens = it.context.realLoadTokens;
+  vm.runInContext(`
+    let tokenRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
+      if (path === "/api/v1/api-tokens" && ++tokenRequests === 1) return oldTokensResponse;
+      if (path === "/api/v1/api-tokens") return { tokens: [{ id: "new" }] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleSettings = it.go("/app/settings");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/boards/board_1");
+  await it.go("/app/settings");
+  releaseOldTokens({ tokens: [{ id: "old" }] });
+  await staleSettings;
+
+  const tokenIds = JSON.parse(vm.runInContext("JSON.stringify(state.tokens.map(token => token.id))", it.context));
+  assert.deepEqual(tokenIds, ["new"]);
+  assert.equal(it.url(), "/app/settings");
+  assert.equal(it.view(), "app:settings");
 });
 
 test("back and forward move between landing, boards, and settings", async () => {

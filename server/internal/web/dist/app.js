@@ -141,7 +141,13 @@ function parseRoute(pathname) {
   if (path === APP_PATH) return { name: "app" };
   if (path === SETTINGS_PATH) return { name: "settings" };
   const board = /^\/app\/boards\/([^/]+)$/.exec(path);
-  if (board) return { name: "board", boardId: decodeURIComponent(board[1]) };
+  if (board) {
+    try {
+      return { name: "board", boardId: decodeURIComponent(board[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
   return { name: "not-found" };
 }
 
@@ -198,7 +204,7 @@ async function applyRoute() {
     return showRoute("login");
   }
   if (!state.me) return navigate(loginPathFor(currentPath()), { replace: true });
-  if (!await loadBoardList()) return;
+  if (!await loadBoardList(version)) return;
   if (routeVersion !== version) return;
 
   if (route.name === "app") {
@@ -209,14 +215,14 @@ async function applyRoute() {
   }
   if (route.name === "board") {
     if (!state.boards.some(board => board.id === route.boardId)) return showRoute("not-found");
-    if (state.board?.id !== route.boardId && !await loadBoard(route.boardId)) return;
+    if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
     if (routeVersion !== version) return;
     return showRoute("app");
   }
   // Settings reads limits off the selected board, so keep one loaded.
-  if (!state.board && state.boards[0] && !await loadBoard(state.boards[0].id)) return;
+  if (!state.board && state.boards[0] && !await loadBoard(state.boards[0].id, authVersion, version)) return;
   if (routeVersion !== version) return;
-  if (!await loadTokens(authVersion, state.me?.id)) return;
+  if (!await loadTokens(authVersion, state.me?.id, version)) return;
   if (routeVersion !== version) return;
   state.view = "app";
   state.settings = true;
@@ -254,10 +260,10 @@ async function boot() {
   render();
 }
 
-async function loadBoardList() {
+async function loadBoardList(expectedRouteVersion) {
   const sessionVersion = authVersion;
   const data = await api.get("/api/v1/boards");
-  if (sessionVersion !== authVersion) return false;
+  if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   state.boards = data.boards;
   state.maxBoards = data.maxBoards || proLimits().boards;
   return true;
@@ -341,20 +347,20 @@ async function logout() {
   return request;
 }
 
-async function loadBoard(id, sessionVersion = authVersion) {
+async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion) {
   let board = await api.get(`/api/v1/boards/${id}`);
-  if (sessionVersion !== authVersion) return false;
+  if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
   if (staleNames.length) {
     try {
       await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
-      if (sessionVersion !== authVersion) return false;
+      if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
       board = await api.get(`/api/v1/boards/${id}`);
     } catch (err) {
-      if (sessionVersion !== authVersion) return false;
+      if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
       throw err;
     }
-    if (sessionVersion !== authVersion) return false;
+    if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   }
   state.board = board;
   if (!(board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
@@ -1763,9 +1769,9 @@ function sessionIsCurrent(sessionVersion, userID) {
   return sessionVersion === authVersion && state.me?.id === userID;
 }
 
-async function loadTokens(sessionVersion = authVersion, userID = state.me?.id) {
+async function loadTokens(sessionVersion = authVersion, userID = state.me?.id, expectedRouteVersion) {
   const data = await api.get("/api/v1/api-tokens");
-  if (!sessionIsCurrent(sessionVersion, userID)) return false;
+  if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   state.tokens = data.tokens;
   return true;
 }
