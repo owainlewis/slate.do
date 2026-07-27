@@ -627,6 +627,50 @@ test("failed logout keeps account data hidden and requires a retry", async t => 
 	assert.equal(logoutAttempts, 2);
 });
 
+test("route load failures replace stale UI and retry without changing history", async t => {
+	let failTokens = true;
+	const server = http.createServer(async (request, response) => {
+		const url = new URL(request.url, "http://localhost");
+		if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
+		if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }] });
+		if (url.pathname === "/api/v1/boards/board-one") return json(response, board(false));
+		if (url.pathname === "/api/v1/api-tokens") {
+			if (failTokens) {
+				response.writeHead(500, { "Content-Type": "application/json" });
+				return response.end(JSON.stringify({ error: "Tokens are unavailable" }));
+			}
+			return json(response, { tokens: [] });
+		}
+		if (isAppShell(url.pathname)) return html(response);
+		if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+		if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+		response.writeHead(404).end();
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise(resolve => server.close(resolve)));
+
+	const browser = await chromium.launch({ headless: true });
+	t.after(() => browser.close());
+	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+	const pageErrors = [];
+	page.on("pageerror", error => pageErrors.push(error.message));
+	const baseURL = `http://127.0.0.1:${server.address().port}`;
+	await page.goto(`${baseURL}/app`);
+	await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+	await page.getByRole("heading", { name: "Couldn’t load settings.", exact: true }).waitFor();
+	assert.equal(page.url(), `${baseURL}/app/settings`);
+	assert.equal(await page.getByRole("alert").innerText(), "Tokens are unavailable");
+	assert.equal(await page.getByRole("button", { name: "Business", exact: true }).count(), 0, "the previous board must not remain visible");
+	assert.deepEqual(pageErrors, []);
+
+	failTokens = false;
+	await page.getByRole("button", { name: "Try again", exact: true }).click();
+	await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
+	assert.equal(page.url(), `${baseURL}/app/settings`);
+	assert.deepEqual(pageErrors, []);
+});
+
 test("password reset request and confirmation work without exposing the token in the URL", async t => {
 	let resetRequest;
 	let resetConfirmation;

@@ -95,6 +95,7 @@ const state = {
   weekStart: "",
   theme: "",
   moveNotice: null,
+  routeError: null,
 };
 
 const themes = [
@@ -191,6 +192,8 @@ async function applyRoute() {
   const version = ++routeVersion;
   const route = parseRoute(location.pathname);
   state.selectedTask = route.name === "board" ? state.selectedTask : null;
+  state.error = "";
+  state.routeError = null;
 
   if (route.name === "reset-password") return showRoute("reset-password", readResetToken);
   if (route.name === "early-access") {
@@ -204,29 +207,36 @@ async function applyRoute() {
     return showRoute("login");
   }
   if (!state.me) return navigate(loginPathFor(currentPath()), { replace: true });
-  if (!await loadBoardList(version)) return;
-  if (routeVersion !== version) return;
-
-  if (route.name === "app") {
-    const first = state.boards[0]?.id;
-    if (first) return navigate(boardPath(first), { replace: true });
-    state.board = null;
-    return showRoute("app");
-  }
-  if (route.name === "board") {
-    if (!state.boards.some(board => board.id === route.boardId)) return showRoute("not-found");
-    if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
+  try {
+    if (!await loadBoardList(version)) return;
     if (routeVersion !== version) return;
-    return showRoute("app");
+
+    if (route.name === "app") {
+      const first = state.boards[0]?.id;
+      if (first) return navigate(boardPath(first), { replace: true });
+      state.board = null;
+      return showRoute("app");
+    }
+    if (route.name === "board") {
+      if (!state.boards.some(board => board.id === route.boardId)) return showRoute("not-found");
+      if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
+      if (routeVersion !== version) return;
+      return showRoute("app");
+    }
+    // Settings reads limits off the selected board, so keep one loaded.
+    if (!state.board && state.boards[0] && !await loadBoard(state.boards[0].id, authVersion, version)) return;
+    if (routeVersion !== version) return;
+    if (!await loadTokens(authVersion, state.me?.id, version)) return;
+    if (routeVersion !== version) return;
+    state.view = "app";
+    state.settings = true;
+    render();
+  } catch (err) {
+    if (routeVersion !== version) return;
+    state.error = err.message;
+    state.routeError = route;
+    showRoute("route-error");
   }
-  // Settings reads limits off the selected board, so keep one loaded.
-  if (!state.board && state.boards[0] && !await loadBoard(state.boards[0].id, authVersion, version)) return;
-  if (routeVersion !== version) return;
-  if (!await loadTokens(authVersion, state.me?.id, version)) return;
-  if (routeVersion !== version) return;
-  state.view = "app";
-  state.settings = true;
-  render();
 }
 
 // Settings is the one surface that sets its own flag, immediately below.
@@ -302,6 +312,7 @@ function resetAuthenticatedState() {
   state.flowListId = "";
   state.weekStart = "";
   state.theme = "";
+  state.routeError = null;
 }
 
 function beginAuthenticatedSession(user) {
@@ -395,6 +406,11 @@ function render() {
     bindNotFound();
     return;
   }
+  if (state.view === "route-error") {
+    root.innerHTML = routeErrorHTML();
+    bindRouteError();
+    return;
+  }
   if (state.view === "home") {
     root.innerHTML = landingHTML();
     bindLanding();
@@ -432,6 +448,24 @@ function notFoundHTML() {
 function bindNotFound() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#not-found-continue").onclick = state.me ? openApp : goHome;
+}
+
+function routeErrorHTML() {
+  const target = state.routeError?.name === "settings" ? "settings" : state.routeError?.name === "board" ? "this board" : "the app";
+  return `
+    <section class="login">
+      <div>
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <h1>Couldn’t load ${target}.</h1>
+        <p class="error" role="alert">${escapeHTML(state.error || "Something went wrong. Try again.")}</p>
+        <button class="primary" id="route-error-retry" type="button">Try again</button>
+      </div>
+    </section>`;
+}
+
+function bindRouteError() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelector("#route-error-retry").onclick = applyRoute;
 }
 
 function logoutStatusHTML() {
