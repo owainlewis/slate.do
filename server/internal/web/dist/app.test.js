@@ -369,8 +369,12 @@ test("settings pages isolate profile, board, agent, and personal API controls", 
   `, app);
   const profile = app.settingsHTML();
   assert.match(profile, /<h1>Profile<\/h1>/);
+  assert.match(profile, /Update your display name\./);
+  assert.doesNotMatch(profile, /generated avatar/);
   assert.match(profile, /id="profile-form"/);
   assert.match(profile, /aria-label="Your display name" value="Owain Lewis"/);
+  assert.match(profile, /class="avatar user-avatar/);
+  assert.doesNotMatch(profile, />OL<\/span>/);
   assert.doesNotMatch(profile, /settings-list-limit|agent-limit|token-form|slate_agent_secret|slate_personal_secret/);
 
   vm.runInContext(`state.settingsPage = "board";`, app);
@@ -414,7 +418,7 @@ test("settings pages isolate profile, board, agent, and personal API controls", 
   vm.runInContext(`state.me = null; state.board = null; state.agents = []; state.tokens = []; state.newAgentToken = ""; state.newToken = ""; state.settingsPage = "profile";`, app);
 });
 
-test("the board header shows the current user avatar without their name", () => {
+test("the board header shows a neutral user icon without their name or generated initials", () => {
   vm.runInContext(`
     state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
     state.board = { id: "board", name: "Business", maxTasksPerList: 20, buckets: [] };
@@ -422,8 +426,10 @@ test("the board header shows the current user avatar without their name", () => 
   `, app);
   const html = app.appHTML();
   const currentUser = html.match(/<span class="current-user">([\s\S]*?)<\/span>\s*<div class="view-switch"/)?.[1] || "";
-  assert.match(currentUser, /class="avatar/);
+  assert.match(currentUser, /class="avatar user-avatar avatar-small"/);
+  assert.match(currentUser, /<svg class="icon /);
   assert.doesNotMatch(currentUser, />Owain Lewis</);
+  assert.doesNotMatch(currentUser, />OL<\/span>/);
   vm.runInContext(`state.me = null; state.board = null; state.boards = [];`, app);
 });
 

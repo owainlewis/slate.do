@@ -12,6 +12,7 @@ const ICON_PATHS = {
   sun: '<circle cx="12" cy="12" r="3.6"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6L18 18M18 6l-1.4 1.4M7.4 16.6L6 18"/>',
   moon: '<path d="M20 13.2A7.8 7.8 0 0 1 10.8 4a7.8 7.8 0 1 0 9.2 9.2z"/>',
   gear: '<circle cx="12" cy="12" r="3.1"/><path d="M12.6 2.6h-1.2a1.5 1.5 0 0 0-1.5 1.5v.3a1.5 1.5 0 0 1-.75 1.3l-.55.31a1.5 1.5 0 0 1-1.5 0l-.26-.14a1.5 1.5 0 0 0-2.05.54l-.6 1.04a1.5 1.5 0 0 0 .55 2.05l.26.15a1.5 1.5 0 0 1 .75 1.3v.62a1.5 1.5 0 0 1-.75 1.3l-.26.15a1.5 1.5 0 0 0-.55 2.05l.6 1.04a1.5 1.5 0 0 0 2.05.54l.26-.14a1.5 1.5 0 0 1 1.5 0l.55.31a1.5 1.5 0 0 1 .75 1.3v.3a1.5 1.5 0 0 0 1.5 1.5h1.2a1.5 1.5 0 0 0 1.5-1.5v-.3a1.5 1.5 0 0 1 .75-1.3l.55-.31a1.5 1.5 0 0 1 1.5 0l.26.14a1.5 1.5 0 0 0 2.05-.54l.6-1.04a1.5 1.5 0 0 0-.55-2.05l-.26-.15a1.5 1.5 0 0 1-.75-1.3v-.62a1.5 1.5 0 0 1 .75-1.3l.26-.15a1.5 1.5 0 0 0 .55-2.05l-.6-1.04a1.5 1.5 0 0 0-2.05-.54l-.26.14a1.5 1.5 0 0 1-1.5 0l-.55-.31a1.5 1.5 0 0 1-.75-1.3v-.3a1.5 1.5 0 0 0-1.5-1.5z"/>',
+  user: '<circle cx="12" cy="8.2" r="3.2"/><path d="M5.8 19.5c.7-3.1 3-4.9 6.2-4.9s5.5 1.8 6.2 4.9"/>',
   signOut: '<path d="M9.5 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h2.5"/><path d="M15 8l4 4-4 4"/><path d="M9.5 12H19"/>',
   inboxTray: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 13h4.6a3.4 3.4 0 0 0 6.8 0H20"/>',
 };
@@ -123,7 +124,7 @@ const LOGIN_PATH = "/login";
 const APP_PATH = "/app";
 const SETTINGS_PATH = "/app/settings";
 const SETTINGS_PAGES = [
-  { id: "profile", label: "Profile", title: "Profile", description: "Manage your primary identity and generated avatar." },
+  { id: "profile", label: "Profile", title: "Profile", description: "Update your display name." },
   { id: "board", label: "Board", title: "Board", description: "Configure the selected board." },
   { id: "agents", label: "Agents", title: "Agents", description: "Manage the agent identity and its one-time credential lifecycle." },
   { id: "api", label: "API access", title: "API access", description: "Create and revoke personal tokens for the CLI and API." },
@@ -740,7 +741,7 @@ function appHTML() {
         <header class="topbar">
           <span class="week">${formatWeekHeading(headerDays)}</span>
           <div class="top-actions">
-            <span class="current-user">${avatarHTML(state.me, { small: true })}</span>
+            <span class="current-user">${userAvatarHTML(state.me, { small: true })}</span>
             <div class="view-switch" aria-label="Board view">
               <button data-board-mode="lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}" title="Lists">${icon("rows")}<span>Lists</span></button>
               <button data-board-mode="flow" aria-pressed="${flowMode}" class="${flowMode ? "on" : ""}" title="Flow">${icon("kanban")}<span>Flow</span></button>
@@ -845,6 +846,12 @@ function avatarHTML(identity, options = {}) {
   const inactive = Boolean(identity.deletedAt);
   const label = inactive ? `${name} (inactive)` : name;
   return `<span class="avatar tone-${avatarTone(identity.id)} ${options.small ? "avatar-small" : ""} ${inactive ? "avatar-inactive" : ""}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">${escapeHTML(avatarInitials(name))}</span>`;
+}
+
+function userAvatarHTML(identity, options = {}) {
+  if (!identity) return "";
+  const label = identity.displayName || identity.email || "User";
+  return `<span class="avatar user-avatar ${options.small ? "avatar-small" : ""}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">${icon("user")}</span>`;
 }
 
 function taskAgent(task) {
@@ -1077,7 +1084,7 @@ function settingsHTML() {
     content = `
       <section class="settings-section profile-settings" aria-label="Profile controls">
         <form id="profile-form" class="profile-form">
-          ${avatarHTML(state.me)}
+          ${userAvatarHTML(state.me)}
           <input name="displayName" aria-label="Your display name" value="${escapeAttr(state.me?.displayName || state.me?.email?.split("@")[0] || "")}" maxlength="80" required>
           <button class="secondary settings-submit" type="submit">Save profile</button>
         </form>
