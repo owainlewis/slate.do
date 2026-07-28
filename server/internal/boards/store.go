@@ -196,7 +196,7 @@ func (s *Store) GetBucketForAgent(ctx context.Context, userID string, agentID st
 			b.created_at, b.updated_at
 		FROM buckets b
 		JOIN boards bo ON bo.id = b.board_id
-		JOIN tasks t ON t.bucket_id = b.id AND t.assignee_agent_id = $3
+		JOIN tasks t ON t.board_id = b.board_id AND t.bucket_id = b.id AND t.assignee_agent_id = $3
 		WHERE bo.user_id = $1 AND b.id = $2
 		GROUP BY b.id, bo.max_tasks_per_list
 	`, userID, id, agentID)
@@ -1082,7 +1082,7 @@ func (s *Store) listBucketsForAgent(ctx context.Context, userID string, agentID 
 			b.created_at, b.updated_at
 		FROM buckets b
 		JOIN boards bo ON bo.id = b.board_id
-		JOIN tasks t ON t.bucket_id = b.id AND t.assignee_agent_id = $3
+		JOIN tasks t ON t.board_id = b.board_id AND t.bucket_id = b.id AND t.assignee_agent_id = $3
 		WHERE bo.user_id = $1 AND b.board_id = $2
 		GROUP BY b.id, bo.max_tasks_per_list
 		ORDER BY b.sort_order, b.created_at
