@@ -1276,6 +1276,292 @@ test("guided agent creation validates, preserves one-time credentials on refresh
   assert.equal(await page.getByText("slate_agent_delayed", { exact: true }).count(), 0);
 });
 
+test("agent detail routes paginate, assign, edit, regroup, and stay safe across responsive states", async t => {
+  const owner = { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" };
+  const agent = {
+    id: "agent-one",
+    displayName: "Builder with a deliberately long but readable collaborator name",
+    purpose: "Ships focused product work without pretending Slate hosts execution.",
+    credential: { lastUsedAt: "2026-07-28T08:15:00Z" },
+    workCounts: { ready: 1, working: 1, review: 1 },
+  };
+  const archivedAgent = {
+    id: "agent-archived", displayName: "Archived builder", purpose: "Historical work",
+    archivedAt: "2026-07-27T08:00:00Z", credential: { revokedAt: "2026-07-27T08:00:00Z" }, workCounts: {},
+  };
+  let tasks = [
+    { id: "ready", boardId: "board-one", bucketId: "list-one", title: "Ready item", description: "", scheduledDate: "", kind: "action", done: false, status: "queued", assigneeAgentId: agent.id, createdAt: "2026-07-28T07:00:00Z", updatedAt: "2026-07-28T07:00:00Z" },
+    { id: "working", boardId: "board-one", bucketId: "list-one", title: "Working item", description: "", scheduledDate: "", kind: "action", done: false, status: "working", assigneeAgentId: agent.id, createdAt: "2026-07-28T07:10:00Z", updatedAt: "2026-07-28T07:10:00Z" },
+    { id: "review", boardId: "board-one", bucketId: "list-one", title: "Review item", description: "", scheduledDate: "", kind: "action", done: false, status: "needs_review", assigneeAgentId: agent.id, createdAt: "2026-07-28T07:20:00Z", updatedAt: "2026-07-28T07:20:00Z" },
+    { id: "done", boardId: "board-one", bucketId: "list-one", title: "Completed item", description: "", scheduledDate: "", kind: "action", done: true, status: "done", assigneeAgentId: agent.id, createdAt: "2026-07-27T07:00:00Z", updatedAt: "2026-07-28T06:00:00Z" },
+  ];
+  let releaseInitialDetail;
+  const initialDetail = new Promise(resolve => { releaseInitialDetail = resolve; });
+  let firstDetailRequest = true;
+  let omittedTaskID = "";
+  let expireBoardPreflight = false;
+  const delayedBoardPreflights = [];
+  const delayNextBoardPreflight = () => {
+    let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    delayedBoardPreflights.push(pending);
+    return release;
+  };
+  const patchBodies = [];
+  const workItem = task => ({ ...task, boardName: "Business", bucketName: "Product" });
+  const detailFor = identity => {
+    const assigned = tasks.filter(task => task.assigneeAgentId === identity.id);
+    const visible = assigned.filter(task => task.id !== omittedTaskID);
+    const open = (items, status) => items.filter(task => !task.done && task.status === status);
+    const completed = visible.filter(task => task.done).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map(workItem);
+    return {
+      agent: identity,
+      work: {
+        ready: open(visible, "queued").map(workItem).slice(0, 50),
+        working: open(visible, "working").map(workItem).slice(0, 50),
+        review: open(visible, "needs_review").map(workItem).slice(0, 50),
+        recentlyCompleted: completed.slice(0, 20),
+        totals: {
+          ready: open(assigned, "queued").length,
+          working: open(assigned, "working").length,
+          review: open(assigned, "needs_review").length,
+          completed: assigned.filter(task => task.done).length,
+        },
+        openLimit: 50,
+        completedLimit: 20,
+      },
+    };
+  };
+  const boardPayload = () => ({
+    id: "board-one", name: "Business", backgroundValue: owner.theme, maxTasksPerList: 20,
+    buckets: [{
+      id: "list-one", boardId: "board-one", name: "Product", goal: "", limitCount: 20,
+      openCount: tasks.filter(task => !task.done).length,
+      tasks: tasks.map(task => ({ ...task })),
+    }],
+  });
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me" && request.method === "GET") return json(response, { authenticated: true, user: owner });
+    if (url.pathname === "/api/v1/me" && request.method === "PATCH") {
+      Object.assign(owner, await requestJSON(request));
+      return json(response, owner);
+    }
+    if (url.pathname === "/api/v1/auth/logout") return json(response, { ok: true });
+    if (url.pathname === "/api/v1/boards") {
+      const delayed = delayedBoardPreflights.shift();
+      if (delayed) await delayed;
+      if (expireBoardPreflight) {
+        response.writeHead(401, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "sign in required" }));
+      }
+      return json(response, { boards: [{ id: "board-one", name: "Business" }], maxBoards: 5 });
+    }
+    if (url.pathname === "/api/v1/boards/board-one") return json(response, boardPayload());
+    if (url.pathname === "/api/v1/agents") return json(response, { agents: [agent, archivedAgent], activeAgents: 1, maxAgents: 5 });
+    if (url.pathname === "/api/v1/agents/agent-one/work") {
+      const page = Number(url.searchParams.get("page") || 1);
+      const items = tasks.filter(task => task.assigneeAgentId === agent.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map(workItem);
+      return json(response, { items: page === 1 ? items : [], page, pageSize: 50, total: 51, hasPrevious: page > 1, hasNext: page === 1 });
+    }
+    if (url.pathname === "/api/v1/agents/agent-one") {
+      if (firstDetailRequest) {
+        firstDetailRequest = false;
+        await initialDetail;
+      }
+      return json(response, detailFor(agent));
+    }
+    if (url.pathname === "/api/v1/agents/agent-archived") return json(response, detailFor(archivedAgent));
+    if (url.pathname === "/api/v1/agents/agent-expired") {
+      response.writeHead(401, { "Content-Type": "application/json" });
+      return response.end(JSON.stringify({ error: "sign in required" }));
+    }
+    if (url.pathname === "/api/v1/agents/agent-failed") {
+      response.writeHead(503, { "Content-Type": "application/json" });
+      return response.end(JSON.stringify({ error: "agent service unavailable" }));
+    }
+    if (url.pathname === "/api/v1/agents/agent-missing") {
+      response.writeHead(404, { "Content-Type": "application/json" });
+      return response.end(JSON.stringify({ error: "agent not found" }));
+    }
+    if (url.pathname.startsWith("/api/v1/tasks/") && url.pathname.endsWith("/status") && request.method === "PATCH") {
+      const id = url.pathname.split("/")[4];
+      const input = await requestJSON(request);
+      patchBodies.push(input);
+      tasks = tasks.map(task => {
+        if (task.id !== id) return task;
+        const updated = { ...task, ...input, updatedAt: "2026-07-28T10:00:00Z" };
+        updated.done = input.status === "done";
+        return updated;
+      });
+      return json(response, tasks.find(task => task.id === id));
+    }
+    if (url.pathname === "/api/v1/buckets/list-one/tasks" && request.method === "POST") {
+      const input = await requestJSON(request);
+      if (input.title === "Expire session") {
+        response.writeHead(401, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "sign in required" }));
+      }
+      if (input.title === "Network failure") {
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "item could not be created" }));
+      }
+      const created = {
+        id: `created-${tasks.length}`, boardId: "board-one", bucketId: "list-one",
+        title: input.title, description: input.description, scheduledDate: input.scheduledDate,
+        kind: "action", done: false, status: "queued", assigneeAgentId: input.assigneeAgentId,
+        createdAt: "2026-07-28T11:00:00Z", updatedAt: "2026-07-28T11:00:00Z",
+      };
+      tasks = [...tasks, created];
+      if (input.title === "Beyond response limit") omittedTaskID = created.id;
+      return json(response, created);
+    }
+    if (isAppShell(url.pathname)) return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const baseURL = `http://127.0.0.1:${server.address().port}`;
+  const releaseInitialPreflight = delayNextBoardPreflight();
+  const navigation = page.goto(`${baseURL}/app/agents/agent-one`);
+  await page.getByRole("heading", { name: "Loading agent…", exact: true }).waitFor();
+  assert.equal(await page.getByText("Ready item", { exact: true }).count(), 0);
+  releaseInitialPreflight();
+  releaseInitialDetail();
+  await navigation;
+  await page.getByRole("heading", { name: agent.displayName, exact: true }).waitFor();
+  for (const title of ["Ready item", "Working item", "Review item", "Completed item"]) {
+    await page.getByText(title, { exact: true }).waitFor();
+  }
+  assert.equal(await page.getByText("Working item", { exact: true }).count(), 1);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+  const overviewTab = page.getByRole("tab", { name: "Overview", exact: true });
+  assert.equal(await overviewTab.getAttribute("aria-controls"), "agent-panel-overview");
+  assert.equal(await page.locator("#agent-panel-overview").getAttribute("aria-labelledby"), "agent-tab-overview");
+  assert.equal(await page.locator("#agent-panel-overview").isVisible(), true);
+  assert.equal(await page.locator("#agent-panel-work").isHidden(), true);
+
+  const releaseWorkPreflight = delayNextBoardPreflight();
+  await page.getByRole("tab", { name: "Work", exact: true }).click();
+  await page.waitForURL(`${baseURL}/app/agents/agent-one/work`);
+  await page.getByRole("heading", { name: "Loading agent…", exact: true }).waitFor();
+  assert.equal(await page.getByText("Ready item", { exact: true }).count(), 0, "old overview work must clear before the board preflight resolves");
+  assert.equal(await page.getByRole("heading", { name: agent.displayName, exact: true }).count(), 0);
+  releaseWorkPreflight();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.getAttribute("role") === "tab" && document.activeElement?.textContent.trim() === "Work");
+  assert.equal(await page.getByRole("tab", { name: "Work", exact: true }).getAttribute("aria-controls"), "agent-panel-work");
+  assert.equal(await page.locator("#agent-panel-work").getAttribute("aria-labelledby"), "agent-tab-work");
+  assert.equal(await page.locator("#agent-panel-work").isVisible(), true);
+  assert.equal(await page.locator("#agent-panel-overview").isHidden(), true);
+  await page.getByRole("link", { name: "Next", exact: true }).click();
+  await page.waitForURL(`${baseURL}/app/agents/agent-one/work?page=2`);
+  await page.getByText("Page 2 · 0 of 51", { exact: true }).waitFor();
+  await page.goBack();
+  await page.waitForURL(`${baseURL}/app/agents/agent-one/work`);
+  const releaseOverviewPreflight = delayNextBoardPreflight();
+  await page.goBack();
+  await page.waitForURL(`${baseURL}/app/agents/agent-one`);
+  await page.getByRole("heading", { name: "Loading agent…", exact: true }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "All work", exact: true }).count(), 0, "old work page must clear during browser back navigation");
+  releaseOverviewPreflight();
+  await page.getByRole("heading", { name: agent.displayName, exact: true }).waitFor();
+  const releaseForwardPreflight = delayNextBoardPreflight();
+  await page.goForward();
+  await page.waitForURL(`${baseURL}/app/agents/agent-one/work`);
+  await page.getByRole("heading", { name: "Loading agent…", exact: true }).waitFor();
+  assert.equal(await page.getByText("Ready item", { exact: true }).count(), 0, "old overview work must clear during browser forward navigation");
+  releaseForwardPreflight();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  await page.goBack();
+  await page.waitForURL(`${baseURL}/app/agents/agent-one`);
+  await page.getByText("Ready item", { exact: true }).waitFor();
+
+  await page.getByRole("button", { name: /Ready item/ }).click();
+  await page.getByLabel("State", { exact: true }).selectOption("working");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "detached" });
+  assert.equal(await page.getByText("Ready item", { exact: true }).count(), 1, "regrouping must not duplicate the edited item");
+  assert.equal(await page.locator(".agent-current .agent-section-heading > span").textContent(), "2");
+  await page.waitForFunction(() => Boolean(document.activeElement?.dataset.openAgentTask));
+  assert.equal(patchBodies[0].status, "working");
+
+  await page.getByRole("button", { name: /Ready item/ }).click();
+  await page.getByLabel("Description", { exact: true }).fill("Fresh work data stays authoritative.");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "detached" });
+  assert.equal(patchBodies[1].status, "working", "a stale board cache must not revert the regrouped state");
+  assert.equal(tasks.find(task => task.id === "ready").status, "working");
+  assert.equal(await page.locator(".agent-current .agent-section-heading > span").textContent(), "2");
+
+  const assign = page.getByRole("button", { name: "Assign work", exact: true });
+  await assign.click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "assign-work");
+  await assign.click();
+  await page.getByRole("button", { name: "Create item", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Item title is required." }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "assign-title");
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Network failure");
+  await page.getByRole("button", { name: "Create item", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "item could not be created" }).waitFor();
+  assert.equal(await page.getByRole("textbox", { name: "Title", exact: true }).inputValue(), "Network failure");
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("New assigned item");
+  await page.getByRole("button", { name: "Create item", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "was assigned" }).waitFor();
+  await page.getByText("New assigned item", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.openAgentTask?.startsWith("created-")), true);
+
+  await assign.click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Beyond response limit");
+  await page.getByRole("button", { name: "Create item", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Beyond response limit" }).waitFor();
+  assert.equal(await page.getByText("Beyond response limit", { exact: true }).count(), 0);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "assign-work", "bounded responses need a stable focus fallback");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+  await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith("/api/v1/me") && response.request().method() === "PATCH"),
+    page.getByRole("button", { name: "Dark", exact: true }).click(),
+  ]);
+  await page.locator(".theme-dark").waitFor();
+  assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(15, 16, 17)");
+  await overviewTab.focus();
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Overview");
+  await overviewTab.press("ArrowRight");
+  await page.waitForURL(`${baseURL}/app/agents/agent-one/work`);
+  await page.waitForFunction(() => document.activeElement?.getAttribute("role") === "tab" && document.activeElement?.getAttribute("aria-selected") === "true");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("role")), "tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-selected")), "true");
+
+  await page.goto(`${baseURL}/app/agents/agent-one`);
+  await page.getByRole("button", { name: "Assign work", exact: true }).click();
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Expire session");
+  await page.getByRole("button", { name: "Create item", exact: true }).click();
+  await page.getByRole("heading", { name: "Your session has expired.", exact: true }).waitFor();
+  assert.equal(await page.getByText("Ready item", { exact: true }).count(), 0);
+
+  await page.goto(`${baseURL}/app/agents/agent-archived`);
+  await page.getByText("Archived identity", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Assign work", exact: true }).count(), 0);
+  await page.goto(`${baseURL}/app/agents/agent-missing`);
+  await page.getByRole("heading", { name: "Agent not found.", exact: true }).waitFor();
+  await page.goto(`${baseURL}/app/agents/agent-failed`);
+  await page.getByRole("alert").filter({ hasText: "agent service unavailable" }).waitFor();
+  expireBoardPreflight = true;
+  await page.goto(`${baseURL}/app/agents/agent-one`);
+  await page.getByRole("heading", { name: "Your session has expired.", exact: true }).waitFor();
+  assert.equal(await page.getByText("Ready item", { exact: true }).count(), 0);
+});
+
 function json(response, body) {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
@@ -1307,6 +1593,10 @@ function isAppShell(pathname) {
 	if (["/", "/index.html", "/login", "/app", "/app/settings", "/early-access", "/reset-password"].includes(pathname)) return true;
 	if (pathname.startsWith("/app/settings/")) return true;
 	if (pathname === "/app/agents" || pathname === "/app/agents/new") return true;
+	if (pathname.startsWith("/app/agents/")) {
+		const parts = pathname.slice("/app/agents/".length).split("/");
+		return parts.length === 1 || (parts.length === 2 && parts[1] === "work");
+	}
 	const rest = pathname.startsWith("/app/boards/") ? pathname.slice("/app/boards/".length) : "";
 	const segments = rest.split("/");
 	return Boolean(rest) && (segments.length === 1 || (segments.length === 2 && segments[1] === "settings"));

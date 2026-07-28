@@ -48,7 +48,12 @@ const api = {
     }
     if (sessionVersion !== authVersion) return new Promise(() => {});
     const data = decodeResponseBody(text, res.ok);
-    if (!res.ok) throw new Error(data.error || "Request failed");
+    if (!res.ok) {
+      const error = new Error(data.error || "Request failed");
+      error.status = res.status;
+      error.code = data.code || "";
+      throw error;
+    }
     return data;
   },
   get(path) { return this.request(path); },
@@ -116,6 +121,16 @@ const state = {
   agentCreateNotice: "",
   credentialCopied: false,
   credentialCopyError: "",
+  agentDetail: null,
+  agentDetailLoadState: "idle",
+  agentDetailError: "",
+  agentWorkPage: null,
+  agentAssignOpen: false,
+  agentAssignError: "",
+  agentAssignNotice: "",
+  agentAssignBoardID: "",
+  agentAssignDraft: null,
+  agentTaskFocusID: "",
   boardMode: "lists",
   flowListId: "",
   weekStart: "",
@@ -170,6 +185,15 @@ function agentsPath() {
   return AGENTS_PATH;
 }
 
+function agentPath(id) {
+  return `${AGENTS_PATH}/${encodeURIComponent(id)}`;
+}
+
+function agentWorkPath(id, page = 1) {
+  const path = `${agentPath(id)}/work`;
+  return page > 1 ? `${path}?page=${page}` : path;
+}
+
 function normalizePath(value) {
   const path = String(value ?? "").split("?")[0].split("#")[0];
   if (!path.startsWith("/")) return HOME_PATH;
@@ -190,6 +214,22 @@ function parseRoute(pathname) {
   if (path === `${SETTINGS_PATH}/agents`) return { name: "agents", redirect: true };
   if (path === AGENTS_PATH) return { name: "agents" };
   if (path === NEW_AGENT_PATH) return { name: "agent-new" };
+  const agentWork = /^\/app\/agents\/([^/]+)\/work$/.exec(path);
+  if (agentWork) {
+    try {
+      return { name: "agent-work", agentId: decodeURIComponent(agentWork[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
+  const agentDetail = /^\/app\/agents\/([^/]+)$/.exec(path);
+  if (agentDetail) {
+    try {
+      return { name: "agent-detail", agentId: decodeURIComponent(agentDetail[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
   const settings = /^\/app\/settings\/([^/]+)$/.exec(path);
   if (settings && SETTINGS_PAGES.some(page => page.id === settings[1])) {
     return { name: "settings", settingsPage: settings[1] };
@@ -214,7 +254,8 @@ function parseRoute(pathname) {
 }
 
 function isProtectedRoute(name) {
-  return name === "app" || name === "board" || name === "board-settings" || name === "settings" || name === "agents" || name === "agent-new";
+  return name === "app" || name === "board" || name === "board-settings" || name === "settings"
+    || name === "agents" || name === "agent-new" || name === "agent-detail" || name === "agent-work";
 }
 
 // Only same-origin app paths may be returned to after login. Anything else,
@@ -222,8 +263,12 @@ function isProtectedRoute(name) {
 function safeNextPath(value) {
   if (typeof value !== "string") return "";
   if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "";
-  const path = normalizePath(value);
-  return isProtectedRoute(parseRoute(path).name) ? path : "";
+  const withoutHash = value.split("#")[0];
+  const queryIndex = withoutHash.indexOf("?");
+  const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+  const search = queryIndex >= 0 ? withoutHash.slice(queryIndex) : "";
+  const path = normalizePath(pathname);
+  return isProtectedRoute(parseRoute(path).name) ? `${path}${search}` : "";
 }
 
 function loginPathFor(target) {
@@ -235,6 +280,10 @@ function currentPath() {
   return normalizePath(location.pathname);
 }
 
+function currentLocationPath() {
+  return `${location.pathname}${location.search || ""}`;
+}
+
 function syncPath(path) {
   if (currentPath() !== normalizePath(path)) history.replaceState({}, "", path);
 }
@@ -243,19 +292,61 @@ function navigate(path, options = {}) {
   const nextRoute = parseRoute(path);
   clearSettingsCredentialsLeaving(nextRoute.name === "settings" ? nextRoute.settingsPage : "");
   clearAgentCredentialLeaving(nextRoute.name);
-  if (options.replace || currentPath() === normalizePath(path)) history.replaceState({}, "", path);
+  if (options.replace || currentLocationPath() === path) history.replaceState({}, "", path);
   else history.pushState({}, "", path);
   return applyRoute();
 }
 
 let routeVersion = 0;
 
+function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
+  if (err?.status !== 401 || (route.name !== "agent-detail" && route.name !== "agent-work")) return false;
+  state.agents = [];
+  state.activeAgents = 0;
+  state.agentsLoadState = "idle";
+  state.agentsLoadError = "";
+  state.agentDetail = null;
+  state.agentWorkPage = null;
+  state.selectedTask = null;
+  state.agentAssignOpen = false;
+  state.agentAssignError = "";
+  state.agentAssignNotice = "";
+  state.agentAssignBoardID = "";
+  state.agentAssignDraft = null;
+  state.agentTaskFocusID = "";
+  state.agentDetailLoadState = "unauthorized";
+  state.agentDetailError = err.message;
+  state.settings = false;
+  state.settingsPage = "profile";
+  state.view = route.name;
+  render();
+  return true;
+}
+
+function prepareAgentRoute(route) {
+  state.settings = false;
+  state.settingsPage = "profile";
+  state.view = route.name;
+  state.selectedTask = null;
+  state.agentDetail = null;
+  state.agentWorkPage = null;
+  state.agentAssignOpen = false;
+  state.agentAssignError = "";
+  state.agentAssignNotice = "";
+  state.agentAssignBoardID = "";
+  state.agentAssignDraft = null;
+  state.agentTaskFocusID = "";
+  state.agentDetailLoadState = "loading";
+  state.agentDetailError = "";
+  render();
+}
+
 // Renders whatever surface the current URL names, redirecting when the URL is
 // not reachable in the current auth state. Every navigation funnels through here.
 async function applyRoute() {
   const version = ++routeVersion;
   const route = parseRoute(location.pathname);
-  state.selectedTask = route.name === "board" ? state.selectedTask : null;
+  if (route.name !== "board" && route.name !== "agent-detail" && route.name !== "agent-work") state.selectedTask = null;
   state.error = "";
   state.settingsNotice = "";
   state.settingsPending = "";
@@ -272,12 +363,13 @@ async function applyRoute() {
     if (state.me) return navigate(safeNextPath(new URLSearchParams(location.search).get("next")) || APP_PATH, { replace: true });
     return showRoute("login");
   }
-  if (!state.me) return navigate(loginPathFor(currentPath()), { replace: true });
+  if (!state.me) return navigate(loginPathFor(currentLocationPath()), { replace: true });
   if (route.redirect) {
     return route.name === "agents"
       ? navigate(AGENTS_PATH, { replace: true })
       : navigate(settingsPath(route.settingsPage), { replace: true });
   }
+  if (route.name === "agent-detail" || route.name === "agent-work") prepareAgentRoute(route);
   try {
     if (!await loadBoardList(version)) return;
     if (routeVersion !== version) return;
@@ -299,6 +391,33 @@ async function applyRoute() {
       }
       if (routeVersion !== version) return;
       state.agentsLoadState = "ready";
+      render();
+      return;
+    }
+    if (route.name === "agent-detail" || route.name === "agent-work") {
+      await loadAgents(true, authVersion, state.me?.id, version);
+      if (routeVersion !== version) return;
+      try {
+        const requestedPage = route.name === "agent-work" ? workPageFromLocation() : 1;
+        const loaded = await loadAgentDetail(route.agentId, {
+          includeWorkPage: route.name === "agent-work",
+          page: requestedPage,
+          sessionVersion: authVersion,
+          userID: state.me?.id,
+          expectedRouteVersion: version,
+        });
+        if (!loaded || routeVersion !== version) return;
+      } catch (err) {
+        if (routeVersion !== version) return;
+        if (handleAgentUnauthorized(err, route)) return;
+        state.agentDetail = null;
+        state.agentWorkPage = null;
+        state.agentDetailLoadState = err.status === 404 ? "not-found" : err.status === 401 || err.status === 403 ? "unauthorized" : "error";
+        state.agentDetailError = err.message;
+        render();
+        return;
+      }
+      state.agentDetailLoadState = "ready";
       render();
       return;
     }
@@ -333,6 +452,7 @@ async function applyRoute() {
     render();
   } catch (err) {
     if (routeVersion !== version) return;
+    if (handleAgentUnauthorized(err, route)) return;
     state.error = err.message;
     state.routeError = route;
     showRoute("route-error");
@@ -425,6 +545,16 @@ function resetAuthenticatedState() {
   state.agentCreateNotice = "";
   state.credentialCopied = false;
   state.credentialCopyError = "";
+  state.agentDetail = null;
+  state.agentDetailLoadState = "idle";
+  state.agentDetailError = "";
+  state.agentWorkPage = null;
+  state.agentAssignOpen = false;
+  state.agentAssignError = "";
+  state.agentAssignNotice = "";
+  state.agentAssignBoardID = "";
+  state.agentAssignDraft = null;
+  state.agentTaskFocusID = "";
   state.boardMode = "lists";
   state.flowListId = "";
   state.weekStart = "";
@@ -556,6 +686,13 @@ function render() {
     bindAgents();
     return;
   }
+  if (state.view === "agent-detail" || state.view === "agent-work") {
+    const agentID = state.agentDetail?.agent?.id || parseRoute(location.pathname).agentId || "";
+    syncPath(state.view === "agent-work" ? agentWorkPath(agentID, state.agentWorkPage?.page || workPageFromLocation()) : agentPath(agentID));
+    root.innerHTML = agentDetailHTML();
+    bindAgentDetail();
+    return;
+  }
   // Whenever a board is on screen its id belongs in the URL, however it was selected.
   syncPath(state.board ? boardPath(state.board.id) : APP_PATH);
   root.innerHTML = appHTML();
@@ -600,6 +737,7 @@ function routeErrorHTML() {
       : state.routeError?.name === "board"
         ? "this board"
         : state.routeError?.name === "agents" || state.routeError?.name === "agent-new"
+          || state.routeError?.name === "agent-detail" || state.routeError?.name === "agent-work"
           ? "agents"
           : "the app";
   return `
@@ -1278,18 +1416,21 @@ function agentRowHTML(agent) {
   const archived = stateLabel === "Archived";
   return `
     <article class="agent-directory-row ${archived ? "archived" : ""}">
-      ${avatarHTML(agent, { large: true, decorative: true })}
-      <div class="agent-identity">
-        <div class="agent-name-line">
-          <h3>${escapeHTML(agent.displayName)}</h3>
-          <span class="connection-state state-${stateLabel.toLowerCase().replace(/\s+/g, "-")}">${escapeHTML(stateLabel)}</span>
+      <a class="agent-directory-link" href="${agentPath(agent.id)}" data-agent-link="${escapeAttr(agent.id)}">
+        ${avatarHTML(agent, { large: true, decorative: true })}
+        <div class="agent-identity">
+          <div class="agent-name-line">
+            <h3>${escapeHTML(agent.displayName)}</h3>
+            <span class="connection-state state-${stateLabel.toLowerCase().replace(/\s+/g, "-")}">${escapeHTML(stateLabel)}</span>
+          </div>
+          <p class="agent-purpose">${escapeHTML(agent.purpose || "No purpose added")}</p>
         </div>
-        <p class="agent-purpose">${escapeHTML(agent.purpose || "No purpose added")}</p>
-      </div>
-      <dl class="agent-facts">
-        <div><dt>Assigned work</dt><dd>${assigned ? countParts.join(" · ") : "No open work assigned"}</dd></div>
-        <div><dt>Last credential use</dt><dd>${formatLastUse(agent.credential?.lastUsedAt || agent.lastUsedAt)}</dd></div>
-      </dl>
+        <dl class="agent-facts">
+          <div><dt>Assigned work</dt><dd>${assigned ? countParts.join(" · ") : "No open work assigned"}</dd></div>
+          <div><dt>Last credential use</dt><dd>${formatLastUse(agent.credential?.lastUsedAt || agent.lastUsedAt)}</dd></div>
+        </dl>
+        <span class="agent-row-arrow" aria-hidden="true">${icon("chevronLeft")}</span>
+      </a>
     </article>`;
 }
 
@@ -1304,6 +1445,232 @@ function formatLastUse(value) {
   if (!value) return "Never used";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown";
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function agentDetailHTML() {
+  const theme = currentTheme();
+  return `
+    <section class="shell agents-shell theme-${theme}">
+      ${appSidebarHTML({ theme, agentsCurrent: true })}
+      <main class="agents-main">
+        <div class="agents-wrap agent-detail-wrap">
+          <a class="back-link" href="${AGENTS_PATH}" id="agent-detail-back">${icon("chevronLeft")}<span>Agents</span></a>
+          ${agentDetailBodyHTML()}
+        </div>
+      </main>
+      ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
+      ${state.agentAssignOpen ? assignWorkHTML() : ""}
+    </section>`;
+}
+
+function agentDetailBodyHTML() {
+  if (state.agentDetailLoadState === "loading") {
+    return `
+      <section class="agents-state agent-detail-state" aria-live="polite" aria-busy="true">
+        <span class="agent-loading-mark">${icon("bot")}</span>
+        <h1>Loading agent…</h1>
+        <p>Finding this identity and its assigned work.</p>
+      </section>`;
+  }
+  if (state.agentDetailLoadState === "not-found") {
+    return `
+      <section class="agents-state agent-detail-state">
+        <span class="agent-state-icon">${icon("bot")}</span>
+        <h1>Agent not found.</h1>
+        <p>This identity does not exist, or it belongs to another account.</p>
+        <a class="secondary" href="${AGENTS_PATH}" data-agent-directory>View agents</a>
+      </section>`;
+  }
+  if (state.agentDetailLoadState === "unauthorized") {
+    return `
+      <section class="agents-state agent-detail-state">
+        <span class="agent-state-icon">${icon("signOut")}</span>
+        <h1>Your session has expired.</h1>
+        <p>No agent or assigned-work data is being shown. Sign in again to continue.</p>
+        <button class="primary" id="agent-detail-sign-in" type="button">Sign in</button>
+      </section>`;
+  }
+  if (state.agentDetailLoadState === "error" || !state.agentDetail) {
+    return `
+      <section class="agents-state agent-error-state agent-detail-state">
+        <span class="agent-state-icon">${icon("bot")}</span>
+        <h1>Agent couldn’t be loaded.</h1>
+        <p class="error" role="alert">${escapeHTML(state.agentDetailError || "Try again.")}</p>
+        <button class="secondary" id="retry-agent-detail" type="button">Try again</button>
+      </section>`;
+  }
+  const agent = state.agentDetail.agent;
+  const archived = Boolean(agent.archivedAt || agent.deletedAt);
+  const current = state.view === "agent-work" ? "work" : "overview";
+  return `
+    <header class="agent-detail-head">
+      <div class="agent-detail-identity">
+        ${avatarHTML(agent, { large: true, decorative: true })}
+        <div>
+          <div class="agent-name-line">
+            <h1>${escapeHTML(agent.displayName)}</h1>
+            <span class="connection-state state-${agentConnectionState(agent).toLowerCase().replace(/\s+/g, "-")}">${escapeHTML(agentConnectionState(agent))}</span>
+          </div>
+          <p>${escapeHTML(agent.purpose || "No purpose added")}</p>
+          <p class="agent-last-used">Last credential use: ${escapeHTML(formatLastUse(agent.credential?.lastUsedAt || agent.lastUsedAt))}</p>
+        </div>
+      </div>
+      ${archived ? "" : `<button class="primary icon-label" id="assign-work" type="button">${icon("plus")}<span>Assign work</span></button>`}
+    </header>
+    <nav class="agent-tabs" aria-label="Agent sections" role="tablist">
+      <a id="agent-tab-overview" href="${agentPath(agent.id)}" role="tab" tabindex="${current === "overview" ? "0" : "-1"}" aria-selected="${current === "overview"}" aria-controls="agent-panel-overview" ${current === "overview" ? 'aria-current="page"' : ""} data-agent-tab>Overview</a>
+      <a id="agent-tab-work" href="${agentWorkPath(agent.id)}" role="tab" tabindex="${current === "work" ? "0" : "-1"}" aria-selected="${current === "work"}" aria-controls="agent-panel-work" ${current === "work" ? 'aria-current="page"' : ""} data-agent-tab>Work</a>
+    </nav>
+    ${archived ? `
+      <section class="agent-archived-note" role="status">
+        <strong>Archived identity</strong>
+        <p>This agent cannot connect or receive new work. Its assigned task history stays available.</p>
+      </section>` : ""}
+    ${state.agentAssignNotice ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentAssignNotice)}</p>` : ""}
+    <section id="agent-panel-overview" class="agent-tab-panel" role="tabpanel" aria-labelledby="agent-tab-overview" tabindex="0" ${current === "overview" ? "" : "hidden"}>
+      ${current === "overview" ? agentOverviewHTML(agent) : ""}
+    </section>
+    <section id="agent-panel-work" class="agent-tab-panel" role="tabpanel" aria-labelledby="agent-tab-work" tabindex="0" ${current === "work" ? "" : "hidden"}>
+      ${current === "work" ? agentWorkPageHTML(agent) : ""}
+    </section>
+  `;
+}
+
+function agentOverviewHTML(agent) {
+  const work = state.agentDetail.work;
+  const working = work.working || [];
+  const totalOpen = Number(work.totals?.ready || 0) + Number(work.totals?.working || 0) + Number(work.totals?.review || 0);
+  const total = totalOpen + Number(work.totals?.completed || 0);
+  return `
+    <section class="agent-current" aria-labelledby="agent-current-heading">
+      <div class="agent-section-heading">
+        <div>
+          <p class="eyebrow">Current focus</p>
+          <h2 id="agent-current-heading">Working now</h2>
+        </div>
+        <span>${Number(work.totals?.working || 0)}</span>
+      </div>
+      ${working.length ? `<div class="agent-current-list">${working.map(item => agentWorkItemHTML(item)).join("")}</div>` : `
+        <div class="agent-no-current">${icon("inboxTray")}<p>${escapeHTML(agent.displayName)} has no active work.</p></div>`}
+    </section>
+    <div class="agent-work-groups">
+      ${agentWorkSectionHTML("Ready", "Work assigned and ready to pick up.", work.ready, work.totals?.ready, "queued")}
+      ${agentWorkSectionHTML("Review", "Work waiting for human review.", work.review, work.totals?.review, "needs_review")}
+      ${agentWorkSectionHTML("Recently completed", "Current completed tasks, sorted by their latest update. This is not run history.", work.recentlyCompleted, work.totals?.completed, "done")}
+    </div>
+    ${total ? `
+      <div class="agent-view-all">
+        <a class="secondary icon-label" href="${agentWorkPath(agent.id)}" data-agent-tab>${icon("rows")}<span>View all work</span></a>
+        <p>${formatCount(total, "assigned item", "assigned items")} in current task data.</p>
+      </div>` : ""}
+  `;
+}
+
+function agentWorkSectionHTML(title, description, items = [], total = 0, status = "") {
+  return `
+    <section class="agent-work-section state-group-${status}" aria-labelledby="agent-work-${status}">
+      <header>
+        <div><h2 id="agent-work-${status}">${title}</h2><p>${description}</p></div>
+        <span>${Number(total || 0)}</span>
+      </header>
+      ${items.length ? `<div class="agent-work-list">${items.map(item => agentWorkItemHTML(item)).join("")}</div>` : `<p class="agent-work-empty">No ${title.toLowerCase()} items.</p>`}
+      ${Number(total || 0) > items.length ? `<p class="agent-work-truncated">Showing ${items.length} of ${Number(total)}. View all work for the rest.</p>` : ""}
+    </section>`;
+}
+
+function agentWorkItemHTML(item) {
+  return `
+    <button class="agent-work-item" type="button" data-open-task="${escapeAttr(item.id)}" data-open-agent-task="${escapeAttr(item.id)}" data-agent-task-board="${escapeAttr(item.boardId)}">
+      <span class="agent-work-title">${escapeHTML(item.title)}</span>
+      <span class="agent-work-meta">
+        <span class="state-badge state-${escapeAttr(item.status)}">${escapeHTML(statusLabel(item.status))}</span>
+        <span>${escapeHTML(item.boardName)} / ${escapeHTML(item.bucketName)}</span>
+        <span>Updated ${escapeHTML(formatUpdatedAt(item.updatedAt))}</span>
+      </span>
+    </button>`;
+}
+
+function agentWorkPageHTML(agent) {
+  const page = state.agentWorkPage;
+  if (!page) {
+    return `<section class="agents-state agent-detail-state"><h2>Work couldn’t be loaded.</h2><button class="secondary" id="retry-agent-detail" type="button">Try again</button></section>`;
+  }
+  const groups = [
+    ["Ready", "queued"],
+    ["Working", "working"],
+    ["Review", "needs_review"],
+    ["Completed", "done"],
+  ];
+  return `
+    <section class="agent-all-work" aria-labelledby="all-work-heading">
+      <header class="agent-section-heading">
+        <div><p class="eyebrow">Assigned tasks</p><h2 id="all-work-heading">All work</h2></div>
+        <span>${Number(page.total || 0)}</span>
+      </header>
+      ${page.items?.length ? groups.map(([label, status]) => {
+        const items = page.items.filter(item => status === "done" ? item.done || item.status === "done" : !item.done && item.status === status);
+        return items.length ? `<section class="agent-page-group"><h3>${label}</h3><div class="agent-work-list">${items.map(agentWorkItemHTML).join("")}</div></section>` : "";
+      }).join("") : `<div class="agents-empty agent-work-page-empty"><span class="agent-state-icon">${icon("inboxTray")}</span><h2>No assigned work.</h2><p>${escapeHTML(agent.displayName)} has no current or completed task data.</p></div>`}
+      ${page.total ? `
+        <nav class="agent-pagination" aria-label="Assigned work pages">
+          <a class="secondary ${page.hasPrevious ? "" : "disabled"}" href="${agentWorkPath(agent.id, page.page - 1)}" data-work-page="${page.page - 1}" ${page.hasPrevious ? "" : 'aria-disabled="true"'}>Previous</a>
+          <span>Page ${page.page} · ${page.items.length} of ${page.total}</span>
+          <a class="secondary ${page.hasNext ? "" : "disabled"}" href="${agentWorkPath(agent.id, page.page + 1)}" data-work-page="${page.page + 1}" ${page.hasNext ? "" : 'aria-disabled="true"'}>Next</a>
+        </nav>` : ""}
+    </section>`;
+}
+
+function assignWorkHTML() {
+  const agent = state.agentDetail.agent;
+  const draft = state.agentAssignDraft || {};
+  const selectedBoardID = state.agentAssignBoardID || state.board?.id || state.boards[0]?.id || "";
+  const selectedBoard = state.board?.id === selectedBoardID ? state.board : null;
+  const lists = selectedBoard?.buckets || [];
+  const availableLists = lists.filter(list => {
+    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+    return (list.openCount || 0) < limit;
+  });
+  return `
+    <div class="detail-overlay" data-assign-overlay>
+      <section class="detail assign-work-dialog" role="dialog" aria-modal="true" aria-labelledby="assign-work-heading">
+        <header class="detail-head">
+          <div class="detail-context"><span>Agents</span><span aria-hidden="true">/</span><b id="assign-work-heading">Assign work</b></div>
+          <button class="detail-close" type="button" data-close-assign aria-label="Close assign work" title="Close">${icon("x")}</button>
+        </header>
+        <form id="assign-work-form" novalidate>
+          <div class="detail-body">
+            <div class="assign-agent-summary">${avatarHTML(agent, { decorative: true })}<span><small>Assigning to</small><strong>${escapeHTML(agent.displayName)}</strong></span></div>
+            <label class="sr-only" for="assign-title">Title</label>
+            <input class="detail-title" id="assign-title" name="title" type="text" value="${escapeAttr(draft.title || "")}" placeholder="What needs doing?" autocomplete="off" required aria-describedby="assign-error">
+            <label class="sr-only" for="assign-description">Description</label>
+            <textarea class="detail-description" id="assign-description" name="description" placeholder="Add a description…">${escapeHTML(draft.description || "")}</textarea>
+            <div class="detail-properties" aria-label="Item properties">
+              <div class="field"><label for="assign-board">Board</label><select id="assign-board" name="boardId">${state.boards.map(board => `<option value="${escapeAttr(board.id)}" ${board.id === selectedBoardID ? "selected" : ""}>${escapeHTML(board.name)}</option>`).join("")}</select></div>
+              <div class="field"><label for="assign-list">List</label><select id="assign-list" name="bucketId" ${availableLists.length ? "" : "disabled"}>${lists.map(list => {
+                const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+                const full = (list.openCount || 0) >= limit;
+                return `<option value="${escapeAttr(list.id)}" ${list.id === draft.bucketId ? "selected" : ""} ${full ? "disabled" : ""}>${escapeHTML(list.name)}${full ? ` (${list.openCount}/${limit} full)` : ""}</option>`;
+              }).join("") || '<option value="">No available lists</option>'}</select></div>
+              <div class="field"><label for="assign-date">Plan for</label><input id="assign-date" name="scheduledDate" type="date" value="${escapeAttr(draft.scheduledDate || "")}"></div>
+            </div>
+            <p class="error detail-error" id="assign-error" role="alert">${escapeHTML(state.agentAssignError)}</p>
+          </div>
+          <footer class="detail-actions assign-actions">
+            <span></span>
+            <div>
+              <button class="secondary" type="button" data-close-assign>Cancel</button>
+              <button class="primary" type="submit" ${availableLists.length ? "" : "disabled"}>Create item</button>
+            </div>
+          </footer>
+        </form>
+      </section>
+    </div>`;
+}
+
+function formatUpdatedAt(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "recently";
   return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
@@ -1922,8 +2289,9 @@ async function deleteBoard(id) {
   render();
 }
 
-function bindDetail() {
+function bindDetail(options = {}) {
   if (!state.selectedTask) return;
+  const refresh = options.refresh || reload;
   const overlay = document.querySelector("[data-detail-overlay]");
   const formElement = document.querySelector("#detail-form");
   const submitButton = formElement.querySelector('button[type="submit"]');
@@ -1954,7 +2322,8 @@ function bindDetail() {
     const addInput = document.querySelector(`[data-add-task="${bucketID}"] input[name="title"]`);
     const activeView = document.querySelector('[data-board-mode][aria-pressed="true"]');
     const selectedBoard = document.querySelector(`[data-board="${state.board?.id}"]`);
-    (trigger || triggers[0] || addInput || activeView || selectedBoard)?.focus();
+    const fallback = options.fallbackSelector ? document.querySelector(options.fallbackSelector) : null;
+    (trigger || triggers[0] || fallback || addInput || activeView || selectedBoard)?.focus();
   };
   const setDetailBusy = busy => {
     detailBusy = busy;
@@ -1989,7 +2358,15 @@ function bindDetail() {
     }
   });
   document.querySelector("#detail-title").focus();
-  const moveController = bindMovePanel({ taskID, task: state.selectedTask, setDetailBusy, savePendingChanges, submitButton });
+  const moveController = bindMovePanel({
+    taskID,
+    task: state.selectedTask,
+    setDetailBusy,
+    savePendingChanges,
+    submitButton,
+    afterMove: options.afterMove,
+    handleError: options.handleError,
+  });
   document.querySelector("#delete-task").onclick = async () => {
     if (!confirm("Delete this item?")) return;
     const visibleTaskIDs = [...document.querySelectorAll("[data-open-task]")].map(element => element.dataset.openTask);
@@ -2000,9 +2377,10 @@ function bindDetail() {
       await api.del(`/api/v1/tasks/${taskID}`);
       state.selectedTask = null;
       state.error = "";
-      await reload();
+      await refresh();
       focusAfterDetail(nextTaskID);
     } catch (err) {
+      if (options.handleError?.(err)) return;
       state.error = err.message;
       formElement.querySelector(".detail-error").textContent = err.message;
       setDetailBusy(false);
@@ -2023,9 +2401,10 @@ function bindDetail() {
       await api.patch(`/api/v1/tasks/${taskID}/status`, input);
       state.error = "";
       state.selectedTask = null;
-      await reload();
+      await refresh();
       focusAfterDetail();
     } catch (err) {
+      if (options.handleError?.(err)) return;
       state.error = err.message;
       const error = formElement.querySelector(".detail-error");
       error.textContent = err.message;
@@ -2035,7 +2414,7 @@ function bindDetail() {
   });
 }
 
-function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submitButton }) {
+function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submitButton, afterMove, handleError }) {
   const panel = document.querySelector("#move-panel");
   const boardSelect = document.querySelector("#move-board");
   const listSelect = document.querySelector("#move-list");
@@ -2101,6 +2480,7 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submit
       document.querySelector(".detail-error").textContent = "";
       refreshLists(board, destinationBoardID === sourceBoardID ? task.bucketId : "");
     } catch (err) {
+      if (handleError?.(err)) return;
       showError(err.message);
     } finally {
       destinationLoading = false;
@@ -2128,6 +2508,7 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submit
         position: Number(positionSelect.value),
       });
     } catch (err) {
+      if (handleError?.(err)) return;
       showError(err.message);
       setDetailBusy(false);
       button.textContent = idleText;
@@ -2139,6 +2520,12 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submit
       if (task.kind === "action" && !task.done) sourceList.openCount = Math.max(0, (sourceList.openCount || 0) - 1);
     }
     state.selectedTask = null;
+    if (afterMove) {
+      state.agentTaskFocusID = moved.id;
+      state.error = "";
+      await afterMove(moved, destinationBoard, destinationList);
+      return;
+    }
     state.moveNotice = {
       message: `Moved to ${destinationBoard.name} / ${destinationList.name}`,
       boardId: moved.boardId,
@@ -2326,6 +2713,10 @@ function bindAgents() {
   };
   follow("#new-agent-link, #empty-new-agent", NEW_AGENT_PATH);
   follow("#agents-back, [data-agents-directory]", AGENTS_PATH);
+  document.querySelectorAll("[data-agent-link]").forEach(element => element.addEventListener("click", event => {
+    event.preventDefault();
+    navigate(agentPath(element.dataset.agentLink));
+  }));
   document.querySelector("#retry-agents")?.addEventListener("click", applyRoute);
   document.querySelector("#copy-agent-credential")?.addEventListener("click", async () => {
     const token = state.agentCreationResult?.token;
@@ -2394,6 +2785,265 @@ function bindAgents() {
     form.querySelector('button[type="submit"]').textContent = "Create agent";
     document.querySelector(".agent-create-error").textContent = state.error;
   });
+}
+
+function bindAgentDetail() {
+  bindAppShell();
+  document.querySelector("#agent-detail-back")?.addEventListener("click", event => {
+    event.preventDefault();
+    navigate(AGENTS_PATH);
+  });
+  document.querySelectorAll("[data-agent-directory]").forEach(element => element.addEventListener("click", event => {
+    event.preventDefault();
+    navigate(AGENTS_PATH);
+  }));
+  document.querySelectorAll("[data-agent-tab]").forEach(element => element.addEventListener("click", async event => {
+    event.preventDefault();
+    await navigate(element.getAttribute("href"));
+    document.querySelector('[role="tab"][aria-selected="true"]')?.focus();
+  }));
+  const tabs = [...document.querySelectorAll('[role="tab"][data-agent-tab]')];
+  tabs.forEach((element, index) => element.addEventListener("keydown", async event => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const offset = event.key === "ArrowRight" ? 1 : -1;
+    const target = tabs[(index + offset + tabs.length) % tabs.length];
+    await navigate(target.getAttribute("href"));
+    document.querySelector('[role="tab"][aria-selected="true"]')?.focus();
+  }));
+  document.querySelectorAll("[data-work-page]").forEach(element => element.addEventListener("click", event => {
+    event.preventDefault();
+    if (element.getAttribute("aria-disabled") === "true") return;
+    navigate(element.getAttribute("href"));
+  }));
+  document.querySelector("#retry-agent-detail")?.addEventListener("click", applyRoute);
+  document.querySelector("#agent-detail-sign-in")?.addEventListener("click", () => {
+    const target = currentLocationPath();
+    authVersion += 1;
+    resetAuthenticatedState();
+    navigate(loginPathFor(target), { replace: true });
+  });
+  document.querySelector("#assign-work")?.addEventListener("click", openAssignWork);
+  document.querySelectorAll("[data-open-agent-task]").forEach(element => element.addEventListener("click", () => openAgentTask(element)));
+  bindAssignWork();
+  if (state.selectedTask) {
+    bindDetail({
+      refresh: refreshAgentSurface,
+      afterMove: refreshAgentSurface,
+      fallbackSelector: "#assign-work, [data-agent-tab]",
+      handleError: handleAgentUnauthorized,
+    });
+  } else if (state.agentTaskFocusID) {
+    const focusID = state.agentTaskFocusID;
+    state.agentTaskFocusID = "";
+    const createdItem = document.querySelector(`[data-open-agent-task="${CSS.escape(focusID)}"]`);
+    const fallback = document.querySelector("#assign-work") || document.querySelector('[role="tab"][aria-selected="true"]');
+    (createdItem || fallback)?.focus();
+  }
+}
+
+async function openAssignWork() {
+  const button = document.querySelector("#assign-work");
+  const version = routeVersion;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const boardID = state.board?.id && state.boards.some(board => board.id === state.board.id) ? state.board.id : state.boards[0]?.id;
+  state.agentAssignError = "";
+  state.agentAssignDraft = null;
+  if (button) {
+    button.disabled = true;
+    button.querySelector("span").textContent = "Loading…";
+  }
+  try {
+    if (boardID && (state.board?.id !== boardID || !state.board?.buckets)) {
+      if (!await loadBoard(boardID, sessionVersion, version)) return;
+    }
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    state.agentAssignBoardID = boardID || "";
+    state.agentAssignOpen = true;
+    render();
+    document.querySelector("#assign-title")?.focus();
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    if (handleAgentUnauthorized(err)) return;
+    state.agentAssignOpen = true;
+    state.agentAssignError = err.message;
+    render();
+    document.querySelector("#assign-title")?.focus();
+  }
+}
+
+function bindAssignWork() {
+  if (!state.agentAssignOpen) return;
+  const overlay = document.querySelector("[data-assign-overlay]");
+  const form = document.querySelector("#assign-work-form");
+  const close = () => {
+    state.agentAssignOpen = false;
+    state.agentAssignError = "";
+    state.agentAssignDraft = null;
+    render();
+    document.querySelector("#assign-work")?.focus();
+  };
+  document.querySelectorAll("[data-close-assign]").forEach(element => element.addEventListener("click", close));
+  overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
+  overlay.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...overlay.querySelectorAll("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)")];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  form.elements.boardId?.addEventListener("change", async event => {
+    const version = routeVersion;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    const boardID = event.target.value;
+    state.agentAssignDraft = assignDraftFromForm(form);
+    state.agentAssignBoardID = boardID;
+    state.agentAssignError = "";
+    [...form.elements].forEach(control => { control.disabled = true; });
+    try {
+      if (!await loadBoard(boardID, sessionVersion, version)) return;
+      if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || !state.agentAssignOpen) return;
+      state.agentAssignDraft.bucketId = "";
+      render();
+      document.querySelector("#assign-board")?.focus();
+    } catch (err) {
+      if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || !state.agentAssignOpen) return;
+      if (handleAgentUnauthorized(err)) return;
+      state.agentAssignError = err.message;
+      render();
+      document.querySelector("#assign-board")?.focus();
+    }
+  });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const title = form.elements.title.value.trim();
+    const bucketID = form.elements.bucketId.value;
+    const error = document.querySelector("#assign-error");
+    if (!title) {
+      form.elements.title.setAttribute("aria-invalid", "true");
+      error.textContent = "Item title is required.";
+      form.elements.title.focus();
+      return;
+    }
+    if (!bucketID) {
+      error.textContent = "Choose an available list.";
+      form.elements.bucketId.focus();
+      return;
+    }
+    const version = routeVersion;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    const agent = state.agentDetail.agent;
+    state.agentAssignDraft = assignDraftFromForm(form);
+    state.agentAssignError = "";
+    [...form.elements].forEach(control => { control.disabled = true; });
+    form.querySelector('button[type="submit"]').textContent = "Creating…";
+    try {
+      const created = await api.post(`/api/v1/buckets/${encodeURIComponent(bucketID)}/tasks`, {
+        title,
+        description: form.elements.description.value,
+        scheduledDate: form.elements.scheduledDate.value,
+        assigneeAgentId: agent.id,
+      });
+      if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || !state.agentAssignOpen) return;
+      state.agentAssignOpen = false;
+      state.agentAssignDraft = null;
+      state.agentAssignNotice = `"${created.title}" was assigned to ${agent.displayName}.`;
+      state.agentTaskFocusID = created.id;
+      await refreshAgentSurface();
+    } catch (err) {
+      if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || !state.agentAssignOpen) return;
+      if (handleAgentUnauthorized(err)) return;
+      state.agentAssignError = err.message;
+      [...form.elements].forEach(control => { control.disabled = false; });
+      form.querySelector('button[type="submit"]').textContent = "Create item";
+      error.textContent = err.message;
+    }
+  });
+}
+
+function assignDraftFromForm(form) {
+  return {
+    title: form.elements.title?.value || "",
+    description: form.elements.description?.value || "",
+    scheduledDate: form.elements.scheduledDate?.value || "",
+    bucketId: form.elements.bucketId?.value || "",
+  };
+}
+
+function agentWorkItems() {
+  if (state.agentWorkPage?.items) return state.agentWorkPage.items;
+  const work = state.agentDetail?.work;
+  return work ? [...(work.ready || []), ...(work.working || []), ...(work.review || []), ...(work.recentlyCompleted || [])] : [];
+}
+
+async function openAgentTask(element) {
+  const item = agentWorkItems().find(work => work.id === element.dataset.openAgentTask);
+  if (!item) return;
+  const version = routeVersion;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  state.agentTaskFocusID = item.id;
+  element.disabled = true;
+  try {
+    if (state.board?.id !== item.boardId || !state.board?.buckets) {
+      if (!await loadBoard(item.boardId, sessionVersion, version)) return;
+    }
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    state.selectedTask = { ...(findTask(item.id) || {}), ...item };
+    state.error = "";
+    render();
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    if (handleAgentUnauthorized(err)) return;
+    state.agentAssignNotice = `Item couldn’t be opened: ${err.message}`;
+    render();
+    document.querySelector(`[data-open-agent-task="${CSS.escape(item.id)}"]`)?.focus();
+  }
+}
+
+async function refreshAgentSurface() {
+  const route = parseRoute(location.pathname);
+  if (route.name !== "agent-detail" && route.name !== "agent-work") return;
+  const version = routeVersion;
+  try {
+    const loaded = await loadAgentDetail(route.agentId, {
+      includeWorkPage: route.name === "agent-work",
+      page: workPageFromLocation(),
+      sessionVersion: authVersion,
+      userID: state.me?.id,
+      expectedRouteVersion: version,
+    });
+    if (!loaded || version !== routeVersion) return false;
+    state.agentDetailLoadState = "ready";
+    render();
+    return true;
+  } catch (err) {
+    if (version !== routeVersion) return false;
+    if (handleAgentUnauthorized(err, route)) return false;
+    state.selectedTask = null;
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+    state.agentDetailLoadState = err.status === 404 ? "not-found" : err.status === 401 || err.status === 403 ? "unauthorized" : "error";
+    state.agentDetailError = state.agentAssignNotice
+      ? `${state.agentAssignNotice} Assigned work could not be refreshed.`
+      : err.message;
+    render();
+    return false;
+  }
 }
 
 async function copyAgentCredential(token, tokenElement, environment = {}) {
@@ -2750,6 +3400,31 @@ async function loadAgents(optional = false, sessionVersion = authVersion, userID
     if (optional) return false;
     throw err;
   }
+}
+
+function workPageFromLocation() {
+  const raw = new URLSearchParams(location.search).get("page");
+  if (!raw) return 1;
+  const page = Number(raw);
+  return Number.isInteger(page) && page > 0 ? Math.min(page, 100000) : 1;
+}
+
+async function loadAgentDetail(agentID, options = {}) {
+  const sessionVersion = options.sessionVersion ?? authVersion;
+  const userID = options.userID ?? state.me?.id;
+  const expectedRouteVersion = options.expectedRouteVersion;
+  const requests = [api.get(`/api/v1/agents/${encodeURIComponent(agentID)}`)];
+  if (options.includeWorkPage) {
+    requests.push(api.get(`/api/v1/agents/${encodeURIComponent(agentID)}/work?page=${options.page || 1}&pageSize=50`));
+  }
+  const [detail, workPage] = await Promise.all(requests);
+  if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+  state.agentDetail = detail;
+  state.agentWorkPage = options.includeWorkPage ? workPage : null;
+  const index = state.agents.findIndex(agent => agent.id === detail.agent.id);
+  if (index >= 0) state.agents[index] = detail.agent;
+  else state.agents.push(detail.agent);
+  return true;
 }
 
 async function createAgent(displayName, purpose, expectedRouteVersion) {

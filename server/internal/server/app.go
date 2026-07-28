@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 
+	"github.com/owainlewis/slate.do/server/internal/agents"
 	"github.com/owainlewis/slate.do/server/internal/auth"
 	"github.com/owainlewis/slate.do/server/internal/boards"
 	"github.com/owainlewis/slate.do/server/internal/database"
@@ -15,6 +16,7 @@ type App struct {
 	static fs.FS
 	db     *database.Pool
 	auth   *auth.Service
+	agents *agents.Handler
 	boards *boards.Handler
 }
 
@@ -29,6 +31,7 @@ func NewApp(static fs.FS, db *database.Pool, cookieSecure bool, options auth.Opt
 	if db != nil {
 		authStore := auth.NewPGStore(db)
 		app.auth = auth.NewServiceWithOptions(authStore, cookieSecure, options)
+		app.agents = agents.NewHandler(agents.NewStore(db, authStore))
 		app.boards = boards.NewHandler(boards.NewStore(db))
 	}
 	return app
@@ -49,6 +52,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/api-tokens/{id}", a.session(a.auth.RevokeAPIToken))
 	mux.HandleFunc("GET /api/v1/agents", a.session(a.auth.ListAgents))
 	mux.HandleFunc("POST /api/v1/agents", a.session(a.auth.CreateAgent))
+	mux.HandleFunc("GET /api/v1/agents/{id}", a.session(a.agents.GetDetail))
+	mux.HandleFunc("GET /api/v1/agents/{id}/work", a.session(a.agents.ListWork))
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/token", a.session(a.auth.RevokeAgentToken))
 	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(a.auth.DeleteAgent))
 	mux.HandleFunc("GET /api/v1/boards", a.account(a.boards.ListBoards))
