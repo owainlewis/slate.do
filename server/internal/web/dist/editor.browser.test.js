@@ -757,28 +757,74 @@ test("route load failures replace stale UI and retry without changing history", 
 	assert.deepEqual(pageErrors, []);
 });
 
-test("settings routes isolate pages and preserve navigation, refresh, and responsive layout", async t => {
-  const defaultBoard = { id: "board-one", name: "Business", maxTasksPerList: 12, buckets: [] };
+test("account and exact-board settings stay synchronized, safe, and responsive", async t => {
+  let user = { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" };
+  const boards = [
+    { id: "board-one", name: "Business", maxTasksPerList: 12, buckets: [] },
+    { id: "board-two", name: "A very long board name that still belongs to this exact board", maxTasksPerList: 8, buckets: [] },
+  ];
+  let tokens = [];
+  let failTokenMetadata = false;
+  let failThemeOnce = false;
+  let delayBoardPatch = false;
   let releaseBoardPatch;
   let markBoardPatchStarted;
   const boardPatchResponse = new Promise(resolve => { releaseBoardPatch = resolve; });
   const boardPatchStarted = new Promise(resolve => { markBoardPatchStarted = resolve; });
+  const profilePatches = [];
+  const boardPatches = [];
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
-    if (url.pathname === "/api/v1/me") return json(response, {
-      authenticated: true,
-      user: { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" },
-    });
-    if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }] });
-    if (url.pathname === "/api/v1/boards/board-one" && request.method === "PATCH") {
-      markBoardPatchStarted();
-      await boardPatchResponse;
-      response.writeHead(503, { "Content-Type": "application/json" });
-      return response.end(JSON.stringify({ error: "Board update failed" }));
+    if (url.pathname === "/api/v1/me" && request.method === "GET") {
+      return json(response, { authenticated: true, user });
     }
-    if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
+    if (url.pathname === "/api/v1/me" && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      profilePatches.push(input);
+      if (input.theme && failThemeOnce) {
+        failThemeOnce = false;
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "Theme preference could not be saved" }));
+      }
+      user = { ...user, ...input };
+      return json(response, user);
+    }
+    if (url.pathname === "/api/v1/boards") {
+      return json(response, { boards: boards.map(({ buckets, ...item }) => item) });
+    }
+    const exactBoard = boards.find(item => url.pathname === `/api/v1/boards/${item.id}`);
+    if (exactBoard && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      boardPatches.push({ id: exactBoard.id, ...input });
+      if (delayBoardPatch && exactBoard.id === "board-one") {
+        markBoardPatchStarted();
+        await boardPatchResponse;
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "Board update failed" }));
+      }
+      Object.assign(exactBoard, input);
+      return json(response, exactBoard);
+    }
+    if (exactBoard) return json(response, exactBoard);
     if (url.pathname === "/api/v1/agents") return json(response, { agents: [], activeAgents: 0, maxAgents: 5 });
-    if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
+    if (url.pathname === "/api/v1/api-tokens" && request.method === "GET") {
+      if (failTokenMetadata) {
+        failTokenMetadata = false;
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "Token metadata unavailable" }));
+      }
+      return json(response, { tokens });
+    }
+    if (url.pathname === "/api/v1/api-tokens" && request.method === "POST") {
+      const input = await requestJSON(request);
+      tokens = [{ id: "token-one", name: input.name }];
+      failTokenMetadata = true;
+      return json(response, { token: "slate_personal_one_time" });
+    }
+    if (url.pathname === "/api/v1/api-tokens/token-one" && request.method === "DELETE") {
+      tokens = [];
+      return json(response, { ok: true });
+    }
     if (isAppShell(url.pathname)) return html(response);
     if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
     if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
@@ -795,41 +841,85 @@ test("settings routes isolate pages and preserve navigation, refresh, and respon
   await page.goto(`${baseURL}/app/settings`);
   await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
   assert.equal(page.url(), `${baseURL}/app/settings/profile`);
-  assert.equal(await page.getByRole("textbox", { name: "Your display name", exact: true }).count(), 1);
+  assert.deepEqual(await page.locator(".settings-nav-link").allTextContents(), ["Profile", "Preferences", "API access"]);
+  const displayName = page.locator("#profile-display-name");
+  assert.equal(await displayName.inputValue(), "Owner");
+  assert.equal(await page.getByText("owner@example.com", { exact: true }).count(), 1);
+  assert.match(await page.locator(".profile-card .user-avatar").getAttribute("class"), /tone-\d/);
   assert.equal(await page.getByRole("spinbutton", { name: "Max active items per list", exact: true }).count(), 0);
   assert.equal(await page.locator('.settings-nav-link[aria-current="page"]').innerText(), "Profile");
-  assert.equal(await page.getByText("Update your display name.", { exact: true }).count(), 1);
-  assert.equal(await page.locator(".profile-form .user-avatar .icon").count(), 1);
-  assert.equal(await page.locator(".profile-form .user-avatar").getAttribute("aria-label"), "Owner");
+  await displayName.fill("   ");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Display name is required." }).waitFor();
+  assert.equal(profilePatches.length, 0);
+  await displayName.fill("Owain Lewis");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Profile saved." }).waitFor();
+  assert.deepEqual(profilePatches, [{ displayName: "Owain Lewis" }]);
 
-  await page.getByRole("link", { name: "Board", exact: true }).click();
-  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
-  const listLimit = page.getByRole("spinbutton", { name: "Max active items per list", exact: true });
-  assert.equal(await listLimit.inputValue(), "12");
-  assert.equal(await page.getByRole("textbox", { name: "Your display name", exact: true }).count(), 0);
-  await listLimit.fill("13");
-  await listLimit.dispatchEvent("change");
-  await boardPatchStarted;
-  await page.getByRole("link", { name: "Profile", exact: true }).click();
-  releaseBoardPatch();
-  await page.waitForTimeout(25);
-  assert.equal(await page.getByRole("heading", { name: "Profile", exact: true }).count(), 1);
-  assert.equal(await page.getByRole("alert").count(), 0, "a delayed Board error must not appear on Profile");
+  await page.getByRole("link", { name: "Preferences", exact: true }).click();
+  await page.getByRole("heading", { name: "Preferences", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Dark", exact: true }).click();
+  await page.locator(".settings-page.theme-dark").waitFor();
+  await page.getByRole("status").filter({ hasText: "Theme preference saved." }).waitFor();
+  await page.getByRole("button", { name: "Light", exact: true }).click();
+  await page.getByRole("button", { name: "Dark", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Theme preference saved." }).waitFor();
+  assert.equal(user.theme, "dark");
+  assert.deepEqual(profilePatches.slice(1).map(input => input.theme), ["dark", "light", "dark"]);
+  failThemeOnce = true;
+  await page.getByRole("button", { name: "Light", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Could not save theme. Restored dark." }).waitFor();
+  assert.equal(user.theme, "dark");
+  assert.equal(await page.getByRole("button", { name: "Dark", exact: true }).getAttribute("aria-pressed"), "true");
 
   await page.getByRole("link", { name: "API access", exact: true }).click();
   await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
-  assert.equal(await page.getByRole("textbox", { name: "Token name", exact: true }).count(), 1);
+  await page.getByText("Personal API tokens", { exact: true }).waitFor();
+  await page.getByText("Agent credentials", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: /Manage agents/ }).getAttribute("href"), "/app/agents");
   assert.equal(await page.getByRole("textbox", { name: "Agent name", exact: true }).count(), 0);
-
+  await page.locator("#token-name").fill("Laptop CLI");
+  await page.getByRole("button", { name: "Create token", exact: true }).click();
+  await page.getByText("slate_personal_one_time", { exact: true }).waitFor();
+  await page.getByRole("status").filter({ hasText: "could not be refreshed" }).waitFor();
+  await page.getByRole("link", { name: "Preferences", exact: true }).click();
+  assert.equal(await page.getByText("slate_personal_one_time", { exact: true }).count(), 0);
   await page.goBack();
-  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
-  await page.goForward();
   await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
+  assert.equal(await page.getByText("slate_personal_one_time", { exact: true }).count(), 0);
   await page.reload();
-  await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
-  assert.equal(page.url(), `${baseURL}/app/settings/api`);
+  assert.equal(await page.getByText("slate_personal_one_time", { exact: true }).count(), 0);
 
-  for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+  await page.goto(`${baseURL}/app/boards/board-one`);
+  await page.getByRole("button", { name: "Dark", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Dark", exact: true }).getAttribute("aria-pressed"), "true");
+  await page.getByRole("button", { name: "Board settings for Business", exact: true }).click();
+  await page.waitForURL(`${baseURL}/app/boards/board-one/settings`);
+  await page.getByRole("heading", { name: "Business", exact: true }).waitFor();
+  const listLimit = page.getByRole("spinbutton", { name: "Max active items per list", exact: true });
+  assert.equal(await listLimit.inputValue(), "12");
+  await listLimit.fill("0");
+  await page.getByRole("button", { name: "Save limit", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Enter a value from 1 to 20." }).waitFor();
+  assert.equal(boardPatches.length, 0);
+  await listLimit.fill("13");
+  await page.getByRole("button", { name: "Save limit", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Board limit saved." }).waitFor();
+  assert.deepEqual(boardPatches, [{ id: "board-one", maxTasksPerList: 13 }]);
+
+  delayBoardPatch = true;
+  await listLimit.fill("14");
+  await page.getByRole("button", { name: "Save limit", exact: true }).click();
+  await boardPatchStarted;
+  await page.goto(`${baseURL}/app/boards/board-two/settings`);
+  await page.getByRole("heading", { name: boards[1].name, exact: true }).waitFor();
+  assert.equal(await page.getByRole("spinbutton", { name: "Max active items per list", exact: true }).inputValue(), "8");
+  releaseBoardPatch();
+  await page.waitForTimeout(40);
+  assert.equal(await page.getByText("Board update failed", { exact: true }).count(), 0);
+
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 640, height: 500 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
@@ -837,10 +927,13 @@ test("settings routes isolate pages and preserve navigation, refresh, and respon
       `settings must not overflow at ${viewport.width}px`,
     );
   }
+  await page.getByRole("button", { name: "Back to board", exact: true }).focus();
+  assert.match(await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle), /solid|auto/);
 
-  await page.goto(`${baseURL}/app/settings/unknown`);
-  await page.getByRole("heading", { name: "Not found.", exact: true }).waitFor();
-  assert.equal(page.url(), `${baseURL}/app/settings/unknown`);
+  await page.goto(`${baseURL}/app/boards/missing/settings`);
+  await page.getByRole("heading", { name: "Couldn’t load board settings.", exact: true }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "does not exist or is no longer available" }).waitFor();
+  assert.equal(page.url(), `${baseURL}/app/boards/missing/settings`);
 
   await page.goto(`${baseURL}/app/settings/profile`);
   await page.getByRole("button", { name: "Back to board", exact: true }).click();
@@ -1214,8 +1307,9 @@ function isAppShell(pathname) {
 	if (["/", "/index.html", "/login", "/app", "/app/settings", "/early-access", "/reset-password"].includes(pathname)) return true;
 	if (pathname.startsWith("/app/settings/")) return true;
 	if (pathname === "/app/agents" || pathname === "/app/agents/new") return true;
-	const id = pathname.startsWith("/app/boards/") ? pathname.slice("/app/boards/".length) : "";
-	return Boolean(id) && !id.includes("/");
+	const rest = pathname.startsWith("/app/boards/") ? pathname.slice("/app/boards/".length) : "";
+	const segments = rest.split("/");
+	return Boolean(rest) && (segments.length === 1 || (segments.length === 2 && segments[1] === "settings"));
 }
 
 function html(response) {

@@ -71,10 +71,14 @@ func isAppRoute(clean string) bool {
 	if clean == "/app/agents" || clean == "/app/agents/new" {
 		return true
 	}
-	// A board id is one non-empty path segment. Whether it names a board the
-	// caller can see is the app's decision, not the file server's.
-	id, ok := strings.CutPrefix(clean, "/app/boards/")
-	return ok && id != "" && !strings.Contains(id, "/")
+	// A board id is one non-empty path segment, optionally followed by its
+	// settings surface. Whether it names an owned board is the app's decision.
+	rest, ok := strings.CutPrefix(clean, "/app/boards/")
+	if !ok || rest == "" {
+		return false
+	}
+	segments := strings.Split(rest, "/")
+	return len(segments) == 1 || (len(segments) == 2 && segments[0] != "" && segments[1] == "settings")
 }
 
 func exists(content fs.FS, name string) (bool, error) {
