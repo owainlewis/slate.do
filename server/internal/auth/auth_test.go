@@ -207,6 +207,9 @@ func TestCreateAgentReturnsPlainTokenOnceAndStoresOnlyHash(t *testing.T) {
 	if strings.Contains(listRec.Body.String(), response.Token) || strings.Contains(listRec.Body.String(), store.tokenHash) {
 		t.Fatal("agent list exposed token material")
 	}
+	if !strings.Contains(listRec.Body.String(), `"activeAgents":1`) || !strings.Contains(listRec.Body.String(), `"maxAgents":5`) {
+		t.Fatalf("agent list omitted server-owned limits: %s", listRec.Body.String())
+	}
 }
 
 func TestCreateAgentReturnsStableLimitConflict(t *testing.T) {

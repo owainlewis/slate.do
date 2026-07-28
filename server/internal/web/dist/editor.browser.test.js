@@ -761,13 +761,8 @@ test("settings routes isolate pages and preserve navigation, refresh, and respon
   const defaultBoard = { id: "board-one", name: "Business", maxTasksPerList: 12, buckets: [] };
   let releaseBoardPatch;
   let markBoardPatchStarted;
-  let releaseAgentCreation;
-  let markAgentCreationStarted;
-  let agents = [];
   const boardPatchResponse = new Promise(resolve => { releaseBoardPatch = resolve; });
   const boardPatchStarted = new Promise(resolve => { markBoardPatchStarted = resolve; });
-  const agentCreationResponse = new Promise(resolve => { releaseAgentCreation = resolve; });
-  const agentCreationStarted = new Promise(resolve => { markAgentCreationStarted = resolve; });
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
     if (url.pathname === "/api/v1/me") return json(response, {
@@ -782,15 +777,7 @@ test("settings routes isolate pages and preserve navigation, refresh, and respon
       return response.end(JSON.stringify({ error: "Board update failed" }));
     }
     if (url.pathname === "/api/v1/boards/board-one") return json(response, defaultBoard);
-    if (url.pathname === "/api/v1/agents" && request.method === "POST") {
-      const input = await requestJSON(request);
-      markAgentCreationStarted();
-      await agentCreationResponse;
-      const agent = { id: "agent-one", displayName: input.displayName };
-      agents = [agent];
-      return json(response, { ...agent, token: "slate_pending_agent_secret" });
-    }
-    if (url.pathname === "/api/v1/agents") return json(response, { agents });
+    if (url.pathname === "/api/v1/agents") return json(response, { agents: [], activeAgents: 0, maxAgents: 5 });
     if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
     if (isAppShell(url.pathname)) return html(response);
     if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
@@ -829,36 +816,13 @@ test("settings routes isolate pages and preserve navigation, refresh, and respon
   assert.equal(await page.getByRole("heading", { name: "Profile", exact: true }).count(), 1);
   assert.equal(await page.getByRole("alert").count(), 0, "a delayed Board error must not appear on Profile");
 
-  await page.getByRole("link", { name: "Agents", exact: true }).click();
-  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
-  const agentName = page.getByRole("textbox", { name: "Agent name", exact: true });
-  assert.equal(await agentName.count(), 1);
-  assert.equal(await page.getByRole("textbox", { name: "Token name", exact: true }).count(), 0);
-  await agentName.fill("Builder Bot");
-  await page.getByRole("button", { name: "Create agent", exact: true }).click();
-  await agentCreationStarted;
-  await page.getByRole("link", { name: "Profile", exact: true }).click();
-  releaseAgentCreation();
-  await page.waitForTimeout(25);
-  assert.equal(await page.getByText("slate_pending_agent_secret", { exact: true }).count(), 0);
-  await page.getByRole("link", { name: "Agents", exact: true }).click();
-  await page.getByText("slate_pending_agent_secret", { exact: true }).waitFor();
-  await page.getByText(/One agent user per account for now/).waitFor();
-  assert.equal(await page.getByRole("textbox", { name: "Agent name", exact: true }).count(), 0);
-  await page.locator(".settings-sidebar .brand").click();
-  await page.getByRole("button", { name: "Open app", exact: true }).first().click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("link", { name: "Agents", exact: true }).click();
-  assert.equal(await page.getByText("slate_pending_agent_secret", { exact: true }).count(), 0, "leaving through the brand must clear the shown credential");
-  await page.getByText(/One agent user per account for now/).waitFor();
-
   await page.getByRole("link", { name: "API access", exact: true }).click();
   await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
   assert.equal(await page.getByRole("textbox", { name: "Token name", exact: true }).count(), 1);
   assert.equal(await page.getByRole("textbox", { name: "Agent name", exact: true }).count(), 0);
 
   await page.goBack();
-  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
   await page.goForward();
   await page.getByRole("heading", { name: "API access", exact: true }).waitFor();
   await page.reload();
@@ -939,47 +903,53 @@ test("password reset request and confirmation work without exposing the token in
 	assert.equal(page.url(), `${baseURL}/login`);
 });
 
-test("agent users can be created, assigned with an avatar, revoked, and safely deleted", async t => {
-  let agents = [];
-  let currentTask = { ...task };
-  let failAgentLoadOnce = false;
-  const agentID = "11111111-1111-4111-8111-111111111111";
-  const currentBoard = () => ({
-    id: "board-one", name: "Business", maxTasksPerList: 20,
-    buckets: [{ id: "list-one", boardId: "board-one", name: "AI Engineer", goal: "", openCount: 1, limitCount: 20, tasks: [currentTask] }],
-  });
+test("agent directory handles loading, errors, limits, archives, themes, keyboard use, and narrow layouts", async t => {
+  let theme = "light";
+  let failAgentLoad = false;
+  let releaseInitialLoad;
+  const initialLoad = new Promise(resolve => { releaseInitialLoad = resolve; });
+  let delayInitialLoad = true;
+  let agents = [
+    {
+      id: "agent-connected", displayName: "Builder Bot", purpose: "Ships product",
+      credential: { lastUsedAt: "2026-07-27T14:30:00Z" },
+      workCounts: { ready: 2, working: 1, review: 1 },
+    },
+    {
+      id: "agent-disconnected", displayName: "Research Bot", purpose: "Finds evidence",
+      credential: { revokedAt: "2026-07-26T14:30:00Z" }, workCounts: {},
+    },
+    ...Array.from({ length: 3 }, (_, index) => ({
+      id: `agent-${index + 3}`, displayName: `Agent ${index + 3}`, purpose: "", credential: {}, workCounts: {},
+    })),
+    {
+      id: "agent-archived", displayName: "Archived Bot", purpose: "Old work",
+      archivedAt: "2026-07-25T10:00:00Z", credential: { revokedAt: "2026-07-25T10:00:00Z" },
+      workCounts: { review: 2 },
+    },
+  ];
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
-    if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" } });
+    if (url.pathname === "/api/v1/me" && request.method === "GET") {
+      return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com", displayName: "Owner", theme } });
+    }
+    if (url.pathname === "/api/v1/me" && request.method === "PATCH") {
+      theme = (await requestJSON(request)).theme;
+      return json(response, { id: "owner", email: "owner@example.com", displayName: "Owner", theme });
+    }
     if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }] });
-    if (url.pathname === "/api/v1/boards/board-one") return json(response, currentBoard());
-    if (url.pathname === "/api/v1/api-tokens") return json(response, { tokens: [] });
-    if (url.pathname === "/api/v1/agents" && request.method === "GET") {
-      if (failAgentLoadOnce) {
-        failAgentLoadOnce = false;
+    if (url.pathname === "/api/v1/agents") {
+      if (delayInitialLoad) {
+        delayInitialLoad = false;
+        await initialLoad;
+      }
+      if (failAgentLoad) {
+        failAgentLoad = false;
         response.writeHead(503, { "Content-Type": "application/json" });
         return response.end(JSON.stringify({ error: "agents temporarily unavailable" }));
       }
-      return json(response, { agents });
-    }
-    if (url.pathname === "/api/v1/agents" && request.method === "POST") {
-      const input = await requestJSON(request);
-      const agent = { id: agentID, displayName: input.displayName, createdAt: "2026-07-27T00:00:00Z" };
-      agents = [agent];
-      failAgentLoadOnce = true;
-      return json(response, { ...agent, token: "slate_agent_create_once" });
-    }
-    if (url.pathname === `/api/v1/agents/${agentID}/token` && request.method === "DELETE") {
-      agents = [{ ...agents[0], revokedAt: "2026-07-27T01:00:00Z" }];
-      return json(response, { ok: true });
-    }
-    if (url.pathname === `/api/v1/agents/${agentID}` && request.method === "DELETE") {
-      agents = [{ ...agents[0], deletedAt: "2026-07-27T02:00:00Z" }];
-      return json(response, { ok: true });
-    }
-    if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
-      currentTask = { ...currentTask, ...await requestJSON(request) };
-      return json(response, currentTask);
+      const activeAgents = agents.filter(agent => !agent.archivedAt).length;
+      return json(response, { agents, activeAgents, maxAgents: 5 });
     }
     if (isAppShell(url.pathname)) return html(response);
     if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
@@ -991,66 +961,226 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
-  const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
-  await page.goto(`http://127.0.0.1:${server.address().port}/app`);
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const baseURL = `http://127.0.0.1:${server.address().port}`;
+  await page.goto(`${baseURL}/app/agents`);
+  await page.getByRole("heading", { name: "Loading agents…", exact: true }).waitFor();
+  releaseInitialLoad();
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
 
-  await page.locator(".current-user .avatar").waitFor();
-  assert.equal(await page.locator(".current-user .avatar").count(), 1);
-  assert.equal(await page.locator(".current-user > span:not(.avatar)").count(), 0);
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("link", { name: "Agents", exact: true }).click();
-  const createAgentButton = page.getByRole("button", { name: "Create agent", exact: true });
-  let box = await createAgentButton.boundingBox();
-  assert.ok(box && box.height >= 32 && box.height <= 36, "settings form actions should stay compact and usable");
-  await page.getByRole("link", { name: "API access", exact: true }).click();
-  const createTokenButton = page.getByRole("button", { name: "Create token", exact: true });
-  box = await createTokenButton.boundingBox();
-  assert.ok(box && box.height >= 32 && box.height <= 36, "settings form actions should stay compact and usable");
-  await page.getByRole("link", { name: "Agents", exact: true }).click();
-  await page.getByPlaceholder("Agent name").fill("Builder Bot");
-  await createAgentButton.click();
-  await page.getByText("slate_agent_create_once", { exact: true }).waitFor();
-  await page.getByText(/Agent created.*could not be refreshed/).waitFor();
-  await page.getByText(/One agent user per account for now/).waitFor();
-  assert.equal(await page.getByPlaceholder("Agent name").count(), 0);
-  const agentActionBox = await page.getByRole("button", { name: "Revoke token", exact: true }).boundingBox();
-  assert.ok(agentActionBox && agentActionBox.height >= 32 && agentActionBox.height <= 36);
+  assert.equal(await page.getByRole("link", { name: "Agents", exact: true }).getAttribute("aria-current"), "page");
+  await page.getByText("Connected", { exact: true }).first().waitFor();
+  await page.getByText("Needs connection", { exact: true }).waitFor();
+  await page.getByText("2 ready items · 1 working item · 1 review item", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "New agent", exact: true }).getAttribute("aria-disabled"), "true");
+  await page.getByText(/5 of 5 active agents/).waitFor();
+  await page.getByText(/^Archived 1$/).click();
+  await page.getByText("Archived Bot", { exact: true }).waitFor();
+  await page.getByText("Archived", { exact: true }).waitFor();
+
+  await page.getByRole("button", { name: "Dark", exact: true }).click();
+  await page.locator(".agents-shell.theme-dark").waitFor();
+  assert.equal(theme, "dark");
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
-  await page.setViewportSize({ width: 1100, height: 800 });
-  await page.getByRole("button", { name: "Back to board", exact: true }).click();
+  await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+  await page.getByRole("link", { name: "Agents", exact: true }).focus();
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "Agents");
 
-  await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
-  await page.getByLabel("Agent", { exact: true }).selectOption(agentID);
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
-  const assignedAvatar = page.locator(".task-assignee .avatar");
-  await assignedAvatar.waitFor();
-  assert.equal(await assignedAvatar.getAttribute("title"), "Builder Bot");
-
-  failAgentLoadOnce = true;
+  failAgentLoad = true;
   await page.reload();
-  await page.getByRole("button", { name: "Improve the vault", exact: true }).click();
-  assert.equal(await page.getByLabel("Agent", { exact: true }).inputValue(), agentID);
-  await page.getByLabel("Title", { exact: true }).fill("Improve the vault safely");
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
-  assert.equal(currentTask.assigneeAgentId, agentID);
+  await page.getByRole("heading", { name: "Agents couldn’t be loaded.", exact: true }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "agents temporarily unavailable" }).waitFor();
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await page.getByText("Builder Bot", { exact: true }).waitFor();
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("link", { name: "Agents", exact: true }).click();
-  await page.getByRole("button", { name: "Revoke token", exact: true }).click();
-  await page.getByText("Token revoked", { exact: true }).waitFor();
-  await page.getByText(/One agent user per account for now/).waitFor();
-  assert.equal(await page.getByPlaceholder("Agent name").count(), 0);
-  page.once("dialog", dialog => dialog.accept());
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
-  await page.getByPlaceholder("Agent name").waitFor();
-  assert.equal(await page.locator(".agent-list").getByText("Builder Bot", { exact: true }).count(), 0);
-  assert.equal(await page.locator(".agent-list").getByText("Inactive", { exact: true }).count(), 0);
+  agents = [];
   await page.reload();
-  await page.getByPlaceholder("Agent name").waitFor();
-  assert.equal(await page.locator(".agent-list").getByText("Builder Bot", { exact: true }).count(), 0);
-  await page.getByRole("button", { name: "Back to board", exact: true }).click();
-  assert.equal(await page.locator(".task-assignee .avatar").getAttribute("title"), "Builder Bot (inactive)");
+  await page.getByRole("heading", { name: "Bring an agent into the plan.", exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "New agent", exact: true }).count(), 1);
+  await page.goto(`${baseURL}/app/settings/agents`);
+  await page.waitForURL(`${baseURL}/app/agents`);
+  assert.equal(await page.getByRole("heading", { name: "Agents", exact: true }).count(), 1);
+});
+
+test("shared new-board flow stays on agents and exposes a default-list failure", async t => {
+  let boards = [{ id: "board-one", name: "Business" }];
+  let bucketPosts = 0;
+  let boardDetailRequests = 0;
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me") return json(response, {
+      authenticated: true,
+      user: { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" },
+    });
+    if (url.pathname === "/api/v1/boards" && request.method === "GET") {
+      return json(response, { boards, maxBoards: 5 });
+    }
+    if (url.pathname === "/api/v1/boards" && request.method === "POST") {
+      const board = { id: "partial-board", name: "Untitled board" };
+      boards = [...boards, board];
+      return json(response, board);
+    }
+    if (url.pathname === "/api/v1/boards/partial-board/buckets" && request.method === "POST") {
+      bucketPosts += 1;
+      if (bucketPosts === 2) {
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "Focus list could not be created" }));
+      }
+      return json(response, { id: "inbox", name: "Inbox" });
+    }
+    if (url.pathname === "/api/v1/boards/partial-board") {
+      boardDetailRequests += 1;
+      return json(response, { id: "partial-board", name: "Untitled board", buckets: [] });
+    }
+    if (url.pathname === "/api/v1/agents") return json(response, {
+      agents: [{ id: "agent", displayName: "Builder Bot", credential: {}, workCounts: {} }],
+      activeAgents: 1,
+      maxAgents: 5,
+    });
+    if (isAppShell(url.pathname)) return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const baseURL = `http://127.0.0.1:${server.address().port}`;
+  await page.goto(`${baseURL}/app/agents`);
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  await page.getByRole("button", { name: "New board", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Focus list could not be created" }).waitFor();
+
+  assert.equal(page.url(), `${baseURL}/app/agents`);
+  assert.equal(bucketPosts, 2);
+  assert.equal(boardDetailRequests, 0);
+  await page.getByText("Untitled board", { exact: true }).waitFor();
+});
+
+test("guided agent creation validates, preserves one-time credentials on refresh failure, and clears stale results", async t => {
+  let agents = [];
+  let failMetadataOnce = false;
+  let releaseDelayedCreate;
+  let markDelayedCreateStarted;
+  const delayedCreate = new Promise(resolve => { releaseDelayedCreate = resolve; });
+  const delayedCreateStarted = new Promise(resolve => { markDelayedCreateStarted = resolve; });
+  let lastCreateInput;
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me") return json(response, {
+      authenticated: true,
+      user: { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" },
+    });
+    if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }] });
+    if (url.pathname === "/api/v1/agents" && request.method === "GET") {
+      if (failMetadataOnce) {
+        failMetadataOnce = false;
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "metadata refresh failed" }));
+      }
+      return json(response, { agents, activeAgents: agents.length, maxAgents: 5 });
+    }
+    if (url.pathname === "/api/v1/agents" && request.method === "POST") {
+      const input = await requestJSON(request);
+      if (input.displayName === "Rejected Bot") {
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "agent could not be created" }));
+      }
+      if (input.displayName === "Delayed Bot") {
+        markDelayedCreateStarted();
+        await delayedCreate;
+      }
+      lastCreateInput = input;
+      const agent = {
+        id: `agent-${agents.length + 1}`, displayName: input.displayName, purpose: input.purpose,
+        credential: { tokenPrefix: "slate_agent_created" }, workCounts: {},
+      };
+      agents = [...agents, agent];
+      if (input.displayName === "Builder Bot") failMetadataOnce = true;
+      return json(response, { ...agent, token: `slate_agent_${input.displayName === "Delayed Bot" ? "delayed" : "create_once"}` });
+    }
+    if (isAppShell(url.pathname)) return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    permissions: ["clipboard-read", "clipboard-write"],
+  });
+  const page = await context.newPage();
+  const baseURL = `http://127.0.0.1:${server.address().port}`;
+  await page.goto(`${baseURL}/app/agents/new`);
+  const create = page.getByRole("button", { name: "Create agent", exact: true });
+  await create.click();
+  await page.getByRole("alert").filter({ hasText: "Agent name is required." }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "agent-name");
+
+  await page.getByLabel("Name Required", { exact: true }).fill("Rejected Bot");
+  await create.click();
+  await page.getByRole("alert").filter({ hasText: "agent could not be created" }).waitFor();
+  await page.getByLabel("Name Required", { exact: true }).fill("  Builder Bot  ");
+  await page.getByLabel("Purpose Optional", { exact: true }).fill("  Ships polished product  ");
+  await create.click();
+  await page.getByRole("heading", { name: "Connect your agent", exact: true }).waitFor();
+  await page.getByText("slate_agent_create_once", { exact: true }).waitFor();
+  await page.getByText(/credential is still available until you leave this page/).waitFor();
+  assert.deepEqual(lastCreateInput, { displayName: "Builder Bot", purpose: "Ships polished product" });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        async writeText() { throw new Error("permission denied"); },
+        async readText() { return window.__copiedCredential || ""; },
+      },
+    });
+    document.execCommand = () => false;
+  });
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "The token is selected" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Copy", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("button", { name: "Copied", exact: true }).count(), 0);
+  assert.equal(await page.evaluate(() => window.getSelection().toString()), "slate_agent_create_once");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "agent-credential");
+
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = async text => { window.__copiedCredential = text; };
+  });
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await page.getByRole("button", { name: "Copied", exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "slate_agent_create_once");
+  await page.getByText("export SLATE_API_TOKEN=slate_agent_create_once", { exact: true }).waitFor();
+  await page.getByText("slate auth status", { exact: true }).waitFor();
+
+  await page.reload();
+  await page.getByRole("heading", { name: "New agent", exact: true }).waitFor();
+  assert.equal(await page.getByText("slate_agent_create_once", { exact: true }).count(), 0);
+  await page.goBack();
+  await page.goForward();
+  assert.equal(await page.getByText("slate_agent_create_once", { exact: true }).count(), 0);
+
+  await page.getByLabel("Name Required", { exact: true }).fill("Delayed Bot");
+  await create.click();
+  await delayedCreateStarted;
+  await page.getByRole("link", { name: "Cancel", exact: true }).click();
+  await page.waitForURL(`${baseURL}/app/agents`);
+  releaseDelayedCreate();
+  await page.waitForTimeout(50);
+  assert.equal(await page.getByText("slate_agent_delayed", { exact: true }).count(), 0);
+  await page.reload();
+  await page.getByText("Delayed Bot", { exact: true }).waitFor();
+  assert.equal(await page.getByText("slate_agent_delayed", { exact: true }).count(), 0);
 });
 
 function json(response, body) {
@@ -1083,6 +1213,7 @@ function file(response, name, type) {
 function isAppShell(pathname) {
 	if (["/", "/index.html", "/login", "/app", "/app/settings", "/early-access", "/reset-password"].includes(pathname)) return true;
 	if (pathname.startsWith("/app/settings/")) return true;
+	if (pathname === "/app/agents" || pathname === "/app/agents/new") return true;
 	const id = pathname.startsWith("/app/boards/") ? pathname.slice("/app/boards/".length) : "";
 	return Boolean(id) && !id.includes("/");
 }

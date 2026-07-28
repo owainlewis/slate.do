@@ -68,6 +68,9 @@ func isAppRoute(clean string) bool {
 	if strings.HasPrefix(clean, "/app/settings/") {
 		return true
 	}
+	if clean == "/app/agents" || clean == "/app/agents/new" {
+		return true
+	}
 	// A board id is one non-empty path segment. Whether it names a board the
 	// caller can see is the app's decision, not the file server's.
 	id, ok := strings.CutPrefix(clean, "/app/boards/")
