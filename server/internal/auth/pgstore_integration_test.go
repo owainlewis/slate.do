@@ -552,6 +552,80 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 		t.Fatalf("agent entitlement = %#v", identity.Entitlement)
 	}
 
+	var boardID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO boards (user_id, name)
+		VALUES ($1, 'Agent count board')
+		RETURNING id::text
+	`, owner.ID).Scan(&boardID); err != nil {
+		t.Fatal(err)
+	}
+	var bucketID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO buckets (board_id, name)
+		VALUES ($1, 'Agent count list')
+		RETURNING id::text
+	`, boardID).Scan(&bucketID); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		status string
+		done   bool
+	}{
+		{status: "queued"},
+		{status: "working"},
+		{status: "needs_review"},
+		{status: "done", done: true},
+	} {
+		if _, err := db.Exec(ctx, `
+			INSERT INTO tasks (board_id, bucket_id, title, status, done, assignee_agent_id)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, boardID, bucketID, "Count "+item.status, item.status, item.done, agent.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other, err := store.CreateAdmin(ctx, fmt.Sprintf("agent-count-other-%d@slate.test", time.Now().UnixNano()), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", other.ID) })
+	var otherBoardID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO boards (user_id, name)
+		VALUES ($1, 'Other owner board')
+		RETURNING id::text
+	`, other.ID).Scan(&otherBoardID); err != nil {
+		t.Fatal(err)
+	}
+	var otherBucketID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO buckets (board_id, name)
+		VALUES ($1, 'Other owner list')
+		RETURNING id::text
+	`, otherBoardID).Scan(&otherBucketID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO tasks (board_id, bucket_id, title, status, assignee_agent_id)
+		VALUES ($1, $2, 'Must not count', 'working', $3)
+	`, otherBoardID, otherBucketID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	counted, err := store.ListAgents(ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var countedAgent AgentUser
+	for _, listed := range counted {
+		if listed.ID == agent.ID {
+			countedAgent = listed
+			break
+		}
+	}
+	if countedAgent.WorkCounts != (AgentWorkCounts{Ready: 1, Working: 1, Review: 1}) {
+		t.Fatalf("owner-scoped work counts = %#v", countedAgent.WorkCounts)
+	}
+
 	if err := store.RevokeAgentToken(ctx, owner.ID, agent.ID); err != nil {
 		t.Fatal(err)
 	}

@@ -109,6 +109,64 @@ test("sidebar separates board creation and explains the board limit", () => {
   vm.runInContext(`state.maxBoards = 10; state.boards = []; state.board = null;`, app);
 });
 
+test("default board creation stays incomplete when either default list fails", async () => {
+  vm.runInContext(`
+    state.me = { id: "owner", theme: "light" };
+    state.boards = [{ id: "existing", name: "Existing" }];
+    state.error = "";
+    defaultBoardPostCalls = [];
+    defaultBoardRefreshes = [];
+    defaultBoardListRefreshes = 0;
+    savedLoadBoards = loadBoards;
+    savedLoadBoardList = loadBoardList;
+    loadBoards = async id => { defaultBoardRefreshes.push(id); return true; };
+    loadBoardList = async () => { defaultBoardListRefreshes += 1; return true; };
+    defaultBoardFailureAt = 2;
+    api.post = async (path, input) => {
+      defaultBoardPostCalls.push({ path, input });
+      if (defaultBoardPostCalls.length === 1) return { id: "partial-board" };
+      if (defaultBoardPostCalls.length === defaultBoardFailureAt) throw new Error("Default list failed");
+      return { id: "list" };
+    };
+  `, app);
+
+  const firstFailure = await app.createDefaultBoard();
+  assert.equal(firstFailure.complete, false);
+  assert.equal(vm.runInContext("defaultBoardPostCalls.length", app), 2);
+  assert.equal(vm.runInContext("defaultBoardListRefreshes", app), 1);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(defaultBoardRefreshes)", app)), []);
+  assert.equal(vm.runInContext("state.error", app), "Default list failed");
+
+  vm.runInContext(`
+    defaultBoardPostCalls = [];
+    defaultBoardListRefreshes = 0;
+    defaultBoardFailureAt = 3;
+    state.error = "";
+  `, app);
+  const secondFailure = await app.createDefaultBoard();
+  assert.equal(secondFailure.complete, false);
+  assert.equal(vm.runInContext("defaultBoardPostCalls.length", app), 3);
+  assert.equal(vm.runInContext("defaultBoardListRefreshes", app), 1);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(defaultBoardRefreshes)", app)), []);
+  assert.equal(vm.runInContext("state.error", app), "Default list failed");
+
+  vm.runInContext(`
+    state.view = "agents";
+    state.agentsLoadState = "ready";
+    state.agents = [{ id: "agent", displayName: "Builder", credential: {}, workCounts: {} }];
+  `, app);
+  assert.match(app.agentsHTML(), /class="status-error" role="alert">Default list failed/);
+  vm.runInContext(`
+    loadBoards = savedLoadBoards;
+    loadBoardList = savedLoadBoardList;
+    state.me = null;
+    state.boards = [];
+    state.agents = [];
+    state.error = "";
+    state.view = "home";
+  `, app);
+});
+
 test("board rows expose an inline rename form with save and cancel controls", () => {
   vm.runInContext(`
     state.boards = [{ id: "board-one", name: "Business" }];
@@ -323,7 +381,7 @@ test("list items show compact state treatment", () => {
   assert.match(done, /class="task action done"/);
 });
 
-test("agent assignments use safe deterministic avatars across task and detail views", () => {
+test("agent assignments use safe deterministic bot avatars across directory, task, and detail views", () => {
   vm.runInContext(`
     state.agents = [
       { id: "agent-one", displayName: "<Research Bot>" },
@@ -337,8 +395,9 @@ test("agent assignments use safe deterministic avatars across task and detail vi
   `, app);
   const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", done: false, scheduledDate: "", assigneeAgentId: "agent-one" };
   const taskHTML = app.taskHTML(assigned);
-  assert.match(taskHTML, /class="avatar tone-\d avatar-small/);
-  assert.match(taskHTML, />&lt;B<\/span>/);
+  assert.match(taskHTML, /class="avatar agent-avatar tone-\d avatar-small/);
+  assert.match(taskHTML, /<rect x="5" y="7" width="14" height="11" rx="3"/);
+  assert.doesNotMatch(taskHTML, />&lt;B<\/span>/);
   assert.doesNotMatch(taskHTML, /<Research Bot>/);
 
   const detail = app.detailHTML({ ...assigned, assigneeAgentId: "agent-old" });
@@ -354,16 +413,15 @@ test("agent assignments use safe deterministic avatars across task and detail vi
   const first = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
   const second = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
   assert.equal(first, second);
+  assert.match(app.avatarHTML({ id: "stable", displayName: "Research Bot" }, { large: true }), /avatar-large/);
   vm.runInContext(`state.agents = []; state.boards = []; state.board = null;`, app);
 });
 
-test("settings pages isolate profile, board, agent, and personal API controls", () => {
+test("settings pages keep agent management out of account settings", () => {
   vm.runInContext(`
     state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
     state.board = { id: "board", name: "Business", maxTasksPerList: 12, buckets: [] };
-    state.agents = [{ id: "agent", displayName: "Builder Bot" }];
     state.tokens = [{ id: "token", name: "CLI" }];
-    state.newAgentToken = "slate_agent_secret";
     state.newToken = "slate_personal_secret";
     state.settingsPage = "profile";
   `, app);
@@ -375,47 +433,160 @@ test("settings pages isolate profile, board, agent, and personal API controls", 
   assert.match(profile, /aria-label="Your display name" value="Owain Lewis"/);
   assert.match(profile, /class="avatar user-avatar/);
   assert.doesNotMatch(profile, />OL<\/span>/);
-  assert.doesNotMatch(profile, /settings-list-limit|agent-limit|token-form|slate_agent_secret|slate_personal_secret/);
+  assert.doesNotMatch(profile, /settings-list-limit|agent-limit|token-form|slate_personal_secret/);
 
   vm.runInContext(`state.settingsPage = "board";`, app);
   const boardSettings = app.settingsHTML();
   assert.match(boardSettings, /<h1>Board<\/h1>/);
   assert.match(boardSettings, /id="settings-list-limit"/);
-  assert.doesNotMatch(boardSettings, /profile-form|agent-limit|token-form|slate_agent_secret|slate_personal_secret/);
-
-  vm.runInContext(`state.settingsPage = "agents";`, app);
-  const agents = app.settingsHTML();
-  assert.match(agents, /<h1>Agents<\/h1>/);
-  assert.doesNotMatch(agents, /id="agent-form"/);
-  assert.match(agents, /id="agent-limit">One agent user per account for now/);
-  assert.match(agents, /slate_agent_secret/);
-  assert.match(agents, /data-revoke-agent="agent"/);
-  assert.match(agents, /data-delete-agent="agent"/);
-  assert.doesNotMatch(agents, /profile-form|settings-list-limit|token-form|slate_personal_secret/);
-  assert.match(agents, /href="\/app\/settings\/agents" aria-current="page"/);
-  vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", revokedAt: "2026-07-27T00:00:00Z" }];`, app);
-  assert.match(app.settingsHTML(), /id="agent-limit"/);
-  vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", deletedAt: "2026-07-27T00:00:00Z" }];`, app);
-  const agentsAfterDelete = app.settingsHTML();
-  assert.match(agentsAfterDelete, /id="agent-form"/);
-  assert.match(agentsAfterDelete, /No agent users yet/);
-  assert.doesNotMatch(agentsAfterDelete, /Builder Bot|Inactive/);
+  assert.doesNotMatch(boardSettings, /profile-form|agent-limit|token-form|slate_personal_secret/);
 
   vm.runInContext(`state.settingsPage = "api";`, app);
   const apiSettings = app.settingsHTML();
   assert.match(apiSettings, /<h1>API access<\/h1>/);
   assert.match(apiSettings, /id="token-form"/);
   assert.match(apiSettings, /slate_personal_secret/);
-  assert.doesNotMatch(apiSettings, /profile-form|settings-list-limit|agent-limit|slate_agent_secret/);
+  assert.doesNotMatch(apiSettings, /profile-form|settings-list-limit|agent-limit/);
 
-  for (const html of [profile, boardSettings, agents, apiSettings]) {
+  for (const html of [profile, boardSettings, apiSettings]) {
     assert.match(html, /<nav class="settings-nav" aria-label="Settings">/);
+    assert.doesNotMatch(html, /href="\/app\/settings\/agents"/);
     assert.match(html, />Back to board<\/span>/);
     assert.match(html, /aria-label="Account actions"/);
     assert.equal((html.match(/aria-current="page"/g) || []).length, 1);
     assert.doesNotMatch(html, /<h1>Settings<\/h1>/);
   }
-  vm.runInContext(`state.me = null; state.board = null; state.agents = []; state.tokens = []; state.newAgentToken = ""; state.newToken = ""; state.settingsPage = "profile";`, app);
+  vm.runInContext(`state.me = null; state.board = null; state.agents = []; state.tokens = []; state.newToken = ""; state.settingsPage = "profile";`, app);
+});
+
+test("agent directory shows credential facts, work counts, archived identities, and limits", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", email: "owner@example.com", theme: "dark" };
+    state.view = "agents";
+    state.agentsLoadState = "ready";
+    state.maxAgents = 5;
+    state.activeAgents = 5;
+    state.agents = [
+      {
+        id: "agent-connected", displayName: "<Builder>", purpose: "Ships product",
+        credential: { lastUsedAt: "2026-07-27T14:30:00Z" },
+        workCounts: { ready: 2, working: 1, review: 1 },
+      },
+      {
+        id: "agent-disconnected", displayName: "Research", purpose: "",
+        credential: { revokedAt: "2026-07-27T12:00:00Z" },
+        workCounts: {},
+      },
+      {
+        id: "agent-archived", displayName: "Old bot", archivedAt: "2026-07-26T12:00:00Z",
+        credential: { revokedAt: "2026-07-26T12:00:00Z" },
+        workCounts: { review: 2 },
+      },
+    ];
+  `, app);
+
+  const html = app.agentsHTML();
+  assert.match(html, /id="agents-nav"[^>]*aria-current="page"/);
+  assert.match(html, /&lt;Builder&gt;/);
+  assert.match(html, />Connected</);
+  assert.match(html, />Needs connection</);
+  assert.match(html, />Archived</);
+  assert.match(html, /2 ready items · 1 working item · 1 review item/);
+  assert.match(html, /No open work assigned/);
+  assert.match(html, /<details class="archived-agents">/);
+  assert.match(html, /5 of 5 active agents/);
+  assert.match(html, /id="new-agent-link"[^>]*aria-disabled="true"/);
+  assert.doesNotMatch(html, /online|offline|runtime|model|concurrency/i);
+
+  vm.runInContext(`state.activeAgents = 0; state.agents = [];`, app);
+  const empty = app.agentsHTML();
+  assert.match(empty, /Bring an agent into the plan/);
+  assert.equal((empty.match(/id="empty-new-agent"/g) || []).length, 1);
+  assert.equal((empty.match(/>New agent<\/span>/g) || []).length, 1);
+  vm.runInContext(`state.me = null; state.view = "home"; state.agents = []; state.agentsLoadState = "idle";`, app);
+});
+
+test("new-agent route has inline limits and one-time CLI connection instructions", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", theme: "light" };
+    state.view = "agent-new";
+    state.agentsLoadState = "ready";
+    state.activeAgents = 1;
+    state.maxAgents = 5;
+    state.agentCreationResult = null;
+  `, app);
+  const form = app.agentsHTML();
+  assert.match(form, /id="agent-name"[^>]*maxlength="80"/);
+  assert.match(form, /id="agent-purpose"[^>]*maxlength="500"/);
+  assert.match(form, /id="agent-name-error" role="alert"/);
+  assert.match(form, /id="agent-purpose-error" role="alert"/);
+
+  vm.runInContext(`
+    state.agentCreationResult = {
+      ownerID: "owner",
+      agent: { id: "agent-one", displayName: "Builder Bot" },
+      token: "slate_agent_once_only",
+    };
+  `, app);
+  const result = app.agentsHTML();
+  assert.match(result, /Copy this token now/);
+  assert.match(result, /export SLATE_API_TOKEN=slate_agent_once_only/);
+  assert.match(result, /slate auth status/);
+  assert.match(result, /cannot show it again after you leave this page or refresh/);
+  assert.doesNotMatch(result, /href="[^"]*slate_agent_once_only/);
+  vm.runInContext(`state.me = null; state.view = "home"; state.agentCreationResult = null; state.agentsLoadState = "idle";`, app);
+});
+
+test("credential copy failure leaves the token selected for manual copy", async () => {
+  const events = [];
+  const range = {
+    selectNodeContents(element) { events.push(["selected", element.id]); },
+  };
+  const selection = {
+    ranges: [],
+    removeAllRanges() { this.ranges = []; events.push(["cleared"]); },
+    addRange(value) { this.ranges.push(value); events.push(["added"]); },
+  };
+  const tokenElement = {
+    id: "agent-credential",
+    focus() { events.push(["focused"]); },
+  };
+  const copied = await app.copyAgentCredential("slate_agent_manual", tokenElement, {
+    clipboard: { async writeText() { throw new Error("denied"); } },
+    document: {
+      createRange() { return range; },
+      execCommand(command) {
+        events.push(["fallback", command]);
+        return false;
+      },
+    },
+    selection,
+  });
+
+  assert.equal(copied, false);
+  assert.equal(selection.ranges.length, 1, "failed fallback must preserve the manual selection");
+  assert.deepEqual(events, [
+    ["selected", "agent-credential"],
+    ["cleared"],
+    ["added"],
+    ["focused"],
+    ["fallback", "copy"],
+  ]);
+
+  vm.runInContext(`
+    state.credentialCopied = false;
+    state.credentialCopyError = "Copy failed. The token is selected. Press Command+C or Ctrl+C to copy it manually.";
+  `, app);
+  const html = app.agentConnectionResultHTML({
+    ownerID: "owner",
+    agent: { id: "agent", displayName: "Builder Bot" },
+    token: "slate_agent_manual",
+  });
+  assert.match(html, /id="agent-credential" tabindex="0" aria-describedby="credential-copy-error"/);
+  assert.match(html, /id="credential-copy-error" role="alert">Copy failed/);
+  assert.match(html, />Copy<\/span>/);
+  assert.doesNotMatch(html, />Copied<\/span>/);
+  vm.runInContext(`state.credentialCopyError = "";`, app);
 });
 
 test("the board header shows a neutral user icon without their name or generated initials", () => {
@@ -436,9 +607,12 @@ test("the board header shows a neutral user icon without their name or generated
 test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
   vm.runInContext(`
     authVersion = 12;
+    routeVersion = 21;
     state.me = { id: "owner" };
+    state.view = "agent-new";
     state.agents = [];
-    state.newAgentToken = "";
+    state.agentCreationResult = null;
+    state.agentCreateNotice = "";
     state.error = "";
     api.post = async path => {
       if (path !== "/api/v1/agents") throw new Error("unexpected POST " + path);
@@ -450,21 +624,20 @@ test("successful agent creation keeps the one-time token when metadata refresh f
     };
   `, app);
 
-  assert.equal(await app.createAgent("Builder Bot"), true);
-  assert.equal(vm.runInContext("state.newAgentToken", app), "slate_agent_copy_now");
+  assert.equal(await app.createAgent("Builder Bot", "Build product", 21), true);
+  assert.equal(vm.runInContext("state.agentCreationResult.token", app), "slate_agent_copy_now");
+  assert.equal(vm.runInContext("state.agentCreationResult.ownerID", app), "owner");
   assert.equal(vm.runInContext("state.agents[0].id", app), "agent");
   assert.equal(vm.runInContext(`"token" in state.agents[0]`, app), false);
-  assert.match(vm.runInContext("state.error", app), /Agent created.*could not be refreshed/);
-  vm.runInContext(`state.me = null; state.agents = []; state.newAgentToken = ""; state.error = "";`, app);
+  assert.match(vm.runInContext("state.agentCreateNotice", app), /still available until you leave/);
+  assert.match(app.agentConnectionResultHTML(JSON.parse(vm.runInContext("JSON.stringify(state.agentCreationResult)", app))), /SLATE_API_TOKEN=slate_agent_copy_now/);
+  vm.runInContext(`state.me = null; state.view = "home"; state.agents = []; state.agentCreationResult = null; state.agentCreateNotice = ""; state.error = "";`, app);
 });
 
-test("pending settings credentials stay isolated and remain recoverable on their owner page", async () => {
+test("pending credentials cannot cross routes or accounts", async () => {
   let releaseToken;
-  let releaseAgent;
   app.pendingTokenResponse = new Promise(resolve => { releaseToken = resolve; });
-  app.pendingAgentResponse = new Promise(resolve => { releaseAgent = resolve; });
   app.releasePendingToken = releaseToken;
-  app.releasePendingAgent = releaseAgent;
   vm.runInContext(`
     authVersion = 14;
     routeVersion = 70;
@@ -472,13 +645,11 @@ test("pending settings credentials stay isolated and remain recoverable on their
     state.settings = true;
     state.settingsPage = "api";
     state.newToken = "";
-    state.newAgentToken = "";
     state.tokens = [];
     state.agents = [];
     state.error = "";
     api.post = async path => {
       if (path === "/api/v1/api-tokens") return pendingTokenResponse;
-      if (path === "/api/v1/agents") return pendingAgentResponse;
       throw new Error("unexpected POST " + path);
     };
   `, app);
@@ -492,18 +663,22 @@ test("pending settings credentials stay isolated and remain recoverable on their
   vm.runInContext(`state.settingsPage = "api";`, app);
   assert.match(app.settingsHTML(), /slate_must_not_cross_routes/);
 
-  vm.runInContext(`routeVersion = 80; state.settings = true; state.settingsPage = "agents";`, app);
-  const agentCreation = app.createAgent("Builder Bot", 80);
-  vm.runInContext(`routeVersion = 81; state.settings = false; state.settingsPage = "profile";`, app);
-  app.releasePendingAgent({ id: "agent", displayName: "Builder Bot", token: "slate_agent_must_not_cross_routes" });
-  assert.equal(await agentCreation, false);
-  assert.equal(vm.runInContext("state.newAgentToken", app), "slate_agent_must_not_cross_routes");
-  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.agents.map(agent => agent.id))", app)), ["agent"]);
-  assert.doesNotMatch(app.settingsHTML(), /slate_agent_must_not_cross_routes/);
-  vm.runInContext(`state.settings = true; state.settingsPage = "agents";`, app);
-  assert.match(app.settingsHTML(), /slate_agent_must_not_cross_routes/);
+  vm.runInContext(`
+    state.view = "agent-new";
+    state.settings = false;
+    state.agentCreationResult = { ownerID: "owner", agent: { id: "agent" }, token: "slate_agent_secret" };
+    clearAgentCredentialLeaving("agents");
+  `, app);
+  assert.equal(vm.runInContext("state.agentCreationResult", app), null);
 
-  vm.runInContext(`state.me = null; state.settings = false; state.settingsPage = "profile"; state.newToken = ""; state.newAgentToken = ""; state.agents = []; state.error = "";`, app);
+  vm.runInContext(`
+    state.view = "agent-new";
+    state.agentCreationResult = { ownerID: "owner", agent: { id: "agent" }, token: "slate_agent_account_a" };
+  `, app);
+  app.beginAuthenticatedSession({ id: "account-b", theme: "light" });
+  assert.equal(vm.runInContext("state.agentCreationResult", app), null);
+
+  vm.runInContext(`state.me = null; state.settings = false; state.settingsPage = "profile"; state.newToken = ""; state.agents = []; state.error = "";`, app);
 });
 
 const board = {
@@ -1105,9 +1280,12 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/login"), { name: "login" });
   assert.deepEqual(route("/app"), { name: "app" });
   assert.deepEqual(route("/app/settings"), { name: "settings", settingsPage: "profile", redirect: true });
-  for (const page of ["profile", "board", "agents", "api"]) {
+  for (const page of ["profile", "board", "api"]) {
     assert.deepEqual(route(`/app/settings/${page}`), { name: "settings", settingsPage: page });
   }
+  assert.deepEqual(route("/app/settings/agents"), { name: "agents", redirect: true });
+  assert.deepEqual(route("/app/agents"), { name: "agents" });
+  assert.deepEqual(route("/app/agents/new"), { name: "agent-new" });
   assert.deepEqual(route("/early-access"), { name: "early-access" });
   assert.deepEqual(route("/reset-password"), { name: "reset-password" });
   assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1" });
@@ -1119,7 +1297,7 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/login?next=/app"), { name: "login" });
   assert.deepEqual(route("/app/settings#token"), { name: "settings", settingsPage: "profile", redirect: true });
 
-  for (const path of ["/nonsense", "/app/boards", "/app/boards/a/b", "/app/settings/unknown", "/app/settings/profile/extra", "/appleseed", "/cli"]) {
+  for (const path of ["/nonsense", "/app/boards", "/app/boards/a/b", "/app/agents/agent-one", "/app/agents/new/extra", "/app/settings/unknown", "/app/settings/profile/extra", "/appleseed", "/cli"]) {
     assert.equal(app.parseRoute(path).name, "not-found", path);
   }
 });
@@ -1127,6 +1305,8 @@ test("routes parse into the surface they name", () => {
 test("only same-origin app paths survive as a login next target", () => {
   assert.equal(app.safeNextPath("/app/settings"), "/app/settings");
   assert.equal(app.safeNextPath("/app/settings/agents"), "/app/settings/agents");
+  assert.equal(app.safeNextPath("/app/agents"), "/app/agents");
+  assert.equal(app.safeNextPath("/app/agents/new"), "/app/agents/new");
   assert.equal(app.safeNextPath("/app/boards/board_1"), "/app/boards/board_1");
   assert.equal(app.safeNextPath("/app/"), "/app");
 
@@ -1141,7 +1321,7 @@ test("only same-origin app paths survive as a login next target", () => {
 });
 
 test("signed-out visits to protected routes redirect to login and keep the exact destination", async () => {
-  for (const target of ["/app/boards/board_1", "/app/settings/profile", "/app/settings/board", "/app/settings/agents", "/app/settings/api"]) {
+  for (const target of ["/app/boards/board_1", "/app/agents", "/app/agents/new", "/app/settings/profile", "/app/settings/board", "/app/settings/agents", "/app/settings/api"]) {
     const it = router({ url: target });
     await it.apply();
     assert.equal(it.url(), `/login?next=${encodeURIComponent(target)}`);

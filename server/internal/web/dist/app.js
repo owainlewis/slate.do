@@ -13,6 +13,8 @@ const ICON_PATHS = {
   moon: '<path d="M20 13.2A7.8 7.8 0 0 1 10.8 4a7.8 7.8 0 1 0 9.2 9.2z"/>',
   gear: '<circle cx="12" cy="12" r="3.1"/><path d="M12.6 2.6h-1.2a1.5 1.5 0 0 0-1.5 1.5v.3a1.5 1.5 0 0 1-.75 1.3l-.55.31a1.5 1.5 0 0 1-1.5 0l-.26-.14a1.5 1.5 0 0 0-2.05.54l-.6 1.04a1.5 1.5 0 0 0 .55 2.05l.26.15a1.5 1.5 0 0 1 .75 1.3v.62a1.5 1.5 0 0 1-.75 1.3l-.26.15a1.5 1.5 0 0 0-.55 2.05l.6 1.04a1.5 1.5 0 0 0 2.05.54l.26-.14a1.5 1.5 0 0 1 1.5 0l.55.31a1.5 1.5 0 0 1 .75 1.3v.3a1.5 1.5 0 0 0 1.5 1.5h1.2a1.5 1.5 0 0 0 1.5-1.5v-.3a1.5 1.5 0 0 1 .75-1.3l.55-.31a1.5 1.5 0 0 1 1.5 0l.26.14a1.5 1.5 0 0 0 2.05-.54l.6-1.04a1.5 1.5 0 0 0-.55-2.05l-.26-.15a1.5 1.5 0 0 1-.75-1.3v-.62a1.5 1.5 0 0 1 .75-1.3l.26-.15a1.5 1.5 0 0 0 .55-2.05l-.6-1.04a1.5 1.5 0 0 0-2.05-.54l-.26.14a1.5 1.5 0 0 1-1.5 0l-.55-.31a1.5 1.5 0 0 1-.75-1.3v-.3a1.5 1.5 0 0 0-1.5-1.5z"/>',
   user: '<circle cx="12" cy="8.2" r="3.2"/><path d="M5.8 19.5c.7-3.1 3-4.9 6.2-4.9s5.5 1.8 6.2 4.9"/>',
+  bot: '<rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 7V4M9 12h.01M15 12h.01M9 15h6M3 11v3M21 11v3"/><circle cx="12" cy="3.5" r=".5" fill="currentColor" stroke="none"/>',
+  copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
   signOut: '<path d="M9.5 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h2.5"/><path d="M15 8l4 4-4 4"/><path d="M9.5 12H19"/>',
   inboxTray: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 13h4.6a3.4 3.4 0 0 0 6.8 0H20"/>',
 };
@@ -95,7 +97,14 @@ const state = {
   newToken: "",
   tokens: [],
   agents: [],
-  newAgentToken: "",
+  maxAgents: 5,
+  activeAgents: 0,
+  agentsLoadState: "idle",
+  agentsLoadError: "",
+  agentCreationResult: null,
+  agentCreateNotice: "",
+  credentialCopied: false,
+  credentialCopyError: "",
   boardMode: "lists",
   flowListId: "",
   weekStart: "",
@@ -112,6 +121,7 @@ const themes = [
 const DEFAULT_LIST_LIMIT = 20;
 const DEFAULT_MAX_BOARDS = 5;
 const DEFAULT_MAX_LISTS_PER_BOARD = 9;
+const DEFAULT_MAX_AGENTS = 5;
 const FLOW_STATES = [
   { value: "queued", label: "Ready" },
   { value: "working", label: "Working" },
@@ -126,9 +136,10 @@ const SETTINGS_PATH = "/app/settings";
 const SETTINGS_PAGES = [
   { id: "profile", label: "Profile", title: "Profile", description: "Update your display name." },
   { id: "board", label: "Board", title: "Board", description: "Configure the selected board." },
-  { id: "agents", label: "Agents", title: "Agents", description: "Manage the agent identity and its one-time credential lifecycle." },
   { id: "api", label: "API access", title: "API access", description: "Create and revoke personal tokens for the CLI and API." },
 ];
+const AGENTS_PATH = "/app/agents";
+const NEW_AGENT_PATH = "/app/agents/new";
 const EARLY_ACCESS_PATH = "/early-access";
 const RESET_PASSWORD_PATH = "/reset-password";
 
@@ -138,6 +149,10 @@ function boardPath(id) {
 
 function settingsPath(page = "profile") {
   return `${SETTINGS_PATH}/${page}`;
+}
+
+function agentsPath() {
+  return AGENTS_PATH;
 }
 
 function normalizePath(value) {
@@ -157,6 +172,9 @@ function parseRoute(pathname) {
   if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
   if (path === APP_PATH) return { name: "app" };
   if (path === SETTINGS_PATH) return { name: "settings", settingsPage: "profile", redirect: true };
+  if (path === `${SETTINGS_PATH}/agents`) return { name: "agents", redirect: true };
+  if (path === AGENTS_PATH) return { name: "agents" };
+  if (path === NEW_AGENT_PATH) return { name: "agent-new" };
   const settings = /^\/app\/settings\/([^/]+)$/.exec(path);
   if (settings && SETTINGS_PAGES.some(page => page.id === settings[1])) {
     return { name: "settings", settingsPage: settings[1] };
@@ -173,7 +191,7 @@ function parseRoute(pathname) {
 }
 
 function isProtectedRoute(name) {
-  return name === "app" || name === "board" || name === "settings";
+  return name === "app" || name === "board" || name === "settings" || name === "agents" || name === "agent-new";
 }
 
 // Only same-origin app paths may be returned to after login. Anything else,
@@ -201,6 +219,7 @@ function syncPath(path) {
 function navigate(path, options = {}) {
   const nextRoute = parseRoute(path);
   clearSettingsCredentialsLeaving(nextRoute.name === "settings" ? nextRoute.settingsPage : "");
+  clearAgentCredentialLeaving(nextRoute.name);
   if (options.replace || currentPath() === normalizePath(path)) history.replaceState({}, "", path);
   else history.pushState({}, "", path);
   return applyRoute();
@@ -229,11 +248,36 @@ async function applyRoute() {
     return showRoute("login");
   }
   if (!state.me) return navigate(loginPathFor(currentPath()), { replace: true });
-  if (route.redirect) return navigate(settingsPath(route.settingsPage), { replace: true });
+  if (route.redirect) {
+    return route.name === "agents"
+      ? navigate(AGENTS_PATH, { replace: true })
+      : navigate(settingsPath(route.settingsPage), { replace: true });
+  }
   try {
     if (!await loadBoardList(version)) return;
     if (routeVersion !== version) return;
-    await loadAgents(route.name !== "settings" || route.settingsPage !== "agents", authVersion, state.me?.id, version);
+    if (route.name === "agents" || route.name === "agent-new") {
+      state.settings = false;
+      state.settingsPage = "profile";
+      state.view = route.name;
+      state.agentsLoadState = "loading";
+      state.agentsLoadError = "";
+      render();
+      try {
+        await loadAgents(false, authVersion, state.me?.id, version);
+      } catch (err) {
+        if (routeVersion !== version) return;
+        state.agentsLoadState = "error";
+        state.agentsLoadError = err.message;
+        render();
+        return;
+      }
+      if (routeVersion !== version) return;
+      state.agentsLoadState = "ready";
+      render();
+      return;
+    }
+    await loadAgents(true, authVersion, state.me?.id, version);
     if (routeVersion !== version) return;
 
     if (route.name === "app") {
@@ -339,7 +383,14 @@ function resetAuthenticatedState() {
   state.newToken = "";
   state.tokens = [];
   state.agents = [];
-  state.newAgentToken = "";
+  state.maxAgents = DEFAULT_MAX_AGENTS;
+  state.activeAgents = 0;
+  state.agentsLoadState = "idle";
+  state.agentsLoadError = "";
+  state.agentCreationResult = null;
+  state.agentCreateNotice = "";
+  state.credentialCopied = false;
+  state.credentialCopyError = "";
   state.boardMode = "lists";
   state.flowListId = "";
   state.weekStart = "";
@@ -459,6 +510,12 @@ function render() {
     bindSettings();
     return;
   }
+  if (state.view === "agents" || state.view === "agent-new") {
+    syncPath(state.view === "agent-new" ? NEW_AGENT_PATH : AGENTS_PATH);
+    root.innerHTML = agentsHTML();
+    bindAgents();
+    return;
+  }
   // Whenever a board is on screen its id belongs in the URL, however it was selected.
   syncPath(state.board ? boardPath(state.board.id) : APP_PATH);
   root.innerHTML = appHTML();
@@ -494,7 +551,15 @@ function bindNotFound() {
 
 function routeErrorHTML() {
   const settingsPage = SETTINGS_PAGES.find(page => page.id === state.routeError?.settingsPage);
-  const target = settingsPage ? `${settingsPage.title} settings` : state.routeError?.name === "settings" ? "settings" : state.routeError?.name === "board" ? "this board" : "the app";
+  const target = settingsPage
+    ? `${settingsPage.title} settings`
+    : state.routeError?.name === "settings"
+      ? "settings"
+      : state.routeError?.name === "board"
+        ? "this board"
+        : state.routeError?.name === "agents" || state.routeError?.name === "agent-new"
+          ? "agents"
+          : "the app";
   return `
     <section class="login">
       <div>
@@ -714,29 +779,7 @@ function appHTML() {
   const listLimitReached = lists.length >= state.maxListsPerBoard;
   return `
     <section class="shell theme-${theme}">
-      <aside class="sidebar">
-        <div class="sidebar-head">
-          <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-          <button class="icon-btn sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar-content" aria-expanded="false">${icon("menu")}</button>
-        </div>
-        <div class="sidebar-content" id="sidebar-content">
-          <section class="nav-sec nav-boards">
-            <h3>Boards</h3>
-            <div class="pages">
-              ${state.boards.map(boardRowHTML).join("")}
-            </div>
-            <div class="board-create">
-              <button class="plain-btn icon-label" id="new-board" ${boardLimitReached ? 'disabled aria-describedby="board-limit"' : ""}>${icon("plus")}<span>New board</span></button>
-              ${boardLimitReached ? `<p class="board-limit" id="board-limit">${state.maxBoards} board limit reached</p>` : ""}
-            </div>
-          </section>
-          <section class="nav-sec nav-sec-footer">
-            ${themeSwitchHTML(theme)}
-            <button class="plain-btn icon-label" id="settings">${icon("gear")}<span>Settings</span></button>
-            <button class="plain-btn icon-label" id="logout">${icon("signOut")}<span>Sign out</span></button>
-          </section>
-        </div>
-      </aside>
+      ${appSidebarHTML({ theme, boardLimitReached })}
       <div class="main">
         <header class="topbar">
           <span class="week">${formatWeekHeading(headerDays)}</span>
@@ -759,6 +802,37 @@ function appHTML() {
       </div>
       ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
     </section>`;
+}
+
+function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, boardLimitReached = state.boards.length >= state.maxBoards } = {}) {
+  return `
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <button class="icon-btn sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar-content" aria-expanded="false">${icon("menu")}</button>
+      </div>
+      <div class="sidebar-content" id="sidebar-content">
+        <section class="nav-sec nav-boards">
+          <h3>Boards</h3>
+          <div class="pages">
+            ${state.boards.map(boardRowHTML).join("")}
+          </div>
+          <div class="board-create">
+            <button class="plain-btn icon-label" id="new-board" ${boardLimitReached ? 'disabled aria-describedby="board-limit"' : ""}>${icon("plus")}<span>New board</span></button>
+            ${boardLimitReached ? `<p class="board-limit" id="board-limit">${state.maxBoards} board limit reached</p>` : ""}
+          </div>
+        </section>
+        <section class="nav-sec nav-collaborators">
+          <h3>Collaborators</h3>
+          <a class="plain-btn icon-label nav-link ${agentsCurrent ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent ? 'aria-current="page"' : ""}>${icon("bot")}<span>Agents</span></a>
+        </section>
+        <section class="nav-sec nav-sec-footer">
+          ${themeSwitchHTML(theme)}
+          <button class="plain-btn icon-label" id="settings">${icon("gear")}<span>Settings</span></button>
+          <button class="plain-btn icon-label" id="logout">${icon("signOut")}<span>Sign out</span></button>
+        </section>
+      </div>
+    </aside>`;
 }
 
 function themeSwitchHTML(theme) {
@@ -826,12 +900,8 @@ function proLimits() {
     boards: DEFAULT_MAX_BOARDS,
     listsPerBoard: DEFAULT_MAX_LISTS_PER_BOARD,
     activeItemsPerList: DEFAULT_LIST_LIMIT,
+    agents: DEFAULT_MAX_AGENTS,
   };
-}
-
-function avatarInitials(displayName) {
-  const parts = String(displayName || "?").trim().split(/\s+/).filter(Boolean);
-  return (parts.length > 1 ? `${parts[0][0]}${parts[parts.length - 1][0]}` : parts[0]?.slice(0, 2) || "?").toUpperCase();
 }
 
 function avatarTone(id) {
@@ -843,9 +913,10 @@ function avatarTone(id) {
 function avatarHTML(identity, options = {}) {
   if (!identity) return "";
   const name = identity.displayName || identity.email || "User";
-  const inactive = Boolean(identity.deletedAt);
-  const label = inactive ? `${name} (inactive)` : name;
-  return `<span class="avatar tone-${avatarTone(identity.id)} ${options.small ? "avatar-small" : ""} ${inactive ? "avatar-inactive" : ""}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">${escapeHTML(avatarInitials(name))}</span>`;
+  const inactive = Boolean(identity.archivedAt || identity.deletedAt);
+  const label = inactive ? `${name} (archived)` : name;
+  const accessibility = options.decorative ? 'aria-hidden="true"' : `title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}"`;
+  return `<span class="avatar agent-avatar tone-${avatarTone(identity.id)} ${options.small ? "avatar-small" : ""} ${options.large ? "avatar-large" : ""} ${inactive ? "avatar-inactive" : ""}" ${accessibility}>${icon("bot")}</span>`;
 }
 
 function userAvatarHTML(identity, options = {}) {
@@ -1075,10 +1146,187 @@ function statusNoticeHTML(notice) {
   return `<div class="status-notice" role="status"><span>${escapeHTML(notice.message)}</span><button id="view-moved-item" type="button">View</button><button id="dismiss-notice" type="button" aria-label="Dismiss">${icon("x")}</button></div>`;
 }
 
+function agentsHTML() {
+  const theme = currentTheme();
+  const onNew = state.view === "agent-new";
+  const active = state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt);
+  const archived = state.agents.filter(agent => agent.archivedAt || agent.deletedAt);
+  const limitReached = state.activeAgents >= state.maxAgents;
+  return `
+    <section class="shell agents-shell theme-${theme}">
+      ${appSidebarHTML({ theme, agentsCurrent: true })}
+      <main class="agents-main">
+        <div class="agents-wrap">
+          <header class="agents-head">
+            <div>
+              ${onNew ? `<a class="back-link" href="${AGENTS_PATH}" id="agents-back">${icon("chevronLeft")}<span>Agents</span></a>` : '<p class="eyebrow">Collaborators</p>'}
+              <h1>${onNew ? (state.agentCreationResult ? "Connect your agent" : "New agent") : "Agents"}</h1>
+              <p>${onNew
+                ? (state.agentCreationResult ? "Save this credential, then verify the connection from your agent’s environment." : "Give this collaborator a clear identity and purpose.")
+                : "External agents can pick up only the work assigned to them in Slate."}</p>
+            </div>
+            ${!onNew && active.length ? `<a class="primary agents-new-action ${limitReached ? "disabled" : ""}" href="${NEW_AGENT_PATH}" id="new-agent-link" ${limitReached ? 'aria-disabled="true" aria-describedby="agents-limit"' : ""}>${icon("plus")}<span>New agent</span></a>` : ""}
+          </header>
+          ${statusErrorHTML(state.error)}
+          ${state.agentsLoadState === "loading" ? agentsLoadingHTML() : ""}
+          ${state.agentsLoadState === "error" ? agentsErrorHTML() : ""}
+          ${state.agentsLoadState === "ready" && onNew ? newAgentHTML(limitReached) : ""}
+          ${state.agentsLoadState === "ready" && !onNew ? agentDirectoryHTML(active, archived, limitReached) : ""}
+        </div>
+      </main>
+    </section>`;
+}
+
+function agentsLoadingHTML() {
+  return `
+    <section class="agents-state" aria-live="polite" aria-busy="true">
+      <span class="agent-loading-mark">${icon("bot")}</span>
+      <h2>Loading agents…</h2>
+      <p>Checking identities, credentials, and assigned work.</p>
+    </section>`;
+}
+
+function agentsErrorHTML() {
+  return `
+    <section class="agents-state agent-error-state">
+      <span class="agent-state-icon">${icon("bot")}</span>
+      <h2>Agents couldn’t be loaded.</h2>
+      <p class="error" role="alert">${escapeHTML(state.agentsLoadError || "Try again.")}</p>
+      <button class="secondary" id="retry-agents" type="button">Try again</button>
+    </section>`;
+}
+
+function agentDirectoryHTML(active, archived, limitReached) {
+  return `
+    <section aria-labelledby="active-agents-heading">
+      <div class="agent-directory-meta">
+        <div>
+          <h2 id="active-agents-heading">Active agents <span>${active.length}</span></h2>
+          <p id="agents-limit">${limitReached
+            ? `${state.maxAgents} of ${state.maxAgents} active agents. Archive an agent before creating another.`
+            : `${state.activeAgents} of ${state.maxAgents} active agent slots used.`}</p>
+        </div>
+      </div>
+      ${active.length ? `<div class="agent-directory">${active.map(agentRowHTML).join("")}</div>` : `
+        <section class="agents-empty">
+          <span class="agent-state-icon">${icon("bot")}</span>
+          <h2>Bring an agent into the plan.</h2>
+          <p>An agent is an external collaborator with its own identity and credential. Assign it work when you are ready.</p>
+          <a class="primary" href="${NEW_AGENT_PATH}" id="empty-new-agent">${icon("plus")}<span>New agent</span></a>
+        </section>`}
+      ${archived.length ? `
+        <details class="archived-agents">
+          <summary>Archived <span>${archived.length}</span></summary>
+          <p>Archived identities stay visible for assignment history and cannot connect.</p>
+          <div class="agent-directory archived-agent-directory">${archived.map(agentRowHTML).join("")}</div>
+        </details>` : ""}
+    </section>`;
+}
+
+function agentRowHTML(agent) {
+  const stateLabel = agentConnectionState(agent);
+  const counts = agent.workCounts || {};
+  const assigned = Number(counts.ready || 0) + Number(counts.working || 0) + Number(counts.review || 0);
+  const countParts = [
+    counts.ready ? formatCount(counts.ready, "ready item", "ready items") : "",
+    counts.working ? formatCount(counts.working, "working item", "working items") : "",
+    counts.review ? formatCount(counts.review, "review item", "review items") : "",
+  ].filter(Boolean);
+  const archived = stateLabel === "Archived";
+  return `
+    <article class="agent-directory-row ${archived ? "archived" : ""}">
+      ${avatarHTML(agent, { large: true, decorative: true })}
+      <div class="agent-identity">
+        <div class="agent-name-line">
+          <h3>${escapeHTML(agent.displayName)}</h3>
+          <span class="connection-state state-${stateLabel.toLowerCase().replace(/\s+/g, "-")}">${escapeHTML(stateLabel)}</span>
+        </div>
+        <p class="agent-purpose">${escapeHTML(agent.purpose || "No purpose added")}</p>
+      </div>
+      <dl class="agent-facts">
+        <div><dt>Assigned work</dt><dd>${assigned ? countParts.join(" · ") : "No open work assigned"}</dd></div>
+        <div><dt>Last credential use</dt><dd>${formatLastUse(agent.credential?.lastUsedAt || agent.lastUsedAt)}</dd></div>
+      </dl>
+    </article>`;
+}
+
+function agentConnectionState(agent) {
+  if (agent.archivedAt || agent.deletedAt) return "Archived";
+  const credential = agent.credential;
+  if (credential && !credential.revokedAt) return "Connected";
+  return "Needs connection";
+}
+
+function formatLastUse(value) {
+  if (!value) return "Never used";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function newAgentHTML(limitReached) {
+  if (state.agentCreationResult) return agentConnectionResultHTML(state.agentCreationResult);
+  if (limitReached) {
+    return `
+      <section class="agents-state agent-limit-state">
+        <span class="agent-state-icon">${icon("bot")}</span>
+        <h2>Active-agent limit reached.</h2>
+        <p>Pro includes ${state.maxAgents} active agents. Archive one before creating another.</p>
+        <a class="secondary" href="${AGENTS_PATH}" data-agents-directory>View agents</a>
+      </section>`;
+  }
+  return `
+    <form class="agent-create-form" id="agent-create-form" novalidate>
+      <div class="field agent-create-field">
+        <label for="agent-name">Name <span>Required</span></label>
+        <input id="agent-name" name="displayName" maxlength="80" autocomplete="off" aria-describedby="agent-name-help agent-name-error" required>
+        <p class="form-help" id="agent-name-help">Use a clear name, up to 80 characters.</p>
+        <p class="error field-error" id="agent-name-error" role="alert"></p>
+      </div>
+      <div class="field agent-create-field">
+        <label for="agent-purpose">Purpose <span>Optional</span></label>
+        <textarea id="agent-purpose" name="purpose" maxlength="500" rows="4" aria-describedby="agent-purpose-help agent-purpose-error" placeholder="What should this agent help with?"></textarea>
+        <p class="form-help" id="agent-purpose-help">A short description helps you assign the right work. Up to 500 characters.</p>
+        <p class="error field-error" id="agent-purpose-error" role="alert"></p>
+      </div>
+      <p class="error agent-create-error" role="alert">${escapeHTML(state.error)}</p>
+      <div class="agent-form-actions">
+        <a class="secondary" href="${AGENTS_PATH}" data-agents-directory>Cancel</a>
+        <button class="primary" type="submit">Create agent</button>
+      </div>
+    </form>`;
+}
+
+function agentConnectionResultHTML(result) {
+  return `
+    <section class="agent-connection-result" aria-labelledby="connection-heading">
+      <div class="connection-agent">
+        ${avatarHTML(result.agent, { large: true, decorative: true })}
+        <div><p>Agent created</p><h2 id="connection-heading">${escapeHTML(result.agent.displayName)}</h2></div>
+      </div>
+      <div class="credential-warning" role="note">
+        <strong>Copy this token now.</strong>
+        <p>For security, Slate cannot show it again after you leave this page or refresh.</p>
+      </div>
+      <div class="credential-value">
+        <code id="agent-credential" tabindex="0" aria-describedby="credential-copy-error">${escapeHTML(result.token)}</code>
+        <button class="secondary icon-label" id="copy-agent-credential" type="button">${icon(state.credentialCopied ? "check" : "copy")}<span>${state.credentialCopied ? "Copied" : "Copy"}</span></button>
+      </div>
+      <p class="error credential-copy-error" id="credential-copy-error" role="alert">${escapeHTML(state.credentialCopyError)}</p>
+      <ol class="connection-steps">
+        <li><span>1</span><div><strong>Set the environment variable</strong><code>export SLATE_API_TOKEN=${escapeHTML(result.token)}</code></div></li>
+        <li><span>2</span><div><strong>Verify the connection</strong><code>slate auth status</code></div></li>
+      </ol>
+      ${state.agentCreateNotice ? `<p class="agent-create-notice" role="status">${escapeHTML(state.agentCreateNotice)}</p>` : ""}
+      <div class="agent-form-actions">
+        <a class="primary" href="${AGENTS_PATH}" data-agents-directory>Done</a>
+      </div>
+    </section>`;
+}
+
 function settingsHTML() {
   const theme = currentTheme();
   const page = SETTINGS_PAGES.find(item => item.id === state.settingsPage) || SETTINGS_PAGES[0];
-  const liveAgents = state.agents.filter(agent => !agent.deletedAt);
   let content = "";
   if (page.id === "profile") {
     content = `
@@ -1100,27 +1348,6 @@ function settingsHTML() {
           <div class="limit-control settings-limit">
             <input id="settings-list-limit" aria-label="Max active items per list" type="number" min="1" max="${proLimits().activeItemsPerList}" value="${state.board.maxTasksPerList || DEFAULT_LIST_LIMIT}">
           </div>` : `<div class="empty-state"><p>Create a board to configure its list limit.</p></div>`}
-      </section>`;
-  } else if (page.id === "agents") {
-    content = `
-      <section class="settings-section" aria-label="Agent controls">
-        ${liveAgents.length ? `<p class="agent-limit" id="agent-limit">One agent user per account for now. Delete the current agent to create a replacement.</p>` : `
-          <form id="agent-form" class="token-form">
-            <input name="displayName" aria-label="Agent name" placeholder="Agent name" maxlength="80" required>
-            <button class="primary settings-submit" type="submit">Create agent</button>
-          </form>`}
-        ${state.newAgentToken ? `<div class="new-token"><label>New agent token. Copy it now.</label><code>${escapeHTML(state.newAgentToken)}</code></div>` : ""}
-        <div class="agent-list">
-          ${liveAgents.length ? liveAgents.map(agent => `
-            <div class="agent-row">
-              ${avatarHTML(agent, { small: true })}
-              <span><b>${escapeHTML(agent.displayName)}</b><small class="agent-status">${agent.revokedAt ? "Token revoked" : "Active"}</small></span>
-              <div class="settings-row-actions">
-                ${agent.revokedAt ? "" : `<button class="secondary" data-revoke-agent="${agent.id}">Revoke token</button>`}
-                <button class="danger" data-delete-agent="${agent.id}">Delete</button>
-              </div>
-            </div>`).join("") : `<div class="empty-state"><p>No agent users yet.</p></div>`}
-        </div>
       </section>`;
   } else {
     content = `
@@ -1291,33 +1518,7 @@ function bindLanding() {
 }
 
 function bindApp() {
-  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
-  const sidebar = document.querySelector(".sidebar");
-  const sidebarToggle = document.querySelector("#sidebar-toggle");
-  sidebarToggle.onclick = () => {
-    const open = sidebar.classList.toggle("open");
-    sidebarToggle.setAttribute("aria-expanded", String(open));
-    sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
-  };
-  document.querySelectorAll("[data-set-theme]").forEach(el => el.onclick = async () => {
-    if (el.dataset.setTheme === currentTheme()) return;
-    try {
-      await updateTheme(el.dataset.setTheme);
-    } catch (err) {
-      state.error = err.message;
-      render();
-    }
-  });
-  document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
-  document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
-    const keepSidebarOpen = sidebar.classList.contains("open");
-    state.renamingBoardId = el.dataset.startRenameBoard;
-    renderKeepingSidebarOpen(keepSidebarOpen);
-    const input = document.querySelector(`[data-rename-board="${state.renamingBoardId}"] input[name="name"]`);
-    input?.focus();
-    input?.select();
-  });
-  document.querySelectorAll("[data-rename-board]").forEach(form => bindBoardRename(form));
+  bindAppShell();
   document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
     const notice = state.moveNotice;
     if (!notice) return;
@@ -1327,19 +1528,6 @@ function bindApp() {
     render();
   });
   document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.moveNotice = null; render(); });
-  document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
-  document.querySelector("#settings").onclick = openSettings;
-  document.querySelector("#logout").onclick = logout;
-  document.querySelector("#new-board").onclick = async () => {
-    if (state.boards.length >= state.maxBoards) return;
-    let board;
-    await runMutation(async () => {
-      board = await api.post("/api/v1/boards", { name: "Untitled board", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
-      await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", isInbox: true });
-      await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Focus" });
-    }, async () => loadBoards(board?.id));
-    render();
-  };
   document.querySelectorAll("[data-board-mode]").forEach(el => el.onclick = () => {
     state.boardMode = el.dataset.boardMode;
     state.selectedTask = null;
@@ -1414,6 +1602,65 @@ function bindApp() {
   });
   bindDrag();
   bindDetail();
+}
+
+function bindAppShell() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  const sidebar = document.querySelector(".sidebar");
+  const sidebarToggle = document.querySelector("#sidebar-toggle");
+  sidebarToggle.onclick = () => {
+    const open = sidebar.classList.toggle("open");
+    sidebarToggle.setAttribute("aria-expanded", String(open));
+    sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+  };
+  document.querySelectorAll("[data-set-theme]").forEach(el => el.onclick = async () => {
+    if (el.dataset.setTheme === currentTheme()) return;
+    try {
+      await updateTheme(el.dataset.setTheme);
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  });
+  document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
+  document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
+    const keepSidebarOpen = sidebar.classList.contains("open");
+    state.renamingBoardId = el.dataset.startRenameBoard;
+    renderKeepingSidebarOpen(keepSidebarOpen);
+    const input = document.querySelector(`[data-rename-board="${state.renamingBoardId}"] input[name="name"]`);
+    input?.focus();
+    input?.select();
+  });
+  document.querySelectorAll("[data-rename-board]").forEach(form => bindBoardRename(form));
+  document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
+  document.querySelector("#agents-nav")?.addEventListener("click", event => {
+    event.preventDefault();
+    navigate(AGENTS_PATH);
+  });
+  document.querySelector("#settings").onclick = openSettings;
+  document.querySelector("#logout").onclick = logout;
+  document.querySelector("#new-board").onclick = async () => {
+    if (state.boards.length >= state.maxBoards) return;
+    const result = await createDefaultBoard();
+    if (result.complete) navigate(boardPath(result.board.id));
+    else render();
+  };
+  return sidebar;
+}
+
+async function createDefaultBoard() {
+  let board;
+  let complete = false;
+  await runMutation(async () => {
+    board = await api.post("/api/v1/boards", { name: "Untitled board", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
+    await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Inbox", isInbox: true });
+    await api.post(`/api/v1/boards/${board.id}/buckets`, { name: "Focus" });
+    complete = true;
+  }, async () => {
+    if (complete) return loadBoards(board.id);
+    return loadBoardList();
+  });
+  return { board, complete };
 }
 
 function bindBoardRename(form) {
@@ -1786,32 +2033,6 @@ async function bindSettings() {
     const version = routeVersion;
     if (await createAPIToken(form.get("name"), version) && settingsRouteIsCurrent(version, "api")) render();
   });
-  document.querySelector("#agent-form")?.addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const version = routeVersion;
-    if (await createAgent(form.get("displayName"), version) && settingsRouteIsCurrent(version, "agents")) render();
-  });
-  document.querySelectorAll("[data-revoke-agent]").forEach(el => el.onclick = async () => {
-    const version = routeVersion;
-    const sessionVersion = authVersion;
-    const userID = state.me?.id;
-    await api.del(`/api/v1/agents/${el.dataset.revokeAgent}/token`);
-    if (!settingsMutationIsCurrent(sessionVersion, userID, version, "agents")) return;
-    state.newAgentToken = "";
-    if (await loadAgents(false, sessionVersion, userID, version) && settingsRouteIsCurrent(version, "agents")) render();
-  });
-  document.querySelectorAll("[data-delete-agent]").forEach(el => el.onclick = async () => {
-    const agent = state.agents.find(item => item.id === el.dataset.deleteAgent);
-    if (!agent || !confirm(`Delete agent "${agent.displayName}"? Existing assignments will remain visible.`)) return;
-    const version = routeVersion;
-    const sessionVersion = authVersion;
-    const userID = state.me?.id;
-    await api.del(`/api/v1/agents/${agent.id}`);
-    if (!settingsMutationIsCurrent(sessionVersion, userID, version, "agents")) return;
-    state.newAgentToken = "";
-    if (await loadAgents(false, sessionVersion, userID, version) && settingsRouteIsCurrent(version, "agents")) render();
-  });
   document.querySelectorAll("[data-revoke]").forEach(el => el.onclick = async () => {
     const version = routeVersion;
     const sessionVersion = authVersion;
@@ -1820,6 +2041,120 @@ async function bindSettings() {
     if (!settingsMutationIsCurrent(sessionVersion, userID, version, "api")) return;
     if (await loadTokens(sessionVersion, userID, version) && settingsRouteIsCurrent(version, "api")) render();
   });
+}
+
+function bindAgents() {
+  bindAppShell();
+  const follow = (selector, path) => {
+    document.querySelectorAll(selector).forEach(element => element.addEventListener("click", event => {
+      event.preventDefault();
+      if (element.getAttribute("aria-disabled") === "true") return;
+      navigate(path);
+    }));
+  };
+  follow("#new-agent-link, #empty-new-agent", NEW_AGENT_PATH);
+  follow("#agents-back, [data-agents-directory]", AGENTS_PATH);
+  document.querySelector("#retry-agents")?.addEventListener("click", applyRoute);
+  document.querySelector("#copy-agent-credential")?.addEventListener("click", async () => {
+    const token = state.agentCreationResult?.token;
+    if (!token) return;
+    const tokenElement = document.querySelector("#agent-credential");
+    state.credentialCopyError = "";
+    document.querySelector("#credential-copy-error").textContent = "";
+    if (!await copyAgentCredential(token, tokenElement)) {
+      state.credentialCopied = false;
+      state.credentialCopyError = "Copy failed. The token is selected. Press Command+C or Ctrl+C to copy it manually.";
+      document.querySelector("#credential-copy-error").textContent = state.credentialCopyError;
+      return;
+    }
+    state.credentialCopied = true;
+    render();
+    document.querySelector("#copy-agent-credential")?.focus();
+  });
+  const form = document.querySelector("#agent-create-form");
+  if (!form) return;
+  const name = form.elements.displayName;
+  const purpose = form.elements.purpose;
+  const nameError = document.querySelector("#agent-name-error");
+  const purposeError = document.querySelector("#agent-purpose-error");
+  const clearFieldError = (field, output) => {
+    field.removeAttribute("aria-invalid");
+    output.textContent = "";
+  };
+  name.addEventListener("input", () => clearFieldError(name, nameError));
+  purpose.addEventListener("input", () => clearFieldError(purpose, purposeError));
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    clearFieldError(name, nameError);
+    clearFieldError(purpose, purposeError);
+    const displayName = name.value.trim();
+    const purposeValue = purpose.value.trim();
+    if (!displayName) {
+      name.setAttribute("aria-invalid", "true");
+      nameError.textContent = "Agent name is required.";
+      name.focus();
+      return;
+    }
+    if ([...displayName].length > 80) {
+      name.setAttribute("aria-invalid", "true");
+      nameError.textContent = "Agent name must be 80 characters or fewer.";
+      name.focus();
+      return;
+    }
+    if ([...purposeValue].length > 500) {
+      purpose.setAttribute("aria-invalid", "true");
+      purposeError.textContent = "Purpose must be 500 characters or fewer.";
+      purpose.focus();
+      return;
+    }
+    const controls = [...form.querySelectorAll("input, textarea, button")];
+    controls.forEach(control => { control.disabled = true; });
+    form.querySelector('button[type="submit"]').textContent = "Creating…";
+    const version = routeVersion;
+    const created = await createAgent(displayName, purposeValue, version);
+    if (!agentRouteIsCurrent(version, "agent-new")) return;
+    if (created) {
+      render();
+      document.querySelector("#copy-agent-credential")?.focus();
+      return;
+    }
+    controls.forEach(control => { control.disabled = false; });
+    form.querySelector('button[type="submit"]').textContent = "Create agent";
+    document.querySelector(".agent-create-error").textContent = state.error;
+  });
+}
+
+async function copyAgentCredential(token, tokenElement, environment = {}) {
+  const clipboard = environment.clipboard ?? globalThis.navigator?.clipboard;
+  try {
+    if (typeof clipboard?.writeText !== "function") throw new Error("Clipboard API unavailable");
+    await clipboard.writeText(token);
+    return true;
+  } catch {
+    // The browser may deny clipboard access. Select the credential before the
+    // legacy fallback so a failed fallback still leaves a manual copy path.
+  }
+
+  const documentRef = environment.document ?? globalThis.document;
+  const selection = environment.selection ?? globalThis.window?.getSelection?.();
+  try {
+    const range = documentRef.createRange();
+    range.selectNodeContents(tokenElement);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    tokenElement.focus();
+  } catch {
+    tokenElement?.focus?.();
+    return false;
+  }
+
+  try {
+    const copied = documentRef.execCommand?.("copy") === true;
+    if (copied) selection.removeAllRanges();
+    return copied;
+  } catch {
+    return false;
+  }
 }
 
 function openSettings() {
@@ -2087,12 +2422,23 @@ function settingsRouteIsCurrent(expectedRouteVersion, expectedPage) {
 
 function clearSettingsCredentialsLeaving(nextPage) {
   if (state.settingsPage === "api" && nextPage !== "api") state.newToken = "";
-  if (state.settingsPage === "agents" && nextPage !== "agents") state.newAgentToken = "";
+}
+
+function clearAgentCredentialLeaving(nextRouteName) {
+  if (state.view !== "agent-new" || nextRouteName === "agent-new") return;
+  state.agentCreationResult = null;
+  state.agentCreateNotice = "";
+  state.credentialCopied = false;
+  state.credentialCopyError = "";
 }
 
 function settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, expectedPage) {
   return sessionIsCurrent(sessionVersion, userID)
     && (expectedRouteVersion === undefined || settingsRouteIsCurrent(expectedRouteVersion, expectedPage));
+}
+
+function agentRouteIsCurrent(expectedRouteVersion, expectedView) {
+  return expectedRouteVersion === routeVersion && state.view === expectedView;
 }
 
 async function loadTokens(sessionVersion = authVersion, userID = state.me?.id, expectedRouteVersion) {
@@ -2106,7 +2452,11 @@ async function loadAgents(optional = false, sessionVersion = authVersion, userID
   try {
     const data = await api.get("/api/v1/agents");
     if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
-    state.agents = data.agents;
+    state.agents = data.agents || [];
+    state.maxAgents = Number(data.maxAgents) || proLimits().agents || DEFAULT_MAX_AGENTS;
+    state.activeAgents = Number.isInteger(data.activeAgents)
+      ? data.activeAgents
+      : state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).length;
     return true;
   } catch (err) {
     if (optional) return false;
@@ -2114,26 +2464,29 @@ async function loadAgents(optional = false, sessionVersion = authVersion, userID
   }
 }
 
-async function createAgent(displayName, expectedRouteVersion) {
+async function createAgent(displayName, purpose, expectedRouteVersion) {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   try {
-    const data = await api.post("/api/v1/agents", { displayName });
-    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    const data = await api.post("/api/v1/agents", { displayName, purpose });
+    if (!sessionIsCurrent(sessionVersion, userID) || !agentRouteIsCurrent(expectedRouteVersion, "agent-new")) return false;
     const { token, ...agent } = data;
-    state.newAgentToken = token;
+    state.agentCreationResult = { ownerID: userID, agent, token };
+    state.credentialCopied = false;
+    state.credentialCopyError = "";
+    state.agentCreateNotice = "";
     state.agents = [...state.agents.filter(item => item.id !== agent.id), agent];
-    if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "agents")) return false;
+    state.activeAgents = state.agents.filter(item => !item.archivedAt && !item.deletedAt).length;
     state.error = "";
     try {
       await loadAgents(false, sessionVersion, userID, expectedRouteVersion);
     } catch {
-      if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "agents")) return false;
-      state.error = "Agent created. Copy the token now; the agent list could not be refreshed.";
+      if (!sessionIsCurrent(sessionVersion, userID) || !agentRouteIsCurrent(expectedRouteVersion, "agent-new")) return false;
+      state.agentCreateNotice = "Agent created. The directory could not be refreshed, but this credential is still available until you leave this page.";
     }
     return true;
   } catch (err) {
-    if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "agents")) return false;
+    if (!sessionIsCurrent(sessionVersion, userID) || !agentRouteIsCurrent(expectedRouteVersion, "agent-new")) return false;
     state.error = err.message;
     return false;
   }
@@ -2318,7 +2671,9 @@ function escapeAttr(value) {
 window.addEventListener("popstate", async () => {
   // Sign-out is in flight; the URL it lands on is decided when it finishes.
   if (state.view === "logging-out" || state.view === "logout-error") return;
-  clearSettingsCredentialsLeaving(parseRoute(location.pathname).settingsPage || "");
+  const nextRoute = parseRoute(location.pathname);
+  clearSettingsCredentialsLeaving(nextRoute.settingsPage || "");
+  clearAgentCredentialLeaving(nextRoute.name);
   await applyRoute();
 });
 

@@ -513,7 +513,8 @@ func stringValue(value *string) string {
 func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT a.id::text, a.name, COALESCE(a.purpose, ''), a.archived_at, a.created_at, a.updated_at,
-			c.id::text, COALESCE(c.token_prefix, ''), c.last_used_at, c.revoked_at, c.created_at, c.updated_at
+			c.id::text, COALESCE(c.token_prefix, ''), c.last_used_at, c.revoked_at, c.created_at, c.updated_at,
+			COALESCE(work.ready, 0), COALESCE(work.working, 0), COALESCE(work.review, 0)
 		FROM agents a
 		LEFT JOIN LATERAL (
 			SELECT id, token_prefix, last_used_at, revoked_at, created_at, updated_at
@@ -522,6 +523,15 @@ func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, e
 			ORDER BY revoked_at NULLS FIRST, created_at DESC
 			LIMIT 1
 		) c ON true
+		LEFT JOIN LATERAL (
+			SELECT
+				count(*) FILTER (WHERE t.status = 'queued' AND NOT t.done) AS ready,
+				count(*) FILTER (WHERE t.status = 'working' AND NOT t.done) AS working,
+				count(*) FILTER (WHERE t.status = 'needs_review' AND NOT t.done) AS review
+			FROM tasks t
+			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
+			WHERE t.assignee_agent_id = a.id
+		) work ON true
 		WHERE a.owner_user_id = $1
 		ORDER BY a.archived_at NULLS FIRST, lower(a.name), a.created_at
 	`, userID)
@@ -744,6 +754,9 @@ func scanAgent(row rowScanner) (AgentUser, error) {
 		&credentialRevokedAt,
 		&credentialCreatedAt,
 		&credentialUpdatedAt,
+		&agent.WorkCounts.Ready,
+		&agent.WorkCounts.Working,
+		&agent.WorkCounts.Review,
 	)
 	if err != nil {
 		return AgentUser{}, err

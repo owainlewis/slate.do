@@ -82,6 +82,12 @@ type AgentCredential struct {
 	UpdatedAt   time.Time  `json:"updatedAt"`
 }
 
+type AgentWorkCounts struct {
+	Ready   int `json:"ready"`
+	Working int `json:"working"`
+	Review  int `json:"review"`
+}
+
 type AgentUser struct {
 	ID          string           `json:"id"`
 	DisplayName string           `json:"displayName"`
@@ -93,6 +99,7 @@ type AgentUser struct {
 	LastUsedAt  *time.Time       `json:"lastUsedAt,omitempty"`
 	RevokedAt   *time.Time       `json:"revokedAt,omitempty"`
 	DeletedAt   *time.Time       `json:"deletedAt,omitempty"`
+	WorkCounts  AgentWorkCounts  `json:"workCounts"`
 }
 
 type MemberAccount struct {
@@ -662,7 +669,21 @@ func (s *Service) ListAgents(w http.ResponseWriter, r *http.Request, user User) 
 	if agents == nil {
 		agents = []AgentUser{}
 	}
-	writeJSON(w, http.StatusOK, map[string][]AgentUser{"agents": agents})
+	activeAgents := 0
+	for _, agent := range agents {
+		if agent.ArchivedAt == nil {
+			activeAgents++
+		}
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Agents       []AgentUser `json:"agents"`
+		ActiveAgents int         `json:"activeAgents"`
+		MaxAgents    int         `json:"maxAgents"`
+	}{
+		Agents:       agents,
+		ActiveAgents: activeAgents,
+		MaxAgents:    entitlements.ProLimits.Agents,
+	})
 }
 
 func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User) {
