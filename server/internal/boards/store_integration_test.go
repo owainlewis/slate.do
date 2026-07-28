@@ -52,7 +52,7 @@ func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
 	assertConcurrentResults(t, taskResults, defaultMaxTasksPerList, ErrActiveItemLimit)
 }
 
-func TestAgentAssignmentsAreAccountScopedAndSurviveSoftDelete(t *testing.T) {
+func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -64,17 +64,25 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveSoftDelete(t *testing.T) {
 
 	var ownerAgentID, otherAgentID string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO agent_users (owner_user_id, display_name, token_hash)
-		VALUES ($1, 'Owner agent', $2)
+		INSERT INTO agents (owner_user_id, name)
+		VALUES ($1, 'Owner agent')
 		RETURNING id::text
-	`, ownerID, fmt.Sprintf("owner-agent-%d", time.Now().UnixNano())).Scan(&ownerAgentID); err != nil {
+	`, ownerID).Scan(&ownerAgentID); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(ctx, `
-		INSERT INTO agent_users (owner_user_id, display_name, token_hash)
-		VALUES ($1, 'Other agent', $2)
+		INSERT INTO agents (owner_user_id, name)
+		VALUES ($1, 'Other agent')
 		RETURNING id::text
-	`, otherID, fmt.Sprintf("other-agent-%d", time.Now().UnixNano())).Scan(&otherAgentID); err != nil {
+	`, otherID).Scan(&otherAgentID); err != nil {
+		t.Fatal(err)
+	}
+	var siblingAgentID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO agents (owner_user_id, name)
+		VALUES ($1, 'Sibling agent')
+		RETURNING id::text
+	`, ownerID).Scan(&siblingAgentID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,11 +118,14 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveSoftDelete(t *testing.T) {
 	if _, err := store.ClaimTaskForAgent(ctx, ownerID, otherAgentID, task.ID); !errors.Is(err, ErrTaskUnavailable) {
 		t.Fatalf("other agent claim error = %v", err)
 	}
+	if _, err := store.ClaimTaskForAgent(ctx, ownerID, siblingAgentID, task.ID); !errors.Is(err, ErrTaskUnavailable) {
+		t.Fatalf("same-account sibling agent claim error = %v", err)
+	}
 	if _, err := store.ClaimTaskForAgent(ctx, ownerID, ownerAgentID, task.ID); err != nil {
 		t.Fatalf("assigned agent claim: %v", err)
 	}
 
-	if _, err := db.Exec(ctx, "UPDATE agent_users SET deleted_at = now(), revoked_at = now() WHERE id = $1", ownerAgentID); err != nil {
+	if _, err := db.Exec(ctx, "UPDATE agents SET archived_at = now() WHERE id = $1", ownerAgentID); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := store.GetTask(ctx, ownerID, task.ID)

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -45,7 +46,8 @@ var (
 	ErrMemberNotFound    = errors.New("member account not found")
 	ErrInvalidResetToken = errors.New("invalid or expired password reset token")
 	ErrNoPendingReset    = errors.New("no pending password reset request")
-	ErrAgentLimit        = errors.New("agent user limit reached")
+	ErrAgentLimit        = errors.New("active agent limit reached")
+	ErrAgentNameTaken    = errors.New("active agent name already exists")
 	ErrAgentNotFound     = errors.New("agent not found")
 )
 
@@ -71,13 +73,26 @@ type APIToken struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 }
 
-type AgentUser struct {
+type AgentCredential struct {
 	ID          string     `json:"id"`
-	DisplayName string     `json:"displayName"`
+	TokenPrefix string     `json:"tokenPrefix,omitempty"`
 	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty"`
 	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
-	DeletedAt   *time.Time `json:"deletedAt,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
+type AgentUser struct {
+	ID          string           `json:"id"`
+	DisplayName string           `json:"displayName"`
+	Purpose     string           `json:"purpose,omitempty"`
+	ArchivedAt  *time.Time       `json:"archivedAt,omitempty"`
+	CreatedAt   time.Time        `json:"createdAt"`
+	UpdatedAt   time.Time        `json:"updatedAt"`
+	Credential  *AgentCredential `json:"credential,omitempty"`
+	LastUsedAt  *time.Time       `json:"lastUsedAt,omitempty"`
+	RevokedAt   *time.Time       `json:"revokedAt,omitempty"`
+	DeletedAt   *time.Time       `json:"deletedAt,omitempty"`
 }
 
 type MemberAccount struct {
@@ -122,7 +137,7 @@ type profileStore interface {
 
 type agentStore interface {
 	ListAgents(ctx context.Context, userID string) ([]AgentUser, error)
-	CreateAgent(ctx context.Context, userID string, displayName string, tokenHash string) (AgentUser, error)
+	CreateAgent(ctx context.Context, userID string, displayName string, purpose string, tokenHash string, tokenPrefix string) (AgentUser, error)
 	RevokeAgentToken(ctx context.Context, userID string, agentID string) error
 	DeleteAgent(ctx context.Context, userID string, agentID string) error
 }
@@ -656,6 +671,7 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 	}
 	var input struct {
 		DisplayName string `json:"displayName"`
+		Purpose     string `json:"purpose"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -669,6 +685,11 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 		writeError(w, http.StatusBadRequest, "agent name must be 80 characters or fewer")
 		return
 	}
+	purpose := strings.TrimSpace(input.Purpose)
+	if len([]rune(purpose)) > 500 {
+		writeError(w, http.StatusBadRequest, "agent purpose must be 500 characters or fewer")
+		return
+	}
 	plain, err := randomToken("slate_agent")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "agent could not be created")
@@ -679,9 +700,13 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 		writeError(w, http.StatusInternalServerError, "agent could not be created")
 		return
 	}
-	agent, err := store.CreateAgent(r.Context(), user.ID, displayName, hashToken(plain))
+	agent, err := store.CreateAgent(r.Context(), user.ID, displayName, purpose, hashToken(plain), tokenDisplayPrefix(plain))
 	if errors.Is(err, ErrAgentLimit) {
-		writeCodedError(w, http.StatusConflict, "agent_limit_reached", "Only one agent user is allowed per account for now. Delete the current agent before creating another.")
+		writeCodedError(w, http.StatusConflict, "agent_limit_reached", fmt.Sprintf("Pro allows up to %d active agents. Archive an agent before creating another.", entitlements.ProLimits.Agents))
+		return
+	}
+	if errors.Is(err, ErrAgentNameTaken) {
+		writeCodedError(w, http.StatusConflict, "agent_name_taken", "An active agent with that name already exists.")
 		return
 	}
 	if errors.Is(err, ErrUnauthorized) {
@@ -811,6 +836,14 @@ func randomToken(prefix string) (string, error) {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func tokenDisplayPrefix(token string) string {
+	const displayLength = 20
+	if len(token) <= displayLength {
+		return token
+	}
+	return token[:displayLength]
 }
 
 func constantTimeEqual(left string, right string) bool {

@@ -118,7 +118,7 @@ func TestMeExposesResolvedProPlanAndLimits(t *testing.T) {
 	service.Me(recorder, req)
 
 	body := recorder.Body.String()
-	if recorder.Code != http.StatusOK || !strings.Contains(body, `"plan":"pro"`) || !strings.Contains(body, `"boards":5`) || !strings.Contains(body, `"listsPerBoard":9`) || !strings.Contains(body, `"activeItemsPerList":20`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `"plan":"pro"`) || !strings.Contains(body, `"boards":5`) || !strings.Contains(body, `"listsPerBoard":9`) || !strings.Contains(body, `"activeItemsPerList":20`) || !strings.Contains(body, `"agents":5`) {
 		t.Fatalf("status = %d, body = %s", recorder.Code, body)
 	}
 }
@@ -178,7 +178,7 @@ func TestUpdateProfilePersistsThemeAndDisplayNameTogether(t *testing.T) {
 func TestCreateAgentReturnsPlainTokenOnceAndStoresOnlyHash(t *testing.T) {
 	store := &agentAuthStore{requestAuthStore: requestAuthStore{}}
 	service := NewService(store, false)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"displayName":"Research Bot"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"displayName":" Research Bot ","purpose":" Customer research "}`))
 	rec := httptest.NewRecorder()
 
 	service.CreateAgent(rec, req, User{ID: "owner"})
@@ -196,6 +196,12 @@ func TestCreateAgentReturnsPlainTokenOnceAndStoresOnlyHash(t *testing.T) {
 	if store.tokenHash != hashToken(response.Token) || strings.Contains(store.tokenHash, response.Token) {
 		t.Fatalf("stored token hash = %q", store.tokenHash)
 	}
+	if store.tokenPrefix != tokenDisplayPrefix(response.Token) || store.displayName != "Research Bot" || store.purpose != "Customer research" {
+		t.Fatalf("stored agent input = %q, %q, %q", store.displayName, store.purpose, store.tokenPrefix)
+	}
+	if response.Credential == nil || response.Credential.TokenPrefix != store.tokenPrefix || response.Purpose != store.purpose {
+		t.Fatalf("create response = %#v", response)
+	}
 	listRec := httptest.NewRecorder()
 	service.ListAgents(listRec, httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil), User{ID: "owner"})
 	if strings.Contains(listRec.Body.String(), response.Token) || strings.Contains(listRec.Body.String(), store.tokenHash) {
@@ -211,7 +217,20 @@ func TestCreateAgentReturnsStableLimitConflict(t *testing.T) {
 
 	service.CreateAgent(rec, req, User{ID: "owner"})
 
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"agent_limit_reached"`) || !strings.Contains(rec.Body.String(), "Only one agent user") {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"agent_limit_reached"`) || !strings.Contains(rec.Body.String(), "5 active agents") {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateAgentReturnsStableCaseInsensitiveNameConflict(t *testing.T) {
+	store := &agentAuthStore{requestAuthStore: requestAuthStore{}, createErr: ErrAgentNameTaken}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"displayName":" research bot "}`))
+	rec := httptest.NewRecorder()
+
+	service.CreateAgent(rec, req, User{ID: "owner"})
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"agent_name_taken"`) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
@@ -741,6 +760,9 @@ type themeAuthStore struct {
 type agentAuthStore struct {
 	requestAuthStore
 	tokenHash    string
+	tokenPrefix  string
+	displayName  string
+	purpose      string
 	revokedOwner string
 	revokedAgent string
 	deletedOwner string
@@ -749,15 +771,28 @@ type agentAuthStore struct {
 }
 
 func (s *agentAuthStore) ListAgents(context.Context, string) ([]AgentUser, error) {
-	return []AgentUser{{ID: "11111111-1111-4111-8111-111111111111", DisplayName: "Research Bot"}}, nil
+	return []AgentUser{{
+		ID:          "11111111-1111-4111-8111-111111111111",
+		DisplayName: "Research Bot",
+		Purpose:     "Customer research",
+		Credential:  &AgentCredential{TokenPrefix: s.tokenPrefix},
+	}}, nil
 }
 
-func (s *agentAuthStore) CreateAgent(_ context.Context, _ string, displayName string, tokenHash string) (AgentUser, error) {
+func (s *agentAuthStore) CreateAgent(_ context.Context, _ string, displayName string, purpose string, tokenHash string, tokenPrefix string) (AgentUser, error) {
 	if s.createErr != nil {
 		return AgentUser{}, s.createErr
 	}
 	s.tokenHash = tokenHash
-	return AgentUser{ID: "11111111-1111-4111-8111-111111111111", DisplayName: displayName}, nil
+	s.tokenPrefix = tokenPrefix
+	s.displayName = displayName
+	s.purpose = purpose
+	return AgentUser{
+		ID:          "11111111-1111-4111-8111-111111111111",
+		DisplayName: displayName,
+		Purpose:     purpose,
+		Credential:  &AgentCredential{TokenPrefix: tokenPrefix},
+	}, nil
 }
 
 func (s *agentAuthStore) RevokeAgentToken(_ context.Context, userID string, agentID string) error {

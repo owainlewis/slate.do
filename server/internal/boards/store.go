@@ -488,8 +488,8 @@ func activeAgentAssignment(ctx context.Context, db queryRower, userID string, ag
 	var id string
 	err := db.QueryRow(ctx, `
 		SELECT id::text
-		FROM agent_users
-		WHERE owner_user_id = $1 AND id = $2 AND deleted_at IS NULL
+		FROM agents
+		WHERE owner_user_id = $1 AND id = $2 AND archived_at IS NULL
 	`, userID, agentID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("%w: agent assignee not found", ErrInvalidData)
@@ -876,6 +876,20 @@ func (s *Store) ReorderTasks(ctx context.Context, userID string, bucketID string
 }
 
 func (s *Store) GetTask(ctx context.Context, userID string, id string) (Task, error) {
+	return s.getTask(ctx, userID, "", id)
+}
+
+func (s *Store) GetTaskForAgent(ctx context.Context, userID string, agentID string, id string) (Task, error) {
+	return s.getTask(ctx, userID, agentID, id)
+}
+
+func (s *Store) getTask(ctx context.Context, userID string, agentID string, id string) (Task, error) {
+	agentSQL := ""
+	args := []any{userID, id}
+	if agentID != "" {
+		args = append(args, agentID)
+		agentSQL = " AND t.assignee_agent_id = $3"
+	}
 	row := s.db.QueryRow(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
@@ -884,7 +898,8 @@ func (s *Store) GetTask(ctx context.Context, userID string, id string) (Task, er
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2
-	`, userID, id)
+			`+agentSQL+`
+	`, args...)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
