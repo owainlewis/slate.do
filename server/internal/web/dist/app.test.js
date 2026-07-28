@@ -392,7 +392,10 @@ test("settings pages isolate profile, board, agent, and personal API controls", 
   vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", revokedAt: "2026-07-27T00:00:00Z" }];`, app);
   assert.match(app.settingsHTML(), /id="agent-limit"/);
   vm.runInContext(`state.agents = [{ id: "agent", displayName: "Builder Bot", deletedAt: "2026-07-27T00:00:00Z" }];`, app);
-  assert.match(app.settingsHTML(), /id="agent-form"/);
+  const agentsAfterDelete = app.settingsHTML();
+  assert.match(agentsAfterDelete, /id="agent-form"/);
+  assert.match(agentsAfterDelete, /No agent users yet/);
+  assert.doesNotMatch(agentsAfterDelete, /Builder Bot|Inactive/);
 
   vm.runInContext(`state.settingsPage = "api";`, app);
   const apiSettings = app.settingsHTML();
