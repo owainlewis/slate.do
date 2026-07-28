@@ -68,8 +68,15 @@ function decodeResponseBody(text, ok) {
 }
 
 function listLimitUpdate(boardId, value) {
-  const next = Math.min(proLimits().activeItemsPerList, Math.max(1, Number(value) || DEFAULT_LIST_LIMIT));
+  const next = Number(value);
   return { next, path: `/api/v1/boards/${boardId}`, input: { maxTasksPerList: next } };
+}
+
+function validateListLimit(value, maximum = proLimits().activeItemsPerList) {
+  const next = Number(value);
+  if (!Number.isInteger(next)) return "Enter a whole number.";
+  if (next < 1 || next > maximum) return `Enter a value from 1 to ${maximum}.`;
+  return "";
 }
 
 const goalSaveChains = new Map();
@@ -91,10 +98,14 @@ const state = {
   settingsPage: "profile",
   view: "home",
   error: "",
+  settingsNotice: "",
+  settingsPending: "",
+  themeStatus: "",
   authNotice: "",
   resetToken: "",
   goalErrors: {},
   newToken: "",
+  newTokenOwnerID: "",
   tokens: [],
   agents: [],
   maxAgents: 5,
@@ -134,9 +145,9 @@ const LOGIN_PATH = "/login";
 const APP_PATH = "/app";
 const SETTINGS_PATH = "/app/settings";
 const SETTINGS_PAGES = [
-  { id: "profile", label: "Profile", title: "Profile", description: "Update your display name." },
-  { id: "board", label: "Board", title: "Board", description: "Configure the selected board." },
-  { id: "api", label: "API access", title: "API access", description: "Create and revoke personal tokens for the CLI and API." },
+  { id: "profile", label: "Profile", icon: "user", title: "Profile", description: "Your identity across Slate." },
+  { id: "preferences", label: "Preferences", icon: "sun", title: "Preferences", description: "Choose how Slate looks for this account." },
+  { id: "api", label: "API access", icon: "copy", title: "API access", description: "Manage personal access to the Slate CLI and API." },
 ];
 const AGENTS_PATH = "/app/agents";
 const NEW_AGENT_PATH = "/app/agents/new";
@@ -145,6 +156,10 @@ const RESET_PASSWORD_PATH = "/reset-password";
 
 function boardPath(id) {
   return `/app/boards/${encodeURIComponent(id)}`;
+}
+
+function boardSettingsPath(id) {
+  return `${boardPath(id)}/settings`;
 }
 
 function settingsPath(page = "profile") {
@@ -179,6 +194,14 @@ function parseRoute(pathname) {
   if (settings && SETTINGS_PAGES.some(page => page.id === settings[1])) {
     return { name: "settings", settingsPage: settings[1] };
   }
+  const boardSettings = /^\/app\/boards\/([^/]+)\/settings$/.exec(path);
+  if (boardSettings) {
+    try {
+      return { name: "board-settings", boardId: decodeURIComponent(boardSettings[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
   const board = /^\/app\/boards\/([^/]+)$/.exec(path);
   if (board) {
     try {
@@ -191,7 +214,7 @@ function parseRoute(pathname) {
 }
 
 function isProtectedRoute(name) {
-  return name === "app" || name === "board" || name === "settings" || name === "agents" || name === "agent-new";
+  return name === "app" || name === "board" || name === "board-settings" || name === "settings" || name === "agents" || name === "agent-new";
 }
 
 // Only same-origin app paths may be returned to after login. Anything else,
@@ -234,6 +257,8 @@ async function applyRoute() {
   const route = parseRoute(location.pathname);
   state.selectedTask = route.name === "board" ? state.selectedTask : null;
   state.error = "";
+  state.settingsNotice = "";
+  state.settingsPending = "";
   state.routeError = null;
 
   if (route.name === "reset-password") return showRoute("reset-password", readResetToken);
@@ -286,15 +311,20 @@ async function applyRoute() {
       state.board = null;
       return showRoute("app");
     }
-    if (route.name === "board") {
-      if (!state.boards.some(board => board.id === route.boardId)) return showRoute("not-found");
+    if (route.name === "board" || route.name === "board-settings") {
+      if (!state.boards.some(board => board.id === route.boardId)) {
+        if (route.name === "board-settings") {
+          state.error = "This board does not exist or is no longer available to you.";
+          state.routeError = route;
+          return showRoute("route-error");
+        }
+        return showRoute("not-found");
+      }
       if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
       if (routeVersion !== version) return;
+      if (route.name === "board-settings") return showRoute("board-settings");
       return showRoute("app");
     }
-    // Only the Board page needs board details and only API access needs tokens.
-    if (route.settingsPage === "board" && !state.board && state.boards[0] && !await loadBoard(state.boards[0].id, authVersion, version)) return;
-    if (routeVersion !== version) return;
     if (route.settingsPage === "api" && !await loadTokens(authVersion, state.me?.id, version)) return;
     if (routeVersion !== version) return;
     state.view = "app";
@@ -378,9 +408,13 @@ function resetAuthenticatedState() {
   state.settings = false;
   state.settingsPage = "profile";
   state.error = "";
+  state.settingsNotice = "";
+  state.settingsPending = "";
+  state.themeStatus = "";
   state.notice = "";
   state.goalErrors = {};
   state.newToken = "";
+  state.newTokenOwnerID = "";
   state.tokens = [];
   state.agents = [];
   state.maxAgents = DEFAULT_MAX_AGENTS;
@@ -510,6 +544,12 @@ function render() {
     bindSettings();
     return;
   }
+  if (state.view === "board-settings") {
+    syncPath(boardSettingsPath(state.board.id));
+    root.innerHTML = boardSettingsHTML();
+    bindBoardSettings();
+    return;
+  }
   if (state.view === "agents" || state.view === "agent-new") {
     syncPath(state.view === "agent-new" ? NEW_AGENT_PATH : AGENTS_PATH);
     root.innerHTML = agentsHTML();
@@ -553,6 +593,8 @@ function routeErrorHTML() {
   const settingsPage = SETTINGS_PAGES.find(page => page.id === state.routeError?.settingsPage);
   const target = settingsPage
     ? `${settingsPage.title} settings`
+    : state.routeError?.name === "board-settings"
+      ? "board settings"
     : state.routeError?.name === "settings"
       ? "settings"
       : state.routeError?.name === "board"
@@ -862,6 +904,7 @@ function boardRowHTML(board) {
     <div class="board-row ${current ? "on" : ""}">
       <button class="board-select" data-board="${board.id}"><span>${escapeHTML(board.name)}</span></button>
       <div class="board-actions">
+        <button data-board-settings="${board.id}" aria-label="Board settings for ${escapeAttr(board.name)}" title="Board settings">${icon("gear")}</button>
         <button data-start-rename-board="${board.id}" aria-label="Rename ${escapeAttr(board.name)}" title="Rename board">${icon("pencil")}</button>
         <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="Delete board">${icon("trash")}</button>
       </div>
@@ -922,7 +965,7 @@ function avatarHTML(identity, options = {}) {
 function userAvatarHTML(identity, options = {}) {
   if (!identity) return "";
   const label = identity.displayName || identity.email || "User";
-  return `<span class="avatar user-avatar ${options.small ? "avatar-small" : ""}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">${icon("user")}</span>`;
+  return `<span class="avatar user-avatar tone-${avatarTone(identity.id)} ${options.small ? "avatar-small" : ""} ${options.large ? "avatar-large" : ""}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}">${icon("user")}</span>`;
 }
 
 function taskAgent(task) {
@@ -1330,45 +1373,115 @@ function settingsHTML() {
   let content = "";
   if (page.id === "profile") {
     content = `
-      <section class="settings-section profile-settings" aria-label="Profile controls">
-        <form id="profile-form" class="profile-form">
-          ${userAvatarHTML(state.me)}
-          <input name="displayName" aria-label="Your display name" value="${escapeAttr(state.me?.displayName || state.me?.email?.split("@")[0] || "")}" maxlength="80" required>
-          <button class="secondary settings-submit" type="submit">Save profile</button>
-        </form>
-      </section>`;
-  } else if (page.id === "board") {
-    content = `
-      <section class="settings-section" aria-label="Board controls">
-        ${state.board ? `
-          <div class="settings-section-head">
-            <h2>${escapeHTML(state.board.name)}</h2>
-            <p>Max active items per list on this board</p>
+      <form id="profile-form" class="settings-card profile-card" novalidate>
+        <div class="settings-row profile-avatar-row">
+          <div class="settings-row-copy">
+            <strong>Avatar</strong>
+            <span>Generated locally from your account ID.</span>
           </div>
-          <div class="limit-control settings-limit">
-            <input id="settings-list-limit" aria-label="Max active items per list" type="number" min="1" max="${proLimits().activeItemsPerList}" value="${state.board.maxTasksPerList || DEFAULT_LIST_LIMIT}">
-          </div>` : `<div class="empty-state"><p>Create a board to configure its list limit.</p></div>`}
+          ${userAvatarHTML(state.me, { large: true })}
+        </div>
+        <div class="settings-row">
+          <label class="settings-row-copy" for="profile-display-name">
+            <strong>Display name</strong>
+            <span>Used anywhere Slate identifies you.</span>
+          </label>
+          <div class="settings-field-wrap">
+            <input id="profile-display-name" name="displayName" value="${escapeAttr(state.me?.displayName || state.me?.email?.split("@")[0] || "")}" maxlength="80" aria-describedby="profile-name-error" required>
+            <p class="field-error" id="profile-name-error" role="alert"></p>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong>Account email</strong>
+            <span>Your sign-in address cannot be changed here.</span>
+          </div>
+          <span class="read-only-value">${escapeHTML(state.me?.email || "")}</span>
+        </div>
+        <div class="settings-card-actions">
+          ${settingsStatusHTML()}
+          <button class="primary settings-submit" type="submit" ${state.settingsPending === "profile" ? "disabled" : ""}>${state.settingsPending === "profile" ? "Saving…" : "Save profile"}</button>
+        </div>
+      </form>`;
+  } else if (page.id === "preferences") {
+    content = `
+      <section class="settings-card" aria-labelledby="appearance-heading">
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong id="appearance-heading">Appearance</strong>
+            <span>This preference also controls the shortcut in the app navigation.</span>
+          </div>
+          <div class="theme-choice" role="group" aria-label="Theme preference">
+            ${themes.map(item => `
+              <button type="button" data-set-theme="${item.id}" class="${theme === item.id ? "on" : ""}" aria-pressed="${theme === item.id}">
+                ${icon(item.id === "dark" ? "moon" : "sun")}<span>${item.label}</span>
+              </button>`).join("")}
+          </div>
+        </div>
+        <div class="settings-card-actions">
+          <p class="settings-status ${state.themeStatus.startsWith("Could not") ? "error" : ""}" role="${state.themeStatus.startsWith("Could not") ? "alert" : "status"}">${escapeHTML(state.themeStatus)}</p>
+        </div>
       </section>`;
   } else {
+    const tokenVisible = state.newToken && state.newTokenOwnerID === state.me?.id;
     content = `
-      <section class="settings-section" aria-label="API token controls">
-        <form id="token-form" class="token-form">
-          <input name="name" aria-label="Token name" placeholder="Token name" required>
-          <button class="primary settings-submit" type="submit">Create token</button>
-        </form>
-        ${state.newToken ? `<div class="new-token"><label>New token</label><code>${escapeHTML(state.newToken)}</code></div>` : ""}
-        <div class="token-list">
-          ${state.tokens.length ? state.tokens.map(t => `<div class="token-row"><span>${escapeHTML(t.name)}</span><div class="settings-row-actions"><button class="danger" data-revoke="${t.id}">Revoke</button></div></div>`).join("") : `<div class="empty-state"><p>No active tokens.</p></div>`}
+      <section class="settings-section" aria-labelledby="personal-tokens-heading">
+        <div class="settings-section-head">
+          <h2 id="personal-tokens-heading">Personal API tokens</h2>
+          <p>Use these tokens for your own CLI and API access. They carry your account permissions.</p>
         </div>
+        <div class="settings-card">
+          <form id="token-form" class="settings-row token-form" novalidate>
+            <label class="settings-row-copy" for="token-name">
+              <strong>Create personal token</strong>
+              <span>Name it after the device or integration that will use it.</span>
+            </label>
+            <div class="token-create-control">
+              <input id="token-name" name="name" placeholder="For example, laptop CLI" maxlength="80" aria-describedby="token-name-error" required>
+              <button class="primary settings-submit" type="submit" ${state.settingsPending === "token" ? "disabled" : ""}>${state.settingsPending === "token" ? "Creating…" : "Create token"}</button>
+              <p class="field-error" id="token-name-error" role="alert"></p>
+            </div>
+          </form>
+          ${tokenVisible ? `
+            <div class="one-time-token" aria-labelledby="new-token-heading">
+              <div>
+                <strong id="new-token-heading">Copy this token now</strong>
+                <p>For security, Slate cannot show this personal token again after you leave or refresh this page.</p>
+              </div>
+              <div class="credential-value">
+                <code id="personal-token" tabindex="0">${escapeHTML(state.newToken)}</code>
+                <button class="secondary icon-label" id="copy-personal-token" type="button">${icon("copy")}<span>Copy</span></button>
+              </div>
+            </div>` : ""}
+          <div class="token-list" aria-label="Active personal tokens">
+            ${state.tokens.length ? state.tokens.map(t => `
+              <div class="token-row">
+                <span><strong>${escapeHTML(t.name)}</strong><small>Personal token</small></span>
+                <div class="settings-row-actions"><button class="danger" data-revoke="${t.id}" ${state.settingsPending === "revoke" ? "disabled" : ""}>${state.settingsPending === "revoke" ? "Revoking…" : "Revoke"}</button></div>
+              </div>`).join("") : `<div class="empty-state"><p>No active personal tokens.</p></div>`}
+          </div>
+          <div class="settings-card-actions">${settingsStatusHTML()}</div>
+        </div>
+      </section>
+      <section class="settings-section" aria-labelledby="agent-credentials-heading">
+        <div class="settings-section-head">
+          <h2 id="agent-credentials-heading">Agent credentials</h2>
+          <p>Each agent has a separate identity and credential limited to its assigned work.</p>
+        </div>
+        <a class="settings-card agent-credentials-link" href="${AGENTS_PATH}" id="manage-agent-credentials">
+          <span class="settings-link-icon">${icon("bot")}</span>
+          <span><strong>Manage agents</strong><small>Create agents and manage their connection setup in the agent directory.</small></span>
+          ${icon("chevronLeft", "chevron-right")}
+        </a>
       </section>`;
   }
   return `
     <section class="settings-page theme-${theme}">
       <aside class="sidebar settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-        <p class="settings-sidebar-title">Settings</p>
+        <p class="settings-sidebar-title">Account settings</p>
         <nav class="settings-nav" aria-label="Settings">
-          ${SETTINGS_PAGES.map(item => `<a class="page-row settings-nav-link ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" ${item.id === page.id ? 'aria-current="page"' : ""}>${item.label}</a>`).join("")}
+          ${SETTINGS_PAGES.map(item => `<a class="page-row icon-label settings-nav-link ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" ${item.id === page.id ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${item.label}</span></a>`).join("")}
         </nav>
         <section class="settings-actions" aria-label="Account actions">
           <button class="plain-btn icon-label" id="back">${icon("chevronLeft")}<span>Back to board</span></button>
@@ -1379,16 +1492,75 @@ function settingsHTML() {
         <section class="settings-panel">
           <div class="settings-head">
             <div>
-              <p>Owner settings</p>
+              <p>Account settings</p>
               <h1>${page.title}</h1>
               <p class="settings-description">${page.description}</p>
             </div>
           </div>
-          ${statusErrorHTML(state.error)}
           ${content}
         </section>
       </main>
     </section>`;
+}
+
+function boardSettingsHTML() {
+  const theme = currentTheme();
+  const board = state.board;
+  const maximum = proLimits().activeItemsPerList;
+  return `
+    <section class="settings-page board-settings-page theme-${theme}">
+      <aside class="sidebar settings-sidebar board-settings-sidebar">
+        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        <p class="settings-sidebar-title">Board settings</p>
+        <div class="board-settings-context">
+          ${icon("rows")}
+          <span>${escapeHTML(board.name)}</span>
+        </div>
+        <section class="settings-actions" aria-label="Board actions">
+          <button class="plain-btn icon-label" id="back-to-board">${icon("chevronLeft")}<span>Back to board</span></button>
+          <a class="plain-btn icon-label settings-account-link" href="${settingsPath()}" id="account-settings-link">${icon("user")}<span>Account settings</span></a>
+        </section>
+      </aside>
+      <main class="settings-main">
+        <section class="settings-panel">
+          <div class="settings-head board-settings-head">
+            <div>
+              <p>Board settings</p>
+              <h1>${escapeHTML(board.name)}</h1>
+              <p class="settings-description">Configuration here applies only to this board.</p>
+            </div>
+          </div>
+          <section class="settings-section" aria-labelledby="work-limits-heading">
+            <div class="settings-section-head">
+              <h2 id="work-limits-heading">Work limits</h2>
+              <p>Keep active work focused across every list on ${escapeHTML(board.name)}.</p>
+            </div>
+            <form id="board-limit-form" class="settings-card" novalidate>
+              <div class="settings-row">
+                <label class="settings-row-copy" for="settings-list-limit">
+                  <strong>Maximum active items</strong>
+                  <span>The number of open items allowed in each list. Pro supports 1 to ${maximum}.</span>
+                </label>
+                <div class="settings-field-wrap settings-limit">
+                  <input id="settings-list-limit" aria-label="Max active items per list" type="number" inputmode="numeric" min="1" max="${maximum}" value="${board.maxTasksPerList || DEFAULT_LIST_LIMIT}" aria-describedby="settings-list-limit-error">
+                  <p class="field-error" id="settings-list-limit-error" role="alert"></p>
+                </div>
+              </div>
+              <div class="settings-card-actions">
+                ${settingsStatusHTML()}
+                <button class="primary settings-submit" type="submit" ${state.settingsPending === "board" ? "disabled" : ""}>${state.settingsPending === "board" ? "Saving…" : "Save limit"}</button>
+              </div>
+            </form>
+          </section>
+        </section>
+      </main>
+    </section>`;
+}
+
+function settingsStatusHTML() {
+  const message = state.error || state.settingsNotice;
+  const role = state.error ? "alert" : "status";
+  return `<p class="settings-status ${state.error ? "error" : ""}" role="${role}">${escapeHTML(message)}</p>`;
 }
 
 function bindLogin() {
@@ -1613,16 +1785,9 @@ function bindAppShell() {
     sidebarToggle.setAttribute("aria-expanded", String(open));
     sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
   };
-  document.querySelectorAll("[data-set-theme]").forEach(el => el.onclick = async () => {
-    if (el.dataset.setTheme === currentTheme()) return;
-    try {
-      await updateTheme(el.dataset.setTheme);
-    } catch (err) {
-      state.error = err.message;
-      render();
-    }
-  });
+  bindThemeControls();
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
+  document.querySelectorAll("[data-board-settings]").forEach(el => el.onclick = () => navigate(boardSettingsPath(el.dataset.boardSettings)));
   document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
     const keepSidebarOpen = sidebar.classList.contains("open");
     state.renamingBoardId = el.dataset.startRenameBoard;
@@ -1646,6 +1811,13 @@ function bindAppShell() {
     else render();
   };
   return sidebar;
+}
+
+function bindThemeControls() {
+  document.querySelectorAll("[data-set-theme]").forEach(el => el.onclick = async () => {
+    if (el.dataset.setTheme === currentTheme()) return;
+    await updateTheme(el.dataset.setTheme);
+  });
 }
 
 async function createDefaultBoard() {
@@ -1992,54 +2164,154 @@ async function bindSettings() {
   });
   document.querySelector("#back").onclick = closeSettings;
   document.querySelector("#settings-logout").onclick = logout;
+  bindThemeControls();
   document.querySelector("#profile-form")?.addEventListener("submit", async event => {
     event.preventDefault();
+    const form = event.currentTarget;
+    const input = form.elements.displayName;
+    const error = document.querySelector("#profile-name-error");
+    const displayName = input.value.trim();
+    error.textContent = "";
+    input.removeAttribute("aria-invalid");
+    if (!displayName) {
+      input.setAttribute("aria-invalid", "true");
+      error.textContent = "Display name is required.";
+      input.focus();
+      return;
+    }
     const version = routeVersion;
     const sessionVersion = authVersion;
     const userID = state.me?.id;
-    const displayName = new FormData(event.currentTarget).get("displayName");
+    state.settingsPending = "profile";
+    state.settingsNotice = "";
+    state.error = "";
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "Saving…";
     try {
       const user = await api.patch("/api/v1/me", { displayName });
       if (!settingsMutationIsCurrent(sessionVersion, userID, version, "profile")) return;
-      state.me = user;
+      state.me = { ...state.me, ...user };
+      state.settingsNotice = "Profile saved.";
       state.error = "";
     } catch (err) {
       if (!settingsMutationIsCurrent(sessionVersion, userID, version, "profile")) return;
       state.error = err.message;
     }
-    render();
-  });
-  document.querySelector("#settings-list-limit")?.addEventListener("change", async e => {
-    const version = routeVersion;
-    const sessionVersion = authVersion;
-    const userID = state.me?.id;
-    const update = listLimitUpdate(state.board.id, e.target.value);
-    e.target.value = update.next;
-    try {
-      await api.patch(update.path, update.input);
-      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "board")) return;
-      state.error = "";
-      if (!await loadBoards(state.board?.id, version)) return;
-    } catch (err) {
-      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "board")) return;
-      state.error = err.message;
-    }
-    if (!settingsMutationIsCurrent(sessionVersion, userID, version, "board")) return;
+    state.settingsPending = "";
     render();
   });
   document.querySelector("#token-form")?.addEventListener("submit", async event => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const input = formElement.elements.name;
+    const error = document.querySelector("#token-name-error");
+    const name = input.value.trim();
+    error.textContent = "";
+    input.removeAttribute("aria-invalid");
+    if (!name) {
+      input.setAttribute("aria-invalid", "true");
+      error.textContent = "Token name is required.";
+      input.focus();
+      return;
+    }
     const version = routeVersion;
-    if (await createAPIToken(form.get("name"), version) && settingsRouteIsCurrent(version, "api")) render();
+    state.settingsPending = "token";
+    state.settingsNotice = "";
+    state.error = "";
+    const submit = formElement.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "Creating…";
+    if (await createAPIToken(name, version) && settingsRouteIsCurrent(version, "api")) {
+      state.settingsPending = "";
+      render();
+      document.querySelector("#copy-personal-token")?.focus();
+    }
   });
   document.querySelectorAll("[data-revoke]").forEach(el => el.onclick = async () => {
+    if (!confirm("Revoke this personal token? Any client using it will lose access.")) return;
     const version = routeVersion;
     const sessionVersion = authVersion;
     const userID = state.me?.id;
-    await api.del(`/api/v1/api-tokens/${el.dataset.revoke}`);
-    if (!settingsMutationIsCurrent(sessionVersion, userID, version, "api")) return;
-    if (await loadTokens(sessionVersion, userID, version) && settingsRouteIsCurrent(version, "api")) render();
+    state.settingsPending = "revoke";
+    state.settingsNotice = "";
+    state.error = "";
+    render();
+    try {
+      await api.del(`/api/v1/api-tokens/${el.dataset.revoke}`);
+      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "api")) return;
+      if (!await loadTokens(sessionVersion, userID, version)) return;
+      state.settingsNotice = "Personal token revoked.";
+    } catch (err) {
+      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "api")) return;
+      state.error = err.message;
+    }
+    state.settingsPending = "";
+    if (settingsRouteIsCurrent(version, "api")) render();
+  });
+  document.querySelector("#copy-personal-token")?.addEventListener("click", async () => {
+    const tokenElement = document.querySelector("#personal-token");
+    if (!state.newToken || state.newTokenOwnerID !== state.me?.id) return;
+    const copied = await copyAgentCredential(state.newToken, tokenElement);
+    state.settingsNotice = copied ? "Personal token copied." : "Copy failed. The token is selected so you can copy it manually.";
+    state.error = "";
+    if (!copied) {
+      const status = document.querySelector(".settings-status");
+      status.textContent = state.settingsNotice;
+      status.setAttribute("role", "alert");
+      return;
+    }
+    render();
+    document.querySelector("#copy-personal-token")?.focus();
+  });
+  document.querySelector("#manage-agent-credentials")?.addEventListener("click", event => {
+    event.preventDefault();
+    navigate(AGENTS_PATH);
+  });
+}
+
+function bindBoardSettings() {
+  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelector("#back-to-board").onclick = () => navigate(boardPath(state.board.id));
+  document.querySelector("#account-settings-link").onclick = event => {
+    event.preventDefault();
+    navigate(settingsPath());
+  };
+  const form = document.querySelector("#board-limit-form");
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const input = document.querySelector("#settings-list-limit");
+    const error = document.querySelector("#settings-list-limit-error");
+    const validation = validateListLimit(input.value);
+    error.textContent = validation;
+    input.toggleAttribute("aria-invalid", Boolean(validation));
+    if (validation) {
+      input.focus();
+      return;
+    }
+    const version = routeVersion;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    const boardID = state.board.id;
+    const update = listLimitUpdate(boardID, input.value);
+    state.settingsPending = "board";
+    state.settingsNotice = "";
+    state.error = "";
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "Saving…";
+    try {
+      const updated = await api.patch(update.path, update.input);
+      if (!boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) return;
+      state.board = { ...state.board, ...updated, buckets: state.board.buckets };
+      state.boards = state.boards.map(board => board.id === boardID ? { ...board, ...updated } : board);
+      state.settingsNotice = "Board limit saved.";
+    } catch (err) {
+      if (!boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) return;
+      state.error = err.message;
+    }
+    state.settingsPending = "";
+    if (boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) render();
   });
 }
 
@@ -2421,7 +2693,13 @@ function settingsRouteIsCurrent(expectedRouteVersion, expectedPage) {
 }
 
 function clearSettingsCredentialsLeaving(nextPage) {
-  if (state.settingsPage === "api" && nextPage !== "api") state.newToken = "";
+  if (state.settingsPage === "api" && nextPage !== "api") {
+    state.newToken = "";
+    state.newTokenOwnerID = "";
+    // Navigation can wait on route metadata. Remove the secret from the live
+    // page immediately so it is never visible under the next route's URL.
+    globalThis.document?.querySelector(".one-time-token")?.remove();
+  }
 }
 
 function clearAgentCredentialLeaving(nextRouteName) {
@@ -2435,6 +2713,16 @@ function clearAgentCredentialLeaving(nextRouteName) {
 function settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, expectedPage) {
   return sessionIsCurrent(sessionVersion, userID)
     && (expectedRouteVersion === undefined || settingsRouteIsCurrent(expectedRouteVersion, expectedPage));
+}
+
+function boardSettingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, boardID) {
+  const route = parseRoute(location.pathname);
+  return sessionIsCurrent(sessionVersion, userID)
+    && expectedRouteVersion === routeVersion
+    && state.view === "board-settings"
+    && route.name === "board-settings"
+    && route.boardId === boardID
+    && state.board?.id === boardID;
 }
 
 function agentRouteIsCurrent(expectedRouteVersion, expectedView) {
@@ -2495,11 +2783,27 @@ async function createAgent(displayName, purpose, expectedRouteVersion) {
 async function createAPIToken(name, expectedRouteVersion) {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
-  const data = await api.post("/api/v1/api-tokens", { name });
-  if (!sessionIsCurrent(sessionVersion, userID)) return false;
-  state.newToken = data.token;
-  if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "api")) return false;
-  return loadTokens(sessionVersion, userID, expectedRouteVersion);
+  try {
+    const data = await api.post("/api/v1/api-tokens", { name });
+    if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "api")) return false;
+    state.newToken = data.token;
+    state.newTokenOwnerID = userID;
+    state.settingsNotice = "";
+    try {
+      if (!await loadTokens(sessionVersion, userID, expectedRouteVersion)) return false;
+      state.settingsNotice = "Personal token created.";
+    } catch {
+      if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "api")) return false;
+      state.settingsNotice = "Personal token created. Active tokens could not be refreshed, but this one-time secret remains available until you leave or refresh this page.";
+    }
+    return true;
+  } catch (err) {
+    if (!settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, "api")) return false;
+    state.settingsPending = "";
+    state.error = err.message;
+    render();
+    return false;
+  }
 }
 
 async function reload() {
@@ -2639,22 +2943,27 @@ async function updateTheme(value) {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   state.theme = theme;
+  state.themeStatus = "Saving preference…";
+  state.error = "";
   render();
   const save = themeSaveChain.catch(() => {}).then(async () => {
     if (authVersion !== sessionVersion || state.me?.id !== userID) return;
     const user = await api.patch("/api/v1/me", { theme });
     if (authVersion !== sessionVersion || state.me?.id !== userID || user.id !== userID) return;
-    state.me = user;
+    state.me = { ...state.me, ...user };
     if (version === themeChangeVersion) state.theme = themeFor(user.theme);
     state.error = "";
+    if (version === themeChangeVersion) state.themeStatus = "Theme preference saved.";
     render();
   }).catch(err => {
-    if (authVersion !== sessionVersion) return;
-    if (version === themeChangeVersion && authVersion === sessionVersion) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    if (version === themeChangeVersion) {
       state.theme = themeFor(state.me?.theme);
+      state.error = err.message;
+      state.themeStatus = `Could not save theme. Restored ${currentTheme()}.`;
       render();
     }
-    throw err;
+    return false;
   });
   themeSaveChain = save;
   return save;

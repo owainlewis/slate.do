@@ -41,7 +41,7 @@ func TestStaticHandlerServesAppShellForFrontendRoutesOnly(t *testing.T) {
 		"/", "/login", "/app", "/app/settings",
 		"/app/settings/profile", "/app/settings/board", "/app/settings/agents", "/app/settings/api",
 		"/app/settings/unknown", "/app/settings/unknown/nested",
-		"/app/boards/board_123", "/app/agents", "/app/agents/new", "/early-access", "/reset-password",
+		"/app/boards/board_123", "/app/boards/board_123/settings", "/app/agents", "/app/agents/new", "/early-access", "/reset-password",
 	}
 	for _, target := range shell {
 		response := httptest.NewRecorder()
@@ -54,7 +54,7 @@ func TestStaticHandlerServesAppShellForFrontendRoutesOnly(t *testing.T) {
 		}
 	}
 
-	missing := []string{"/nonsense", "/app/boards", "/app/agents/agent_123", "/app/agents/new/extra", "/app/boards/board_123/extra", "/appleseed", "/app/missing.js"}
+	missing := []string{"/nonsense", "/app/boards", "/app/agents/agent_123", "/app/agents/new/extra", "/app/boards/board_123/extra", "/app/boards/board_123/settings/extra", "/appleseed", "/app/missing.js"}
 	for _, target := range missing {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
