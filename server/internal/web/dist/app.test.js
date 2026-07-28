@@ -499,6 +499,7 @@ test("agent directory shows credential facts, work counts, archived identities, 
   assert.match(html, />Needs connection</);
   assert.match(html, />Archived</);
   assert.match(html, /2 ready items · 1 working item · 1 review item/);
+  assert.match(html, /href="\/app\/agents\/agent-connected" data-agent-link="agent-connected"/);
   assert.match(html, /No open work assigned/);
   assert.match(html, /<details class="archived-agents">/);
   assert.match(html, /5 of 5 active agents/);
@@ -511,6 +512,79 @@ test("agent directory shows credential facts, work counts, archived identities, 
   assert.equal((empty.match(/id="empty-new-agent"/g) || []).length, 1);
   assert.equal((empty.match(/>New agent<\/span>/g) || []).length, 1);
   vm.runInContext(`state.me = null; state.view = "home"; state.agents = []; state.agentsLoadState = "idle";`, app);
+});
+
+test("agent detail presents real grouped task data, bounded history, and distinct states", () => {
+  const workItem = (id, title, status, done = false) => ({
+    id, title, status, done, boardId: "board", boardName: "Business",
+    bucketId: "list", bucketName: "Product", updatedAt: "2026-07-28T09:00:00Z",
+  });
+  vm.runInContext(`
+    state.me = { id: "owner", theme: "dark" };
+    state.view = "agent-detail";
+    state.agentDetailLoadState = "ready";
+    state.agentDetail = ${JSON.stringify({
+      agent: {
+        id: "agent-one", displayName: "<Builder>", purpose: "Ships product",
+        credential: { lastUsedAt: "2026-07-28T08:00:00Z" },
+      },
+      work: {
+        ready: [workItem("ready", "Ready item", "queued")],
+        working: [workItem("working", "Working item", "working")],
+        review: [workItem("review", "Review item", "needs_review")],
+        recentlyCompleted: [workItem("done", "Done item", "done", true)],
+        totals: { ready: 51, working: 1, review: 1, completed: 21 },
+        openLimit: 50,
+        completedLimit: 20,
+      },
+    })};
+    state.agentAssignOpen = false;
+    state.selectedTask = null;
+  `, app);
+  const overview = app.agentDetailHTML();
+  assert.match(overview, /<h1>&lt;Builder&gt;<\/h1>/);
+  assert.match(overview, /Ships product/);
+  assert.match(overview, />Connected</);
+  assert.match(overview, /role="tablist"/);
+  assert.match(overview, /id="agent-tab-overview"[^>]*role="tab"[^>]*aria-selected="true"[^>]*aria-controls="agent-panel-overview"[^>]*aria-current="page"[^>]*>Overview/);
+  assert.match(overview, /id="agent-tab-work"[^>]*role="tab"[^>]*aria-selected="false"[^>]*aria-controls="agent-panel-work"/);
+  assert.match(overview, /id="agent-panel-overview"[^>]*role="tabpanel"[^>]*aria-labelledby="agent-tab-overview"[^>]*tabindex="0"/);
+  assert.match(overview, /id="agent-panel-work"[^>]*role="tabpanel"[^>]*aria-labelledby="agent-tab-work"[^>]*tabindex="0" hidden/);
+  assert.match(overview, /Ready item/);
+  assert.match(overview, /Working item/);
+  assert.equal((overview.match(/Working item/g) || []).length, 1, "working tasks must not be duplicated");
+  assert.match(overview, /Review item/);
+  assert.match(overview, /Done item/);
+  assert.match(overview, /This is not run history/);
+  assert.match(overview, /Showing 1 of 51/);
+  assert.match(overview, /href="\/app\/agents\/agent-one\/work"/);
+  assert.doesNotMatch(overview, /runtime|model|concurrency|online|offline/i);
+
+  vm.runInContext(`
+    state.view = "agent-work";
+    state.agentWorkPage = {
+      items: ${JSON.stringify([workItem("ready", "Ready item", "queued"), workItem("done", "Done item", "done", true)])},
+      page: 2, pageSize: 50, total: 102, hasPrevious: true, hasNext: true,
+    };
+  `, app);
+  const history = app.agentDetailHTML();
+  assert.match(history, /id="agent-tab-work"[^>]*aria-selected="true"[^>]*aria-controls="agent-panel-work"[^>]*aria-current="page"[^>]*>Work/);
+  assert.match(history, /id="agent-panel-overview"[^>]*role="tabpanel"[^>]*aria-labelledby="agent-tab-overview"[^>]*tabindex="0" hidden/);
+  assert.match(history, /id="agent-panel-work"[^>]*role="tabpanel"[^>]*aria-labelledby="agent-tab-work"[^>]*tabindex="0"/);
+  assert.match(history, /Page 2 · 2 of 102/);
+  assert.match(history, /data-work-page="1"/);
+  assert.match(history, /data-work-page="3"/);
+
+  vm.runInContext(`state.agentDetail.agent.archivedAt = "2026-07-27T00:00:00Z"; state.view = "agent-detail";`, app);
+  const archived = app.agentDetailHTML();
+  assert.match(archived, /Archived identity/);
+  assert.doesNotMatch(archived, /id="assign-work"/);
+
+  for (const [loadState, text] of [["loading", "Loading agent"], ["not-found", "Agent not found"], ["unauthorized", "session has expired"], ["error", "couldn’t be loaded"]]) {
+    vm.runInContext(`state.agentDetailLoadState = ${JSON.stringify(loadState)}; state.agentDetailError = "Network failed";`, app);
+    assert.match(app.agentDetailHTML(), new RegExp(text, "i"));
+  }
+  vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentWorkPage = null; state.agentDetailLoadState = "idle";`, app);
 });
 
 test("new-agent route has inline limits and one-time CLI connection instructions", () => {
@@ -724,6 +798,44 @@ test("pending credentials cannot cross routes or accounts", async () => {
   assert.equal(vm.runInContext("state.agentCreationResult", app), null);
 
   vm.runInContext(`state.me = null; state.settings = false; state.settingsPage = "profile"; state.newToken = ""; state.agents = []; state.error = "";`, app);
+});
+
+test("agent detail responses cannot cross routes or accounts", async () => {
+  let releaseDetail;
+  app.pendingAgentDetail = new Promise(resolve => { releaseDetail = resolve; });
+  vm.runInContext(`
+    authVersion = 40;
+    routeVersion = 80;
+    state.me = { id: "owner-a" };
+    state.agentDetail = null;
+    api.get = async path => {
+      if (path === "/api/v1/agents/agent-one") return pendingAgentDetail;
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+  const staleRoute = app.loadAgentDetail("agent-one", {
+    sessionVersion: 40,
+    userID: "owner-a",
+    expectedRouteVersion: 80,
+  });
+  vm.runInContext(`routeVersion = 81;`, app);
+  releaseDetail({ agent: { id: "agent-one" }, work: {} });
+  assert.equal(await staleRoute, false);
+  assert.equal(vm.runInContext("state.agentDetail", app), null);
+
+  vm.runInContext(`
+    routeVersion = 90;
+    state.me = { id: "owner-a" };
+    api.get = async () => ({ agent: { id: "agent-two" }, work: {} });
+  `, app);
+  app.beginAuthenticatedSession({ id: "owner-b", theme: "light" });
+  assert.equal(await app.loadAgentDetail("agent-two", {
+    sessionVersion: 40,
+    userID: "owner-a",
+    expectedRouteVersion: 90,
+  }), false);
+  assert.equal(vm.runInContext("state.agentDetail", app), null);
+  vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
 
 const board = {
@@ -1348,6 +1460,9 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/app/settings/agents"), { name: "agents", redirect: true });
   assert.deepEqual(route("/app/agents"), { name: "agents" });
   assert.deepEqual(route("/app/agents/new"), { name: "agent-new" });
+  assert.deepEqual(route("/app/agents/agent-one"), { name: "agent-detail", agentId: "agent-one" });
+  assert.deepEqual(route("/app/agents/a%20b"), { name: "agent-detail", agentId: "a b" });
+  assert.deepEqual(route("/app/agents/agent-one/work"), { name: "agent-work", agentId: "agent-one" });
   assert.deepEqual(route("/early-access"), { name: "early-access" });
   assert.deepEqual(route("/reset-password"), { name: "reset-password" });
   assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1" });
@@ -1361,7 +1476,7 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/login?next=/app"), { name: "login" });
   assert.deepEqual(route("/app/settings#token"), { name: "settings", settingsPage: "profile", redirect: true });
 
-  for (const path of ["/nonsense", "/app/boards", "/app/boards/a/b", "/app/agents/agent-one", "/app/agents/new/extra", "/app/settings/board", "/app/settings/unknown", "/app/settings/profile/extra", "/appleseed", "/cli"]) {
+  for (const path of ["/nonsense", "/app/boards", "/app/boards/a/b", "/app/agents/agent-one/extra", "/app/agents/agent-one/work/extra", "/app/agents/new/extra", "/app/settings/board", "/app/settings/unknown", "/app/settings/profile/extra", "/appleseed", "/cli"]) {
     assert.equal(app.parseRoute(path).name, "not-found", path);
   }
 });
@@ -1371,6 +1486,9 @@ test("only same-origin app paths survive as a login next target", () => {
   assert.equal(app.safeNextPath("/app/settings/agents"), "/app/settings/agents");
   assert.equal(app.safeNextPath("/app/agents"), "/app/agents");
   assert.equal(app.safeNextPath("/app/agents/new"), "/app/agents/new");
+  assert.equal(app.safeNextPath("/app/agents/agent-one"), "/app/agents/agent-one");
+  assert.equal(app.safeNextPath("/app/agents/agent-one/work"), "/app/agents/agent-one/work");
+  assert.equal(app.safeNextPath("/app/agents/agent-one/work?page=2"), "/app/agents/agent-one/work?page=2");
   assert.equal(app.safeNextPath("/app/boards/board_1"), "/app/boards/board_1");
   assert.equal(app.safeNextPath("/app/boards/board_1/settings"), "/app/boards/board_1/settings");
   assert.equal(app.safeNextPath("/app/"), "/app");
@@ -1381,12 +1499,13 @@ test("only same-origin app paths survive as a login next target", () => {
 
   assert.equal(app.loginPathFor("/app/settings"), "/login?next=%2Fapp%2Fsettings");
   assert.equal(app.loginPathFor("/app/settings/api"), "/login?next=%2Fapp%2Fsettings%2Fapi");
+  assert.equal(app.loginPathFor("/app/agents/agent-one/work?page=2"), "/login?next=%2Fapp%2Fagents%2Fagent-one%2Fwork%3Fpage%3D2");
   assert.equal(app.loginPathFor("/app"), "/login");
   assert.equal(app.loginPathFor("https://evil.example"), "/login");
 });
 
 test("signed-out visits to protected routes redirect to login and keep the exact destination", async () => {
-  for (const target of ["/app/boards/board_1", "/app/boards/board_1/settings", "/app/agents", "/app/agents/new", "/app/settings/profile", "/app/settings/preferences", "/app/settings/agents", "/app/settings/api"]) {
+  for (const target of ["/app/boards/board_1", "/app/boards/board_1/settings", "/app/agents", "/app/agents/new", "/app/agents/agent-one", "/app/agents/agent-one/work", "/app/settings/profile", "/app/settings/preferences", "/app/settings/agents", "/app/settings/api"]) {
     const it = router({ url: target });
     await it.apply();
     assert.equal(it.url(), `/login?next=${encodeURIComponent(target)}`);
