@@ -21,15 +21,21 @@ func NewHandler(store *Store) *Handler {
 }
 
 func (h *Handler) ListBoards(w http.ResponseWriter, r *http.Request, user auth.User) {
-	boards, err := h.store.ListBoards(r.Context(), user.ID)
+	var listed []Board
+	var err error
+	if user.AgentID != "" {
+		listed, err = h.store.ListBoardsForAgent(r.Context(), user.ID, user.AgentID)
+	} else {
+		listed, err = h.store.ListBoards(r.Context(), user.ID)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "boards could not be loaded")
 		return
 	}
-	if boards == nil {
-		boards = []Board{}
+	if listed == nil {
+		listed = []Board{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"boards": boards, "maxBoards": defaultMaxBoards})
+	writeJSON(w, http.StatusOK, map[string]any{"boards": listed, "maxBoards": defaultMaxBoards})
 }
 
 func (h *Handler) CreateBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
@@ -45,7 +51,13 @@ func (h *Handler) CreateBoard(w http.ResponseWriter, r *http.Request, user auth.
 }
 
 func (h *Handler) GetBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
-	board, err := h.store.GetBoard(r.Context(), user.ID, r.PathValue("id"))
+	var board Board
+	var err error
+	if user.AgentID != "" {
+		board, err = h.store.GetBoardForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+	} else {
+		board, err = h.store.GetBoard(r.Context(), user.ID, r.PathValue("id"))
+	}
 	if handleStoreError(w, err) {
 		return
 	}
@@ -85,7 +97,13 @@ func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request, user auth
 }
 
 func (h *Handler) GetBucket(w http.ResponseWriter, r *http.Request, user auth.User) {
-	bucket, err := h.store.GetBucket(r.Context(), user.ID, r.PathValue("id"))
+	var bucket Bucket
+	var err error
+	if user.AgentID != "" {
+		bucket, err = h.store.GetBucketForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+	} else {
+		bucket, err = h.store.GetBucket(r.Context(), user.ID, r.PathValue("id"))
+	}
 	if handleStoreError(w, err) {
 		return
 	}
@@ -393,6 +411,8 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrIdempotencyGone):
 		writeError(w, http.StatusGone, err.Error())
+	case errors.Is(err, ErrAgentTaskScope):
+		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, ErrInvalidData):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:

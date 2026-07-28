@@ -69,6 +69,37 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	otherList, err := boardStore.CreateBucket(ctx, owner.ID, board.ID, boards.CreateBucketInput{Name: "Agent B list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boardStore.CreateTask(ctx, owner.ID, otherList.ID, boards.CreateTaskInput{Title: "Agent B other work", AssigneeAgentID: agentB.ID}); err != nil {
+		t.Fatal(err)
+	}
+	unrelatedBoard, err := boardStore.CreateBoard(ctx, owner.ID, boards.CreateBoardInput{Name: "Unrelated board"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelatedList, err := boardStore.CreateBucket(ctx, owner.ID, unrelatedBoard.ID, boards.CreateBucketInput{Name: "Unrelated list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boardStore.CreateTask(ctx, owner.ID, unrelatedList.ID, boards.CreateTaskInput{Title: "Agent B unrelated work", AssigneeAgentID: agentB.ID}); err != nil {
+		t.Fatal(err)
+	}
+	otherOwner, err := authStore.CreateAdmin(ctx, fmt.Sprintf("agent-route-other-%d@slate.test", time.Now().UnixNano()), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", otherOwner.ID) })
+	otherBoard, err := boardStore.CreateBoard(ctx, otherOwner.ID, boards.CreateBoardInput{Name: "Other account board"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherBucket, err := boardStore.CreateBucket(ctx, otherOwner.ID, otherBoard.ID, boards.CreateBucketInput{Name: "Other account list"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	app := NewApp(fstest.MapFS{"index.html": {Data: []byte("app")}}, db, false, auth.Options{}).Routes()
 
@@ -89,25 +120,49 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 		t.Fatalf("sibling task update = %d %s", siblingUpdate.Code, siblingUpdate.Body.String())
 	}
 
+	boardList := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/boards", "")
+	if boardList.Code != http.StatusOK || !strings.Contains(boardList.Body.String(), board.ID) || strings.Contains(boardList.Body.String(), unrelatedBoard.ID) || strings.Contains(boardList.Body.String(), otherBoard.ID) {
+		t.Fatalf("scoped board list = %d %s", boardList.Code, boardList.Body.String())
+	}
+	boardGet := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/boards/"+board.ID, "")
+	if boardGet.Code != http.StatusOK || !strings.Contains(boardGet.Body.String(), bucket.ID) || !strings.Contains(boardGet.Body.String(), `"openCount":1`) || strings.Contains(boardGet.Body.String(), otherList.ID) || strings.Contains(boardGet.Body.String(), `"tasks"`) || strings.Contains(boardGet.Body.String(), taskA.ID) || strings.Contains(boardGet.Body.String(), taskB.Title) {
+		t.Fatalf("scoped board get = %d %s", boardGet.Code, boardGet.Body.String())
+	}
+	listGet := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/buckets/"+bucket.ID, "")
+	if listGet.Code != http.StatusOK || !strings.Contains(listGet.Body.String(), bucket.ID) || !strings.Contains(listGet.Body.String(), `"openCount":1`) || strings.Contains(listGet.Body.String(), `"tasks"`) || strings.Contains(listGet.Body.String(), taskA.ID) || strings.Contains(listGet.Body.String(), taskB.Title) {
+		t.Fatalf("scoped list get = %d %s", listGet.Code, listGet.Body.String())
+	}
+	for _, path := range []string{
+		"/api/v1/boards/" + unrelatedBoard.ID,
+		"/api/v1/buckets/" + unrelatedList.ID,
+		"/api/v1/boards/" + otherBoard.ID,
+		"/api/v1/buckets/" + otherBucket.ID,
+	} {
+		recorder := agentRequest(t, app, agentAToken, http.MethodGet, path, "")
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d %s, want 404", path, recorder.Code, recorder.Body.String())
+		}
+	}
+
 	restricted := []struct {
 		method string
 		path   string
 		body   string
 	}{
-		{http.MethodGet, "/api/v1/boards", ""},
 		{http.MethodPost, "/api/v1/boards", `{"name":"Injected"}`},
-		{http.MethodGet, "/api/v1/boards/" + board.ID, ""},
 		{http.MethodPatch, "/api/v1/boards/" + board.ID, `{"name":"Changed"}`},
 		{http.MethodDelete, "/api/v1/boards/" + board.ID, ""},
 		{http.MethodPost, "/api/v1/boards/" + board.ID + "/buckets", `{"name":"Injected"}`},
 		{http.MethodPost, "/api/v1/boards/" + board.ID + "/reorder-buckets", `{"ids":[]}`},
-		{http.MethodGet, "/api/v1/buckets/" + bucket.ID, ""},
 		{http.MethodPatch, "/api/v1/buckets/" + bucket.ID, `{"name":"Changed"}`},
 		{http.MethodDelete, "/api/v1/buckets/" + bucket.ID, ""},
 		{http.MethodPost, "/api/v1/buckets/" + bucket.ID + "/tasks", `{"title":"Injected"}`},
 		{http.MethodPost, "/api/v1/buckets/" + bucket.ID + "/reorder-tasks", `{"ids":[]}`},
 		{http.MethodPost, "/api/v1/tasks/" + taskB.ID + "/move", fmt.Sprintf(`{"bucketId":%q,"position":0}`, bucket.ID)},
 		{http.MethodDelete, "/api/v1/tasks/" + taskB.ID, ""},
+		{http.MethodPatch, "/api/v1/tasks/" + taskA.ID, fmt.Sprintf(`{"bucketId":%q}`, otherList.ID)},
+		{http.MethodPatch, "/api/v1/tasks/" + taskA.ID, `{"sortOrder":99}`},
+		{http.MethodPatch, "/api/v1/tasks/" + taskA.ID, fmt.Sprintf(`{"assigneeAgentId":%q}`, agentB.ID)},
 	}
 	for _, request := range restricted {
 		recorder := agentRequest(t, app, agentAToken, request.method, request.path, request.body)
@@ -136,6 +191,10 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	persistedSibling, err := boardStore.GetTask(ctx, owner.ID, taskB.ID)
 	if err != nil || persistedSibling.Title != taskB.Title {
 		t.Fatalf("sibling task after denied routes = %#v, error = %v", persistedSibling, err)
+	}
+	persistedOwn, err := boardStore.GetTask(ctx, owner.ID, taskA.ID)
+	if err != nil || persistedOwn.BucketID != bucket.ID || persistedOwn.SortOrder != taskA.SortOrder || persistedOwn.AssigneeAgentID != agentA.ID {
+		t.Fatalf("own task after denied routing fields = %#v, error = %v", persistedOwn, err)
 	}
 	persistedBoard, err := boardStore.GetBoard(ctx, owner.ID, board.ID)
 	if err != nil || persistedBoard.Name != board.Name {

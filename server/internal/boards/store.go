@@ -25,6 +25,7 @@ var (
 	ErrTaskUnavailable = errors.New("task is not available")
 	ErrIdempotencyKey  = errors.New("idempotency key already used with different task data")
 	ErrIdempotencyGone = errors.New("task created by idempotency key was deleted")
+	ErrAgentTaskScope  = errors.New("agent credentials cannot move, reorder, or reassign tasks")
 )
 
 const (
@@ -94,6 +95,34 @@ func (s *Store) ListBoards(ctx context.Context, userID string) ([]Board, error) 
 	return boards, rows.Err()
 }
 
+func (s *Store) ListBoardsForAgent(ctx context.Context, userID string, agentID string) ([]Board, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT b.id::text, b.name, b.background_kind, b.background_value, b.max_tasks_per_list, b.sort_order, b.created_at, b.updated_at
+		FROM boards b
+		WHERE b.user_id = $1
+			AND EXISTS (
+				SELECT 1
+				FROM tasks t
+				WHERE t.board_id = b.id AND t.assignee_agent_id = $2
+			)
+		ORDER BY b.sort_order, b.created_at
+	`, userID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var boards []Board
+	for rows.Next() {
+		board, err := scanBoard(rows)
+		if err != nil {
+			return nil, err
+		}
+		boards = append(boards, board)
+	}
+	return boards, rows.Err()
+}
+
 func (s *Store) GetBoard(ctx context.Context, userID string, id string) (Board, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT id::text, name, background_kind, background_value, max_tasks_per_list, sort_order, created_at, updated_at
@@ -122,6 +151,31 @@ func (s *Store) GetBoard(ctx context.Context, userID string, id string) (Board, 
 	return board, nil
 }
 
+func (s *Store) GetBoardForAgent(ctx context.Context, userID string, agentID string, id string) (Board, error) {
+	row := s.db.QueryRow(ctx, `
+		SELECT b.id::text, b.name, b.background_kind, b.background_value, b.max_tasks_per_list, b.sort_order, b.created_at, b.updated_at
+		FROM boards b
+		WHERE b.user_id = $1 AND b.id = $2
+			AND EXISTS (
+				SELECT 1
+				FROM tasks t
+				WHERE t.board_id = b.id AND t.assignee_agent_id = $3
+			)
+	`, userID, id, agentID)
+	board, err := scanBoard(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Board{}, ErrNotFound
+	}
+	if err != nil {
+		return Board{}, err
+	}
+	board.Buckets, err = s.listBucketsForAgent(ctx, userID, agentID, id)
+	if err != nil {
+		return Board{}, err
+	}
+	return board, nil
+}
+
 func (s *Store) GetBucket(ctx context.Context, userID string, id string) (Bucket, error) {
 	bucket, err := s.getBucket(ctx, userID, id)
 	if err != nil {
@@ -133,6 +187,24 @@ func (s *Store) GetBucket(ctx context.Context, userID string, id string) (Bucket
 	}
 	bucket.Tasks = tasks
 	return bucket, nil
+}
+
+func (s *Store) GetBucketForAgent(ctx context.Context, userID string, agentID string, id string) (Bucket, error) {
+	row := s.db.QueryRow(ctx, `
+		SELECT b.id::text, b.board_id::text, b.name, b.goal, b.is_inbox, bo.max_tasks_per_list, b.sort_order,
+			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.done = false)::int AS open_count,
+			b.created_at, b.updated_at
+		FROM buckets b
+		JOIN boards bo ON bo.id = b.board_id
+		JOIN tasks t ON t.bucket_id = b.id AND t.assignee_agent_id = $3
+		WHERE bo.user_id = $1 AND b.id = $2
+		GROUP BY b.id, bo.max_tasks_per_list
+	`, userID, id, agentID)
+	bucket, err := scanBucket(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Bucket{}, ErrNotFound
+	}
+	return bucket, err
 }
 
 func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoardInput) (Board, error) {
@@ -572,6 +644,9 @@ func (s *Store) UpdateTaskForHuman(ctx context.Context, userID string, id string
 }
 
 func (s *Store) UpdateTaskForAgent(ctx context.Context, userID string, agentID string, id string, input UpdateTaskInput) (Task, error) {
+	if input.BucketID != nil || input.SortOrder != nil || input.AssigneeAgentID != nil {
+		return Task{}, ErrAgentTaskScope
+	}
 	return s.updateTask(ctx, userID, agentID, id, input, false)
 }
 
@@ -984,6 +1059,34 @@ func (s *Store) listBuckets(ctx context.Context, userID string, boardID string) 
 		GROUP BY b.id, bo.max_tasks_per_list
 		ORDER BY b.sort_order, b.created_at
 	`, userID, boardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var buckets []Bucket
+	for rows.Next() {
+		bucket, err := scanBucket(rows)
+		if err != nil {
+			return nil, err
+		}
+		buckets = append(buckets, bucket)
+	}
+	return buckets, rows.Err()
+}
+
+func (s *Store) listBucketsForAgent(ctx context.Context, userID string, agentID string, boardID string) ([]Bucket, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT b.id::text, b.board_id::text, b.name, b.goal, b.is_inbox, bo.max_tasks_per_list, b.sort_order,
+			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.done = false)::int AS open_count,
+			b.created_at, b.updated_at
+		FROM buckets b
+		JOIN boards bo ON bo.id = b.board_id
+		JOIN tasks t ON t.bucket_id = b.id AND t.assignee_agent_id = $3
+		WHERE bo.user_id = $1 AND b.board_id = $2
+		GROUP BY b.id, bo.max_tasks_per_list
+		ORDER BY b.sort_order, b.created_at
+	`, userID, boardID, agentID)
 	if err != nil {
 		return nil, err
 	}
