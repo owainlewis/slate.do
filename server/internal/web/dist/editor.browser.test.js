@@ -1040,8 +1040,12 @@ test("agent users can be created, assigned with an avatar, revoked, and safely d
   assert.equal(await page.getByPlaceholder("Agent name").count(), 0);
   page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Delete", exact: true }).click();
-  await page.getByText("Inactive", { exact: true }).waitFor();
   await page.getByPlaceholder("Agent name").waitFor();
+  assert.equal(await page.locator(".agent-list").getByText("Builder Bot", { exact: true }).count(), 0);
+  assert.equal(await page.locator(".agent-list").getByText("Inactive", { exact: true }).count(), 0);
+  await page.reload();
+  await page.getByPlaceholder("Agent name").waitFor();
+  assert.equal(await page.locator(".agent-list").getByText("Builder Bot", { exact: true }).count(), 0);
   await page.getByRole("button", { name: "Back to board", exact: true }).click();
   assert.equal(await page.locator(".task-assignee .avatar").getAttribute("title"), "Builder Bot (inactive)");
 });

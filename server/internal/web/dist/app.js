@@ -1104,14 +1104,14 @@ function settingsHTML() {
           </form>`}
         ${state.newAgentToken ? `<div class="new-token"><label>New agent token. Copy it now.</label><code>${escapeHTML(state.newAgentToken)}</code></div>` : ""}
         <div class="agent-list">
-          ${state.agents.length ? state.agents.map(agent => `
-            <div class="agent-row ${agent.deletedAt ? "inactive" : ""}">
+          ${liveAgents.length ? liveAgents.map(agent => `
+            <div class="agent-row">
               ${avatarHTML(agent, { small: true })}
-              <span><b>${escapeHTML(agent.displayName)}</b><small class="agent-status">${agent.deletedAt ? "Inactive" : agent.revokedAt ? "Token revoked" : "Active"}</small></span>
-              ${agent.deletedAt ? "" : `<div class="settings-row-actions">
+              <span><b>${escapeHTML(agent.displayName)}</b><small class="agent-status">${agent.revokedAt ? "Token revoked" : "Active"}</small></span>
+              <div class="settings-row-actions">
                 ${agent.revokedAt ? "" : `<button class="secondary" data-revoke-agent="${agent.id}">Revoke token</button>`}
                 <button class="danger" data-delete-agent="${agent.id}">Delete</button>
-              </div>`}
+              </div>
             </div>`).join("") : `<div class="empty-state"><p>No agent users yet.</p></div>`}
         </div>
       </section>`;
