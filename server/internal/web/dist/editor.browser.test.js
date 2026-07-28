@@ -811,6 +811,9 @@ test("settings routes isolate pages and preserve navigation, refresh, and respon
   assert.equal(await page.getByRole("textbox", { name: "Your display name", exact: true }).count(), 1);
   assert.equal(await page.getByRole("spinbutton", { name: "Max active items per list", exact: true }).count(), 0);
   assert.equal(await page.locator('.settings-nav-link[aria-current="page"]').innerText(), "Profile");
+  assert.equal(await page.getByText("Update your display name.", { exact: true }).count(), 1);
+  assert.equal(await page.locator(".profile-form .user-avatar .icon").count(), 1);
+  assert.equal(await page.locator(".profile-form .user-avatar").getAttribute("aria-label"), "Owner");
 
   await page.getByRole("link", { name: "Board", exact: true }).click();
   await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
