@@ -3,11 +3,28 @@ package agents
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/owainlewis/slate.do/server/internal/auth"
 	"github.com/owainlewis/slate.do/server/internal/database"
+	"github.com/owainlewis/slate.do/server/internal/entitlements"
 )
+
+var (
+	ErrArchiveConflict     = errors.New("agent has open assigned work")
+	ErrIdempotencyConflict = errors.New("idempotency key belongs to another agent")
+	ErrRestoreLimit        = errors.New("active agent limit reached")
+	ErrRestoreNameTaken    = errors.New("active agent name already exists")
+)
+
+type ArchiveConflictError struct {
+	Counts ArchiveConflict
+}
+
+func (e *ArchiveConflictError) Error() string { return ErrArchiveConflict.Error() }
+func (e *ArchiveConflictError) Unwrap() error { return ErrArchiveConflict }
 
 type agentFinder interface {
 	GetAgent(context.Context, string, string) (auth.AgentUser, error)
@@ -101,6 +118,302 @@ func (s *Store) ListWork(ctx context.Context, userID string, agentID string, pag
 		HasNext:     offset+len(items) < total,
 		HasPrevious: page > 1,
 	}, nil
+}
+
+func (s *Store) UpdateAgent(ctx context.Context, userID string, agentID string, displayName string, purpose string) (auth.AgentUser, error) {
+	displayName = strings.TrimSpace(displayName)
+	purpose = strings.TrimSpace(purpose)
+	var id string
+	err := s.db.QueryRow(ctx, `
+		UPDATE agents
+		SET name = $3, purpose = NULLIF($4, ''), updated_at = now()
+		WHERE owner_user_id = $1 AND id::text = $2
+		RETURNING id::text
+	`, userID, agentID, displayName, purpose).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.AgentUser{}, auth.ErrAgentNotFound
+	}
+	if constraintViolation(err, "agents_owner_active_name_idx") {
+		return auth.AgentUser{}, auth.ErrAgentNameTaken
+	}
+	if err != nil {
+		return auth.AgentUser{}, err
+	}
+	return s.agents.GetAgent(ctx, userID, id)
+}
+
+func (s *Store) RotateCredential(ctx context.Context, userID string, agentID string, idempotencyKey string, tokenHash string, tokenPrefix string) (auth.AgentCredential, bool, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return auth.AgentCredential{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":"+idempotencyKey); err != nil {
+		return auth.AgentCredential{}, false, err
+	}
+	var credential auth.AgentCredential
+	var recordedAgentID string
+	err = tx.QueryRow(ctx, `
+		SELECT credential.id::text, COALESCE(credential.token_prefix, ''), credential.last_used_at,
+			credential.revoked_at, credential.created_at, credential.updated_at, rotation.agent_id::text
+		FROM agent_credential_rotations rotation
+		JOIN agent_credentials credential ON credential.id = rotation.credential_id
+		WHERE rotation.owner_user_id = $1 AND rotation.idempotency_key = $2
+	`, userID, idempotencyKey).Scan(
+		&credential.ID, &credential.TokenPrefix, &credential.LastUsedAt,
+		&credential.RevokedAt, &credential.CreatedAt, &credential.UpdatedAt, &recordedAgentID,
+	)
+	if err == nil {
+		if recordedAgentID != agentID {
+			return auth.AgentCredential{}, false, ErrIdempotencyConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return auth.AgentCredential{}, false, err
+		}
+		return credential, false, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return auth.AgentCredential{}, false, err
+	}
+
+	var ownedID string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text
+		FROM agents
+		WHERE owner_user_id = $1 AND id::text = $2 AND archived_at IS NULL
+		FOR UPDATE
+	`, userID, agentID).Scan(&ownedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.AgentCredential{}, false, auth.ErrAgentNotFound
+	}
+	if err != nil {
+		return auth.AgentCredential{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_credentials
+		SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
+		WHERE agent_id = $1 AND revoked_at IS NULL
+	`, ownedID); err != nil {
+		return auth.AgentCredential{}, false, err
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO agent_credentials (agent_id, token_hash, token_prefix)
+		VALUES ($1, $2, $3)
+		RETURNING id::text, COALESCE(token_prefix, ''), last_used_at, revoked_at, created_at, updated_at
+	`, ownedID, tokenHash, tokenPrefix).Scan(
+		&credential.ID, &credential.TokenPrefix, &credential.LastUsedAt,
+		&credential.RevokedAt, &credential.CreatedAt, &credential.UpdatedAt,
+	)
+	if err != nil {
+		return auth.AgentCredential{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_credential_rotations (owner_user_id, idempotency_key, agent_id, credential_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, idempotencyKey, ownedID, credential.ID); err != nil {
+		return auth.AgentCredential{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return auth.AgentCredential{}, false, err
+	}
+	return credential, true, nil
+}
+
+func (s *Store) RevokeCredential(ctx context.Context, userID string, agentID string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var ownedID string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text FROM agents
+		WHERE owner_user_id = $1 AND id::text = $2 AND archived_at IS NULL
+		FOR UPDATE
+	`, userID, agentID).Scan(&ownedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.ErrAgentNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_credentials
+		SET revoked_at = now(), updated_at = now()
+		WHERE agent_id = $1 AND revoked_at IS NULL
+	`, ownedID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) ArchiveAgent(ctx context.Context, userID string, agentID string, unassignOpen bool) (ArchiveConflict, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return ArchiveConflict{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var archived bool
+	err = tx.QueryRow(ctx, `
+		SELECT archived_at IS NOT NULL
+		FROM agents
+		WHERE owner_user_id = $1 AND id::text = $2
+		FOR UPDATE
+	`, userID, agentID).Scan(&archived)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ArchiveConflict{}, auth.ErrAgentNotFound
+	}
+	if err != nil {
+		return ArchiveConflict{}, err
+	}
+	if archived {
+		if err := tx.Commit(ctx); err != nil {
+			return ArchiveConflict{}, err
+		}
+		return ArchiveConflict{}, nil
+	}
+
+	var conflict ArchiveConflict
+	rows, err := tx.Query(ctx, `
+		SELECT t.status
+		FROM tasks t
+		JOIN boards b ON b.id = t.board_id
+		WHERE b.user_id = $1
+			AND t.assignee_agent_id = $2
+			AND NOT t.done
+			AND t.status IN ('queued', 'working')
+		FOR UPDATE OF t
+	`, userID, agentID)
+	if err != nil {
+		return ArchiveConflict{}, err
+	}
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			rows.Close()
+			return ArchiveConflict{}, err
+		}
+		if status == "working" {
+			conflict.Working++
+		} else {
+			conflict.Ready++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ArchiveConflict{}, err
+	}
+	rows.Close()
+	if (conflict.Ready > 0 || conflict.Working > 0) && !unassignOpen {
+		return conflict, &ArchiveConflictError{Counts: conflict}
+	}
+	if unassignOpen {
+		if _, err := tx.Exec(ctx, `
+			UPDATE tasks t
+			SET assignee_agent_id = NULL, status = 'queued', done = false, updated_at = now()
+			FROM boards b
+			WHERE b.id = t.board_id
+				AND b.user_id = $1
+				AND t.assignee_agent_id = $2
+				AND NOT t.done
+				AND t.status IN ('queued', 'working')
+		`, userID, agentID); err != nil {
+			return ArchiveConflict{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_credentials
+		SET revoked_at = now(), updated_at = now()
+		WHERE agent_id = $1 AND revoked_at IS NULL
+	`, agentID); err != nil {
+		return ArchiveConflict{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agents
+		SET archived_at = now(), updated_at = now()
+		WHERE owner_user_id = $1 AND id::text = $2
+	`, userID, agentID); err != nil {
+		return ArchiveConflict{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ArchiveConflict{}, err
+	}
+	return conflict, nil
+}
+
+func (s *Store) RestoreAgent(ctx context.Context, userID string, agentID string) (auth.AgentUser, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return auth.AgentUser{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var activeUserID string
+	err = tx.QueryRow(ctx, `
+		SELECT u.id::text
+		FROM users u
+		JOIN entitlements e ON e.user_id = u.id AND e.plan = 'pro'
+		WHERE u.id = $1 AND u.disabled_at IS NULL
+		FOR UPDATE OF u
+	`, userID).Scan(&activeUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.AgentUser{}, auth.ErrUnauthorized
+	}
+	if err != nil {
+		return auth.AgentUser{}, err
+	}
+	var archived bool
+	err = tx.QueryRow(ctx, `
+		SELECT archived_at IS NOT NULL
+		FROM agents
+		WHERE owner_user_id = $1 AND id::text = $2
+		FOR UPDATE
+	`, activeUserID, agentID).Scan(&archived)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.AgentUser{}, auth.ErrAgentNotFound
+	}
+	if err != nil {
+		return auth.AgentUser{}, err
+	}
+	if archived {
+		var activeAgents int
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM agents
+			WHERE owner_user_id = $1 AND archived_at IS NULL
+		`, activeUserID).Scan(&activeAgents); err != nil {
+			return auth.AgentUser{}, err
+		}
+		if activeAgents >= entitlements.ProLimits.Agents {
+			return auth.AgentUser{}, ErrRestoreLimit
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE agent_credentials
+			SET revoked_at = COALESCE(revoked_at, now()), updated_at =
+				CASE WHEN revoked_at IS NULL THEN now() ELSE updated_at END
+			WHERE agent_id = $1
+		`, agentID); err != nil {
+			return auth.AgentUser{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE agents SET archived_at = NULL, updated_at = now()
+			WHERE owner_user_id = $1 AND id::text = $2
+		`, activeUserID, agentID); constraintViolation(err, "agents_owner_active_name_idx") {
+			return auth.AgentUser{}, ErrRestoreNameTaken
+		} else if err != nil {
+			return auth.AgentUser{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return auth.AgentUser{}, err
+	}
+	return s.agents.GetAgent(ctx, activeUserID, agentID)
+}
+
+func constraintViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.ConstraintName == constraint
 }
 
 func (s *Store) workTotals(ctx context.Context, userID string, agentID string) (WorkTotals, error) {

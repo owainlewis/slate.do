@@ -618,6 +618,59 @@ test("new-agent route has inline limits and one-time CLI connection instructions
   vm.runInContext(`state.me = null; state.view = "home"; state.agentCreationResult = null; state.agentsLoadState = "idle";`, app);
 });
 
+test("agent settings separate identity, credential, and archive lifecycle without persistent secrets", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", theme: "light" };
+    state.view = "agent-settings";
+    state.agentDetailLoadState = "ready";
+    state.agentDetail = {
+      agent: { id: "agent-one", displayName: "Builder", purpose: "Ships work", credential: { id: "credential-one" } },
+      work: { ready: [], working: [], review: [], recentlyCompleted: [], totals: {} },
+    };
+    state.agentCredentialResult = null;
+    state.agentLifecycleConfirm = "";
+    state.agentLifecycleError = "";
+    state.agentLifecycleNotice = "";
+  `, app);
+  const settings = app.agentDetailHTML();
+  assert.match(settings, /id="agent-tab-settings"[^>]*aria-selected="true"[^>]*aria-current="page"/);
+  assert.match(settings, /id="agent-identity-form"/);
+  assert.match(settings, /id="agent-settings-name" name="displayName" value="Builder"/);
+  assert.match(settings, /id="rotate-agent-credential"/);
+  assert.match(settings, /id="revoke-agent-credential"/);
+  assert.match(settings, /id="archive-agent"/);
+  assert.doesNotMatch(settings, />Delete</);
+
+  vm.runInContext(`
+    state.agentCredentialResult = { ownerID: "owner", agentID: "agent-one", token: "slate_agent_once_only" };
+  `, app);
+  const result = app.agentDetailHTML();
+  assert.match(result, /class="agent-connection-result agent-lifecycle-secret"/);
+  assert.match(result, /slate_agent_once_only/);
+  assert.match(result, /Slate stores only its hash/);
+  assert.doesNotMatch(source, /localStorage|sessionStorage/);
+  assert.match(source, /alreadyApplied/);
+  assert.match(source, /old credential may have been revoked/i);
+  vm.runInContext(`
+    clearAgentCredentialLeaving({ name: "agent-settings", agentId: "agent-one" });
+  `, app);
+  assert.equal(vm.runInContext("state.agentCredentialResult?.token", app), "slate_agent_once_only");
+  vm.runInContext(`
+    clearAgentCredentialLeaving({ name: "agent-detail", agentId: "agent-one" });
+  `, app);
+  assert.equal(vm.runInContext("state.agentCredentialResult", app), null);
+
+  vm.runInContext(`
+    state.agentDetail.agent.archivedAt = "2026-07-28T00:00:00Z";
+  `, app);
+  const archived = app.agentDetailHTML();
+  assert.match(archived, /id="restore-agent"/);
+  assert.doesNotMatch(archived, /id="rotate-agent-credential"/);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(app.parseRoute("/app/agents/agent-one/settings"))), { name: "agent-settings", agentId: "agent-one" });
+  vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentCredentialResult = null;`, app);
+});
+
 test("credential copy failure leaves the token selected for manual copy", async () => {
   const events = [];
   const range = {

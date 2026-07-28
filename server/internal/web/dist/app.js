@@ -3,6 +3,8 @@ const ICON_PATHS = {
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
   pencil: '<path d="M4 20h4l10.7-10.7a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>',
   trash: '<path d="M4 7h16"/><path d="M9 7V4.6C9 3.7 9.7 3 10.6 3h2.8c.9 0 1.6.7 1.6 1.6V7"/><path d="M18.4 7l-.8 12.4a2 2 0 0 1-2 1.9H8.4a2 2 0 0 1-2-1.9L5.6 7"/><path d="M10 11v6M14 11v6"/>',
+  archive: '<path d="M5 8v11h14V8M3.5 4h17v4h-17zM9 12h6"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M15 8l2 2M17 6l2 2"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chevronLeft: '<path d="M15 6l-6 6 6 6"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
@@ -52,6 +54,7 @@ const api = {
       const error = new Error(data.error || "Request failed");
       error.status = res.status;
       error.code = data.code || "";
+      error.data = data;
       throw error;
     }
     return data;
@@ -131,6 +134,12 @@ const state = {
   agentAssignBoardID: "",
   agentAssignDraft: null,
   agentTaskFocusID: "",
+  agentLifecycleNotice: "",
+  agentLifecycleError: "",
+  agentLifecyclePending: "",
+  agentLifecycleConfirm: "",
+  agentArchiveConflict: null,
+  agentCredentialResult: null,
   boardMode: "lists",
   flowListId: "",
   weekStart: "",
@@ -194,6 +203,10 @@ function agentWorkPath(id, page = 1) {
   return page > 1 ? `${path}?page=${page}` : path;
 }
 
+function agentSettingsPath(id) {
+  return `${agentPath(id)}/settings`;
+}
+
 function normalizePath(value) {
   const path = String(value ?? "").split("?")[0].split("#")[0];
   if (!path.startsWith("/")) return HOME_PATH;
@@ -218,6 +231,14 @@ function parseRoute(pathname) {
   if (agentWork) {
     try {
       return { name: "agent-work", agentId: decodeURIComponent(agentWork[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
+  const agentSettings = /^\/app\/agents\/([^/]+)\/settings$/.exec(path);
+  if (agentSettings) {
+    try {
+      return { name: "agent-settings", agentId: decodeURIComponent(agentSettings[1]) };
     } catch {
       return { name: "not-found" };
     }
@@ -255,7 +276,7 @@ function parseRoute(pathname) {
 
 function isProtectedRoute(name) {
   return name === "app" || name === "board" || name === "board-settings" || name === "settings"
-    || name === "agents" || name === "agent-new" || name === "agent-detail" || name === "agent-work";
+    || name === "agents" || name === "agent-new" || name === "agent-detail" || name === "agent-work" || name === "agent-settings";
 }
 
 // Only same-origin app paths may be returned to after login. Anything else,
@@ -291,7 +312,7 @@ function syncPath(path) {
 function navigate(path, options = {}) {
   const nextRoute = parseRoute(path);
   clearSettingsCredentialsLeaving(nextRoute.name === "settings" ? nextRoute.settingsPage : "");
-  clearAgentCredentialLeaving(nextRoute.name);
+  clearAgentCredentialLeaving(nextRoute);
   if (options.replace || currentLocationPath() === path) history.replaceState({}, "", path);
   else history.pushState({}, "", path);
   return applyRoute();
@@ -300,7 +321,7 @@ function navigate(path, options = {}) {
 let routeVersion = 0;
 
 function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
-  if (err?.status !== 401 || (route.name !== "agent-detail" && route.name !== "agent-work")) return false;
+  if (err?.status !== 401 || !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return false;
   state.agents = [];
   state.activeAgents = 0;
   state.agentsLoadState = "idle";
@@ -314,6 +335,12 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentLifecycleNotice = "";
+  state.agentLifecycleError = "";
+  state.agentLifecyclePending = "";
+  state.agentLifecycleConfirm = "";
+  state.agentArchiveConflict = null;
+  clearAgentLifecycleCredential();
   state.agentDetailLoadState = "unauthorized";
   state.agentDetailError = err.message;
   state.settings = false;
@@ -336,6 +363,11 @@ function prepareAgentRoute(route) {
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentLifecycleNotice = "";
+  state.agentLifecycleError = "";
+  state.agentLifecyclePending = "";
+  state.agentLifecycleConfirm = "";
+  state.agentArchiveConflict = null;
   state.agentDetailLoadState = "loading";
   state.agentDetailError = "";
   render();
@@ -346,7 +378,7 @@ function prepareAgentRoute(route) {
 async function applyRoute() {
   const version = ++routeVersion;
   const route = parseRoute(location.pathname);
-  if (route.name !== "board" && route.name !== "agent-detail" && route.name !== "agent-work") state.selectedTask = null;
+  if (route.name !== "board" && !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) state.selectedTask = null;
   state.error = "";
   state.settingsNotice = "";
   state.settingsPending = "";
@@ -369,7 +401,7 @@ async function applyRoute() {
       ? navigate(AGENTS_PATH, { replace: true })
       : navigate(settingsPath(route.settingsPage), { replace: true });
   }
-  if (route.name === "agent-detail" || route.name === "agent-work") prepareAgentRoute(route);
+  if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) prepareAgentRoute(route);
   try {
     if (!await loadBoardList(version)) return;
     if (routeVersion !== version) return;
@@ -394,7 +426,7 @@ async function applyRoute() {
       render();
       return;
     }
-    if (route.name === "agent-detail" || route.name === "agent-work") {
+    if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) {
       await loadAgents(true, authVersion, state.me?.id, version);
       if (routeVersion !== version) return;
       try {
@@ -555,6 +587,12 @@ function resetAuthenticatedState() {
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentLifecycleNotice = "";
+  state.agentLifecycleError = "";
+  state.agentLifecyclePending = "";
+  state.agentLifecycleConfirm = "";
+  state.agentArchiveConflict = null;
+  state.agentCredentialResult = null;
   state.boardMode = "lists";
   state.flowListId = "";
   state.weekStart = "";
@@ -686,9 +724,11 @@ function render() {
     bindAgents();
     return;
   }
-  if (state.view === "agent-detail" || state.view === "agent-work") {
+  if (state.view === "agent-detail" || state.view === "agent-work" || state.view === "agent-settings") {
     const agentID = state.agentDetail?.agent?.id || parseRoute(location.pathname).agentId || "";
-    syncPath(state.view === "agent-work" ? agentWorkPath(agentID, state.agentWorkPage?.page || workPageFromLocation()) : agentPath(agentID));
+    syncPath(state.view === "agent-work"
+      ? agentWorkPath(agentID, state.agentWorkPage?.page || workPageFromLocation())
+      : state.view === "agent-settings" ? agentSettingsPath(agentID) : agentPath(agentID));
     root.innerHTML = agentDetailHTML();
     bindAgentDetail();
     return;
@@ -737,7 +777,7 @@ function routeErrorHTML() {
       : state.routeError?.name === "board"
         ? "this board"
         : state.routeError?.name === "agents" || state.routeError?.name === "agent-new"
-          || state.routeError?.name === "agent-detail" || state.routeError?.name === "agent-work"
+          || state.routeError?.name === "agent-detail" || state.routeError?.name === "agent-work" || state.routeError?.name === "agent-settings"
           ? "agents"
           : "the app";
   return `
@@ -1461,6 +1501,7 @@ function agentDetailHTML() {
       </main>
       ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
       ${state.agentAssignOpen ? assignWorkHTML() : ""}
+      ${state.agentLifecycleConfirm ? agentLifecycleConfirmHTML() : ""}
     </section>`;
 }
 
@@ -1502,7 +1543,7 @@ function agentDetailBodyHTML() {
   }
   const agent = state.agentDetail.agent;
   const archived = Boolean(agent.archivedAt || agent.deletedAt);
-  const current = state.view === "agent-work" ? "work" : "overview";
+  const current = state.view === "agent-work" ? "work" : state.view === "agent-settings" ? "settings" : "overview";
   return `
     <header class="agent-detail-head">
       <div class="agent-detail-identity">
@@ -1516,11 +1557,12 @@ function agentDetailBodyHTML() {
           <p class="agent-last-used">Last credential use: ${escapeHTML(formatLastUse(agent.credential?.lastUsedAt || agent.lastUsedAt))}</p>
         </div>
       </div>
-      ${archived ? "" : `<button class="primary icon-label" id="assign-work" type="button">${icon("plus")}<span>Assign work</span></button>`}
+      ${archived || current === "settings" ? "" : `<button class="primary icon-label" id="assign-work" type="button">${icon("plus")}<span>Assign work</span></button>`}
     </header>
     <nav class="agent-tabs" aria-label="Agent sections" role="tablist">
       <a id="agent-tab-overview" href="${agentPath(agent.id)}" role="tab" tabindex="${current === "overview" ? "0" : "-1"}" aria-selected="${current === "overview"}" aria-controls="agent-panel-overview" ${current === "overview" ? 'aria-current="page"' : ""} data-agent-tab>Overview</a>
       <a id="agent-tab-work" href="${agentWorkPath(agent.id)}" role="tab" tabindex="${current === "work" ? "0" : "-1"}" aria-selected="${current === "work"}" aria-controls="agent-panel-work" ${current === "work" ? 'aria-current="page"' : ""} data-agent-tab>Work</a>
+      <a id="agent-tab-settings" href="${agentSettingsPath(agent.id)}" role="tab" tabindex="${current === "settings" ? "0" : "-1"}" aria-selected="${current === "settings"}" aria-controls="agent-panel-settings" ${current === "settings" ? 'aria-current="page"' : ""} data-agent-tab>Settings</a>
     </nav>
     ${archived ? `
       <section class="agent-archived-note" role="status">
@@ -1534,7 +1576,95 @@ function agentDetailBodyHTML() {
     <section id="agent-panel-work" class="agent-tab-panel" role="tabpanel" aria-labelledby="agent-tab-work" tabindex="0" ${current === "work" ? "" : "hidden"}>
       ${current === "work" ? agentWorkPageHTML(agent) : ""}
     </section>
+    <section id="agent-panel-settings" class="agent-tab-panel" role="tabpanel" aria-labelledby="agent-tab-settings" tabindex="0" ${current === "settings" ? "" : "hidden"}>
+      ${current === "settings" ? agentSettingsHTML(agent) : ""}
+    </section>
   `;
+}
+
+function agentSettingsHTML(agent) {
+  const archived = Boolean(agent.archivedAt || agent.deletedAt);
+  const connected = agentConnectionState(agent) === "Connected";
+  if (state.agentCredentialResult?.ownerID === state.me?.id && state.agentCredentialResult?.agentID === agent.id) {
+    return agentRotationResultHTML(agent, state.agentCredentialResult);
+  }
+  return `
+    ${state.agentLifecycleNotice ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentLifecycleNotice)}</p>` : ""}
+    ${state.agentLifecycleError ? `<p class="status-error" role="alert">${escapeHTML(state.agentLifecycleError)}</p>` : ""}
+    <form class="agent-settings-card" id="agent-identity-form" novalidate>
+      <header><div><p class="eyebrow">Identity</p><h2>Name and purpose</h2></div><span>Immutable ID ${escapeHTML(agent.id)}</span></header>
+      <label class="agent-create-field"><span class="field-title">Name</span><input id="agent-settings-name" name="displayName" value="${escapeAttr(agent.displayName)}" maxlength="80" required aria-describedby="agent-settings-name-error"><small class="error" id="agent-settings-name-error"></small></label>
+      <label class="agent-create-field"><span class="field-title">Purpose</span><textarea id="agent-settings-purpose" name="purpose" maxlength="500" aria-describedby="agent-settings-purpose-error">${escapeHTML(agent.purpose || "")}</textarea><small class="error" id="agent-settings-purpose-error"></small></label>
+      <div class="agent-settings-actions"><button class="primary" type="submit" ${state.agentLifecyclePending ? "disabled" : ""}>${state.agentLifecyclePending === "identity" ? "Saving…" : "Save changes"}</button></div>
+    </form>
+    <section class="agent-settings-card" aria-labelledby="credential-settings-heading">
+      <header><div><p class="eyebrow">Credential</p><h2 id="credential-settings-heading">${connected ? "Connected" : "Needs connection"}</h2></div>${icon("key")}</header>
+      <p>${archived ? "Archived agents cannot connect. Restore this identity before creating a new credential." : connected ? "Only this agent’s assigned work is available through its active credential." : "Create a new credential to connect this identity again."}</p>
+      ${archived ? "" : `<div class="agent-settings-actions">
+        <button class="secondary icon-label" id="rotate-agent-credential" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>${icon("key")}<span>${connected ? "Rotate credential" : "Create credential"}</span></button>
+        ${connected ? `<button class="secondary danger-text" id="revoke-agent-credential" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>Revoke credential</button>` : ""}
+      </div>`}
+    </section>
+    <section class="agent-settings-card agent-danger-zone" aria-labelledby="agent-lifecycle-heading">
+      <header><div><p class="eyebrow">Lifecycle</p><h2 id="agent-lifecycle-heading">${archived ? "Restore identity" : "Archive agent"}</h2></div>${icon("archive")}</header>
+      <p>${archived ? "Restore this identity as Needs connection. Historical assignments remain attached." : "Archiving removes this agent from assignment choices and revokes every credential. Review and Done history remains attached."}</p>
+      <div class="agent-settings-actions"><button class="${archived ? "secondary" : "danger"}" id="${archived ? "restore-agent" : "archive-agent"}" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>${archived ? "Restore agent" : "Archive agent"}</button></div>
+    </section>`;
+}
+
+function agentRotationResultHTML(agent, result) {
+  return `
+    <section class="agent-connection-result agent-lifecycle-secret" aria-labelledby="rotation-result-heading">
+      <div class="connection-agent">${avatarHTML(agent, { decorative: true })}<div><p>Credential rotated</p><h2 id="rotation-result-heading">Connect ${escapeHTML(agent.displayName)}</h2></div></div>
+      <div class="credential-warning"><strong>Copy this credential now.</strong><p>Slate stores only its hash. This value disappears when you leave or refresh this page.</p></div>
+      <div class="credential-value"><code id="agent-lifecycle-credential" tabindex="0">${escapeHTML(result.token)}</code><button class="secondary icon-label" id="copy-lifecycle-credential" type="button">${icon(state.credentialCopied ? "check" : "copy")}<span>${state.credentialCopied ? "Copied" : "Copy"}</span></button></div>
+      <p class="error credential-copy-error" id="lifecycle-copy-error">${escapeHTML(state.credentialCopyError)}</p>
+      <div class="credential-steps"><p><span>1</span><code>export SLATE_API_TOKEN=${escapeHTML(result.token)}</code></p><p><span>2</span><code>slate auth status</code></p></div>
+      ${state.agentLifecycleNotice ? `<p class="agent-create-notice" role="status">${escapeHTML(state.agentLifecycleNotice)}</p>` : ""}
+      <div class="agent-settings-actions"><button class="primary" id="finish-lifecycle-credential" type="button">Done</button></div>
+    </section>`;
+}
+
+function agentLifecycleConfirmHTML() {
+  const agent = state.agentDetail.agent;
+  const action = state.agentLifecycleConfirm;
+  const pending = Boolean(state.agentLifecyclePending);
+  const conflict = state.agentArchiveConflict;
+  const config = {
+    rotate: {
+      title: agentConnectionState(agent) === "Connected" ? "Rotate credential?" : "Create credential?",
+      body: agentConnectionState(agent) === "Connected"
+        ? "The current credential will stop working as soon as the replacement is created."
+        : "A one-time credential will be created for this identity.",
+      confirm: agentConnectionState(agent) === "Connected" ? "Rotate credential" : "Create credential",
+    },
+    revoke: {
+      title: "Revoke credential?",
+      body: "The agent will become Needs connection. All assigned work stays assigned.",
+      confirm: "Revoke credential",
+    },
+    archive: {
+      title: conflict ? "Open work is still assigned." : "Archive this agent?",
+      body: conflict
+        ? `${formatCount(conflict.ready, "Ready item", "Ready items")} and ${formatCount(conflict.working, "Working item", "Working items")} must be unassigned. Review and Done history will remain attached.`
+        : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for Ready and Working work.",
+      confirm: conflict ? "Unassign open work and archive" : "Archive agent",
+    },
+    restore: {
+      title: "Restore this identity?",
+      body: "It will return as Needs connection and use one active agent slot. Existing credentials stay revoked.",
+      confirm: "Restore agent",
+    },
+  }[action];
+  return `
+    <div class="detail-overlay agent-lifecycle-overlay">
+      <section class="agent-lifecycle-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-lifecycle-confirm-heading" ${pending ? 'aria-busy="true"' : ""}>
+        <header><span class="agent-state-icon">${icon(action === "rotate" ? "key" : action === "restore" ? "bot" : "archive")}</span><div><h2 id="agent-lifecycle-confirm-heading">${escapeHTML(config.title)}</h2><p>${escapeHTML(config.body)}</p></div></header>
+        ${pending ? '<p class="agent-lifecycle-pending" id="agent-lifecycle-pending" role="status" tabindex="-1">Working… Keep this page open.</p>' : ""}
+        ${state.agentLifecycleError ? `<p class="status-error" role="alert">${escapeHTML(state.agentLifecycleError)}</p>` : ""}
+        <footer><button class="secondary" id="cancel-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>Cancel</button><button class="${action === "rotate" || action === "restore" ? "primary" : "danger"}" id="confirm-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>${pending ? "Working…" : escapeHTML(config.confirm)}</button></footer>
+      </section>
+    </div>`;
 }
 
 function agentOverviewHTML(agent) {
@@ -2826,6 +2956,7 @@ function bindAgentDetail() {
   document.querySelector("#assign-work")?.addEventListener("click", openAssignWork);
   document.querySelectorAll("[data-open-agent-task]").forEach(element => element.addEventListener("click", () => openAgentTask(element)));
   bindAssignWork();
+  bindAgentLifecycle();
   if (state.selectedTask) {
     bindDetail({
       refresh: refreshAgentSurface,
@@ -2840,6 +2971,308 @@ function bindAgentDetail() {
     const fallback = document.querySelector("#assign-work") || document.querySelector('[role="tab"][aria-selected="true"]');
     (createdItem || fallback)?.focus();
   }
+}
+
+function bindAgentLifecycle() {
+  if (state.view !== "agent-settings" || !state.agentDetail) return;
+  const form = document.querySelector("#agent-identity-form");
+  form?.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (state.agentLifecyclePending) return;
+    const name = form.elements.displayName;
+    const purpose = form.elements.purpose;
+    const displayName = name.value.trim();
+    const purposeValue = purpose.value.trim();
+    document.querySelector("#agent-settings-name-error").textContent = "";
+    document.querySelector("#agent-settings-purpose-error").textContent = "";
+    name.removeAttribute("aria-invalid");
+    purpose.removeAttribute("aria-invalid");
+    if (!displayName) {
+      name.setAttribute("aria-invalid", "true");
+      document.querySelector("#agent-settings-name-error").textContent = "Agent name is required.";
+      name.focus();
+      return;
+    }
+    if ([...displayName].length > 80) {
+      name.setAttribute("aria-invalid", "true");
+      document.querySelector("#agent-settings-name-error").textContent = "Agent name must be 80 characters or fewer.";
+      name.focus();
+      return;
+    }
+    if ([...purposeValue].length > 500) {
+      purpose.setAttribute("aria-invalid", "true");
+      document.querySelector("#agent-settings-purpose-error").textContent = "Purpose must be 500 characters or fewer.";
+      purpose.focus();
+      return;
+    }
+    const context = agentMutationContext();
+    state.agentLifecyclePending = "identity";
+    state.agentLifecycleError = "";
+    state.agentLifecycleNotice = "";
+    render();
+    try {
+      const updated = await api.patch(`/api/v1/agents/${encodeURIComponent(context.agentID)}`, { displayName, purpose: purposeValue });
+      if (!agentMutationIsCurrent(context)) return;
+      state.agentDetail.agent = updated;
+      updateAgentCache(updated);
+      state.agentLifecycleNotice = "Agent identity saved.";
+    } catch (err) {
+      if (!agentMutationIsCurrent(context)) return;
+      if (handleAgentUnauthorized(err)) return;
+      state.agentLifecycleError = err.message;
+    }
+    if (!agentMutationIsCurrent(context)) return;
+    state.agentLifecyclePending = "";
+    render();
+    document.querySelector(state.agentLifecycleError ? "#agent-settings-name" : '#agent-identity-form button[type="submit"]')?.focus();
+  });
+
+  const openConfirm = action => {
+    state.agentLifecycleConfirm = action;
+    state.agentArchiveConflict = null;
+    state.agentLifecycleError = "";
+    render();
+    document.querySelector("#confirm-agent-lifecycle")?.focus();
+  };
+  document.querySelector("#rotate-agent-credential")?.addEventListener("click", () => openConfirm("rotate"));
+  document.querySelector("#revoke-agent-credential")?.addEventListener("click", () => openConfirm("revoke"));
+  document.querySelector("#archive-agent")?.addEventListener("click", () => openConfirm("archive"));
+  document.querySelector("#restore-agent")?.addEventListener("click", () => openConfirm("restore"));
+  document.querySelector("#finish-lifecycle-credential")?.addEventListener("click", () => {
+    clearAgentLifecycleCredential();
+    state.agentLifecycleNotice = "Credential saved. Slate cannot show it again.";
+    render();
+    document.querySelector("#rotate-agent-credential")?.focus();
+  });
+  document.querySelector("#copy-lifecycle-credential")?.addEventListener("click", async () => {
+    const token = state.agentCredentialResult?.token;
+    if (!token) return;
+    const element = document.querySelector("#agent-lifecycle-credential");
+    state.credentialCopyError = "";
+    if (!await copyAgentCredential(token, element)) {
+      state.credentialCopied = false;
+      state.credentialCopyError = "Copy failed. The credential is selected. Press Command+C or Ctrl+C to copy it manually.";
+      document.querySelector("#lifecycle-copy-error").textContent = state.credentialCopyError;
+      return;
+    }
+    state.credentialCopied = true;
+    render();
+    document.querySelector("#copy-lifecycle-credential")?.focus();
+  });
+  bindAgentLifecycleDialog();
+}
+
+function bindAgentLifecycleDialog() {
+  const overlay = document.querySelector(".agent-lifecycle-overlay");
+  if (!overlay) return;
+  const cancel = () => {
+    if (state.agentLifecyclePending) return;
+    const action = state.agentLifecycleConfirm;
+    state.agentLifecycleConfirm = "";
+    state.agentArchiveConflict = null;
+    state.agentLifecycleError = "";
+    render();
+    document.querySelector(`#${action === "rotate" ? "rotate-agent-credential" : action === "revoke" ? "revoke-agent-credential" : action === "restore" ? "restore-agent" : "archive-agent"}`)?.focus();
+  };
+  document.querySelector("#cancel-agent-lifecycle")?.addEventListener("click", cancel);
+  overlay.addEventListener("click", event => { if (event.target === overlay) cancel(); });
+  overlay.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancel();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = [...overlay.querySelectorAll("button:not(:disabled)")];
+    if (!controls.length) {
+      event.preventDefault();
+      document.querySelector("#agent-lifecycle-pending")?.focus();
+      return;
+    }
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  document.querySelector("#confirm-agent-lifecycle")?.addEventListener("click", runAgentLifecycleMutation);
+}
+
+async function runAgentLifecycleMutation() {
+  if (state.agentLifecyclePending) return;
+  const context = agentMutationContext();
+  const action = state.agentLifecycleConfirm;
+  state.agentLifecyclePending = action;
+  state.agentLifecycleError = "";
+  render();
+  document.querySelector("#agent-lifecycle-pending")?.focus();
+  try {
+    if (action === "rotate") {
+      await rotateAgentCredential(context);
+      return;
+    }
+    if (action === "revoke") {
+      await api.del(`/api/v1/agents/${encodeURIComponent(context.agentID)}/credential`);
+      if (!agentMutationIsCurrent(context)) return;
+      state.agentDetail.agent = {
+        ...state.agentDetail.agent,
+        credential: { ...(state.agentDetail.agent.credential || {}), revokedAt: new Date().toISOString() },
+      };
+      updateAgentCache(state.agentDetail.agent);
+      state.agentLifecycleNotice = "Credential revoked. Assigned work is unchanged.";
+    } else if (action === "archive") {
+      const force = Boolean(state.agentArchiveConflict);
+      await api.post(`/api/v1/agents/${encodeURIComponent(context.agentID)}/archive`, { unassignOpenWork: force });
+      if (!agentMutationIsCurrent(context)) return;
+      state.agentLifecycleNotice = force
+        ? "Open work was unassigned and the agent was archived."
+        : "Agent archived.";
+      state.agentDetail.agent = {
+        ...state.agentDetail.agent,
+        archivedAt: new Date().toISOString(),
+        credential: { ...(state.agentDetail.agent.credential || {}), revokedAt: new Date().toISOString() },
+      };
+      updateAgentCache(state.agentDetail.agent);
+      state.activeAgents = Math.max(0, state.activeAgents - 1);
+    } else if (action === "restore") {
+      const restored = await api.post(`/api/v1/agents/${encodeURIComponent(context.agentID)}/restore`, {});
+      if (!agentMutationIsCurrent(context)) return;
+      state.agentDetail.agent = restored;
+      updateAgentCache(restored);
+      state.activeAgents += 1;
+      state.agentLifecycleNotice = "Agent restored. Create a credential when you are ready to connect it.";
+    }
+    if (!agentMutationIsCurrent(context)) return;
+    state.agentLifecycleConfirm = "";
+    state.agentArchiveConflict = null;
+    state.agentLifecyclePending = "";
+    try {
+      await refreshAgentSettings(context);
+    } catch {
+      if (!agentMutationIsCurrent(context)) return;
+      state.agentLifecycleNotice += " Agent metadata could not be refreshed.";
+      render();
+    }
+    if (agentMutationIsCurrent(context)) focusAfterAgentLifecycle(action);
+  } catch (err) {
+    if (!agentMutationIsCurrent(context)) return;
+    if (handleAgentUnauthorized(err)) return;
+    state.agentLifecyclePending = "";
+    if (action === "archive" && err.status === 409 && err.code === "agent_open_work") {
+      state.agentArchiveConflict = {
+        ready: Number(err.data?.conflict?.ready || 0),
+        working: Number(err.data?.conflict?.working || 0),
+      };
+      state.agentLifecycleError = "";
+    } else {
+      state.agentLifecycleError = err.message;
+    }
+    render();
+    document.querySelector("#confirm-agent-lifecycle")?.focus();
+  }
+}
+
+function focusAfterAgentLifecycle(action) {
+  const selector = action === "archive"
+    ? "#restore-agent"
+    : action === "restore" || action === "revoke"
+      ? "#rotate-agent-credential"
+      : "#copy-lifecycle-credential";
+  const target = document.querySelector(selector)
+    || document.querySelector("#agent-tab-settings")
+    || document.querySelector(".agent-detail-notice")
+    || document.querySelector(".agent-detail-head h1");
+  if (target && !target.hasAttribute("tabindex") && !/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) {
+    target.setAttribute("tabindex", "-1");
+  }
+  target?.focus();
+}
+
+async function rotateAgentCredential(context) {
+  const idempotencyKey = newAgentRotationKey();
+  try {
+    const result = await api.post(`/api/v1/agents/${encodeURIComponent(context.agentID)}/credential/rotate`, { idempotencyKey });
+    if (!agentMutationIsCurrent(context)) return;
+    if (result.alreadyApplied || !result.token) {
+      state.agentLifecyclePending = "";
+      state.agentLifecycleConfirm = "";
+      state.agentLifecycleError = "The rotation was applied, but its one-time credential is no longer available. The old credential may have been revoked. Rotate again to create a credential you can save.";
+      render();
+      document.querySelector("#rotate-agent-credential")?.focus();
+      return;
+    }
+    state.agentCredentialResult = { ownerID: context.userID, agentID: context.agentID, token: result.token };
+    state.credentialCopied = false;
+    state.credentialCopyError = "";
+    state.agentLifecyclePending = "";
+    state.agentLifecycleConfirm = "";
+    state.agentLifecycleNotice = "";
+    try {
+      await refreshAgentSettings(context, false);
+    } catch {
+      if (!agentMutationIsCurrent(context)) return;
+      state.agentLifecycleNotice = "Credential rotated. Agent metadata could not be refreshed, but this one-time credential remains available until you leave or refresh this page.";
+    }
+    if (!agentMutationIsCurrent(context)) return;
+    render();
+    document.querySelector("#copy-lifecycle-credential")?.focus();
+  } catch (err) {
+    if (!agentMutationIsCurrent(context)) return;
+    if (handleAgentUnauthorized(err)) return;
+    state.agentLifecyclePending = "";
+    state.agentLifecycleConfirm = "";
+    state.agentLifecycleError = "The rotation response could not be confirmed. The old credential may have been revoked. Rotate again to create a safe replacement.";
+    render();
+    document.querySelector("#rotate-agent-credential")?.focus();
+  }
+}
+
+function newAgentRotationKey() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const values = new Uint8Array(24);
+  globalThis.crypto.getRandomValues(values);
+  return [...values].map(value => value.toString(16).padStart(2, "0")).join("");
+}
+
+function agentMutationContext() {
+  return {
+    sessionVersion: authVersion,
+    routeVersion,
+    userID: state.me?.id,
+    agentID: state.agentDetail?.agent?.id,
+  };
+}
+
+function agentMutationIsCurrent(context) {
+  const route = parseRoute(location.pathname);
+  return sessionIsCurrent(context.sessionVersion, context.userID)
+    && context.routeVersion === routeVersion
+    && state.view === "agent-settings"
+    && route.name === "agent-settings"
+    && route.agentId === context.agentID
+    && state.agentDetail?.agent?.id === context.agentID;
+}
+
+async function refreshAgentSettings(context, renderAfter = true) {
+  const loaded = await loadAgentDetail(context.agentID, {
+    sessionVersion: context.sessionVersion,
+    userID: context.userID,
+    expectedRouteVersion: context.routeVersion,
+  });
+  if (!loaded || !agentMutationIsCurrent(context)) return false;
+  state.agentDetailLoadState = "ready";
+  if (renderAfter) render();
+  return true;
+}
+
+function updateAgentCache(agent) {
+  const index = state.agents.findIndex(item => item.id === agent.id);
+  if (index >= 0) state.agents[index] = agent;
+  else state.agents.push(agent);
 }
 
 async function openAssignWork() {
@@ -3017,7 +3450,7 @@ async function openAgentTask(element) {
 
 async function refreshAgentSurface() {
   const route = parseRoute(location.pathname);
-  if (route.name !== "agent-detail" && route.name !== "agent-work") return;
+  if (!["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return;
   const version = routeVersion;
   try {
     const loaded = await loadAgentDetail(route.agentId, {
@@ -3352,12 +3785,28 @@ function clearSettingsCredentialsLeaving(nextPage) {
   }
 }
 
-function clearAgentCredentialLeaving(nextRouteName) {
-  if (state.view !== "agent-new" || nextRouteName === "agent-new") return;
-  state.agentCreationResult = null;
-  state.agentCreateNotice = "";
+function clearAgentCredentialLeaving(nextRoute) {
+  const nextRouteName = typeof nextRoute === "string" ? nextRoute : nextRoute?.name;
+  if (state.view === "agent-new" && nextRouteName !== "agent-new") {
+    state.agentCreationResult = null;
+    state.agentCreateNotice = "";
+    state.credentialCopied = false;
+    state.credentialCopyError = "";
+    globalThis.document?.querySelector(".agent-connection-result")?.remove();
+  }
+  const result = state.agentCredentialResult;
+  const staysOnOwnerResult = result
+    && nextRouteName === "agent-settings"
+    && nextRoute?.agentId === result.agentID
+    && result.ownerID === state.me?.id;
+  if (result && !staysOnOwnerResult) clearAgentLifecycleCredential();
+}
+
+function clearAgentLifecycleCredential() {
+  state.agentCredentialResult = null;
   state.credentialCopied = false;
   state.credentialCopyError = "";
+  globalThis.document?.querySelector(".agent-lifecycle-secret")?.remove();
 }
 
 function settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, expectedPage) {
@@ -3657,7 +4106,7 @@ window.addEventListener("popstate", async () => {
   if (state.view === "logging-out" || state.view === "logout-error") return;
   const nextRoute = parseRoute(location.pathname);
   clearSettingsCredentialsLeaving(nextRoute.settingsPage || "");
-  clearAgentCredentialLeaving(nextRoute.name);
+  clearAgentCredentialLeaving(nextRoute);
   await applyRoute();
 });
 

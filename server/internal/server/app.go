@@ -53,9 +53,19 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/agents", a.session(a.auth.ListAgents))
 	mux.HandleFunc("POST /api/v1/agents", a.session(a.auth.CreateAgent))
 	mux.HandleFunc("GET /api/v1/agents/{id}", a.session(a.agents.GetDetail))
+	mux.HandleFunc("PATCH /api/v1/agents/{id}", a.session(a.agents.Update))
 	mux.HandleFunc("GET /api/v1/agents/{id}/work", a.session(a.agents.ListWork))
-	mux.HandleFunc("DELETE /api/v1/agents/{id}/token", a.session(a.auth.RevokeAgentToken))
-	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(a.auth.DeleteAgent))
+	mux.HandleFunc("POST /api/v1/agents/{id}/credential/rotate", a.session(a.agents.RotateCredential))
+	mux.HandleFunc("DELETE /api/v1/agents/{id}/credential", a.session(a.agents.RevokeCredential))
+	mux.HandleFunc("POST /api/v1/agents/{id}/archive", a.session(a.agents.Archive))
+	mux.HandleFunc("POST /api/v1/agents/{id}/restore", a.session(a.agents.Restore))
+	// Compatibility for clients released before credentials became their own
+	// lifecycle. Both aliases use the safe owner-scoped behavior.
+	mux.HandleFunc("DELETE /api/v1/agents/{id}/token", a.session(a.agents.RevokeCredential))
+	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(func(w http.ResponseWriter, r *http.Request, user auth.User) {
+		r.Body = http.NoBody
+		a.agents.Archive(w, r, user)
+	}))
 	mux.HandleFunc("GET /api/v1/boards", a.account(a.boards.ListBoards))
 	mux.HandleFunc("POST /api/v1/boards", a.account(a.boards.CreateBoard))
 	mux.HandleFunc("GET /api/v1/boards/{id}", a.account(a.boards.GetBoard))

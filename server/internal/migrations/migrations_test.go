@@ -270,6 +270,92 @@ func TestAgentIdentityMigrationPreservesAgentsCredentialsAndAssignments(t *testi
 	}
 }
 
+func TestAgentCredentialRotationMigrationStoresOnlyReferences(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		SET LOCAL search_path TO pg_temp;
+		CREATE TEMP TABLE users (id uuid PRIMARY KEY);
+		CREATE TEMP TABLE agents (id uuid PRIMARY KEY);
+		CREATE TEMP TABLE agent_credentials (id uuid PRIMARY KEY);
+		INSERT INTO users VALUES ('10000000-0000-0000-0000-000000000001');
+		INSERT INTO agents VALUES ('20000000-0000-0000-0000-000000000001'), ('20000000-0000-0000-0000-000000000002');
+		INSERT INTO agent_credentials VALUES ('30000000-0000-0000-0000-000000000001'), ('30000000-0000-0000-0000-000000000002');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("020_agent_credential_rotation_idempotency.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "SAVEPOINT duplicate_rotation"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_credential_rotations (owner_user_id, idempotency_key, agent_id, credential_id)
+		VALUES (
+			'10000000-0000-0000-0000-000000000001',
+			'rotation-key-00000001',
+			'20000000-0000-0000-0000-000000000001',
+			'30000000-0000-0000-0000-000000000001'
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_credential_rotations (owner_user_id, idempotency_key, agent_id, credential_id)
+		VALUES (
+			'10000000-0000-0000-0000-000000000001',
+			'rotation-key-00000001',
+			'20000000-0000-0000-0000-000000000002',
+			'30000000-0000-0000-0000-000000000002'
+		)
+	`); err == nil || !strings.Contains(err.Error(), "agent_credential_rotations_pkey") {
+		t.Fatalf("duplicate owner key error = %v", err)
+	}
+	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT duplicate_rotation"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_schema LIKE 'pg_temp_%' AND table_name = 'agent_credential_rotations'
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var columns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, column)
+	}
+	for _, column := range columns {
+		if strings.Contains(column, "token") || strings.Contains(column, "plain") || strings.Contains(column, "secret") {
+			t.Fatalf("rotation idempotency stores secret-like column %q", column)
+		}
+	}
+}
+
 func TestAgentCredentialMigrationEnforcesOneActiveCredential(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

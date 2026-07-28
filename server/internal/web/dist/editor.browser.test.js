@@ -1562,6 +1562,217 @@ test("agent detail routes paginate, assign, edit, regroup, and stay safe across 
   assert.equal(await page.getByText("Ready item", { exact: true }).count(), 0);
 });
 
+test("agent settings safely edit, rotate, revoke, archive, restore, and scrub one-time credentials", async t => {
+  const owner = { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" };
+  const agent = {
+    id: "agent-one", displayName: "Builder", purpose: "Ships work",
+    credential: { id: "credential-one", tokenPrefix: "slate_agent_connected" },
+    workCounts: { ready: 2, working: 1, review: 1 },
+  };
+  let archived = false;
+  let connected = true;
+  let failDetailRefresh = false;
+  let loseRotationResponse = false;
+  let archiveAttempts = 0;
+  let revokeGate = null;
+  let archiveGate = null;
+  let restoreGate = null;
+  const patches = [];
+  const deferredResponse = () => {
+    let release;
+    return { promise: new Promise(resolve => { release = resolve; }), release };
+  };
+  const detail = () => ({
+    agent: {
+      ...agent,
+      archivedAt: archived ? "2026-07-28T12:00:00Z" : undefined,
+      credential: connected
+        ? { id: "credential-current", tokenPrefix: "slate_agent_current" }
+        : { id: "credential-old", tokenPrefix: "slate_agent_old", revokedAt: "2026-07-28T11:00:00Z" },
+    },
+    work: {
+      ready: [], working: [], review: [], recentlyCompleted: [],
+      totals: { ready: archived ? 0 : 2, working: archived ? 0 : 1, review: 1, completed: 1 },
+      openLimit: 50, completedLimit: 20,
+    },
+  });
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: owner });
+    if (url.pathname === "/api/v1/auth/logout") return json(response, { ok: true });
+    if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }], maxBoards: 5 });
+    if (url.pathname === "/api/v1/boards/board-one") return json(response, { ...board(false), buckets: [] });
+    if (url.pathname === "/api/v1/agents" && request.method === "GET") {
+      return json(response, { agents: [detail().agent], activeAgents: archived ? 0 : 1, maxAgents: 5 });
+    }
+    if (url.pathname === "/api/v1/agents/agent-one" && request.method === "GET") {
+      if (failDetailRefresh) {
+        failDetailRefresh = false;
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "metadata refresh failed" }));
+      }
+      return json(response, detail());
+    }
+    if (url.pathname === "/api/v1/agents/agent-one" && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      patches.push(input);
+      agent.displayName = String(input.displayName).trim();
+      agent.purpose = String(input.purpose).trim();
+      return json(response, detail().agent);
+    }
+    if (url.pathname === "/api/v1/agents/agent-one/credential" && request.method === "DELETE") {
+      const gate = revokeGate;
+      revokeGate = null;
+      if (gate) await gate.promise;
+      connected = false;
+      return json(response, { ok: true });
+    }
+    if (url.pathname === "/api/v1/agents/agent-one/credential/rotate" && request.method === "POST") {
+      const input = await requestJSON(request);
+      assert.ok(input.idempotencyKey.length >= 16);
+      connected = true;
+      if (loseRotationResponse) {
+        loseRotationResponse = false;
+        response.writeHead(503, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({ error: "rotation response lost" }));
+      }
+      failDetailRefresh = true;
+      return json(response, {
+        id: "credential-rotated",
+        tokenPrefix: "slate_agent_rotated",
+        token: "slate_agent_once_only_browser",
+        alreadyApplied: false,
+      });
+    }
+    if (url.pathname === "/api/v1/agents/agent-one/archive" && request.method === "POST") {
+      const input = await requestJSON(request);
+      archiveAttempts += 1;
+      const gate = archiveGate;
+      archiveGate = null;
+      if (gate) await gate.promise;
+      if (!input.unassignOpenWork) {
+        response.writeHead(409, { "Content-Type": "application/json" });
+        return response.end(JSON.stringify({
+          code: "agent_open_work",
+          error: "Ready and Working work must be unassigned before this agent can be archived.",
+          conflict: { ready: 2, working: 1 },
+        }));
+      }
+      archived = true;
+      connected = false;
+      return json(response, { ok: true, ready: 2, working: 1 });
+    }
+    if (url.pathname === "/api/v1/agents/agent-one/restore" && request.method === "POST") {
+      const gate = restoreGate;
+      restoreGate = null;
+      if (gate) await gate.promise;
+      archived = false;
+      connected = false;
+      return json(response, detail().agent);
+    }
+    if (isAppShell(url.pathname)) return html(response);
+    if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
+    if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
+    response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const baseURL = `http://127.0.0.1:${server.address().port}`;
+  const assertPendingFocus = async () => {
+    await page.getByRole("status").filter({ hasText: "Working… Keep this page open." }).waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "agent-lifecycle-pending");
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "agent-lifecycle-pending");
+    await page.keyboard.press("Escape");
+    assert.equal(await page.getByRole("dialog").count(), 1);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "agent-lifecycle-pending");
+  };
+  await page.goto(`${baseURL}/app/agents/agent-one/settings`);
+  await page.getByRole("tab", { name: "Settings", exact: true }).waitFor();
+  assert.equal(await page.getByRole("tab", { name: "Settings", exact: true }).getAttribute("aria-selected"), "true");
+
+  const name = page.locator("#agent-settings-name");
+  await name.fill("  Builder Prime  ");
+  await page.locator("#agent-settings-purpose").fill("  Focused delivery  ");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Agent identity saved." }).waitFor();
+  assert.deepEqual(patches, [{ displayName: "Builder Prime", purpose: "Focused delivery" }]);
+
+  await page.getByRole("button", { name: "Revoke credential", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "revoke-agent-credential");
+
+  const slowRevoke = deferredResponse();
+  revokeGate = slowRevoke;
+  await page.getByRole("button", { name: "Revoke credential", exact: true }).click();
+  await page.getByRole("dialog").getByText("assigned work stays assigned", { exact: false }).waitFor();
+  await page.getByRole("dialog").getByRole("button", { name: "Revoke credential", exact: true }).click();
+  await assertPendingFocus();
+  slowRevoke.release();
+  await page.getByRole("status").filter({ hasText: "Assigned work is unchanged." }).waitFor();
+  await page.getByRole("heading", { name: "Needs connection", exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "rotate-agent-credential");
+
+  await page.getByRole("button", { name: "Create credential", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Create credential", exact: true }).click();
+  await page.getByText("slate_agent_once_only_browser", { exact: true }).waitFor();
+  await page.getByText(/metadata could not be refreshed/).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "copy-lifecycle-credential");
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.waitForURL(`${baseURL}/app/agents/agent-one`);
+  assert.equal(await page.getByText("slate_agent_once_only_browser", { exact: true }).count(), 0);
+  await page.goBack();
+  await page.getByRole("tab", { name: "Settings", exact: true }).waitFor();
+  assert.equal(await page.getByText("slate_agent_once_only_browser", { exact: true }).count(), 0);
+
+  loseRotationResponse = true;
+  await page.getByRole("button", { name: "Rotate credential", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Rotate credential", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "old credential may have been revoked" }).waitFor();
+  assert.equal(await page.getByText("slate_agent_once_only_browser", { exact: true }).count(), 0);
+
+  const slowArchiveCheck = deferredResponse();
+  archiveGate = slowArchiveCheck;
+  await page.getByRole("button", { name: "Archive agent", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Archive agent", exact: true }).click();
+  await assertPendingFocus();
+  slowArchiveCheck.release();
+  await page.getByRole("dialog").getByText("2 Ready items and 1 Working item", { exact: false }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "confirm-agent-lifecycle");
+  const slowForcedArchive = deferredResponse();
+  archiveGate = slowForcedArchive;
+  await page.getByRole("dialog").getByRole("button", { name: "Unassign open work and archive", exact: true }).click();
+  await assertPendingFocus();
+  slowForcedArchive.release();
+  await page.getByText("Archived identity", { exact: true }).waitFor();
+  assert.equal(archiveAttempts, 2);
+  assert.equal(await page.getByRole("button", { name: "Assign work", exact: true }).count(), 0);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "restore-agent");
+
+  owner.theme = "dark";
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.locator(".agents-shell.theme-dark").waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+  const slowRestore = deferredResponse();
+  restoreGate = slowRestore;
+  await page.getByRole("button", { name: "Restore agent", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Restore agent", exact: true }).press("Enter");
+  await assertPendingFocus();
+  slowRestore.release();
+  await page.getByRole("status").filter({ hasText: "Agent restored." }).waitFor();
+  await page.getByRole("heading", { name: "Needs connection", exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "rotate-agent-credential");
+
+  await page.reload();
+  await page.getByRole("tab", { name: "Settings", exact: true }).waitFor();
+  assert.equal(await page.getByText("slate_agent_once_only_browser", { exact: true }).count(), 0);
+});
+
 function json(response, body) {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
@@ -1595,7 +1806,7 @@ function isAppShell(pathname) {
 	if (pathname === "/app/agents" || pathname === "/app/agents/new") return true;
 	if (pathname.startsWith("/app/agents/")) {
 		const parts = pathname.slice("/app/agents/".length).split("/");
-		return parts.length === 1 || (parts.length === 2 && parts[1] === "work");
+		return parts.length === 1 || (parts.length === 2 && (parts[1] === "work" || parts[1] === "settings"));
 	}
 	const rest = pathname.startsWith("/app/boards/") ? pathname.slice("/app/boards/".length) : "";
 	const segments = rest.split("/");

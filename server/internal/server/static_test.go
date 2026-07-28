@@ -42,7 +42,7 @@ func TestStaticHandlerServesAppShellForFrontendRoutesOnly(t *testing.T) {
 		"/app/settings/profile", "/app/settings/board", "/app/settings/agents", "/app/settings/api",
 		"/app/settings/unknown", "/app/settings/unknown/nested",
 		"/app/boards/board_123", "/app/boards/board_123/settings", "/app/agents", "/app/agents/new", "/app/agents/agent_123",
-		"/app/agents/agent_123/work", "/early-access", "/reset-password",
+		"/app/agents/agent_123/work", "/app/agents/agent_123/settings", "/early-access", "/reset-password",
 	}
 	for _, target := range shell {
 		response := httptest.NewRecorder()
