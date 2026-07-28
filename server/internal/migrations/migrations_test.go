@@ -356,6 +356,97 @@ func TestAgentCredentialRotationMigrationStoresOnlyReferences(t *testing.T) {
 	}
 }
 
+func TestAgentAssignmentMetadataIndexCoversCompletedTasks(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		SET LOCAL search_path TO pg_temp;
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			assignee_agent_id uuid,
+			board_id uuid NOT NULL,
+			bucket_id uuid NOT NULL,
+			done boolean NOT NULL DEFAULT false
+		);
+		INSERT INTO tasks (assignee_agent_id, board_id, bucket_id, done)
+		VALUES (
+			'10000000-0000-0000-0000-000000000001',
+			'20000000-0000-0000-0000-000000000001',
+			'30000000-0000-0000-0000-000000000001',
+			true
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("021_agent_assignment_metadata_index.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var definition, predicate string
+	if err := tx.QueryRow(ctx, `
+		SELECT pg_get_indexdef(i.indexrelid), COALESCE(pg_get_expr(i.indpred, i.indrelid), '')
+		FROM pg_index i
+		JOIN pg_class idx ON idx.oid = i.indexrelid
+		WHERE idx.relname = 'tasks_assignee_board_bucket_idx'
+			AND i.indrelid = 'tasks'::regclass
+	`).Scan(&definition, &predicate); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(definition, "(assignee_agent_id, board_id, bucket_id)") {
+		t.Fatalf("assignment metadata index = %q", definition)
+	}
+	if !strings.Contains(predicate, "assignee_agent_id IS NOT NULL") || strings.Contains(predicate, "done") {
+		t.Fatalf("assignment metadata predicate = %q", predicate)
+	}
+
+	if _, err := tx.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.Query(ctx, `
+		EXPLAIN (COSTS OFF)
+		SELECT 1
+		FROM tasks
+		WHERE assignee_agent_id = '10000000-0000-0000-0000-000000000001'
+			AND board_id = '20000000-0000-0000-0000-000000000001'
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "tasks_assignee_board_bucket_idx") {
+		t.Fatalf("assignment metadata query plan did not use index:\n%s", plan.String())
+	}
+}
+
 func TestAgentCredentialMigrationEnforcesOneActiveCredential(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
