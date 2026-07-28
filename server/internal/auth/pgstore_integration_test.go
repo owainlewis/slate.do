@@ -88,7 +88,7 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	if _, err := store.CreateAPIToken(ctx, user.ID, "operator-test", "api-hash"); err != nil {
 		t.Fatal(err)
 	}
-	agent, err := store.CreateAgent(ctx, user.ID, "Operator Bot", "agent-hash")
+	agent, err := store.CreateAgent(ctx, user.ID, "Operator Bot", "", "agent-hash", "slate_agent_operator")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	if _, err := store.CreateAPIToken(ctx, user.ID, "disabled-token", "disabled-api-hash"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("API token creation while disabled error = %v, want ErrUnauthorized", err)
 	}
-	if _, err := store.CreateAgent(ctx, user.ID, "Disabled Bot", "disabled-agent-hash"); !errors.Is(err, ErrUnauthorized) {
+	if _, err := store.CreateAgent(ctx, user.ID, "Disabled Bot", "", "disabled-agent-hash", "slate_agent_disabled"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("agent creation while disabled error = %v, want ErrUnauthorized", err)
 	}
 	if err := store.SetMemberDisabled(ctx, email, false); err != nil {
@@ -323,6 +323,9 @@ func TestDisableSerializesWithSessionAPITokenAndAgentCreation(t *testing.T) {
 		if err := store.SetMemberDisabled(ctx, email, false); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := db.Exec(ctx, "UPDATE agents SET archived_at = now() WHERE owner_user_id = $1 AND archived_at IS NULL", user.ID); err != nil {
+			t.Fatal(err)
+		}
 		sessionHash := fmt.Sprintf("race-session-%d-%d", time.Now().UnixNano(), iteration)
 		tokenHash := fmt.Sprintf("race-token-%d-%d", time.Now().UnixNano(), iteration)
 		agentHash := fmt.Sprintf("race-agent-%d-%d", time.Now().UnixNano(), iteration)
@@ -349,7 +352,7 @@ func TestDisableSerializesWithSessionAPITokenAndAgentCreation(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			agent, agentErr = store.CreateAgent(ctx, user.ID, fmt.Sprintf("Race Agent %d", iteration), agentHash)
+			agent, agentErr = store.CreateAgent(ctx, user.ID, fmt.Sprintf("Race Agent %d", iteration), "", agentHash, "slate_agent_race")
 		}()
 		close(start)
 		wait.Wait()
@@ -515,12 +518,27 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", owner.ID) })
 
 	tokenHash := fmt.Sprintf("agent-token-%d", time.Now().UnixNano())
-	agent, err := store.CreateAgent(ctx, owner.ID, "Research Bot", tokenHash)
+	agent, err := store.CreateAgent(ctx, owner.ID, "Research Bot", "Research customer needs", tokenHash, "slate_agent_research")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateAgent(ctx, owner.ID, "Second Bot", tokenHash+"-duplicate"); !errors.Is(err, ErrAgentLimit) {
-		t.Fatalf("second active agent error = %v", err)
+	if _, err := store.CreateAgent(ctx, owner.ID, " research bot ", "", tokenHash+"-duplicate", "slate_agent_duplicate"); !errors.Is(err, ErrAgentNameTaken) {
+		t.Fatalf("case-insensitive duplicate name error = %v", err)
+	}
+	for index := 2; index <= entitlements.ProLimits.Agents; index++ {
+		if _, err := store.CreateAgent(
+			ctx,
+			owner.ID,
+			fmt.Sprintf("Agent %d", index),
+			"",
+			fmt.Sprintf("%s-%d", tokenHash, index),
+			fmt.Sprintf("slate_agent_%d", index),
+		); err != nil {
+			t.Fatalf("create active agent %d: %v", index, err)
+		}
+	}
+	if _, err := store.CreateAgent(ctx, owner.ID, "Over limit", "", tokenHash+"-limit", "slate_agent_limit"); !errors.Is(err, ErrAgentLimit) {
+		t.Fatalf("sixth active agent error = %v", err)
 	}
 
 	identity, err := store.FindUserByAPITokenHash(ctx, tokenHash, time.Now())
@@ -537,7 +555,7 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	if err := store.RevokeAgentToken(ctx, owner.ID, agent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateAgent(ctx, owner.ID, "Replacement before delete", tokenHash+"-revoked"); !errors.Is(err, ErrAgentLimit) {
+	if _, err := store.CreateAgent(ctx, owner.ID, "Replacement before archive", "", tokenHash+"-revoked", "slate_agent_revoked"); !errors.Is(err, ErrAgentLimit) {
 		t.Fatalf("revoked agent should still consume slot: %v", err)
 	}
 	if _, err := store.FindUserByAPITokenHash(ctx, tokenHash, time.Now()); !errors.Is(err, ErrUnauthorized) {
@@ -553,19 +571,29 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agents) != 1 || agents[0].DeletedAt == nil || agents[0].RevokedAt == nil {
-		t.Fatalf("deleted agent = %#v", agents)
+	if len(agents) != entitlements.ProLimits.Agents || agents[len(agents)-1].DeletedAt == nil {
+		t.Fatalf("archived agent list = %#v", agents)
 	}
-	replacement, err := store.CreateAgent(ctx, owner.ID, "Replacement Bot", tokenHash+"-replacement")
+	var archived AgentUser
+	for _, listed := range agents {
+		if listed.ID == agent.ID {
+			archived = listed
+			break
+		}
+	}
+	if archived.ArchivedAt == nil || archived.DeletedAt == nil || archived.RevokedAt == nil || archived.Credential == nil || archived.Credential.TokenPrefix != "slate_agent_research" || archived.Purpose != "Research customer needs" {
+		t.Fatalf("archived agent = %#v", archived)
+	}
+	replacement, err := store.CreateAgent(ctx, owner.ID, "Replacement Bot", "", tokenHash+"-replacement", "slate_agent_replacement")
 	if err != nil {
-		t.Fatalf("replacement after soft delete: %v", err)
+		t.Fatalf("replacement after archive: %v", err)
 	}
 	if replacement.ID == agent.ID {
 		t.Fatalf("replacement reused deleted identity: %#v", replacement)
 	}
 }
 
-func TestConcurrentAgentCreationCannotExceedOneLiveAgent(t *testing.T) {
+func TestConcurrentAgentCreationCannotExceedProActiveAgentLimit(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("set SLATE_TEST_DATABASE_URL to run auth store integration tests")
@@ -597,7 +625,14 @@ func TestConcurrentAgentCreationCannotExceedOneLiveAgent(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			start.Wait()
-			_, err := store.CreateAgent(ctx, owner.ID, fmt.Sprintf("Agent %d", index), fmt.Sprintf("agent-race-token-%d-%d", time.Now().UnixNano(), index))
+			_, err := store.CreateAgent(
+				ctx,
+				owner.ID,
+				fmt.Sprintf("Agent %d", index),
+				"",
+				fmt.Sprintf("agent-race-token-%d-%d", time.Now().UnixNano(), index),
+				fmt.Sprintf("slate_agent_%d", index),
+			)
 			results <- err
 		}()
 	}
@@ -617,15 +652,15 @@ func TestConcurrentAgentCreationCannotExceedOneLiveAgent(t *testing.T) {
 			t.Fatalf("unexpected concurrent creation error: %v", err)
 		}
 	}
-	if successes != 1 || limits != attempts-1 {
+	if successes != entitlements.ProLimits.Agents || limits != attempts-entitlements.ProLimits.Agents {
 		t.Fatalf("concurrent results = %d success, %d limits", successes, limits)
 	}
 	var liveAgents int
-	if err := db.QueryRow(ctx, "SELECT count(*) FROM agent_users WHERE owner_user_id = $1 AND deleted_at IS NULL", owner.ID).Scan(&liveAgents); err != nil {
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM agents WHERE owner_user_id = $1 AND archived_at IS NULL", owner.ID).Scan(&liveAgents); err != nil {
 		t.Fatal(err)
 	}
-	if liveAgents != 1 {
-		t.Fatalf("live agents = %d, want 1", liveAgents)
+	if liveAgents != entitlements.ProLimits.Agents {
+		t.Fatalf("live agents = %d, want %d", liveAgents, entitlements.ProLimits.Agents)
 	}
 }
 

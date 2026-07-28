@@ -124,6 +124,210 @@ func TestOneAgentPerOwnerMigrationUpgradesExistingAgentSchema(t *testing.T) {
 	}
 }
 
+func TestAgentIdentityMigrationPreservesAgentsCredentialsAndAssignments(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		SET LOCAL search_path TO pg_temp;
+		CREATE TEMP TABLE users (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			email text NOT NULL
+		);
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			status text NOT NULL DEFAULT 'queued',
+			done boolean NOT NULL DEFAULT false
+		);
+		INSERT INTO users (email) VALUES ('owner@example.com');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"017_agent_users.sql"} {
+		body, err := files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, string(body)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_users (id, owner_user_id, display_name, token_hash, revoked_at, deleted_at, created_at, updated_at)
+		SELECT '20000000-0000-0000-0000-000000000001'::uuid, id, 'Revoked Bot', 'revoked-hash',
+			TIMESTAMPTZ '2026-07-27 09:30:00Z', NULL::timestamptz, TIMESTAMPTZ '2026-07-27 09:00:00Z', TIMESTAMPTZ '2026-07-27 09:30:00Z' FROM users
+		UNION ALL
+		SELECT '20000000-0000-0000-0000-000000000002'::uuid, id, 'Live Bot', 'live-hash',
+			NULL::timestamptz, NULL::timestamptz, TIMESTAMPTZ '2026-07-27 10:00:00Z', TIMESTAMPTZ '2026-07-27 10:00:00Z' FROM users
+		UNION ALL
+		SELECT '20000000-0000-0000-0000-000000000003'::uuid, id, 'Extra Bot', 'extra-hash',
+			NULL::timestamptz, NULL::timestamptz, TIMESTAMPTZ '2026-07-27 11:00:00Z', TIMESTAMPTZ '2026-07-27 11:00:00Z' FROM users
+		UNION ALL
+		SELECT '20000000-0000-0000-0000-000000000004'::uuid, id, 'Deleted Bot', 'deleted-hash',
+			NULL::timestamptz, TIMESTAMPTZ '2026-07-27 12:30:00Z', TIMESTAMPTZ '2026-07-27 12:00:00Z', TIMESTAMPTZ '2026-07-27 12:30:00Z' FROM users;
+		INSERT INTO tasks (assignee_agent_id) VALUES ('20000000-0000-0000-0000-000000000003');
+		INSERT INTO users (email) VALUES ('revoked-owner@example.com');
+		INSERT INTO agent_users (id, owner_user_id, display_name, token_hash, revoked_at, created_at, updated_at)
+		SELECT '20000000-0000-0000-0000-000000000005'::uuid, id, 'Sole Revoked Bot', 'sole-revoked-hash',
+			TIMESTAMPTZ '2026-07-27 13:30:00Z', TIMESTAMPTZ '2026-07-27 13:00:00Z', TIMESTAMPTZ '2026-07-27 13:30:00Z'
+		FROM users
+		WHERE email = 'revoked-owner@example.com';
+	`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"018_one_agent_per_owner.sql", "019_agent_identities_and_credentials.sql"} {
+		body, err := files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, string(body)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT a.id::text, a.archived_at IS NOT NULL, c.token_hash, c.revoked_at IS NOT NULL, c.token_prefix
+		FROM agents a
+		JOIN agent_credentials c ON c.agent_id = a.id
+		ORDER BY a.created_at
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type migratedAgent struct {
+		id          string
+		archived    bool
+		tokenHash   string
+		revoked     bool
+		tokenPrefix *string
+	}
+	var agents []migratedAgent
+	for rows.Next() {
+		var agent migratedAgent
+		if err := rows.Scan(&agent.id, &agent.archived, &agent.tokenHash, &agent.revoked, &agent.tokenPrefix); err != nil {
+			t.Fatal(err)
+		}
+		agents = append(agents, agent)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 5 {
+		t.Fatalf("migrated agents = %#v", agents)
+	}
+	if !agents[0].archived || !agents[0].revoked || agents[0].tokenHash != "revoked-hash" ||
+		agents[1].archived || agents[1].revoked || agents[1].tokenHash != "live-hash" ||
+		!agents[2].archived || !agents[2].revoked || agents[2].tokenHash != "extra-hash" ||
+		!agents[3].archived || !agents[3].revoked || agents[3].tokenHash != "deleted-hash" ||
+		agents[4].archived || !agents[4].revoked || agents[4].tokenHash != "sole-revoked-hash" {
+		t.Fatalf("migrated agent states = %#v", agents)
+	}
+	for _, agent := range agents {
+		if agent.tokenPrefix != nil {
+			t.Fatalf("migration invented token prefix for %s: %q", agent.id, *agent.tokenPrefix)
+		}
+	}
+
+	var assignedAgent string
+	if err := tx.QueryRow(ctx, "SELECT assignee_agent_id::text FROM tasks").Scan(&assignedAgent); err != nil {
+		t.Fatal(err)
+	}
+	if assignedAgent != "20000000-0000-0000-0000-000000000003" {
+		t.Fatalf("assignment changed to %q", assignedAgent)
+	}
+	var foreignKeyDefinition string
+	if err := tx.QueryRow(ctx, `
+		SELECT pg_get_constraintdef(oid)
+		FROM pg_constraint
+		WHERE conrelid = 'tasks'::regclass
+			AND conname = 'tasks_assignee_agent_id_fkey'
+	`).Scan(&foreignKeyDefinition); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(foreignKeyDefinition, "REFERENCES agents(id)") {
+		t.Fatalf("assignment foreign key = %q", foreignKeyDefinition)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agents (owner_user_id, name)
+		SELECT id, '  live bot  ' FROM users
+	`); err == nil || !strings.Contains(err.Error(), "agents_owner_active_name_idx") {
+		t.Fatalf("case-insensitive active name error = %v", err)
+	}
+}
+
+func TestAgentCredentialMigrationEnforcesOneActiveCredential(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		SET LOCAL search_path TO pg_temp;
+		CREATE TEMP TABLE users (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			email text NOT NULL
+		);
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			status text NOT NULL DEFAULT 'queued',
+			done boolean NOT NULL DEFAULT false
+		);
+		INSERT INTO users (email) VALUES ('owner@example.com');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"017_agent_users.sql", "018_one_agent_per_owner.sql", "019_agent_identities_and_credentials.sql"} {
+		body, err := files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, string(body)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+	}
+	var agentID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO agents (owner_user_id, name)
+		SELECT id, 'Credential Bot' FROM users
+		RETURNING id::text
+	`).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO agent_credentials (agent_id, token_hash) VALUES ($1, 'first-active')", agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO agent_credentials (agent_id, token_hash) VALUES ($1, 'second-active')", agentID); err == nil || !strings.Contains(err.Error(), "agent_credentials_one_active_per_agent_idx") {
+		t.Fatalf("second active credential error = %v", err)
+	}
+}
+
 func TestProEntitlementMigrationKeepsExistingAdminsUsable(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

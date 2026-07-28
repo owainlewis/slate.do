@@ -138,7 +138,13 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request, user auth.U
 }
 
 func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request, user auth.User) {
-	task, err := h.store.GetTask(r.Context(), user.ID, r.PathValue("id"))
+	var task Task
+	var err error
+	if user.AgentID != "" {
+		task, err = h.store.GetTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+	} else {
+		task, err = h.store.GetTask(r.Context(), user.ID, r.PathValue("id"))
+	}
 	if handleStoreError(w, err) {
 		return
 	}
@@ -227,6 +233,9 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request, user auth.Us
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if user.AgentID != "" {
+		filter.AssigneeAgentID = user.AgentID
 	}
 	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
 	if err != nil {

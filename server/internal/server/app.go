@@ -51,24 +51,24 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/agents", a.session(a.auth.CreateAgent))
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/token", a.session(a.auth.RevokeAgentToken))
 	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(a.auth.DeleteAgent))
-	mux.HandleFunc("GET /api/v1/boards", a.user(a.boards.ListBoards))
-	mux.HandleFunc("POST /api/v1/boards", a.user(a.boards.CreateBoard))
-	mux.HandleFunc("GET /api/v1/boards/{id}", a.user(a.boards.GetBoard))
-	mux.HandleFunc("PATCH /api/v1/boards/{id}", a.user(a.boards.UpdateBoard))
-	mux.HandleFunc("DELETE /api/v1/boards/{id}", a.user(a.boards.DeleteBoard))
-	mux.HandleFunc("POST /api/v1/boards/{id}/buckets", a.user(a.boards.CreateBucket))
-	mux.HandleFunc("POST /api/v1/boards/{id}/reorder-buckets", a.user(a.boards.ReorderBuckets))
-	mux.HandleFunc("GET /api/v1/buckets/{id}", a.user(a.boards.GetBucket))
-	mux.HandleFunc("PATCH /api/v1/buckets/{id}", a.user(a.boards.UpdateBucket))
-	mux.HandleFunc("DELETE /api/v1/buckets/{id}", a.user(a.boards.DeleteBucket))
-	mux.HandleFunc("POST /api/v1/buckets/{id}/tasks", a.user(a.boards.CreateTask))
-	mux.HandleFunc("POST /api/v1/buckets/{id}/reorder-tasks", a.user(a.boards.ReorderTasks))
+	mux.HandleFunc("GET /api/v1/boards", a.account(a.boards.ListBoards))
+	mux.HandleFunc("POST /api/v1/boards", a.account(a.boards.CreateBoard))
+	mux.HandleFunc("GET /api/v1/boards/{id}", a.account(a.boards.GetBoard))
+	mux.HandleFunc("PATCH /api/v1/boards/{id}", a.account(a.boards.UpdateBoard))
+	mux.HandleFunc("DELETE /api/v1/boards/{id}", a.account(a.boards.DeleteBoard))
+	mux.HandleFunc("POST /api/v1/boards/{id}/buckets", a.account(a.boards.CreateBucket))
+	mux.HandleFunc("POST /api/v1/boards/{id}/reorder-buckets", a.account(a.boards.ReorderBuckets))
+	mux.HandleFunc("GET /api/v1/buckets/{id}", a.account(a.boards.GetBucket))
+	mux.HandleFunc("PATCH /api/v1/buckets/{id}", a.account(a.boards.UpdateBucket))
+	mux.HandleFunc("DELETE /api/v1/buckets/{id}", a.account(a.boards.DeleteBucket))
+	mux.HandleFunc("POST /api/v1/buckets/{id}/tasks", a.account(a.boards.CreateTask))
+	mux.HandleFunc("POST /api/v1/buckets/{id}/reorder-tasks", a.account(a.boards.ReorderTasks))
 	mux.HandleFunc("GET /api/v1/tasks", a.user(a.boards.ListTasks))
 	mux.HandleFunc("GET /api/v1/tasks/{id}", a.user(a.boards.GetTask))
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}", a.user(a.boards.UpdateTask))
-	mux.HandleFunc("POST /api/v1/tasks/{id}/move", a.user(a.boards.MoveTask))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/move", a.account(a.boards.MoveTask))
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}/status", a.session(a.boards.UpdateTaskStatus))
-	mux.HandleFunc("DELETE /api/v1/tasks/{id}", a.user(a.boards.DeleteTask))
+	mux.HandleFunc("DELETE /api/v1/tasks/{id}", a.account(a.boards.DeleteTask))
 	mux.HandleFunc("GET /api/v1/agent/tasks", a.user(a.boards.AgentTasks))
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/claim", a.user(a.boards.AgentClaim))
 	mux.HandleFunc("PATCH /api/v1/agent/tasks/{id}/status", a.user(a.boards.AgentStatus))
@@ -160,6 +160,16 @@ func (a *App) user(next func(http.ResponseWriter, *http.Request, auth.User)) htt
 		}
 		a.auth.RequireUser(next)(w, r)
 	}
+}
+
+func (a *App) account(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {
+	return a.user(func(w http.ResponseWriter, r *http.Request, user auth.User) {
+		if user.AgentID != "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "agent credentials cannot manage account resources"})
+			return
+		}
+		next(w, r, user)
+	})
 }
 
 func (a *App) session(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {

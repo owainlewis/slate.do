@@ -12,6 +12,7 @@ type Limits struct {
 	Boards             int `json:"boards"`
 	ListsPerBoard      int `json:"listsPerBoard"`
 	ActiveItemsPerList int `json:"activeItemsPerList"`
+	Agents             int `json:"agents"`
 }
 
 type Entitlement struct {
@@ -24,6 +25,7 @@ var ProLimits = Limits{
 	Boards:             5,
 	ListsPerBoard:      9,
 	ActiveItemsPerList: 20,
+	Agents:             5,
 }
 
 func Pro(source string) Entitlement {

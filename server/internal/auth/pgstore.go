@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -454,13 +455,14 @@ func (s *PGStore) FindUserByAPITokenHash(ctx context.Context, tokenHash string, 
 				AND t.token_hash = $1 AND t.revoked_at IS NULL
 			RETURNING u.id, u.email, u.role, u.theme, u.display_name, e.plan, e.source
 		), agent_token AS (
-			UPDATE agent_users a
+			UPDATE agent_credentials c
 			SET last_used_at = $2, updated_at = $2
-			FROM users u, entitlements e
-			WHERE a.owner_user_id = u.id AND e.user_id = u.id AND e.plan = 'pro'
+			FROM agents a, users u, entitlements e
+			WHERE c.agent_id = a.id
+				AND a.owner_user_id = u.id AND e.user_id = u.id AND e.plan = 'pro'
 				AND u.disabled_at IS NULL
-				AND a.token_hash = $1 AND a.revoked_at IS NULL AND a.deleted_at IS NULL
-			RETURNING u.id, u.theme, a.id AS agent_id, a.display_name, e.plan, e.source
+				AND c.token_hash = $1 AND c.revoked_at IS NULL AND a.archived_at IS NULL
+			RETURNING u.id, u.theme, a.id AS agent_id, a.name AS display_name, e.plan, e.source
 		)
 		SELECT id::text, email, role, theme, display_name, '' AS agent_id, plan, source
 		FROM human_token
@@ -510,10 +512,18 @@ func stringValue(value *string) string {
 
 func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id::text, display_name, last_used_at, revoked_at, deleted_at, created_at
-		FROM agent_users
-		WHERE owner_user_id = $1
-		ORDER BY deleted_at NULLS FIRST, lower(display_name), created_at
+		SELECT a.id::text, a.name, COALESCE(a.purpose, ''), a.archived_at, a.created_at, a.updated_at,
+			c.id::text, COALESCE(c.token_prefix, ''), c.last_used_at, c.revoked_at, c.created_at, c.updated_at
+		FROM agents a
+		LEFT JOIN LATERAL (
+			SELECT id, token_prefix, last_used_at, revoked_at, created_at, updated_at
+			FROM agent_credentials
+			WHERE agent_id = a.id
+			ORDER BY revoked_at NULLS FIRST, created_at DESC
+			LIMIT 1
+		) c ON true
+		WHERE a.owner_user_id = $1
+		ORDER BY a.archived_at NULLS FIRST, lower(a.name), a.created_at
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -521,8 +531,8 @@ func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, e
 	defer rows.Close()
 	var agents []AgentUser
 	for rows.Next() {
-		var agent AgentUser
-		if err := rows.Scan(&agent.ID, &agent.DisplayName, &agent.LastUsedAt, &agent.RevokedAt, &agent.DeletedAt, &agent.CreatedAt); err != nil {
+		agent, err := scanAgent(rows)
+		if err != nil {
 			return nil, err
 		}
 		agents = append(agents, agent)
@@ -530,46 +540,115 @@ func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, e
 	return agents, rows.Err()
 }
 
-func (s *PGStore) CreateAgent(ctx context.Context, userID string, displayName string, tokenHash string) (AgentUser, error) {
-	var agent AgentUser
-	err := s.db.QueryRow(ctx, `
-		WITH active_user AS (
-			SELECT id FROM users
-			WHERE id = $1 AND disabled_at IS NULL
-			FOR UPDATE
-		)
-		INSERT INTO agent_users (owner_user_id, display_name, token_hash)
-		SELECT id, $2, $3 FROM active_user
-		RETURNING id::text, display_name, last_used_at, revoked_at, deleted_at, created_at
-	`, userID, displayName, tokenHash).Scan(&agent.ID, &agent.DisplayName, &agent.LastUsedAt, &agent.RevokedAt, &agent.DeletedAt, &agent.CreatedAt)
-	if constraintViolation(err, "agent_users_one_active_per_owner_idx") {
-		return AgentUser{}, ErrAgentLimit
+func (s *PGStore) CreateAgent(ctx context.Context, userID string, displayName string, purpose string, tokenHash string, tokenPrefix string) (AgentUser, error) {
+	displayName = strings.TrimSpace(displayName)
+	purpose = strings.TrimSpace(purpose)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return AgentUser{}, err
 	}
+	defer tx.Rollback(ctx)
+
+	var activeUserID string
+	err = tx.QueryRow(ctx, `
+		SELECT u.id::text
+		FROM users u
+		JOIN entitlements e ON e.user_id = u.id AND e.plan = 'pro'
+		WHERE u.id = $1 AND u.disabled_at IS NULL
+		FOR UPDATE OF u
+	`, userID).Scan(&activeUserID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AgentUser{}, ErrUnauthorized
 	}
-	return agent, err
+	if err != nil {
+		return AgentUser{}, err
+	}
+	var activeAgents int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agents
+		WHERE owner_user_id = $1 AND archived_at IS NULL
+	`, activeUserID).Scan(&activeAgents); err != nil {
+		return AgentUser{}, err
+	}
+	if activeAgents >= entitlements.ProLimits.Agents {
+		return AgentUser{}, ErrAgentLimit
+	}
+
+	var agent AgentUser
+	err = tx.QueryRow(ctx, `
+		INSERT INTO agents (owner_user_id, name, purpose)
+		VALUES ($1, $2, NULLIF($3, ''))
+		RETURNING id::text, name, COALESCE(purpose, ''), archived_at, created_at, updated_at
+	`, activeUserID, displayName, purpose).Scan(
+		&agent.ID, &agent.DisplayName, &agent.Purpose, &agent.ArchivedAt, &agent.CreatedAt, &agent.UpdatedAt,
+	)
+	if constraintViolation(err, "agents_owner_active_name_idx") {
+		return AgentUser{}, ErrAgentNameTaken
+	}
+	if err != nil {
+		return AgentUser{}, err
+	}
+	var credential AgentCredential
+	err = tx.QueryRow(ctx, `
+		INSERT INTO agent_credentials (agent_id, token_hash, token_prefix)
+		VALUES ($1, $2, $3)
+		RETURNING id::text, COALESCE(token_prefix, ''), last_used_at, revoked_at, created_at, updated_at
+	`, agent.ID, tokenHash, tokenPrefix).Scan(
+		&credential.ID, &credential.TokenPrefix, &credential.LastUsedAt, &credential.RevokedAt, &credential.CreatedAt, &credential.UpdatedAt,
+	)
+	if err != nil {
+		return AgentUser{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AgentUser{}, err
+	}
+	agent.Credential = &credential
+	agent.LastUsedAt = credential.LastUsedAt
+	agent.RevokedAt = credential.RevokedAt
+	return agent, nil
 }
 
 func (s *PGStore) RevokeAgentToken(ctx context.Context, userID string, agentID string) error {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE agent_users
-		SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
-		WHERE owner_user_id = $1 AND id = $2 AND deleted_at IS NULL
-	`, userID, agentID)
-	if err == nil && tag.RowsAffected() == 0 {
+	var found bool
+	err := s.db.QueryRow(ctx, `
+		WITH owned_agent AS (
+			SELECT id
+			FROM agents
+			WHERE owner_user_id = $1 AND id = $2 AND archived_at IS NULL
+		), revoked AS (
+			UPDATE agent_credentials c
+			SET revoked_at = COALESCE(c.revoked_at, now()), updated_at = now()
+			FROM owned_agent a
+			WHERE c.agent_id = a.id
+			RETURNING c.id
+		)
+		SELECT EXISTS (SELECT 1 FROM owned_agent)
+	`, userID, agentID).Scan(&found)
+	if err == nil && !found {
 		return ErrAgentNotFound
 	}
 	return err
 }
 
 func (s *PGStore) DeleteAgent(ctx context.Context, userID string, agentID string) error {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE agent_users
-		SET revoked_at = COALESCE(revoked_at, now()), deleted_at = now(), updated_at = now()
-		WHERE owner_user_id = $1 AND id = $2 AND deleted_at IS NULL
-	`, userID, agentID)
-	if err == nil && tag.RowsAffected() == 0 {
+	var found bool
+	err := s.db.QueryRow(ctx, `
+		WITH archived AS (
+			UPDATE agents
+			SET archived_at = now(), updated_at = now()
+			WHERE owner_user_id = $1 AND id = $2 AND archived_at IS NULL
+			RETURNING id
+		), revoked AS (
+			UPDATE agent_credentials c
+			SET revoked_at = COALESCE(c.revoked_at, now()), updated_at = now()
+			FROM archived a
+			WHERE c.agent_id = a.id
+			RETURNING c.id
+		)
+		SELECT EXISTS (SELECT 1 FROM archived)
+	`, userID, agentID).Scan(&found)
+	if err == nil && !found {
 		return ErrAgentNotFound
 	}
 	return err
@@ -627,14 +706,65 @@ func (s *PGStore) SetMemberDisabled(ctx context.Context, email string, disabled 
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
-			UPDATE agent_users
+			UPDATE agent_credentials c
 			SET revoked_at = now(), updated_at = now()
-			WHERE owner_user_id = $1 AND deleted_at IS NULL AND revoked_at IS NULL
+			FROM agents a
+			WHERE c.agent_id = a.id
+				AND a.owner_user_id = $1
+				AND c.revoked_at IS NULL
 		`, userID); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+type rowScanner interface {
+	Scan(...any) error
+}
+
+func scanAgent(row rowScanner) (AgentUser, error) {
+	var agent AgentUser
+	var credentialID *string
+	var credentialPrefix *string
+	var credentialLastUsedAt *time.Time
+	var credentialRevokedAt *time.Time
+	var credentialCreatedAt *time.Time
+	var credentialUpdatedAt *time.Time
+	err := row.Scan(
+		&agent.ID,
+		&agent.DisplayName,
+		&agent.Purpose,
+		&agent.ArchivedAt,
+		&agent.CreatedAt,
+		&agent.UpdatedAt,
+		&credentialID,
+		&credentialPrefix,
+		&credentialLastUsedAt,
+		&credentialRevokedAt,
+		&credentialCreatedAt,
+		&credentialUpdatedAt,
+	)
+	if err != nil {
+		return AgentUser{}, err
+	}
+	agent.DeletedAt = agent.ArchivedAt
+	if credentialID != nil && credentialCreatedAt != nil && credentialUpdatedAt != nil {
+		credential := AgentCredential{
+			ID:         *credentialID,
+			LastUsedAt: credentialLastUsedAt,
+			RevokedAt:  credentialRevokedAt,
+			CreatedAt:  *credentialCreatedAt,
+			UpdatedAt:  *credentialUpdatedAt,
+		}
+		if credentialPrefix != nil {
+			credential.TokenPrefix = *credentialPrefix
+		}
+		agent.Credential = &credential
+		agent.LastUsedAt = credential.LastUsedAt
+		agent.RevokedAt = credential.RevokedAt
+	}
+	return agent, nil
 }
 
 func setEntitlementLimits(user *User) {
