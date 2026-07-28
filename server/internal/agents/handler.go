@@ -2,8 +2,14 @@ package agents
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -13,6 +19,11 @@ import (
 type detailStore interface {
 	GetDetail(context.Context, string, string) (Detail, error)
 	ListWork(context.Context, string, string, int, int) (WorkPage, error)
+	UpdateAgent(context.Context, string, string, string, string) (auth.AgentUser, error)
+	RotateCredential(context.Context, string, string, string, string, string) (auth.AgentCredential, bool, error)
+	RevokeCredential(context.Context, string, string) error
+	ArchiveAgent(context.Context, string, string, bool) (ArchiveConflict, error)
+	RestoreAgent(context.Context, string, string) (auth.AgentUser, error)
 }
 
 type Handler struct {
@@ -69,6 +80,207 @@ func (h *Handler) ListWork(w http.ResponseWriter, r *http.Request, user auth.Use
 	writeJSON(w, http.StatusOK, work)
 }
 
+func (h *Handler) Update(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validateMutation(w, r) {
+		return
+	}
+	var input struct {
+		DisplayName string `json:"displayName"`
+		Purpose     string `json:"purpose"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	displayName := strings.TrimSpace(input.DisplayName)
+	purpose := strings.TrimSpace(input.Purpose)
+	if displayName == "" {
+		writeError(w, http.StatusBadRequest, "agent name is required")
+		return
+	}
+	if len([]rune(displayName)) > 80 {
+		writeError(w, http.StatusBadRequest, "agent name must be 80 characters or fewer")
+		return
+	}
+	if len([]rune(purpose)) > 500 {
+		writeError(w, http.StatusBadRequest, "agent purpose must be 500 characters or fewer")
+		return
+	}
+	agent, err := h.store.UpdateAgent(r.Context(), user.ID, agentID(r), displayName, purpose)
+	switch {
+	case errors.Is(err, auth.ErrAgentNotFound):
+		writeError(w, http.StatusNotFound, "agent not found")
+	case errors.Is(err, auth.ErrAgentNameTaken):
+		writeCodedError(w, http.StatusConflict, "agent_name_taken", "An active agent with that name already exists.")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "agent settings could not be saved")
+	default:
+		writeJSON(w, http.StatusOK, agent)
+	}
+}
+
+func (h *Handler) RotateCredential(w http.ResponseWriter, r *http.Request, user auth.User) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !validateMutation(w, r) {
+		return
+	}
+	var input struct {
+		IdempotencyKey string `json:"idempotencyKey"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	key := strings.TrimSpace(input.IdempotencyKey)
+	if len(key) < 16 || len(key) > 128 {
+		writeError(w, http.StatusBadRequest, "a stable idempotency key is required")
+		return
+	}
+	plain, err := randomAgentToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "credential could not be rotated")
+		return
+	}
+	sum := sha256.Sum256([]byte(plain))
+	credential, applied, err := h.store.RotateCredential(r.Context(), user.ID, agentID(r), key, fmt.Sprintf("%x", sum[:]), tokenDisplayPrefix(plain))
+	switch {
+	case errors.Is(err, auth.ErrAgentNotFound):
+		writeError(w, http.StatusNotFound, "agent not found")
+	case errors.Is(err, ErrIdempotencyConflict):
+		writeCodedError(w, http.StatusConflict, "idempotency_conflict", "This rotation key was already used for another agent.")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "credential could not be rotated")
+	default:
+		token := ""
+		if applied {
+			token = plain
+		}
+		writeJSON(w, http.StatusOK, struct {
+			Token          string `json:"token,omitempty"`
+			AlreadyApplied bool   `json:"alreadyApplied"`
+			auth.AgentCredential
+		}{
+			Token:           token,
+			AlreadyApplied:  !applied,
+			AgentCredential: credential,
+		})
+	}
+}
+
+func (h *Handler) RevokeCredential(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validateMutation(w, r) {
+		return
+	}
+	err := h.store.RevokeCredential(r.Context(), user.ID, agentID(r))
+	switch {
+	case errors.Is(err, auth.ErrAgentNotFound):
+		writeError(w, http.StatusNotFound, "agent not found")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "credential could not be revoked")
+	default:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+func (h *Handler) Archive(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validateMutation(w, r) {
+		return
+	}
+	var input struct {
+		UnassignOpenWork bool `json:"unassignOpenWork"`
+	}
+	if r.Method != http.MethodDelete && !decodeJSON(w, r, &input) {
+		return
+	}
+	counts, err := h.store.ArchiveAgent(r.Context(), user.ID, agentID(r), input.UnassignOpenWork)
+	var conflict *ArchiveConflictError
+	switch {
+	case errors.Is(err, auth.ErrAgentNotFound):
+		writeError(w, http.StatusNotFound, "agent not found")
+	case errors.As(err, &conflict):
+		writeJSON(w, http.StatusConflict, struct {
+			Code     string          `json:"code"`
+			Error    string          `json:"error"`
+			Conflict ArchiveConflict `json:"conflict"`
+		}{
+			Code:     "agent_open_work",
+			Error:    "Ready and Working work must be unassigned before this agent can be archived.",
+			Conflict: conflict.Counts,
+		})
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "agent could not be archived")
+	default:
+		writeJSON(w, http.StatusOK, struct {
+			OK bool `json:"ok"`
+			ArchiveConflict
+		}{OK: true, ArchiveConflict: counts})
+	}
+}
+
+func (h *Handler) Restore(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validateMutation(w, r) {
+		return
+	}
+	agent, err := h.store.RestoreAgent(r.Context(), user.ID, agentID(r))
+	switch {
+	case errors.Is(err, auth.ErrAgentNotFound):
+		writeError(w, http.StatusNotFound, "agent not found")
+	case errors.Is(err, ErrRestoreLimit):
+		writeCodedError(w, http.StatusConflict, "agent_limit_reached", "Archive an active agent before restoring this identity.")
+	case errors.Is(err, ErrRestoreNameTaken):
+		writeCodedError(w, http.StatusConflict, "agent_name_taken", "An active agent with that name already exists. Rename this identity before restoring it.")
+	case errors.Is(err, auth.ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "authentication required")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "agent could not be restored")
+	default:
+		writeJSON(w, http.StatusOK, agent)
+	}
+}
+
+func agentID(r *http.Request) string {
+	return strings.TrimSpace(r.PathValue("id"))
+}
+
+func randomAgentToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return "slate_agent_" + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func tokenDisplayPrefix(token string) string {
+	const displayLength = 24
+	if len(token) <= displayLength {
+		return token
+	}
+	return token[:displayLength]
+}
+
+func validateMutation(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || r.Host == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") &&
+		strings.EqualFold(parsed.Host, r.Host) && parsed.User == nil {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "cross-origin request blocked")
+	return false
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	return true
+}
+
 func positiveQueryInt(r *http.Request, name string, fallback int, maximum int) (int, error) {
 	raw := strings.TrimSpace(r.URL.Query().Get(name))
 	if raw == "" {
@@ -89,4 +301,8 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeCodedError(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "error": message})
 }

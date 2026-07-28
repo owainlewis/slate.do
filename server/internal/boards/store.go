@@ -490,6 +490,7 @@ func activeAgentAssignment(ctx context.Context, db queryRower, userID string, ag
 		SELECT id::text
 		FROM agents
 		WHERE owner_user_id = $1 AND id = $2 AND archived_at IS NULL
+		FOR KEY SHARE
 	`, userID, agentID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("%w: agent assignee not found", ErrInvalidData)
@@ -754,6 +755,11 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		current.AssigneeAgentID, err = activeAgentAssignment(ctx, tx, userID, *input.AssigneeAgentID)
 		if err != nil {
 			return Task{}, err
+		}
+	}
+	if current.AssigneeAgentID != "" && !current.Done && (current.Status == StatusQueued || current.Status == StatusWorking) {
+		if _, err := activeAgentAssignment(ctx, tx, userID, current.AssigneeAgentID); err != nil {
+			return Task{}, fmt.Errorf("%w: clear or replace the archived agent before moving this item to Ready or Working", ErrInvalidData)
 		}
 	}
 	if current.Title == "" {
