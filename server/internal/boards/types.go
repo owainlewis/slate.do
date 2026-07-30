@@ -8,6 +8,12 @@ const (
 	StatusWorking     = "working"
 	StatusNeedsReview = "needs_review"
 	StatusDone        = "done"
+
+	// Priority is optional and crosses lists. Most items stay unset.
+	PriorityNone = ""
+	PriorityP0   = "p0"
+	PriorityP1   = "p1"
+	PriorityP2   = "p2"
 )
 
 type Board struct {
@@ -46,6 +52,7 @@ type Task struct {
 	Kind            string    `json:"kind"`
 	Done            bool      `json:"done"`
 	Status          string    `json:"status"`
+	Priority        string    `json:"priority"`
 	AssigneeAgentID string    `json:"assigneeAgentId,omitempty"`
 	SortOrder       int       `json:"sortOrder"`
 	CreatedAt       time.Time `json:"createdAt"`
@@ -100,6 +107,7 @@ type UpdateTaskInput struct {
 	BucketID        *string `json:"bucketId"`
 	Done            *bool   `json:"done"`
 	Status          *string `json:"status"`
+	Priority        *string `json:"priority"`
 	AssigneeAgentID *string `json:"assigneeAgentId"`
 	SortOrder       *int    `json:"sortOrder"`
 }
@@ -113,6 +121,7 @@ type TaskFilter struct {
 	BoardID         string
 	BucketID        string
 	Status          string
+	Priority        string
 	Done            *bool
 	Limit           int
 	ActionsOnly     bool

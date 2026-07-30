@@ -597,7 +597,7 @@ func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string,
 			COALESCE((SELECT max(sort_order) + 1 FROM tasks WHERE bucket_id = $2), 0)
 		)
 		RETURNING id::text, board_id::text, bucket_id::text, title, description,
-			COALESCE(scheduled_date::text, ''), kind, done, status, sort_order, created_at, updated_at
+			COALESCE(scheduled_date::text, ''), kind, done, status, priority, sort_order, created_at, updated_at
 			, COALESCE(assignee_agent_id::text, '')
 	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusQueued, assigneeAgentID)
 	return scanTask(row)
@@ -607,7 +607,7 @@ func taskByID(ctx context.Context, db queryRower, id string) (Task, error) {
 	row := db.QueryRow(ctx, `
 		SELECT id::text, board_id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, done,
-			status, sort_order, created_at, updated_at, COALESCE(assignee_agent_id::text, '')
+			status, priority, sort_order, created_at, updated_at, COALESCE(assignee_agent_id::text, '')
 		FROM tasks
 		WHERE id = $1
 	`, id)
@@ -823,6 +823,13 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			current.Status = StatusQueued
 		}
 	}
+	if input.Priority != nil {
+		priority := clean(*input.Priority)
+		if !validPriority(priority) {
+			return Task{}, fmt.Errorf("%w: invalid priority", ErrInvalidData)
+		}
+		current.Priority = priority
+	}
 	if input.SortOrder != nil {
 		current.SortOrder = *input.SortOrder
 	}
@@ -854,16 +861,16 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		UPDATE tasks t
 		SET board_id = $3, bucket_id = $4, title = $5, description = $6,
 			scheduled_date = NULLIF($7, '')::date, kind = $8,
-			done = $9, status = $10, sort_order = $11,
-			assignee_agent_id = NULLIF($12, '')::uuid, updated_at = now()
+			done = $9, status = $10, priority = $11, sort_order = $12,
+			assignee_agent_id = NULLIF($13, '')::uuid, updated_at = now()
 		FROM boards b
 		WHERE b.id = t.board_id AND b.user_id = $1 AND t.id = $2
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at,
+			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, '')
 	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Description, current.ScheduledDate, current.Kind, current.Done,
-		current.Status, current.SortOrder, current.AssigneeAgentID)
+		current.Status, current.Priority, current.SortOrder, current.AssigneeAgentID)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
@@ -905,7 +912,7 @@ func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id
 			`+agentSQL+`
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at,
+			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, '')
 	`, args...)
 	task, err := scanTask(row)
@@ -974,7 +981,7 @@ func (s *Store) getTask(ctx context.Context, userID string, agentID string, id s
 	row := s.db.QueryRow(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at,
+			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
@@ -1003,6 +1010,10 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 		args = append(args, filter.Status)
 		doneSQL += fmt.Sprintf(" AND t.status = $%d", len(args))
 	}
+	if filter.Priority != "" {
+		args = append(args, filter.Priority)
+		doneSQL += fmt.Sprintf(" AND t.priority = $%d", len(args))
+	}
 	if filter.Done != nil {
 		args = append(args, *filter.Done)
 		doneSQL += fmt.Sprintf(" AND t.done = $%d", len(args))
@@ -1023,7 +1034,7 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 	query := `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at,
+			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
@@ -1154,7 +1165,7 @@ func lockedTaskForAgent(ctx context.Context, tx pgx.Tx, userID string, agentID s
 	row := tx.QueryRow(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at,
+			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
@@ -1192,7 +1203,7 @@ func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID str
 	rows, err := s.db.Query(ctx, `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.sort_order, t.created_at, t.updated_at,
+			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
@@ -1261,7 +1272,7 @@ func scanTask(row rowScanner) (Task, error) {
 	var task Task
 	err := row.Scan(
 		&task.ID, &task.BoardID, &task.BucketID, &task.Title, &task.Description, &task.ScheduledDate, &task.Kind, &task.Done,
-		&task.Status,
+		&task.Status, &task.Priority,
 		&task.SortOrder, &task.CreatedAt, &task.UpdatedAt,
 		&task.AssigneeAgentID,
 	)
@@ -1320,4 +1331,12 @@ func applyTaskStatus(task *Task, status string, allowWorking bool) error {
 
 func validKind(kind string) bool {
 	return kind == KindAction
+}
+
+func validPriority(priority string) bool {
+	switch priority {
+	case PriorityNone, PriorityP0, PriorityP1, PriorityP2:
+		return true
+	}
+	return false
 }

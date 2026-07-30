@@ -142,6 +142,7 @@ const state = {
   agentCredentialResult: null,
   boardMode: "lists",
   flowListId: "",
+  priorityFilter: "",
   weekStart: "",
   theme: "",
   moveNotice: null,
@@ -162,6 +163,11 @@ const FLOW_STATES = [
   { value: "working", label: "Working" },
   { value: "needs_review", label: "Review" },
   { value: "done", label: "Done" },
+];
+const PRIORITIES = [
+  { value: "p0", label: "P0" },
+  { value: "p1", label: "P1" },
+  { value: "p2", label: "P2" },
 ];
 
 const HOME_PATH = "/";
@@ -1017,7 +1023,8 @@ function appHTML() {
         </header>
         ${statusErrorHTML(state.error)}
         ${statusNoticeHTML(state.moveNotice)}
-        ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
+        ${listsMode ? priorityToolbarHTML() : ""}
+        ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${visibleLists(lists).map(listHTML).join("")}</div>`}
         ${footerHTML(board, todayMode)}
       </div>
       ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
@@ -1089,9 +1096,30 @@ function boardRowHTML(board) {
     </div>`;
 }
 
+function priorityToolbarHTML() {
+  const selected = state.priorityFilter;
+  return `
+    <div class="priority-toolbar">
+      <label for="priority-filter">Priority</label>
+      <select id="priority-filter" aria-label="Filter board by priority">
+        <option value="">All items</option>
+        ${PRIORITIES.map(p => `<option value="${escapeAttr(p.value)}" ${p.value === selected ? "selected" : ""}>${escapeHTML(p.label)} only</option>`).join("")}
+      </select>
+    </div>`;
+}
+
+function priorityMatches(task) {
+  return !state.priorityFilter || task.priority === state.priorityFilter;
+}
+
+function visibleLists(lists) {
+  if (!state.priorityFilter) return lists;
+  return lists.filter(list => (list.tasks || []).some(priorityMatches));
+}
+
 function listHTML(list) {
   const over = list.openCount > list.limitCount ? "over-limit" : "";
-  const tasks = list.tasks || [];
+  const tasks = (list.tasks || []).filter(priorityMatches);
   const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
   const activeLimitReached = (list.openCount || 0) >= activeLimit;
   return `
@@ -1161,7 +1189,7 @@ function taskHTML(task) {
     <li class="task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
       <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
       <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
-        <div class="task-title">${escapeHTML(task.title)}${taskStateBadgeHTML(task)}</div>
+        <div class="task-title">${escapeHTML(task.title)}${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}</div>
         ${task.scheduledDate ? `<span class="task-date">${formatTaskDate(task.scheduledDate)}</span>` : ""}
       </button>
       ${taskAssigneeHTML(task)}
@@ -1171,6 +1199,20 @@ function taskHTML(task) {
 function taskStateBadgeHTML(task) {
   if (task.status === "queued" || task.status === "done") return "";
   return `<span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span>`;
+}
+
+function taskPriorityBadgeHTML(task) {
+  if (!task.priority) return "";
+  return `<span class="priority-badge priority-${task.priority}">${escapeHTML(priorityLabel(task.priority))}</span>`;
+}
+
+function priorityLabel(priority) {
+  return PRIORITIES.find(p => p.value === priority)?.label || "";
+}
+
+function priorityOptionsHTML(selected) {
+  const options = [{ value: "", label: "None" }].concat(PRIORITIES);
+  return options.map(p => `<option value="${escapeAttr(p.value)}" ${p.value === (selected || "") ? "selected" : ""}>${escapeHTML(p.label)}</option>`).join("");
 }
 
 function flowHTML(board) {
@@ -1289,6 +1331,7 @@ function detailHTML(task) {
             <textarea class="detail-description" id="detail-description" name="description" placeholder="Add a description…">${escapeHTML(task.description || "")}</textarea>
             <div class="detail-properties" aria-label="Item properties">
               <div class="field"><label for="detail-status">State</label><select id="detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
+              <div class="field"><label for="detail-priority">Priority</label><select id="detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
               <div class="field"><label for="detail-assignee">Agent</label><select id="detail-assignee" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
               <div class="field"><label>Location</label><button class="location-button" id="open-move" type="button"><span>${escapeHTML(state.board.name)} / ${escapeHTML(list?.name || "List")}</span><b>Move…</b></button></div>
               <div class="field"><label for="detail-date">Plan for</label><input id="detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
@@ -2208,6 +2251,12 @@ function bindApp() {
     render();
     document.querySelector("#flow-list-filter")?.focus();
   });
+  document.querySelector("#priority-filter")?.addEventListener("change", event => {
+    state.priorityFilter = event.target.value;
+    state.selectedTask = null;
+    render();
+    document.querySelector("#priority-filter")?.focus();
+  });
   document.querySelector("#previous-week")?.addEventListener("click", () => changeWeek(-7));
   document.querySelector("#next-week")?.addEventListener("click", () => changeWeek(7));
   document.querySelector("#current-week")?.addEventListener("click", () => { state.weekStart = ""; render(); });
@@ -2435,6 +2484,7 @@ function bindDetail(options = {}) {
       description: form.get("description"),
       scheduledDate: form.get("scheduledDate"),
       status: form.get("status"),
+      priority: form.get("priority"),
       assigneeAgentId: form.get("assigneeAgentId"),
     };
   };

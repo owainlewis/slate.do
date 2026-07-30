@@ -124,7 +124,7 @@ Run "slate help <topic>" for every command and flag.
   slate tasks get <task-id>
   slate tasks pull [--board <board-id>] [--list <list-id>] [--limit <n>]
   slate tasks create --list <list-id> --title <title> [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>] [--override-limit]
-  slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>]
+  slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>] [--priority <p0|p1|p2>]
   slate tasks delete <task-id>
   slate tasks reorder --list <list-id> <task-id>...
   slate tasks claim <task-id>
@@ -384,11 +384,15 @@ func tasksCmd(c client, args []string) error {
 		date := fs.String("date", "", "planned date")
 		listID := fs.String("list", "", "list id")
 		bucketID := fs.String("bucket", "", "deprecated alias for --list")
+		priority := fs.String("priority", "", "priority: p0, p1, p2, or empty to clear")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 0 {
 			return errors.New("unexpected arguments")
+		}
+		if !validPriority(*priority) {
+			return fmt.Errorf("invalid priority %q; choose p0, p1, p2, or an empty value to clear", *priority)
 		}
 		body := map[string]any{}
 		fs.Visit(func(item *flag.Flag) {
@@ -399,6 +403,8 @@ func tasksCmd(c client, args []string) error {
 				body["description"] = *description
 			case "date":
 				body["scheduledDate"] = *date
+			case "priority":
+				body["priority"] = *priority
 			}
 		})
 		if targetList := firstNonEmpty(*listID, *bucketID); targetList != "" {
@@ -581,6 +587,15 @@ func setQuery(q url.Values, key string, value string) {
 func validStatus(status string) bool {
 	switch status {
 	case "queued", "working", "needs_review", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+func validPriority(priority string) bool {
+	switch priority {
+	case "", "p0", "p1", "p2":
 		return true
 	default:
 		return false

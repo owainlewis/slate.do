@@ -910,7 +910,7 @@ const board = {
       openCount: 1,
       limitCount: 20,
       tasks: [
-        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", done: false },
+        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", done: false, priority: "p0" },
       ],
     },
   ],
@@ -929,6 +929,34 @@ test("Flow groups every list item into four fixed states without redundant move 
   assert.match(html, />YouTube</);
   assert.doesNotMatch(html, /data-set-task-status/);
   assert.doesNotMatch(html, /aria-label="Move Working action to/);
+});
+
+test("priority filter narrows lists to matching items and hides empty lists", () => {
+  vm.runInContext('state.priorityFilter = "p0"', app);
+
+  assert.deepEqual(app.visibleLists(board.buckets).map(list => list.id), ["youtube"]);
+  const html = app.listHTML(board.buckets[1]);
+  assert.match(html, /Write video script/);
+
+  const home = app.visibleLists(board.buckets).find(list => list.id === "home");
+  assert.equal(home, undefined, "a list with no matching items is hidden");
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  assert.deepEqual(app.visibleLists(board.buckets).map(list => list.id), ["home", "youtube"]);
+});
+
+test("priority renders as a card badge only when set", () => {
+  assert.match(app.taskPriorityBadgeHTML({ priority: "p0" }), /class="priority-badge priority-p0">P0</);
+  assert.equal(app.taskPriorityBadgeHTML({ priority: "" }), "");
+  assert.equal(app.taskPriorityBadgeHTML({}), "");
+});
+
+test("priority options offer None plus the three levels", () => {
+  const html = app.priorityOptionsHTML("p1");
+  assert.match(html, /value="" >None|value="" selected>None/);
+  assert.match(html, /value="p1" selected>P1/);
+  assert.match(html, /value="p0" >P0|value="p0">P0/);
+  assert.match(html, /value="p2"/);
 });
 
 test("Flow filters cards to one selected list", () => {
