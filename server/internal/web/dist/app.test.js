@@ -931,18 +931,22 @@ test("Flow groups every list item into four fixed states without redundant move 
   assert.doesNotMatch(html, /aria-label="Move Working action to/);
 });
 
-test("priority filter narrows lists to matching items and hides empty lists", () => {
+test("priority filter hides items but keeps every list on the board", () => {
   vm.runInContext('state.priorityFilter = "p0"', app);
 
-  assert.deepEqual(app.visibleLists(board.buckets).map(list => list.id), ["youtube"]);
-  const html = app.listHTML(board.buckets[1]);
-  assert.match(html, /Write video script/);
+  const matching = app.listHTML(board.buckets[1]);
+  assert.match(matching, /YouTube/);
+  assert.match(matching, /Write video script/);
 
-  const home = app.visibleLists(board.buckets).find(list => list.id === "home");
-  assert.equal(home, undefined, "a list with no matching items is hidden");
+  const empty = app.listHTML(board.buckets[0]);
+  assert.match(empty, /Home list/, "a list with no matching items still renders");
+  assert.match(empty, /No P0 items/, "its empty state names the active filter");
+  assert.doesNotMatch(empty, /Working action/);
+  assert.doesNotMatch(empty, /Ready action/);
 
   vm.runInContext('state.priorityFilter = ""', app);
-  assert.deepEqual(app.visibleLists(board.buckets).map(list => list.id), ["home", "youtube"]);
+  assert.match(app.listHTML(board.buckets[0]), /Ready action/);
+  assert.match(app.listHTML(board.buckets[0]), /Nothing here yet|Ready action/);
 });
 
 test("priority renders as a card badge only when set", () => {

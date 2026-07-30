@@ -1024,7 +1024,7 @@ function appHTML() {
         ${statusErrorHTML(state.error)}
         ${statusNoticeHTML(state.moveNotice)}
         ${listsMode ? priorityToolbarHTML() : ""}
-        ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${visibleLists(lists).map(listHTML).join("")}</div>`}
+        ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
         ${footerHTML(board, todayMode)}
       </div>
       ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
@@ -1112,9 +1112,9 @@ function priorityMatches(task) {
   return !state.priorityFilter || task.priority === state.priorityFilter;
 }
 
-function visibleLists(lists) {
-  if (!state.priorityFilter) return lists;
-  return lists.filter(list => (list.tasks || []).some(priorityMatches));
+function emptyListMessage() {
+  if (!state.priorityFilter) return "Nothing here yet";
+  return `No ${priorityLabel(state.priorityFilter)} items`;
 }
 
 function listHTML(list) {
@@ -1134,7 +1134,7 @@ function listHTML(list) {
       <input class="bucket-goal" data-bucket-goal="${list.id}" value="${escapeAttr(list.goal || "")}" placeholder="Add a goal" aria-label="Goal for ${escapeAttr(list.name)}">
       ${state.goalErrors[list.id] ? `<p class="error bucket-goal-error">${escapeHTML(state.goalErrors[list.id])}</p>` : ""}
       <ul class="tasks ${tasks.length ? "" : "empty"}" data-task-list="${list.id}">
-        ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state">${icon("inboxTray")}<p>Nothing here yet</p></li>`}
+        ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state">${icon("inboxTray")}<p>${escapeHTML(emptyListMessage())}</p></li>`}
       </ul>
     <form class="add-task" data-add-task="${list.id}">
     <button class="add-icon" type="submit" title="Add item" ${activeLimitReached ? 'disabled aria-describedby="item-limit-' + list.id + '"' : ""}>${icon("plus")}</button>
