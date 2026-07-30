@@ -69,6 +69,28 @@ func TestValidKind(t *testing.T) {
 	}
 }
 
+func TestValidPriority(t *testing.T) {
+	for _, priority := range []string{PriorityNone, PriorityP0, PriorityP1, PriorityP2} {
+		if !validPriority(priority) {
+			t.Fatalf("%q should be valid", priority)
+		}
+	}
+	if validPriority("p3") || validPriority("P0") || validPriority("urgent") {
+		t.Fatal("unexpected valid priority")
+	}
+}
+
+func TestTaskFilterFromQueryIncludesPriority(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/v1/tasks?priority=p0", nil)
+	filter, err := taskFilterFromQuery(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filter.Priority != PriorityP0 {
+		t.Fatalf("filter.Priority = %q", filter.Priority)
+	}
+}
+
 func TestTaskFilterFromQueryIncludesBoardAndList(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId=board-1&bucketId=list-1&status=queued&done=false&limit=12", nil)
 	filter, err := taskFilterFromQuery(req)

@@ -910,7 +910,7 @@ const board = {
       openCount: 1,
       limitCount: 20,
       tasks: [
-        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", done: false },
+        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", done: false, priority: "p0" },
       ],
     },
   ],
@@ -929,6 +929,79 @@ test("Flow groups every list item into four fixed states without redundant move 
   assert.match(html, />YouTube</);
   assert.doesNotMatch(html, /data-set-task-status/);
   assert.doesNotMatch(html, /aria-label="Move Working action to/);
+});
+
+test("priority filter hides items but keeps every list on the board", () => {
+  vm.runInContext('state.priorityFilter = "p0"', app);
+
+  const matching = app.listHTML(board.buckets[1]);
+  assert.match(matching, /YouTube/);
+  assert.match(matching, /Write video script/);
+
+  const empty = app.listHTML(board.buckets[0]);
+  assert.match(empty, /Home list/, "a list with no matching items still renders");
+  assert.match(empty, /No P0 items/, "its empty state names the active filter");
+  assert.doesNotMatch(empty, /Working action/);
+  assert.doesNotMatch(empty, /Ready action/);
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  assert.match(app.listHTML(board.buckets[0]), /Ready action/);
+  assert.match(app.listHTML(board.buckets[0]), /Nothing here yet|Ready action/);
+});
+
+test("dropping a card while filtered lands it against the real task order", () => {
+  vm.runInContext(`state.board = { buckets: [{ id: "home", tasks: [
+    { id: "a", priority: "p1" },
+    { id: "b", priority: "p0" },
+    { id: "c", priority: "p1" },
+    { id: "d", priority: "p0" },
+  ] }] }`, app);
+
+  // Only b and d render under a p0 filter. Dragging d leaves b as the sole card.
+  const listElement = {
+    dataset: { taskList: "home" },
+    querySelectorAll: () => [{ dataset: { task: "b" } }],
+  };
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  assert.equal(app.fullTaskIndex(listElement, 0, "d"), 0, "unfiltered boards pass the index straight through");
+
+  vm.runInContext('state.priorityFilter = "p0"', app);
+  // Dropping before the visible card b must land at b's real index, not index 0,
+  // so hidden item a keeps its place ahead of it.
+  assert.equal(app.fullTaskIndex(listElement, 0, "d"), 1);
+  // Dropping past the last visible card goes to the true end of the list.
+  assert.equal(app.fullTaskIndex(listElement, 1, "d"), 3);
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  vm.runInContext('state.board = null', app);
+});
+
+test("adding an item is blocked while a filter is active", () => {
+  vm.runInContext('state.priorityFilter = "p0"', app);
+  const filtered = app.listHTML(board.buckets[1]);
+  assert.match(filtered, /Clear the filter to add items/);
+  assert.match(filtered, /<input name="title"[^>]*disabled/);
+  assert.doesNotMatch(filtered, /aria-describedby="item-limit/, "no dangling describedby when the limit is not the blocker");
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  const open = app.listHTML(board.buckets[1]);
+  assert.match(open, /placeholder="Add item"/);
+  assert.doesNotMatch(open, /<input name="title"[^>]*disabled/);
+});
+
+test("priority renders as a card badge only when set", () => {
+  assert.match(app.taskPriorityBadgeHTML({ priority: "p0" }), /class="priority-badge priority-p0">P0</);
+  assert.equal(app.taskPriorityBadgeHTML({ priority: "" }), "");
+  assert.equal(app.taskPriorityBadgeHTML({}), "");
+});
+
+test("priority options offer None plus the three levels", () => {
+  const html = app.priorityOptionsHTML("p1");
+  assert.match(html, /value="" >None|value="" selected>None/);
+  assert.match(html, /value="p1" selected>P1/);
+  assert.match(html, /value="p0" >P0|value="p0">P0/);
+  assert.match(html, /value="p2"/);
 });
 
 test("Flow filters cards to one selected list", () => {

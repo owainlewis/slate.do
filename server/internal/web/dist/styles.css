@@ -473,6 +473,18 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .state-working { background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent); }
 .state-needs_review { background: color-mix(in srgb, var(--review) 12%, transparent); color: var(--review); }
+.priority-badge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-decoration: none;
+}
+.priority-p0 { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.priority-p1 { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+.priority-p2 { background: color-mix(in srgb, var(--faint) 16%, transparent); color: var(--faint); }
 .task-list-name, .task-date {
   margin-top: 3px;
   color: var(--faint);
@@ -520,6 +532,31 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+.priority-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 24px 0;
+}
+.priority-toolbar label {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.priority-toolbar select {
+  min-width: 160px;
+  max-width: 280px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 7px 30px 7px 10px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
 }
 .flow-toolbar {
   display: flex;

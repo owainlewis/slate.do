@@ -207,6 +207,7 @@ func (h *Handler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request, user 
 		Kind            *string `json:"kind"`
 		BucketID        *string `json:"bucketId"`
 		Status          *string `json:"status"`
+		Priority        *string `json:"priority"`
 		AssigneeAgentID *string `json:"assigneeAgentId"`
 	}
 	if !decodeJSON(w, r, &input) {
@@ -218,7 +219,8 @@ func (h *Handler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request, user 
 	}
 	task, err := h.store.UpdateTaskForHuman(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{
 		Title: input.Title, Description: input.Description, ScheduledDate: input.ScheduledDate,
-		Kind: input.Kind, BucketID: input.BucketID, Status: input.Status, AssigneeAgentID: input.AssigneeAgentID,
+		Kind: input.Kind, BucketID: input.BucketID, Status: input.Status, Priority: input.Priority,
+		AssigneeAgentID: input.AssigneeAgentID,
 	})
 	if handleStoreError(w, err) {
 		return
@@ -350,6 +352,7 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 		BoardID:  strings.TrimSpace(q.Get("boardId")),
 		BucketID: strings.TrimSpace(q.Get("bucketId")),
 		Status:   strings.TrimSpace(q.Get("status")),
+		Priority: strings.TrimSpace(q.Get("priority")),
 	}
 	if raw := strings.TrimSpace(q.Get("done")); raw != "" {
 		done, err := parseQueryBool("done", raw)

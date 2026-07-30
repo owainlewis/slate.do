@@ -120,11 +120,11 @@ Run "slate help <topic>" for every command and flag.
 "buckets" is accepted as an alias for "lists".
 `,
 	"tasks": `Usage:
-  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--done <true|false>] [--limit <n>]
+  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--done <true|false>] [--limit <n>]
   slate tasks get <task-id>
-  slate tasks pull [--board <board-id>] [--list <list-id>] [--limit <n>]
+  slate tasks pull [--board <board-id>] [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
   slate tasks create --list <list-id> --title <title> [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>] [--override-limit]
-  slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>]
+  slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>] [--priority <p0|p1|p2>]
   slate tasks delete <task-id>
   slate tasks reorder --list <list-id> <task-id>...
   slate tasks claim <task-id>
@@ -132,8 +132,9 @@ Run "slate help <topic>" for every command and flag.
   slate tasks done <task-id>
 
 "pull" returns open queued tasks. Claim before starting work. Use an empty
---description or --date value to clear that field. "working" uses the atomic
-claim operation, so only one agent can successfully claim a queued task.
+--description or --date value to clear that field, or an empty --priority to
+clear the priority. "working" uses the atomic claim operation, so only one
+agent can successfully claim a queued task.
 Reuse --idempotency-key when retrying task creation after an uncertain result.
 `,
 }
@@ -323,6 +324,7 @@ func tasksCmd(c client, args []string) error {
 		boardID := fs.String("board", "", "board id")
 		listID := fs.String("list", "", "list id")
 		limit := fs.Int("limit", 0, "maximum tasks")
+		priority := fs.String("priority", "", "priority filter: p0, p1, or p2")
 		var status, done *string
 		if command == "list" {
 			status = fs.String("status", "", "status filter")
@@ -334,9 +336,13 @@ func tasksCmd(c client, args []string) error {
 		if fs.NArg() != 0 {
 			return errors.New("unexpected arguments")
 		}
+		if !validPriority(*priority) {
+			return fmt.Errorf("invalid priority %q; choose p0, p1, or p2", *priority)
+		}
 		q := url.Values{}
 		setQuery(q, "boardId", *boardID)
 		setQuery(q, "bucketId", *listID)
+		setQuery(q, "priority", *priority)
 		if *limit > 0 {
 			q.Set("limit", strconv.Itoa(*limit))
 		}
@@ -384,11 +390,15 @@ func tasksCmd(c client, args []string) error {
 		date := fs.String("date", "", "planned date")
 		listID := fs.String("list", "", "list id")
 		bucketID := fs.String("bucket", "", "deprecated alias for --list")
+		priority := fs.String("priority", "", "priority: p0, p1, p2, or empty to clear")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 0 {
 			return errors.New("unexpected arguments")
+		}
+		if !validPriority(*priority) {
+			return fmt.Errorf("invalid priority %q; choose p0, p1, p2, or an empty value to clear", *priority)
 		}
 		body := map[string]any{}
 		fs.Visit(func(item *flag.Flag) {
@@ -399,6 +409,8 @@ func tasksCmd(c client, args []string) error {
 				body["description"] = *description
 			case "date":
 				body["scheduledDate"] = *date
+			case "priority":
+				body["priority"] = *priority
 			}
 		})
 		if targetList := firstNonEmpty(*listID, *bucketID); targetList != "" {
@@ -581,6 +593,15 @@ func setQuery(q url.Values, key string, value string) {
 func validStatus(status string) bool {
 	switch status {
 	case "queued", "working", "needs_review", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+func validPriority(priority string) bool {
+	switch priority {
+	case "", "p0", "p1", "p2":
 		return true
 	default:
 		return false

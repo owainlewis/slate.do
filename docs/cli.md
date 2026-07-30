@@ -103,6 +103,15 @@ slate tasks list --list <list-id> --done false
 slate tasks get <task-id>
 ```
 
+Priority is optional and crosses lists, so it is how you find urgent work
+wherever it lives:
+
+```bash
+slate tasks update <task-id> --priority p0
+slate tasks list --priority p0
+slate tasks update <task-id> --priority ""
+```
+
 Run `slate help boards`, `slate help lists`, or `slate help tasks` for every
 command and flag.
 
