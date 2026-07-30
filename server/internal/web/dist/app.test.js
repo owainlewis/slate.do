@@ -949,6 +949,47 @@ test("priority filter hides items but keeps every list on the board", () => {
   assert.match(app.listHTML(board.buckets[0]), /Nothing here yet|Ready action/);
 });
 
+test("dropping a card while filtered lands it against the real task order", () => {
+  vm.runInContext(`state.board = { buckets: [{ id: "home", tasks: [
+    { id: "a", priority: "p1" },
+    { id: "b", priority: "p0" },
+    { id: "c", priority: "p1" },
+    { id: "d", priority: "p0" },
+  ] }] }`, app);
+
+  // Only b and d render under a p0 filter. Dragging d leaves b as the sole card.
+  const listElement = {
+    dataset: { taskList: "home" },
+    querySelectorAll: () => [{ dataset: { task: "b" } }],
+  };
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  assert.equal(app.fullTaskIndex(listElement, 0, "d"), 0, "unfiltered boards pass the index straight through");
+
+  vm.runInContext('state.priorityFilter = "p0"', app);
+  // Dropping before the visible card b must land at b's real index, not index 0,
+  // so hidden item a keeps its place ahead of it.
+  assert.equal(app.fullTaskIndex(listElement, 0, "d"), 1);
+  // Dropping past the last visible card goes to the true end of the list.
+  assert.equal(app.fullTaskIndex(listElement, 1, "d"), 3);
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  vm.runInContext('state.board = null', app);
+});
+
+test("adding an item is blocked while a filter is active", () => {
+  vm.runInContext('state.priorityFilter = "p0"', app);
+  const filtered = app.listHTML(board.buckets[1]);
+  assert.match(filtered, /Clear the filter to add items/);
+  assert.match(filtered, /<input name="title"[^>]*disabled/);
+  assert.doesNotMatch(filtered, /aria-describedby="item-limit/, "no dangling describedby when the limit is not the blocker");
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  const open = app.listHTML(board.buckets[1]);
+  assert.match(open, /placeholder="Add item"/);
+  assert.doesNotMatch(open, /<input name="title"[^>]*disabled/);
+});
+
 test("priority renders as a card badge only when set", () => {
   assert.match(app.taskPriorityBadgeHTML({ priority: "p0" }), /class="priority-badge priority-p0">P0</);
   assert.equal(app.taskPriorityBadgeHTML({ priority: "" }), "");

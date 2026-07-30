@@ -601,6 +601,7 @@ function resetAuthenticatedState() {
   state.agentCredentialResult = null;
   state.boardMode = "lists";
   state.flowListId = "";
+  state.priorityFilter = "";
   state.weekStart = "";
   state.theme = "";
   state.routeError = null;
@@ -650,6 +651,7 @@ async function logout() {
 }
 
 async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion) {
+  const previousBoardID = state.board?.id || "";
   let board = await api.get(`/api/v1/boards/${id}`);
   if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
@@ -664,8 +666,12 @@ async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion)
     }
     if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   }
+  const changedBoard = previousBoardID && previousBoardID !== board.id;
   state.board = board;
   if (!(board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
+  // A filter carried onto another board can render every column empty, which
+  // reads as a broken board rather than an active filter.
+  if (changedBoard) state.priorityFilter = "";
   state.selectedTask = state.selectedTask ? findTask(state.selectedTask.id) : null;
   return true;
 }
@@ -1122,6 +1128,14 @@ function listHTML(list) {
   const tasks = (list.tasks || []).filter(priorityMatches);
   const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
   const activeLimitReached = (list.openCount || 0) >= activeLimit;
+  // New items carry no priority, so adding one under a filter would create it
+  // and immediately hide it. Block the form instead of failing silently.
+  const addBlocked = activeLimitReached || Boolean(state.priorityFilter);
+  const addPlaceholder = activeLimitReached
+    ? `Limit of ${activeLimit} active items reached`
+    : state.priorityFilter
+      ? "Clear the filter to add items"
+      : "Add item";
   return `
     <section class="bucket ${over}" data-bucket="${list.id}" draggable="true">
       <div class="bucket-head">
@@ -1137,8 +1151,8 @@ function listHTML(list) {
         ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state">${icon("inboxTray")}<p>${escapeHTML(emptyListMessage())}</p></li>`}
       </ul>
     <form class="add-task" data-add-task="${list.id}">
-    <button class="add-icon" type="submit" title="Add item" ${activeLimitReached ? 'disabled aria-describedby="item-limit-' + list.id + '"' : ""}>${icon("plus")}</button>
-    <input name="title" placeholder="${activeLimitReached ? `Limit of ${activeLimit} active items reached` : "Add item"}" ${activeLimitReached ? 'disabled aria-describedby="item-limit-' + list.id + '"' : ""}>
+    <button class="add-icon" type="submit" title="Add item" ${addBlocked ? "disabled" : ""} ${activeLimitReached ? 'aria-describedby="item-limit-' + list.id + '"' : ""}>${icon("plus")}</button>
+    <input name="title" placeholder="${addPlaceholder}" ${addBlocked ? "disabled" : ""} ${activeLimitReached ? 'aria-describedby="item-limit-' + list.id + '"' : ""}>
   </form>
   ${activeLimitReached ? `<p class="board-limit" id="item-limit-${list.id}">${activeLimit} active item limit reached</p>` : ""}
   </section>`;
@@ -2503,6 +2517,13 @@ function bindDetail(options = {}) {
     const activeView = document.querySelector('[data-board-mode][aria-pressed="true"]');
     const selectedBoard = document.querySelector(`[data-board="${state.board?.id}"]`);
     const fallback = options.fallbackSelector ? document.querySelector(options.fallbackSelector) : null;
+    // An edit can hide the item behind the active filter. Falling back to the
+    // first card on the board would move focus to an unrelated list, so stay
+    // in the item's own list instead.
+    if (!trigger && state.priorityFilter) {
+      (fallback || addInput || activeView || selectedBoard)?.focus();
+      return;
+    }
     (trigger || triggers[0] || fallback || addInput || activeView || selectedBoard)?.focus();
   };
   const setDetailBusy = busy => {
@@ -3622,8 +3643,8 @@ function bindDrag() {
     list.addEventListener("drop", async event => {
       if (drag?.type !== "task") return;
       event.preventDefault();
-      const index = taskDropIndex(list, event.clientY);
       const id = drag.id;
+      const index = fullTaskIndex(list, taskDropIndex(list, event.clientY), id);
       drag = null;
       clearDropMarks();
       await dropTask(id, list.dataset.taskList, index);
@@ -3735,6 +3756,19 @@ function taskDropIndex(list, y) {
     if (y < rect.top + rect.height / 2) return i;
   }
   return items.length;
+}
+
+// taskDropIndex counts rendered cards, but dropTask splices into the full task
+// array. While a priority filter hides cards those two disagree, so translate
+// the visible position into a real one by anchoring on the card dropped before.
+function fullTaskIndex(listElement, visibleIndex, draggingID) {
+  if (!state.priorityFilter) return visibleIndex;
+  const bucket = state.board?.buckets?.find(b => b.id === listElement.dataset.taskList);
+  const remaining = (bucket?.tasks || []).filter(task => task.id !== draggingID);
+  const visibleIDs = [...listElement.querySelectorAll("[data-task]:not(.dragging)")].map(el => el.dataset.task);
+  if (visibleIndex >= visibleIDs.length) return remaining.length;
+  const anchor = remaining.findIndex(task => task.id === visibleIDs[visibleIndex]);
+  return anchor < 0 ? remaining.length : anchor;
 }
 
 function markTaskDrop(list, y) {

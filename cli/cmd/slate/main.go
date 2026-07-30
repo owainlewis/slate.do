@@ -120,9 +120,9 @@ Run "slate help <topic>" for every command and flag.
 "buckets" is accepted as an alias for "lists".
 `,
 	"tasks": `Usage:
-  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--done <true|false>] [--limit <n>]
+  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--done <true|false>] [--limit <n>]
   slate tasks get <task-id>
-  slate tasks pull [--board <board-id>] [--list <list-id>] [--limit <n>]
+  slate tasks pull [--board <board-id>] [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
   slate tasks create --list <list-id> --title <title> [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>] [--override-limit]
   slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>] [--priority <p0|p1|p2>]
   slate tasks delete <task-id>
@@ -132,8 +132,9 @@ Run "slate help <topic>" for every command and flag.
   slate tasks done <task-id>
 
 "pull" returns open queued tasks. Claim before starting work. Use an empty
---description or --date value to clear that field. "working" uses the atomic
-claim operation, so only one agent can successfully claim a queued task.
+--description or --date value to clear that field, or an empty --priority to
+clear the priority. "working" uses the atomic claim operation, so only one
+agent can successfully claim a queued task.
 Reuse --idempotency-key when retrying task creation after an uncertain result.
 `,
 }
@@ -323,6 +324,7 @@ func tasksCmd(c client, args []string) error {
 		boardID := fs.String("board", "", "board id")
 		listID := fs.String("list", "", "list id")
 		limit := fs.Int("limit", 0, "maximum tasks")
+		priority := fs.String("priority", "", "priority filter: p0, p1, or p2")
 		var status, done *string
 		if command == "list" {
 			status = fs.String("status", "", "status filter")
@@ -334,9 +336,13 @@ func tasksCmd(c client, args []string) error {
 		if fs.NArg() != 0 {
 			return errors.New("unexpected arguments")
 		}
+		if !validPriority(*priority) {
+			return fmt.Errorf("invalid priority %q; choose p0, p1, or p2", *priority)
+		}
 		q := url.Values{}
 		setQuery(q, "boardId", *boardID)
 		setQuery(q, "bucketId", *listID)
+		setQuery(q, "priority", *priority)
 		if *limit > 0 {
 			q.Set("limit", strconv.Itoa(*limit))
 		}
