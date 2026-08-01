@@ -494,6 +494,130 @@ func TestPGStoreResolvesProEntitlementForEveryAuthenticationPath(t *testing.T) {
 	}
 }
 
+func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run auth store integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPGStore(db)
+	email := fmt.Sprintf("free-auth-%d@slate.test", time.Now().UnixNano())
+	var userID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO users (email, password_hash, role)
+		VALUES ($1, 'hash', 'member')
+		RETURNING id::text
+	`, email).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	byEmail, err := store.FindUserByEmail(ctx, email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFreeEntitlement(t, byEmail.User)
+
+	sessionHash := fmt.Sprintf("free-session-%d", time.Now().UnixNano())
+	if err := store.CreateSession(ctx, userID, "hash", sessionHash, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	bySession, err := store.FindUserBySessionHash(ctx, sessionHash, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFreeEntitlement(t, bySession)
+
+	type tokenResult struct {
+		hash string
+		err  error
+	}
+	const attempts = 8
+	start := make(chan struct{})
+	results := make(chan tokenResult, attempts)
+	var workers sync.WaitGroup
+	for index := 1; index <= attempts; index++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			<-start
+			hash := fmt.Sprintf("free-api-%d-%d", time.Now().UnixNano(), index)
+			_, err := store.CreateAPIToken(ctx, userID, fmt.Sprintf("Token %d", index), hash)
+			results <- tokenResult{hash: hash, err: err}
+		}(index)
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+
+	created := make([]string, 0, entitlements.FreeLimits.APITokens)
+	limited := 0
+	for result := range results {
+		switch {
+		case result.err == nil:
+			created = append(created, result.hash)
+		case errors.Is(result.err, ErrAPITokenLimit):
+			limited++
+		default:
+			t.Fatalf("concurrent free API token error = %v", result.err)
+		}
+	}
+	if len(created) != entitlements.FreeLimits.APITokens || limited != attempts-entitlements.FreeLimits.APITokens {
+		t.Fatalf("concurrent token results: created = %d, limited = %d", len(created), limited)
+	}
+	byToken, err := store.FindUserByAPITokenHash(ctx, created[0], time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFreeEntitlement(t, byToken)
+
+	if _, err := store.CreateAgent(ctx, userID, "Free Agent", "", fmt.Sprintf("free-agent-%d", time.Now().UnixNano()), "slate_agent_free"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateAgent(ctx, userID, "Second Agent", "", fmt.Sprintf("free-agent-over-%d", time.Now().UnixNano()), "slate_agent_over"); !errors.Is(err, ErrAgentLimit) {
+		t.Fatalf("second free agent error = %v", err)
+	}
+
+	var boardID, bucketID string
+	if err := db.QueryRow(ctx, `INSERT INTO boards (user_id, name) VALUES ($1, 'Free board') RETURNING id::text`, userID).Scan(&boardID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `INSERT INTO buckets (board_id, name) VALUES ($1, 'Free list') RETURNING id::text`, boardID).Scan(&bucketID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO tasks (board_id, bucket_id, title, description, kind, done, status)
+		VALUES
+			($1, $2, 'é', '🙂', 'action', false, 'queued'),
+			($1, $2, 'abc', '', 'action', true, 'done')
+	`, boardID, bucketID); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := store.AccountUsage(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Boards != 1 || usage.MaxListsPerBoard != 1 || usage.MaxActiveItemsPerList != 1 || usage.Agents != 1 || usage.StoredTasks != 2 || usage.StoredContentBytes != 9 || usage.APITokens != 3 {
+		t.Fatalf("free usage = %#v", usage)
+	}
+
+	theme := "dark"
+	updated, err := store.UpdateProfile(ctx, userID, &theme, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFreeEntitlement(t, updated)
+}
+
 func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -745,5 +869,12 @@ func assertProAdminEntitlement(t *testing.T, user User) {
 	}
 	if user.Entitlement.Limits != entitlements.ProLimits {
 		t.Fatalf("limits = %#v, want %#v", user.Entitlement.Limits, entitlements.ProLimits)
+	}
+}
+
+func assertFreeEntitlement(t *testing.T, user User) {
+	t.Helper()
+	if user.Role != "member" || user.Entitlement != entitlements.Free() {
+		t.Fatalf("free entitlement = %#v", user)
 	}
 }

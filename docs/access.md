@@ -1,39 +1,46 @@
 # Access model
 
-Slate keeps application authority separate from product access. Every account that can use the app has one server-owned `pro` entitlement.
+Slate keeps application authority separate from product access. Every account resolves to a server-owned Free or Pro plan.
 
 ## Roles
 
 - `admin` is an operator role.
 - `member` is the default role for future public sign-ups.
 
-Neither role is a plan. A user is usable only when the server resolves a separate Pro entitlement.
+Neither role is a plan. A member without an entitlement row resolves to Free. Admin, invite, manual, and future Stripe grants resolve to Pro.
 
 The `seed-admin` command creates a named admin account and grants Pro with the `admin` source. It is idempotent for the same email and does not promote an existing member silently. More than one named admin may exist. The Pro migration grants the same entitlement to every existing admin, so those accounts remain usable.
 
-## Pro entitlement
+## Plans and grants
 
-`entitlements` records the user, the single `pro` plan, and how access was granted:
+`entitlements` records explicit Pro grants and how access was granted:
 
 - `invite_code`
 - `stripe`
 - `manual`
 - `admin`
 
-There is no Free tier, `beta_pro`, or second paid plan. Stripe behavior is not implemented here.
+Free is the default and does not require an entitlement row. There is one paid plan, Pro. Stripe behavior is not implemented here.
 
 Invite-code registration creates `member` accounts with the same `pro` plan and records `invite_code` only as the entitlement source. The shared admission code is not stored with the account and is not needed for later sign-in.
 
-The authenticated user response exposes the resolved plan, source, and the server-owned Pro limits:
+The authenticated user response exposes the resolved plan, grant source, server-owned limits, and measured usage:
 
-- 5 boards per account.
-- 9 lists per board.
-- Max active items per list: 20.
-- 5 active agents per account.
+| Limit | Free | Pro |
+| --- | ---: | ---: |
+| Boards | 1 | 5 |
+| Lists per board | 5 | 9 |
+| Active items per list | 20 | 20 |
+| Active agents | 1 | 5 |
+| Stored tasks | 500 | 10,000 |
+| Stored task content | 10 MiB | 250 MiB |
+| API tokens | 3 | 20 |
+
+Usage reports boards, the largest list count on a board, the largest active-item count on a list, active agents, all stored tasks, stored task-content bytes, and active API tokens. Content is measured as UTF-8 bytes from task titles and descriptions. Stored-task and content quotas are reported here but are enforced by the separate storage-quota work.
 
 Completed items do not count toward the active-item maximum. A board can configure a lower Max active items per list value as a working constraint. API input cannot configure a value above 20. An explicit override can bypass only the lower working constraint, never the Pro maximum.
 
-All resource limits are enforced transactionally on the server for browser, CLI, idempotent, and agent requests. UI checks explain obvious over-limit actions but are not an authorization boundary. Every query and mutation continues to scope resources to the authenticated account owner.
+Board, list, active-agent, and API-token limits are enforced transactionally on the server. UI checks explain obvious over-limit actions but are not an authorization boundary. Every query and mutation continues to scope resources to the authenticated account owner.
 
 ## Agent identities and credentials
 
@@ -46,7 +53,7 @@ Creation returns one plaintext `slate_agent_...` token once. Slate stores only i
 
 An agent token resolves to its owning account and immutable agent ID for assigned-work authorization. Agent credentials can read board and list metadata only when the board or list contains work assigned to that agent. These metadata responses do not include nested tasks. Agent credentials cannot use account-level board or list creation, editing, deletion, or reordering routes, or general task create, reorder, move, and delete routes. Supported general task reads and updates are always restricted to that agent's assignments. An agent cannot read, claim, or mutate another agent's assigned work, even when both agents belong to the same account. Claim and status changes remain atomic.
 
-Pro permits five active agents. Archived agents do not consume the limit. Active names are stored trimmed and must be unique per account using case-insensitive comparison. Creation locks the account while checking the limit, so concurrent requests cannot exceed it.
+Free permits one active agent and Pro permits five. Archived agents do not consume the limit. Active names are stored trimmed and must be unique per account using case-insensitive comparison. Creation locks the account while checking the plan limit, so concurrent requests cannot exceed it.
 
 Revoking a credential leaves the agent identity and assignments intact, and the active identity still consumes a Pro slot. Archiving an agent also revokes its active credential, removes the identity from future assignment choices, and frees the slot. Existing assignments keep the archived identity so task history remains understandable. Existing live, revoked, and deleted agent records migrate without changing identity IDs; deleted records become archived identities and no migration creates or logs plaintext credentials.
 

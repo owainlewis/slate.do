@@ -18,9 +18,9 @@ import (
 var (
 	ErrNotFound        = errors.New("not found")
 	ErrLimitFull       = errors.New("working limit reached")
-	ErrBoardLimit      = errors.New("pro board limit reached")
-	ErrListLimit       = errors.New("pro list limit reached")
-	ErrActiveItemLimit = errors.New("pro active item limit reached")
+	ErrBoardLimit      = errors.New("board limit reached")
+	ErrListLimit       = errors.New("list limit reached")
+	ErrActiveItemLimit = errors.New("active item limit reached")
 	ErrInvalidData     = errors.New("invalid data")
 	ErrTaskUnavailable = errors.New("task is not available")
 	ErrIdempotencyKey  = errors.New("idempotency key already used with different task data")
@@ -28,10 +28,10 @@ var (
 	ErrAgentTaskScope  = errors.New("agent credentials cannot move, reorder, or reassign tasks")
 )
 
-const (
-	defaultMaxBoards        = 5
-	defaultMaxListsPerBoard = 9
-	defaultMaxTasksPerList  = 20
+var (
+	defaultMaxBoards        = entitlements.ProLimits.Boards
+	defaultMaxListsPerBoard = entitlements.ProLimits.ListsPerBoard
+	defaultMaxTasksPerList  = entitlements.ProLimits.ActiveItemsPerList
 )
 
 type Store struct {
@@ -228,15 +228,15 @@ func (s *Store) CreateBoard(ctx context.Context, userID string, input CreateBoar
 		return Board{}, err
 	}
 	defer tx.Rollback(ctx)
-	var lockedUserID string
-	if err := tx.QueryRow(ctx, "SELECT id::text FROM users WHERE id = $1 FOR UPDATE", userID).Scan(&lockedUserID); err != nil {
+	limits, err := accountLimitsForUpdate(ctx, tx, userID)
+	if err != nil {
 		return Board{}, err
 	}
 	var boardCount int
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM boards WHERE user_id = $1", userID).Scan(&boardCount); err != nil {
 		return Board{}, err
 	}
-	if boardCount >= defaultMaxBoards {
+	if boardCount >= limits.Boards {
 		return Board{}, ErrBoardLimit
 	}
 	var board Board
@@ -340,21 +340,25 @@ func (s *Store) CreateBucket(ctx context.Context, userID string, boardID string,
 		return Bucket{}, err
 	}
 	defer tx.Rollback(ctx)
-	var lockedBoardID string
+	var lockedBoardID, role, plan, source string
 	if err := tx.QueryRow(ctx, `
-		SELECT id::text FROM boards
-		WHERE id = $1 AND user_id = $2
-		FOR UPDATE
-	`, boardID, userID).Scan(&lockedBoardID); errors.Is(err, pgx.ErrNoRows) {
+		SELECT b.id::text, u.role, COALESCE(e.plan, ''), COALESCE(e.source, '')
+		FROM boards b
+		JOIN users u ON u.id = b.user_id
+		LEFT JOIN entitlements e ON e.user_id = u.id
+		WHERE b.id = $1 AND b.user_id = $2 AND u.disabled_at IS NULL
+		FOR UPDATE OF b, u
+	`, boardID, userID).Scan(&lockedBoardID, &role, &plan, &source); errors.Is(err, pgx.ErrNoRows) {
 		return Bucket{}, ErrNotFound
 	} else if err != nil {
 		return Bucket{}, err
 	}
+	limits := entitlements.Resolve(role, plan, source).Limits
 	var listCount int
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM buckets WHERE board_id = $1", boardID).Scan(&listCount); err != nil {
 		return Bucket{}, err
 	}
-	if listCount >= defaultMaxListsPerBoard {
+	if listCount >= limits.ListsPerBoard {
 		return Bucket{}, ErrListLimit
 	}
 	var bucket Bucket
@@ -1291,6 +1295,24 @@ func validateWorkingLimit(limit int) error {
 		return fmt.Errorf("%w: Max active items per list cannot exceed the Pro maximum of %d", ErrInvalidData, entitlements.ProLimits.ActiveItemsPerList)
 	}
 	return nil
+}
+
+func accountLimitsForUpdate(ctx context.Context, tx pgx.Tx, userID string) (entitlements.Limits, error) {
+	var role, plan, source string
+	err := tx.QueryRow(ctx, `
+		SELECT u.role, COALESCE(e.plan, ''), COALESCE(e.source, '')
+		FROM users u
+		LEFT JOIN entitlements e ON e.user_id = u.id
+		WHERE u.id = $1 AND u.disabled_at IS NULL
+		FOR UPDATE OF u
+	`, userID).Scan(&role, &plan, &source)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return entitlements.Limits{}, ErrNotFound
+	}
+	if err != nil {
+		return entitlements.Limits{}, err
+	}
+	return entitlements.Resolve(role, plan, source).Limits, nil
 }
 
 func validDate(value string) (string, error) {

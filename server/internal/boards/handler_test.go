@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/owainlewis/slate.do/server/internal/entitlements"
 )
 
 func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
@@ -34,6 +36,20 @@ func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
 				t.Fatalf("response = %#v", response)
 			}
 		})
+	}
+}
+
+func TestFreeLimitErrorsUsePlanSpecificStableCodes(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	if !handleStoreError(recorder, ErrBoardLimit, entitlements.Free()) {
+		t.Fatal("limit error was not handled")
+	}
+	var response map[string]string
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["code"] != "free_board_limit_reached" || response["error"] != "Free allows up to 1 board." {
+		t.Fatalf("response = %#v", response)
 	}
 }
 

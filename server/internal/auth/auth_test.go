@@ -123,6 +123,49 @@ func TestMeExposesResolvedProPlanAndLimits(t *testing.T) {
 	}
 }
 
+func TestMeExposesDefaultFreePlanAndMeasuredUsage(t *testing.T) {
+	store := &freeUsageAuthStore{requestAuthStore: requestAuthStore{}}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: "sess_ok"})
+	recorder := httptest.NewRecorder()
+
+	service.Me(recorder, req)
+
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`"plan":"free"`,
+		`"source":"free"`,
+		`"boards":1`,
+		`"storedTasks":500`,
+		`"storedContentBytes":10485760`,
+		`"apiTokens":3`,
+		`"maxListsPerBoard":4`,
+		`"maxActiveItemsPerList":7`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("status = %d, body missing %s: %s", recorder.Code, expected, body)
+		}
+	}
+}
+
+func TestMeDoesNotLoadAccountUsageForAgentCredentials(t *testing.T) {
+	store := &agentUsageAuthStore{requestAuthStore: requestAuthStore{}}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer agent_ok")
+	recorder := httptest.NewRecorder()
+
+	service.Me(recorder, req)
+
+	if recorder.Code != http.StatusOK || store.usageCalls != 0 {
+		t.Fatalf("status = %d, usage calls = %d, body = %s", recorder.Code, store.usageCalls, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), `"storedTasks":12`) {
+		t.Fatalf("agent response exposed account usage: %s", recorder.Body.String())
+	}
+}
+
 func TestUpdateThemePersistsUserPreference(t *testing.T) {
 	store := &themeAuthStore{requestAuthStore: requestAuthStore{}}
 	service := NewService(store, false)
@@ -181,7 +224,8 @@ func TestCreateAgentReturnsPlainTokenOnceAndStoresOnlyHash(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"displayName":" Research Bot ","purpose":" Customer research "}`))
 	rec := httptest.NewRecorder()
 
-	service.CreateAgent(rec, req, User{ID: "owner"})
+	proUser := User{ID: "owner", Entitlement: entitlements.Pro(entitlements.SourceManual)}
+	service.CreateAgent(rec, req, proUser)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -203,7 +247,7 @@ func TestCreateAgentReturnsPlainTokenOnceAndStoresOnlyHash(t *testing.T) {
 		t.Fatalf("create response = %#v", response)
 	}
 	listRec := httptest.NewRecorder()
-	service.ListAgents(listRec, httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil), User{ID: "owner"})
+	service.ListAgents(listRec, httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil), proUser)
 	if strings.Contains(listRec.Body.String(), response.Token) || strings.Contains(listRec.Body.String(), store.tokenHash) {
 		t.Fatal("agent list exposed token material")
 	}
@@ -218,10 +262,23 @@ func TestCreateAgentReturnsStableLimitConflict(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"displayName":"Second Bot"}`))
 	rec := httptest.NewRecorder()
 
-	service.CreateAgent(rec, req, User{ID: "owner"})
+	service.CreateAgent(rec, req, User{ID: "owner", Entitlement: entitlements.Pro(entitlements.SourceManual)})
 
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"agent_limit_reached"`) || !strings.Contains(rec.Body.String(), "5 active agents") {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateAPITokenReturnsFreePlanLimitConflict(t *testing.T) {
+	store := &apiTokenLimitAuthStore{requestAuthStore: requestAuthStore{}}
+	service := NewService(store, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/api-tokens", strings.NewReader(`{"name":"Fourth token"}`))
+	recorder := httptest.NewRecorder()
+
+	service.CreateAPIToken(recorder, req, User{ID: "free-user", Entitlement: entitlements.Free()})
+
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"code":"api_token_limit_reached"`) || !strings.Contains(recorder.Body.String(), "Free allows up to 3 API tokens") {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -560,6 +617,54 @@ func TestSeedAdminDoesNotPromoteExistingMember(t *testing.T) {
 }
 
 type requestAuthStore struct{}
+
+type freeUsageAuthStore struct {
+	requestAuthStore
+}
+
+type agentUsageAuthStore struct {
+	requestAuthStore
+	usageCalls int
+}
+
+type apiTokenLimitAuthStore struct {
+	requestAuthStore
+}
+
+func (s *apiTokenLimitAuthStore) CreateAPIToken(context.Context, string, string, string) (APIToken, error) {
+	return APIToken{}, ErrAPITokenLimit
+}
+
+func (s *freeUsageAuthStore) FindUserBySessionHash(_ context.Context, tokenHash string, _ time.Time) (User, error) {
+	if tokenHash != hashToken("sess_ok") {
+		return User{}, ErrUnauthorized
+	}
+	return User{ID: "free-user", Role: "member", Entitlement: entitlements.Free()}, nil
+}
+
+func (s *freeUsageAuthStore) AccountUsage(context.Context, string) (entitlements.Usage, error) {
+	return entitlements.Usage{
+		Boards:                1,
+		MaxListsPerBoard:      4,
+		MaxActiveItemsPerList: 7,
+		Agents:                1,
+		StoredTasks:           12,
+		StoredContentBytes:    345,
+		APITokens:             2,
+	}, nil
+}
+
+func (s *agentUsageAuthStore) FindUserByAPITokenHash(_ context.Context, tokenHash string, _ time.Time) (User, error) {
+	if tokenHash != hashToken("agent_ok") {
+		return User{}, ErrUnauthorized
+	}
+	return User{ID: "owner", Role: "agent", AgentID: "agent-1", Entitlement: entitlements.Free()}, nil
+}
+
+func (s *agentUsageAuthStore) AccountUsage(context.Context, string) (entitlements.Usage, error) {
+	s.usageCalls++
+	return entitlements.Usage{StoredTasks: 12}, nil
+}
 
 type recordingPasswordResetSender struct {
 	email          string

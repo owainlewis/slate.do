@@ -115,6 +115,10 @@ func (s *PGStore) CreateInvitedMember(ctx context.Context, email string, passwor
 		return User{}, err
 	}
 	user.Entitlement = entitlements.Pro(entitlements.SourceInviteCode)
+	user.Usage = entitlements.Usage{
+		Boards:           1,
+		MaxListsPerBoard: len(defaultLists),
+	}
 	return user, nil
 }
 
@@ -358,10 +362,11 @@ func (s *PGStore) FindUserByEmail(ctx context.Context, email string) (UserWithPa
 func (s *PGStore) FindUserBySessionHash(ctx context.Context, tokenHash string, now time.Time) (User, error) {
 	var user User
 	err := s.db.QueryRow(ctx, `
-		SELECT u.id::text, u.email, u.role, u.theme, u.display_name, e.plan, e.source
+		SELECT u.id::text, u.email, u.role, u.theme, u.display_name,
+			COALESCE(e.plan, ''), COALESCE(e.source, '')
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
-		JOIN entitlements e ON e.user_id = u.id AND e.plan = 'pro'
+		LEFT JOIN entitlements e ON e.user_id = u.id
 		WHERE s.token_hash = $1 AND s.expires_at > $2 AND u.disabled_at IS NULL
 	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName,
 		&user.Entitlement.Plan, &user.Entitlement.Source)
@@ -417,21 +422,38 @@ func (s *PGStore) ListAPITokens(ctx context.Context, userID string) ([]APIToken,
 }
 
 func (s *PGStore) CreateAPIToken(ctx context.Context, userID string, name string, tokenHash string) (APIToken, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return APIToken{}, err
+	}
+	defer tx.Rollback(ctx)
+	entitlement, err := resolvedEntitlementForLockedUser(ctx, tx, userID)
+	if err != nil {
+		return APIToken{}, err
+	}
+	var activeTokens int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM api_tokens
+		WHERE user_id = $1 AND revoked_at IS NULL
+	`, userID).Scan(&activeTokens); err != nil {
+		return APIToken{}, err
+	}
+	if activeTokens >= entitlement.Limits.APITokens {
+		return APIToken{}, ErrAPITokenLimit
+	}
 	var token APIToken
-	err := s.db.QueryRow(ctx, `
-		WITH active_user AS (
-			SELECT id FROM users
-			WHERE id = $1 AND disabled_at IS NULL
-			FOR UPDATE
-		)
+	err = tx.QueryRow(ctx, `
 		INSERT INTO api_tokens (user_id, name, token_hash)
-		SELECT id, $2, $3 FROM active_user
+		VALUES ($1, $2, $3)
 		RETURNING id::text, name, last_used_at, created_at
 	`, userID, name, tokenHash).Scan(&token.ID, &token.Name, &token.LastUsedAt, &token.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return APIToken{}, ErrUnauthorized
+	if err != nil {
+		return APIToken{}, err
 	}
-	return token, err
+	if err := tx.Commit(ctx); err != nil {
+		return APIToken{}, err
+	}
+	return token, nil
 }
 
 func (s *PGStore) RevokeAPIToken(ctx context.Context, userID string, id string) error {
@@ -449,20 +471,25 @@ func (s *PGStore) FindUserByAPITokenHash(ctx context.Context, tokenHash string, 
 		WITH human_token AS (
 			UPDATE api_tokens t
 			SET last_used_at = $2
-			FROM users u, entitlements e
-			WHERE t.user_id = u.id AND e.user_id = u.id AND e.plan = 'pro'
+			FROM users u LEFT JOIN entitlements e ON e.user_id = u.id
+			WHERE t.user_id = u.id
 				AND u.disabled_at IS NULL
 				AND t.token_hash = $1 AND t.revoked_at IS NULL
-			RETURNING u.id, u.email, u.role, u.theme, u.display_name, e.plan, e.source
+			RETURNING u.id, u.email, u.role, u.theme, u.display_name,
+				CASE WHEN u.role = 'admin' THEN 'pro' ELSE COALESCE(e.plan, '') END AS plan,
+				CASE WHEN u.role = 'admin' THEN 'admin' ELSE COALESCE(e.source, '') END AS source
 		), agent_token AS (
 			UPDATE agent_credentials c
 			SET last_used_at = $2, updated_at = $2
-			FROM agents a, users u, entitlements e
+			FROM agents a
+			JOIN users u ON a.owner_user_id = u.id
+			LEFT JOIN entitlements e ON e.user_id = u.id
 			WHERE c.agent_id = a.id
-				AND a.owner_user_id = u.id AND e.user_id = u.id AND e.plan = 'pro'
 				AND u.disabled_at IS NULL
 				AND c.token_hash = $1 AND c.revoked_at IS NULL AND a.archived_at IS NULL
-			RETURNING u.id, u.theme, a.id AS agent_id, a.name AS display_name, e.plan, e.source
+			RETURNING u.id, u.theme, a.id AS agent_id, a.name AS display_name,
+				CASE WHEN u.role = 'admin' THEN 'pro' ELSE COALESCE(e.plan, '') END AS plan,
+				CASE WHEN u.role = 'admin' THEN 'admin' ELSE COALESCE(e.source, '') END AS source
 		)
 		SELECT id::text, email, role, theme, display_name, '' AS agent_id, plan, source
 		FROM human_token
@@ -486,13 +513,18 @@ func (s *PGStore) UpdateTheme(ctx context.Context, userID string, theme string) 
 func (s *PGStore) UpdateProfile(ctx context.Context, userID string, theme *string, displayName *string) (User, error) {
 	var user User
 	err := s.db.QueryRow(ctx, `
-		UPDATE users u
-		SET theme = CASE WHEN $2 THEN $3 ELSE u.theme END,
-			display_name = CASE WHEN $4 THEN $5 ELSE u.display_name END,
-			updated_at = now()
-		FROM entitlements e
-		WHERE u.id = $1 AND e.user_id = u.id AND e.plan = 'pro' AND u.disabled_at IS NULL
-		RETURNING u.id::text, u.email, u.role, u.theme, u.display_name, e.plan, e.source
+		WITH updated AS (
+			UPDATE users u
+			SET theme = CASE WHEN $2 THEN $3 ELSE u.theme END,
+				display_name = CASE WHEN $4 THEN $5 ELSE u.display_name END,
+				updated_at = now()
+			WHERE u.id = $1 AND u.disabled_at IS NULL
+			RETURNING u.id, u.email, u.role, u.theme, u.display_name
+		)
+		SELECT u.id::text, u.email, u.role, u.theme, u.display_name,
+			COALESCE(e.plan, ''), COALESCE(e.source, '')
+		FROM updated u
+		LEFT JOIN entitlements e ON e.user_id = u.id
 	`, userID, theme != nil, stringValue(theme), displayName != nil, stringValue(displayName)).Scan(
 		&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName,
 		&user.Entitlement.Plan, &user.Entitlement.Source)
@@ -590,20 +622,11 @@ func (s *PGStore) CreateAgent(ctx context.Context, userID string, displayName st
 	}
 	defer tx.Rollback(ctx)
 
-	var activeUserID string
-	err = tx.QueryRow(ctx, `
-		SELECT u.id::text
-		FROM users u
-		JOIN entitlements e ON e.user_id = u.id AND e.plan = 'pro'
-		WHERE u.id = $1 AND u.disabled_at IS NULL
-		FOR UPDATE OF u
-	`, userID).Scan(&activeUserID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return AgentUser{}, ErrUnauthorized
-	}
+	entitlement, err := resolvedEntitlementForLockedUser(ctx, tx, userID)
 	if err != nil {
 		return AgentUser{}, err
 	}
+	activeUserID := userID
 	var activeAgents int
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*)
@@ -612,7 +635,7 @@ func (s *PGStore) CreateAgent(ctx context.Context, userID string, displayName st
 	`, activeUserID).Scan(&activeAgents); err != nil {
 		return AgentUser{}, err
 	}
-	if activeAgents >= entitlements.ProLimits.Agents {
+	if activeAgents >= entitlement.Limits.Agents {
 		return AgentUser{}, ErrAgentLimit
 	}
 
@@ -812,9 +835,58 @@ func scanAgent(row rowScanner) (AgentUser, error) {
 }
 
 func setEntitlementLimits(user *User) {
-	if user.Entitlement.Plan == entitlements.PlanPro {
-		user.Entitlement.Limits = entitlements.ProLimits
+	user.Entitlement = entitlements.Resolve(user.Role, user.Entitlement.Plan, user.Entitlement.Source)
+}
+
+func resolvedEntitlementForLockedUser(ctx context.Context, tx pgx.Tx, userID string) (entitlements.Entitlement, error) {
+	var role, plan, source string
+	err := tx.QueryRow(ctx, `
+		SELECT u.role, COALESCE(e.plan, ''), COALESCE(e.source, '')
+		FROM users u
+		LEFT JOIN entitlements e ON e.user_id = u.id
+		WHERE u.id = $1 AND u.disabled_at IS NULL
+		FOR UPDATE OF u
+	`, userID).Scan(&role, &plan, &source)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return entitlements.Entitlement{}, ErrUnauthorized
 	}
+	if err != nil {
+		return entitlements.Entitlement{}, err
+	}
+	return entitlements.Resolve(role, plan, source), nil
+}
+
+func (s *PGStore) AccountUsage(ctx context.Context, userID string) (entitlements.Usage, error) {
+	var usage entitlements.Usage
+	err := s.db.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM boards WHERE user_id = $1),
+			(SELECT COALESCE(max(list_count), 0) FROM (
+				SELECT count(*) AS list_count FROM buckets bu
+				JOIN boards b ON b.id = bu.board_id
+				WHERE b.user_id = $1 GROUP BY b.id
+			) lists),
+			(SELECT COALESCE(max(active_count), 0) FROM (
+				SELECT count(*) AS active_count FROM tasks t
+				JOIN boards b ON b.id = t.board_id
+				WHERE b.user_id = $1 AND t.kind = 'action' AND t.done = false
+				GROUP BY t.bucket_id
+			) active),
+			(SELECT count(*) FROM agents WHERE owner_user_id = $1 AND archived_at IS NULL),
+			(SELECT count(*) FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.user_id = $1),
+			(SELECT COALESCE(sum(octet_length(t.title) + octet_length(t.description)), 0)
+				FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.user_id = $1),
+			(SELECT count(*) FROM api_tokens WHERE user_id = $1 AND revoked_at IS NULL)
+	`, userID).Scan(
+		&usage.Boards,
+		&usage.MaxListsPerBoard,
+		&usage.MaxActiveItemsPerList,
+		&usage.Agents,
+		&usage.StoredTasks,
+		&usage.StoredContentBytes,
+		&usage.APITokens,
+	)
+	return usage, err
 }
 
 func uniqueViolation(err error) bool {
