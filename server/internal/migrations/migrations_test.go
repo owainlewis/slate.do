@@ -573,6 +573,120 @@ func TestProEntitlementMigrationKeepsExistingAdminsUsable(t *testing.T) {
 	}
 }
 
+func TestAccountStorageUsageMigrationBackfillsUTF8Bytes(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE SCHEMA quota_migration_test;
+		SET LOCAL search_path TO quota_migration_test, public;
+		CREATE TABLE users (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			role text NOT NULL DEFAULT 'member'
+		);
+		CREATE TABLE entitlements (
+			user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			plan text NOT NULL
+		);
+		CREATE TABLE boards (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE
+		);
+		CREATE TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			board_id uuid NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+			title text NOT NULL,
+			description text NOT NULL DEFAULT ''
+		);
+		WITH created_user AS (
+			INSERT INTO users DEFAULT VALUES RETURNING id
+		), created_board AS (
+			INSERT INTO boards (user_id) SELECT id FROM created_user RETURNING id
+		)
+		INSERT INTO tasks (board_id, title, description)
+		SELECT id, 'é', '🙂' FROM created_board
+		UNION ALL
+		SELECT id, 'abc', '' FROM created_board;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("026_account_storage_usage.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var tasks, contentBytes, generatedBytes int64
+	if err := tx.QueryRow(ctx, `
+		SELECT stored_tasks, stored_content_bytes FROM account_storage_usage
+	`).Scan(&tasks, &contentBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT sum(storage_bytes) FROM tasks").Scan(&generatedBytes); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 2 || contentBytes != 9 || generatedBytes != 9 {
+		t.Fatalf("backfill = tasks=%d content=%d generated=%d", tasks, contentBytes, generatedBytes)
+	}
+
+	var directTaskID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tasks (board_id, title, description)
+		SELECT id, 'z', '' FROM boards LIMIT 1
+		RETURNING id::text
+	`).Scan(&directTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE tasks SET title = 'é' WHERE id = $1", directTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM tasks WHERE id = $1", directTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT stored_tasks, stored_content_bytes FROM account_storage_usage").Scan(&tasks, &contentBytes); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 2 || contentBytes != 9 {
+		t.Fatalf("trigger lifecycle usage = tasks=%d content=%d", tasks, contentBytes)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tasks (board_id, title, description)
+		SELECT b.id, 'x', ''
+		FROM boards b CROSS JOIN generate_series(1, 498)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT stored_tasks, stored_content_bytes FROM account_storage_usage").Scan(&tasks, &contentBytes); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 500 || contentBytes != 507 {
+		t.Fatalf("trigger exact limit = tasks=%d content=%d", tasks, contentBytes)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tasks (board_id, title, description)
+		SELECT id, 'over', '' FROM boards LIMIT 1
+	`); err == nil || !strings.Contains(err.Error(), "stored_task_limit_reached") {
+		t.Fatalf("trigger over-limit error = %v", err)
+	}
+}
+
 func TestAdminMemberRolesMigration(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

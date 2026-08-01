@@ -314,14 +314,36 @@ func (s *Store) UpdateBoard(ctx context.Context, userID string, id string, input
 }
 
 func (s *Store) DeleteBoard(ctx context.Context, userID string, id string) error {
-	tag, err := s.db.Exec(ctx, "DELETE FROM boards WHERE user_id = $1 AND id = $2", userID, id)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	quota, err := lockStorageQuota(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	var boardID string
+	if err := tx.QueryRow(ctx, "SELECT id::text FROM boards WHERE user_id = $1 AND id = $2 FOR UPDATE", userID, id).Scan(&boardID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	usage, err := lockedBoardTaskStorage(ctx, tx, boardID)
+	if err != nil {
+		return err
+	}
+	if err := quota.apply(ctx, tx, -usage.Tasks, -usage.ContentBytes); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, "DELETE FROM boards WHERE id = $1", boardID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) CreateBucket(ctx context.Context, userID string, boardID string, input CreateBucketInput) (Bucket, error) {
@@ -341,20 +363,22 @@ func (s *Store) CreateBucket(ctx context.Context, userID string, boardID string,
 		return Bucket{}, err
 	}
 	defer tx.Rollback(ctx)
-	var lockedBoardID, role, plan, source string
+	limits, err := accountLimitsForUpdate(ctx, tx, userID)
+	if err != nil {
+		return Bucket{}, err
+	}
+	var lockedBoardID string
 	if err := tx.QueryRow(ctx, `
-		SELECT b.id::text, u.role, COALESCE(e.plan, ''), COALESCE(e.source, '')
+		SELECT b.id::text
 		FROM boards b
 		JOIN users u ON u.id = b.user_id
-		LEFT JOIN entitlements e ON e.user_id = u.id
 		WHERE b.id = $1 AND b.user_id = $2 AND u.disabled_at IS NULL
-		FOR UPDATE OF b, u
-	`, boardID, userID).Scan(&lockedBoardID, &role, &plan, &source); errors.Is(err, pgx.ErrNoRows) {
+		FOR UPDATE OF b
+	`, boardID, userID).Scan(&lockedBoardID); errors.Is(err, pgx.ErrNoRows) {
 		return Bucket{}, ErrNotFound
 	} else if err != nil {
 		return Bucket{}, err
 	}
-	limits := entitlements.Resolve(role, plan, source).Limits
 	var listCount int
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM buckets WHERE board_id = $1", boardID).Scan(&listCount); err != nil {
 		return Bucket{}, err
@@ -427,18 +451,42 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 }
 
 func (s *Store) DeleteBucket(ctx context.Context, userID string, id string) error {
-	tag, err := s.db.Exec(ctx, `
-		DELETE FROM buckets b
-		USING boards bo
-		WHERE bo.id = b.board_id AND bo.user_id = $1 AND b.id = $2
-	`, userID, id)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	quota, err := lockStorageQuota(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	var bucketID string
+	if err := tx.QueryRow(ctx, `
+		SELECT b.id::text
+		FROM buckets b
+		JOIN boards bo ON bo.id = b.board_id
+		WHERE bo.user_id = $1 AND b.id = $2
+		FOR UPDATE OF b
+	`, userID, id).Scan(&bucketID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	usage, err := lockedBucketTaskStorage(ctx, tx, bucketID)
+	if err != nil {
+		return err
+	}
+	if err := quota.apply(ctx, tx, -usage.Tasks, -usage.ContentBytes); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, "DELETE FROM buckets WHERE id = $1", bucketID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ReorderBuckets(ctx context.Context, userID string, boardID string, ids []string) error {
@@ -521,11 +569,18 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 			return Task{}, err
 		}
 	}
+	quota, err := lockStorageQuota(ctx, tx, userID)
+	if err != nil {
+		return Task{}, err
+	}
 	bucket, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
 		return Task{}, err
 	}
 	if err := checkTaskCapacity(ctx, tx, bucket, "", overrideLimit); err != nil {
+		return Task{}, err
+	}
+	if err := quota.apply(ctx, tx, 1, inputContentBytes(title, description)); err != nil {
 		return Task{}, err
 	}
 	assigneeAgentID, err = activeAgentAssignment(ctx, tx, userID, assigneeAgentID)
@@ -778,10 +833,18 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		return Task{}, err
 	}
 	defer tx.Rollback(ctx)
+	var quota *storageQuota
+	if input.Title != nil || input.Description != nil {
+		quota, err = lockStorageQuota(ctx, tx, userID)
+		if err != nil {
+			return Task{}, err
+		}
+	}
 	current, err := lockedTaskForAgent(ctx, tx, userID, requiredAgentID, id)
 	if err != nil {
 		return Task{}, err
 	}
+	original := current
 	originalBucketID := current.BucketID
 	originalActive := current.Kind == KindAction && !current.Done
 	if input.Title != nil {
@@ -851,6 +914,12 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	}
 	if current.Title == "" {
 		return Task{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
+	}
+	contentDelta := taskContentBytes(current) - taskContentBytes(original)
+	if quota != nil {
+		if err := quota.apply(ctx, tx, 0, contentDelta); err != nil {
+			return Task{}, err
+		}
 	}
 	currentActive := current.Kind == KindAction && !current.Done
 	if currentActive && (!originalActive || originalBucketID != current.BucketID) {
@@ -928,18 +997,30 @@ func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id
 }
 
 func (s *Store) DeleteTask(ctx context.Context, userID string, id string) error {
-	tag, err := s.db.Exec(ctx, `
-		DELETE FROM tasks t
-		USING boards b
-		WHERE b.id = t.board_id AND b.user_id = $1 AND t.id = $2
-	`, userID, id)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	quota, err := lockStorageQuota(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	task, err := lockedTask(ctx, tx, userID, id)
+	if err != nil {
+		return err
+	}
+	if err := quota.apply(ctx, tx, -1, -taskContentBytes(task)); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, "DELETE FROM tasks WHERE id = $1", task.ID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ReorderTasks(ctx context.Context, userID string, bucketID string, ids []string) error {
