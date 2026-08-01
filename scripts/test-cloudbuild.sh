@@ -21,6 +21,11 @@ assert_not_contains() {
 
 for file in cloudbuild.yaml scripts/gcp-deploy.sh; do
   assert_contains "$file" "slate-migrate"
+  assert_contains "$file" "slate-cleanup"
+  assert_contains "$file" "--args cleanup"
+  assert_contains "$file" '17 3 * * *'
+  assert_contains "$file" "--attempt-deadline 300s"
+  assert_contains "$file" "--max-retries 1"
   assert_contains "$file" "slate-postgres-ew1"
   assert_contains "$file" "INVITE_CODE=slate-invite-code:latest"
   assert_contains "$file" "gcloud secrets versions access latest --secret=slate-invite-code"
@@ -75,6 +80,12 @@ assert_contains docs/deploy.md 'roles/cloudbuild.builds.viewer'
 assert_contains docs/deploy.md '4 × 2 = 8'
 assert_contains docs/deploy.md 'scripts/check-capacity.sh'
 assert_contains docs/deploy.md 'database/postgresql/num_backends'
+assert_contains docs/deploy.md 'data-retention.md'
+assert_contains scripts/gcp-bootstrap.sh 'cloudscheduler.googleapis.com'
+assert_contains scripts/gcp-bootstrap.sh 'roles/run.invoker'
+assert_contains scripts/gcp-bootstrap.sh 'roles/cloudscheduler.admin'
+assert_contains scripts/gcp-bootstrap.sh 'roles/iam.serviceAccountUser'
+assert_contains cloudbuild.yaml 'https://run.googleapis.com/v2/projects/'
 
 lock_attempts="$(grep -c -- '--if-generation-match=0' cloudbuild.yaml)"
 if [ "$lock_attempts" -ne 2 ]; then

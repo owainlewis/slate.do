@@ -148,7 +148,15 @@ func (s *PGStore) consumeRateLimit(ctx context.Context, table string, keys []rat
 	if table != "signup_rate_limits" && table != "password_reset_rate_limits" && table != "password_reset_confirmation_rate_limits" {
 		return 0, fmt.Errorf("unsupported rate limit table")
 	}
-	if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE window_started_at < ($1::timestamptz - interval '24 hours')", now); err != nil {
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM `+table+` WHERE ctid IN (
+			SELECT ctid FROM `+table+`
+			WHERE window_started_at < ($1::timestamptz - interval '24 hours')
+			ORDER BY window_started_at
+			LIMIT 100
+			FOR UPDATE SKIP LOCKED
+		)
+	`, now); err != nil {
 		return 0, err
 	}
 
@@ -233,8 +241,13 @@ func (s *PGStore) CompletePasswordResetRequest(ctx context.Context, id string, n
 		return err
 	}
 	_, err = s.db.Exec(ctx, `
-		DELETE FROM password_reset_requests
-		WHERE processed_at < $1::timestamptz - interval '24 hours'
+		DELETE FROM password_reset_requests WHERE ctid IN (
+			SELECT ctid FROM password_reset_requests
+			WHERE processed_at < $1::timestamptz - interval '24 hours'
+			ORDER BY processed_at
+			LIMIT 100
+			FOR UPDATE SKIP LOCKED
+		)
 	`, now)
 	return err
 }
@@ -256,7 +269,15 @@ func (s *PGStore) CreatePasswordResetToken(ctx context.Context, email string, to
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "DELETE FROM password_reset_tokens WHERE expires_at < now() - interval '24 hours'"); err != nil {
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM password_reset_tokens WHERE ctid IN (
+			SELECT ctid FROM password_reset_tokens
+			WHERE used_at IS NULL AND expires_at < now() - interval '24 hours'
+			ORDER BY expires_at
+			LIMIT 100
+			FOR UPDATE SKIP LOCKED
+		)
+	`); err != nil {
 		return err
 	}
 	var userID string
