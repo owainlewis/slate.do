@@ -80,7 +80,7 @@ function listLimitUpdate(boardId, value) {
   return { next, path: `/api/v1/boards/${boardId}`, input: { maxTasksPerList: next } };
 }
 
-function validateListLimit(value, maximum = proLimits().activeItemsPerList) {
+function validateListLimit(value, maximum = accountLimits().activeItemsPerList) {
   const next = Number(value);
   if (!Number.isInteger(next)) return "Enter a whole number.";
   if (next < 1 || next > maximum) return `Enter a value from 1 to ${maximum}.`;
@@ -534,7 +534,7 @@ async function loadBoardList(expectedRouteVersion) {
   const data = await api.get("/api/v1/boards");
   if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   state.boards = data.boards;
-  state.maxBoards = data.maxBoards || proLimits().boards;
+  state.maxBoards = data.maxBoards || accountLimits().boards;
   return true;
 }
 
@@ -611,8 +611,8 @@ function beginAuthenticatedSession(user) {
   authVersion += 1;
   resetAuthenticatedState();
   state.me = user;
-  state.maxBoards = proLimits().boards;
-  state.maxListsPerBoard = proLimits().listsPerBoard;
+  state.maxBoards = accountLimits().boards;
+  state.maxListsPerBoard = accountLimits().listsPerBoard;
   state.theme = themeFor(user.theme);
 }
 
@@ -1024,7 +1024,7 @@ function appHTML() {
               <button data-board-mode="today" aria-pressed="${todayMode}" class="${todayMode ? "on" : ""}" title="Today">${icon("sun")}<span>Today</span></button>
             </div>
       <button class="icon-btn icon-label ${listsMode ? "" : "add-list-placeholder"}" id="add-list" ${listsMode ? (listLimitReached ? 'disabled aria-describedby="list-limit"' : "") : 'aria-hidden="true" tabindex="-1" disabled'}>${icon("plus")}<span>New list</span></button>
-      ${listsMode && listLimitReached ? `<span class="board-limit" id="list-limit">${state.maxListsPerBoard} list Pro limit reached</span>` : ""}
+      ${listsMode && listLimitReached ? `<span class="board-limit" id="list-limit">${state.maxListsPerBoard} list ${planLabel()} limit reached</span>` : ""}
           </div>
         </header>
         ${statusErrorHTML(state.error)}
@@ -1126,7 +1126,7 @@ function emptyListMessage() {
 function listHTML(list) {
   const over = list.openCount > list.limitCount ? "over-limit" : "";
   const tasks = (list.tasks || []).filter(priorityMatches);
-  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
   const activeLimitReached = (list.openCount || 0) >= activeLimit;
   // New items carry no priority, so adding one under a filter would create it
   // and immediately hide it. Block the form instead of failing silently.
@@ -1158,13 +1158,20 @@ function listHTML(list) {
   </section>`;
 }
 
-function proLimits() {
+function accountLimits() {
   return state.me?.entitlement?.limits || {
     boards: DEFAULT_MAX_BOARDS,
     listsPerBoard: DEFAULT_MAX_LISTS_PER_BOARD,
     activeItemsPerList: DEFAULT_LIST_LIMIT,
     agents: DEFAULT_MAX_AGENTS,
+    storedTasks: 10000,
+    storedContentBytes: 250 * 1024 * 1024,
+    apiTokens: 20,
   };
+}
+
+function planLabel() {
+  return state.me?.entitlement?.plan === "pro" ? "Pro" : "Free";
 }
 
 function avatarTone(id) {
@@ -1386,7 +1393,7 @@ function agentOptionsHTML(selectedID = "") {
 
 function moveListOptionsHTML(board, task, selectedID = task.bucketId) {
   return (board?.buckets || []).map(list => {
-    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
     const full = task.kind === "action" && !task.done && list.id !== task.bucketId && (list.openCount || 0) >= limit;
     return `<option value="${list.id}" ${list.id === selectedID ? "selected" : ""} ${full ? "disabled" : ""}>${escapeHTML(list.name)}${full ? ` (${list.openCount}/${limit} full)` : ""}</option>`;
   }).join("");
@@ -1815,7 +1822,7 @@ function assignWorkHTML() {
   const selectedBoard = state.board?.id === selectedBoardID ? state.board : null;
   const lists = selectedBoard?.buckets || [];
   const availableLists = lists.filter(list => {
-    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
     return (list.openCount || 0) < limit;
   });
   return `
@@ -1835,7 +1842,7 @@ function assignWorkHTML() {
             <div class="detail-properties" aria-label="Item properties">
               <div class="field"><label for="assign-board">Board</label><select id="assign-board" name="boardId">${state.boards.map(board => `<option value="${escapeAttr(board.id)}" ${board.id === selectedBoardID ? "selected" : ""}>${escapeHTML(board.name)}</option>`).join("")}</select></div>
               <div class="field"><label for="assign-list">List</label><select id="assign-list" name="bucketId" ${availableLists.length ? "" : "disabled"}>${lists.map(list => {
-                const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+                const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
                 const full = (list.openCount || 0) >= limit;
                 return `<option value="${escapeAttr(list.id)}" ${list.id === draft.bucketId ? "selected" : ""} ${full ? "disabled" : ""}>${escapeHTML(list.name)}${full ? ` (${list.openCount}/${limit} full)` : ""}</option>`;
               }).join("") || '<option value="">No available lists</option>'}</select></div>
@@ -1868,7 +1875,7 @@ function newAgentHTML(limitReached) {
       <section class="agents-state agent-limit-state">
         <span class="agent-state-icon">${icon("bot")}</span>
         <h2>Active-agent limit reached.</h2>
-        <p>Pro includes ${state.maxAgents} active agents. Archive one before creating another.</p>
+        <p>${planLabel()} includes ${formatCount(state.maxAgents, "active agent", "active agents")}. Archive one before creating another.</p>
         <a class="secondary" href="${AGENTS_PATH}" data-agents-directory>View agents</a>
       </section>`;
   }
@@ -1978,6 +1985,8 @@ function settingsHTML() {
       </section>`;
   } else {
     const tokenVisible = state.newToken && state.newTokenOwnerID === state.me?.id;
+    const tokenLimit = Number(accountLimits().apiTokens) || 0;
+    const tokenLimitReached = tokenLimit > 0 && state.tokens.length >= tokenLimit;
     content = `
       <section class="settings-section" aria-labelledby="personal-tokens-heading">
         <div class="settings-section-head">
@@ -1988,11 +1997,11 @@ function settingsHTML() {
           <form id="token-form" class="settings-row token-form" novalidate>
             <label class="settings-row-copy" for="token-name">
               <strong>Create personal token</strong>
-              <span>Name it after the device or integration that will use it.</span>
+              <span>${tokenLimitReached ? `${planLabel()} includes ${tokenLimit} active API tokens. Revoke one before creating another.` : `Name it after the device or integration that will use it. ${state.tokens.length} of ${tokenLimit} slots used.`}</span>
             </label>
             <div class="token-create-control">
-              <input id="token-name" name="name" placeholder="For example, laptop CLI" maxlength="80" aria-describedby="token-name-error" required>
-              <button class="primary settings-submit" type="submit" ${state.settingsPending === "token" ? "disabled" : ""}>${state.settingsPending === "token" ? "Creating…" : "Create token"}</button>
+              <input id="token-name" name="name" placeholder="For example, laptop CLI" maxlength="80" aria-describedby="token-name-error" required ${tokenLimitReached ? "disabled" : ""}>
+              <button class="primary settings-submit" type="submit" ${state.settingsPending === "token" || tokenLimitReached ? "disabled" : ""}>${state.settingsPending === "token" ? "Creating…" : "Create token"}</button>
               <p class="field-error" id="token-name-error" role="alert"></p>
             </div>
           </form>
@@ -2060,7 +2069,7 @@ function settingsHTML() {
 function boardSettingsHTML() {
   const theme = currentTheme();
   const board = state.board;
-  const maximum = proLimits().activeItemsPerList;
+  const maximum = accountLimits().activeItemsPerList;
   return `
     <section class="settings-page board-settings-page theme-${theme}">
       <aside class="sidebar settings-sidebar board-settings-sidebar">
@@ -2093,7 +2102,7 @@ function boardSettingsHTML() {
               <div class="settings-row">
                 <label class="settings-row-copy" for="settings-list-limit">
                   <strong>Maximum active items</strong>
-                  <span>The number of open items allowed in each list. Pro supports 1 to ${maximum}.</span>
+                  <span>The number of open items allowed in each list. ${planLabel()} supports 1 to ${maximum}.</span>
                 </label>
                 <div class="settings-field-wrap settings-limit">
                   <input id="settings-list-limit" aria-label="Max active items per list" type="number" inputmode="numeric" min="1" max="${maximum}" value="${board.maxTasksPerList || DEFAULT_LIST_LIMIT}" aria-describedby="settings-list-limit-error">
@@ -3612,7 +3621,7 @@ async function addTask(event) {
   const title = new FormData(form).get("title").trim();
   if (!title) return;
   const list = state.board.buckets.find(b => b.id === form.dataset.addTask);
-  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, proLimits().activeItemsPerList);
+  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
   if ((list.openCount || 0) >= activeLimit) return;
   await runMutation(() => api.post(`/api/v1/buckets/${list.id}/tasks`, { title }), reload);
 }
@@ -3924,7 +3933,7 @@ async function loadAgents(optional = false, sessionVersion = authVersion, userID
     const data = await api.get("/api/v1/agents");
     if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
     state.agents = data.agents || [];
-    state.maxAgents = Number(data.maxAgents) || proLimits().agents || DEFAULT_MAX_AGENTS;
+    state.maxAgents = Number(data.maxAgents) || accountLimits().agents || DEFAULT_MAX_AGENTS;
     state.activeAgents = Number.isInteger(data.activeAgents)
       ? data.activeAgents
       : state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).length;

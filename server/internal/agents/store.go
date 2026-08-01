@@ -350,20 +350,21 @@ func (s *Store) RestoreAgent(ctx context.Context, userID string, agentID string)
 	}
 	defer tx.Rollback(ctx)
 
-	var activeUserID string
+	var activeUserID, role, plan, source string
 	err = tx.QueryRow(ctx, `
-		SELECT u.id::text
+		SELECT u.id::text, u.role, COALESCE(e.plan, ''), COALESCE(e.source, '')
 		FROM users u
-		JOIN entitlements e ON e.user_id = u.id AND e.plan = 'pro'
+		LEFT JOIN entitlements e ON e.user_id = u.id
 		WHERE u.id = $1 AND u.disabled_at IS NULL
 		FOR UPDATE OF u
-	`, userID).Scan(&activeUserID)
+	`, userID).Scan(&activeUserID, &role, &plan, &source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return auth.AgentUser{}, auth.ErrUnauthorized
 	}
 	if err != nil {
 		return auth.AgentUser{}, err
 	}
+	limits := entitlements.Resolve(role, plan, source).Limits
 	var archived bool
 	err = tx.QueryRow(ctx, `
 		SELECT archived_at IS NOT NULL
@@ -385,7 +386,7 @@ func (s *Store) RestoreAgent(ctx context.Context, userID string, agentID string)
 		`, activeUserID).Scan(&activeAgents); err != nil {
 			return auth.AgentUser{}, err
 		}
-		if activeAgents >= entitlements.ProLimits.Agents {
+		if activeAgents >= limits.Agents {
 			return auth.AgentUser{}, ErrRestoreLimit
 		}
 		if _, err := tx.Exec(ctx, `

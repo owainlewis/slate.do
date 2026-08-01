@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/owainlewis/slate.do/server/internal/database"
+	"github.com/owainlewis/slate.do/server/internal/entitlements"
 	"github.com/owainlewis/slate.do/server/internal/migrations"
 )
 
@@ -50,6 +51,30 @@ func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
 		return err
 	})
 	assertConcurrentResults(t, taskResults, defaultMaxTasksPerList, ErrActiveItemLimit)
+}
+
+func TestFreeAccountUsesCatalogBoardAndListLimits(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	userID := createFreeIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+	store := NewStore(db)
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Free board"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Second board"}); !errors.Is(err, ErrBoardLimit) {
+		t.Fatalf("second free board error = %v", err)
+	}
+	for index := 0; index < entitlements.FreeLimits.ListsPerBoard; index++ {
+		if _, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: fmt.Sprintf("List %d", index+1)}); err != nil {
+			t.Fatalf("create free list %d: %v", index+1, err)
+		}
+	}
+	if _, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "One too many"}); !errors.Is(err, ErrListLimit) {
+		t.Fatalf("sixth free list error = %v", err)
+	}
 }
 
 func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
@@ -925,6 +950,26 @@ func createIntegrationUser(t *testing.T, ctx context.Context, db *database.Pool)
 	if err := db.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash)
 		VALUES ($1, 'test')
+		RETURNING id::text
+	`, email).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO entitlements (user_id, plan, source)
+		VALUES ($1, 'pro', 'manual')
+	`, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func createFreeIntegrationUser(t *testing.T, ctx context.Context, db *database.Pool) string {
+	t.Helper()
+	email := fmt.Sprintf("free-%s-%d@slate.test", strings.ToLower(t.Name()), time.Now().UnixNano())
+	var id string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO users (email, password_hash, role)
+		VALUES ($1, 'test', 'member')
 		RETURNING id::text
 	`, email).Scan(&id); err != nil {
 		t.Fatal(err)

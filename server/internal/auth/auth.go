@@ -46,6 +46,7 @@ var (
 	ErrMemberNotFound    = errors.New("member account not found")
 	ErrInvalidResetToken = errors.New("invalid or expired password reset token")
 	ErrNoPendingReset    = errors.New("no pending password reset request")
+	ErrAPITokenLimit     = errors.New("API token limit reached")
 	ErrAgentLimit        = errors.New("active agent limit reached")
 	ErrAgentNameTaken    = errors.New("active agent name already exists")
 	ErrAgentNotFound     = errors.New("agent not found")
@@ -59,6 +60,7 @@ type User struct {
 	DisplayName string                   `json:"displayName"`
 	AgentID     string                   `json:"agentId,omitempty"`
 	Entitlement entitlements.Entitlement `json:"entitlement"`
+	Usage       entitlements.Usage       `json:"usage"`
 }
 
 type UserWithPassword struct {
@@ -140,6 +142,10 @@ type Store interface {
 
 type profileStore interface {
 	UpdateProfile(ctx context.Context, userID string, theme *string, displayName *string) (User, error)
+}
+
+type usageStore interface {
+	AccountUsage(ctx context.Context, userID string) (entitlements.Usage, error)
 }
 
 type agentStore interface {
@@ -309,8 +315,8 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
-	if account.Entitlement.Plan != entitlements.PlanPro {
-		writeError(w, http.StatusUnauthorized, "invalid email or password")
+	if err := s.populateUsage(r.Context(), &account.User); err != nil {
+		writeError(w, http.StatusInternalServerError, "account usage could not be loaded")
 		return
 	}
 	if !s.createSession(w, r, account.User, account.PasswordHash) {
@@ -493,7 +499,26 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, meResponse{Authenticated: false})
 		return
 	}
+	if user.AgentID == "" {
+		if err := s.populateUsage(r.Context(), &user); err != nil {
+			writeError(w, http.StatusInternalServerError, "account usage could not be loaded")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, meResponse{Authenticated: true, User: &user})
+}
+
+func (s *Service) populateUsage(ctx context.Context, user *User) error {
+	store, ok := s.store.(usageStore)
+	if !ok {
+		return nil
+	}
+	usage, err := store.AccountUsage(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	user.Usage = usage
+	return nil
 }
 
 func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User) {
@@ -542,6 +567,10 @@ func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User)
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "profile could not be updated")
+		return
+	}
+	if err := s.populateUsage(r.Context(), &updated); err != nil {
+		writeError(w, http.StatusInternalServerError, "account usage could not be loaded")
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -626,6 +655,10 @@ func (s *Service) CreateAPIToken(w http.ResponseWriter, r *http.Request, user Us
 		return
 	}
 	token, err := s.store.CreateAPIToken(r.Context(), user.ID, name, hashToken(plain))
+	if errors.Is(err, ErrAPITokenLimit) {
+		writeCodedError(w, http.StatusConflict, "api_token_limit_reached", fmt.Sprintf("%s allows up to %d API tokens.", planName(user.Entitlement.Plan), user.Entitlement.Limits.APITokens))
+		return
+	}
 	if errors.Is(err, ErrUnauthorized) {
 		clearSessionCookie(w, s.cookieSecure)
 		writeError(w, http.StatusUnauthorized, "authentication required")
@@ -636,6 +669,13 @@ func (s *Service) CreateAPIToken(w http.ResponseWriter, r *http.Request, user Us
 		return
 	}
 	writeJSON(w, http.StatusCreated, createAPITokenResponse{Token: plain, APIToken: token})
+}
+
+func planName(plan string) string {
+	if plan == entitlements.PlanPro {
+		return "Pro"
+	}
+	return "Free"
 }
 
 func (s *Service) RevokeAPIToken(w http.ResponseWriter, r *http.Request, user User) {
@@ -682,7 +722,7 @@ func (s *Service) ListAgents(w http.ResponseWriter, r *http.Request, user User) 
 	}{
 		Agents:       agents,
 		ActiveAgents: activeAgents,
-		MaxAgents:    entitlements.ProLimits.Agents,
+		MaxAgents:    user.Entitlement.Limits.Agents,
 	})
 }
 
@@ -723,7 +763,7 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 	}
 	agent, err := store.CreateAgent(r.Context(), user.ID, displayName, purpose, hashToken(plain), tokenDisplayPrefix(plain))
 	if errors.Is(err, ErrAgentLimit) {
-		writeCodedError(w, http.StatusConflict, "agent_limit_reached", fmt.Sprintf("Pro allows up to %d active agents. Archive an agent before creating another.", entitlements.ProLimits.Agents))
+		writeCodedError(w, http.StatusConflict, "agent_limit_reached", fmt.Sprintf("%s allows up to %d active agents. Archive an agent before creating another.", planName(user.Entitlement.Plan), user.Entitlement.Limits.Agents))
 		return
 	}
 	if errors.Is(err, ErrAgentNameTaken) {

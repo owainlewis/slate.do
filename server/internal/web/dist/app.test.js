@@ -302,8 +302,33 @@ test("Pro limits prevent obvious list and active-item creation", () => {
 	assert.match(html, />9 list Pro limit reached</);
 	assert.match(html, /data-add-task="list-0"[\s\S]*?placeholder="Limit of 20 active items reached" disabled/);
 	assert.match(html, />20 active item limit reached</);
-	assert.equal(app.proLimits().boards, 5);
+	assert.equal(app.accountLimits().boards, 5);
 	vm.runInContext(`state.me = null; state.boards = []; state.board = null;`, app);
+});
+
+test("Free limits and plan names drive customer-facing controls", () => {
+	vm.runInContext(`
+		state.me = { id: "free-user", entitlement: { plan: "free", source: "free", limits: { boards: 1, listsPerBoard: 5, activeItemsPerList: 20, agents: 1, storedTasks: 500, storedContentBytes: 10485760, apiTokens: 3 } } };
+		state.maxBoards = 1;
+		state.maxListsPerBoard = 5;
+		state.maxAgents = 1;
+		state.activeAgents = 1;
+		state.boards = [{ id: "board", name: "Board" }];
+		state.board = { id: "board", name: "Board", maxTasksPerList: 20, buckets: Array.from({ length: 5 }, (_, index) => ({ id: "list-" + index, name: "List " + index, openCount: 0, limitCount: 20, tasks: [] })) };
+		state.boardMode = "lists";
+	`, app);
+
+	const boardHTML = app.appHTML();
+	assert.match(boardHTML, />5 list Free limit reached</);
+	assert.equal(app.accountLimits().boards, 1);
+	assert.equal(app.planLabel(), "Free");
+	assert.match(app.newAgentHTML(true), /Free includes 1 active agent/);
+
+	vm.runInContext(`state.settingsPage = "api"; state.tokens = [{id:"1",name:"one"},{id:"2",name:"two"},{id:"3",name:"three"}];`, app);
+	const apiHTML = app.settingsHTML();
+	assert.match(apiHTML, /Free includes 3 active API tokens/);
+	assert.match(apiHTML, /id="token-name"[^>]*disabled/);
+	vm.runInContext(`state.me = null; state.tokens = []; state.boards = []; state.board = null;`, app);
 });
 
 function themeTokens(selector) {

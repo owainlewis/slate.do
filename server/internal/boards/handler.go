@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/owainlewis/slate.do/server/internal/auth"
+	"github.com/owainlewis/slate.do/server/internal/entitlements"
 )
 
 type Handler struct {
@@ -35,7 +36,7 @@ func (h *Handler) ListBoards(w http.ResponseWriter, r *http.Request, user auth.U
 	if listed == nil {
 		listed = []Board{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"boards": listed, "maxBoards": defaultMaxBoards})
+	writeJSON(w, http.StatusOK, map[string]any{"boards": listed, "maxBoards": user.Entitlement.Limits.Boards})
 }
 
 func (h *Handler) CreateBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
@@ -44,7 +45,7 @@ func (h *Handler) CreateBoard(w http.ResponseWriter, r *http.Request, user auth.
 		return
 	}
 	board, err := h.store.CreateBoard(r.Context(), user.ID, input)
-	if handleStoreError(w, err) {
+	if handleStoreError(w, err, user.Entitlement) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, board)
@@ -58,7 +59,7 @@ func (h *Handler) GetBoard(w http.ResponseWriter, r *http.Request, user auth.Use
 	} else {
 		board, err = h.store.GetBoard(r.Context(), user.ID, r.PathValue("id"))
 	}
-	if handleStoreError(w, err) {
+	if handleStoreError(w, err, user.Entitlement) {
 		return
 	}
 	writeJSON(w, http.StatusOK, board)
@@ -90,7 +91,7 @@ func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request, user auth
 		return
 	}
 	bucket, err := h.store.CreateBucket(r.Context(), user.ID, r.PathValue("id"), input)
-	if handleStoreError(w, err) {
+	if handleStoreError(w, err, user.Entitlement) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, bucket)
@@ -149,7 +150,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	}
 	input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	task, err := h.store.CreateTask(r.Context(), user.ID, r.PathValue("id"), input)
-	if handleStoreError(w, err) {
+	if handleStoreError(w, err, user.Entitlement) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, task)
@@ -393,7 +394,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func handleStoreError(w http.ResponseWriter, err error) bool {
+func handleStoreError(w http.ResponseWriter, err error, account ...entitlements.Entitlement) bool {
 	if err == nil {
 		return false
 	}
@@ -403,11 +404,14 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, ErrLimitFull):
 		writeLimitError(w, "working_limit_reached", "This list's working limit has been reached.")
 	case errors.Is(err, ErrBoardLimit):
-		writeLimitError(w, "pro_board_limit_reached", fmt.Sprintf("Pro allows up to %d boards.", defaultMaxBoards))
+		plan, code, limit := limitContext(account, func(l entitlements.Limits) int { return l.Boards }, defaultMaxBoards)
+		writeLimitError(w, code+"_board_limit_reached", fmt.Sprintf("%s allows up to %d %s.", plan, limit, plural(limit, "board", "boards")))
 	case errors.Is(err, ErrListLimit):
-		writeLimitError(w, "pro_list_limit_reached", fmt.Sprintf("Pro allows up to %d lists per board.", defaultMaxListsPerBoard))
+		plan, code, limit := limitContext(account, func(l entitlements.Limits) int { return l.ListsPerBoard }, defaultMaxListsPerBoard)
+		writeLimitError(w, code+"_list_limit_reached", fmt.Sprintf("%s allows up to %d lists per board.", plan, limit))
 	case errors.Is(err, ErrActiveItemLimit):
-		writeLimitError(w, "pro_active_item_limit_reached", fmt.Sprintf("Max active items per list is %d on Pro.", defaultMaxTasksPerList))
+		plan, code, limit := limitContext(account, func(l entitlements.Limits) int { return l.ActiveItemsPerList }, defaultMaxTasksPerList)
+		writeLimitError(w, code+"_active_item_limit_reached", fmt.Sprintf("Max active items per list is %d on %s.", limit, plan))
 	case errors.Is(err, ErrTaskUnavailable):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrIdempotencyKey):
@@ -423,6 +427,30 @@ func handleStoreError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusInternalServerError, "request failed")
 	}
 	return true
+}
+
+func plural(value int, singular string, multiple string) string {
+	if value == 1 {
+		return singular
+	}
+	return multiple
+}
+
+func limitContext(account []entitlements.Entitlement, value func(entitlements.Limits) int, fallback int) (string, string, int) {
+	if len(account) == 0 {
+		return "Pro", "pro", fallback
+	}
+	name := "Free"
+	code := "free"
+	if account[0].Plan == entitlements.PlanPro {
+		name = "Pro"
+		code = "pro"
+	}
+	limit := value(account[0].Limits)
+	if limit == 0 {
+		limit = fallback
+	}
+	return name, code, limit
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
