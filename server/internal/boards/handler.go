@@ -482,6 +482,14 @@ func handleStoreError(w http.ResponseWriter, err error, account ...entitlements.
 	case errors.Is(err, ErrActiveItemLimit):
 		plan, code, limit := limitContext(account, func(l entitlements.Limits) int { return l.ActiveItemsPerList }, defaultMaxTasksPerList)
 		writeLimitError(w, code+"_active_item_limit_reached", fmt.Sprintf("Max active items per list is %d on %s.", limit, plan))
+	case storageQuotaError(err) != nil:
+		quota := storageQuotaError(err)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"code":  quota.Code,
+			"error": quota.Error(),
+			"usage": quota.Current,
+			"limit": quota.Limit,
+		})
 	case errors.Is(err, ErrTaskUnavailable):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrIdempotencyKey):
@@ -497,6 +505,14 @@ func handleStoreError(w http.ResponseWriter, err error, account ...entitlements.
 		writeInternalError(w, err, "request failed")
 	}
 	return true
+}
+
+func storageQuotaError(err error) *StorageQuotaError {
+	var quota *StorageQuotaError
+	if errors.As(err, &quota) {
+		return quota
+	}
+	return nil
 }
 
 func plural(value int, singular string, multiple string) string {

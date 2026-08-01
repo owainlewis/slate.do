@@ -66,6 +66,28 @@ func TestFreeLimitErrorsUsePlanSpecificStableCodes(t *testing.T) {
 	}
 }
 
+func TestStorageQuotaErrorsIncludeStableCodeUsageAndLimit(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	quota := &StorageQuotaError{Code: StoredContentLimitCode, Current: 10485760, Limit: 10485760}
+	if !handleStoreError(recorder, quota) {
+		t.Fatal("quota error was not handled")
+	}
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
+	}
+	var response struct {
+		Code  string `json:"code"`
+		Usage int64  `json:"usage"`
+		Limit int64  `json:"limit"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != StoredContentLimitCode || response.Usage != quota.Current || response.Limit != quota.Limit {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestBoardUpdateRejectionsUseValidationAndNotFoundResponses(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -874,7 +874,7 @@ func (s *PGStore) AccountUsage(ctx context.Context, userID string) (entitlements
 			) active),
 			(SELECT count(*) FROM agents WHERE owner_user_id = $1 AND archived_at IS NULL),
 			(SELECT count(*) FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.user_id = $1),
-			(SELECT COALESCE(sum(octet_length(t.title) + octet_length(t.description)), 0)
+			(SELECT COALESCE(sum(t.storage_bytes), 0)
 				FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.user_id = $1),
 			(SELECT count(*) FROM api_tokens WHERE user_id = $1 AND revoked_at IS NULL)
 	`, userID).Scan(
