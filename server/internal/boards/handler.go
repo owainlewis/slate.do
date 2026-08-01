@@ -11,6 +11,7 @@ import (
 
 	"github.com/owainlewis/slate.do/server/internal/auth"
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 )
 
 type Handler struct {
@@ -44,6 +45,9 @@ func (h *Handler) CreateBoard(w http.ResponseWriter, r *http.Request, user auth.
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if !validateCreateBoardText(w, input) {
+		return
+	}
 	board, err := h.store.CreateBoard(r.Context(), user.ID, input)
 	if handleStoreError(w, err, user.Entitlement) {
 		return
@@ -70,6 +74,9 @@ func (h *Handler) UpdateBoard(w http.ResponseWriter, r *http.Request, user auth.
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if !validateUpdateBoardText(w, input) {
+		return
+	}
 	board, err := h.store.UpdateBoard(r.Context(), user.ID, r.PathValue("id"), input)
 	if handleStoreError(w, err) {
 		return
@@ -88,6 +95,9 @@ func (h *Handler) DeleteBoard(w http.ResponseWriter, r *http.Request, user auth.
 func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input CreateBucketInput
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !validateCreateBucketText(w, input) {
 		return
 	}
 	bucket, err := h.store.CreateBucket(r.Context(), user.ID, r.PathValue("id"), input)
@@ -114,6 +124,9 @@ func (h *Handler) GetBucket(w http.ResponseWriter, r *http.Request, user auth.Us
 func (h *Handler) UpdateBucket(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input UpdateBucketInput
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !validateUpdateBucketText(w, input) {
 		return
 	}
 	bucket, err := h.store.UpdateBucket(r.Context(), user.ID, r.PathValue("id"), input)
@@ -148,7 +161,13 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	if !validateCreateTaskText(w, input) {
+		return
+	}
 	input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if !validateTaskIdempotencyKey(w, input.IdempotencyKey) {
+		return
+	}
 	task, err := h.store.CreateTask(r.Context(), user.ID, r.PathValue("id"), input)
 	if handleStoreError(w, err, user.Entitlement) {
 		return
@@ -173,6 +192,9 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request, user auth.User
 func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input UpdateTaskInput
 	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !validateUpdateTaskText(w, input) {
 		return
 	}
 	var task Task
@@ -218,11 +240,15 @@ func (h *Handler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request, user 
 		writeError(w, http.StatusBadRequest, "status is required")
 		return
 	}
-	task, err := h.store.UpdateTaskForHuman(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{
+	update := UpdateTaskInput{
 		Title: input.Title, Description: input.Description, ScheduledDate: input.ScheduledDate,
 		Kind: input.Kind, BucketID: input.BucketID, Status: input.Status, Priority: input.Priority,
 		AssigneeAgentID: input.AssigneeAgentID,
-	})
+	}
+	if !validateUpdateTaskText(w, update) {
+		return
+	}
+	task, err := h.store.UpdateTaskForHuman(r.Context(), user.ID, r.PathValue("id"), update)
 	if handleStoreError(w, err) {
 		return
 	}
@@ -384,14 +410,58 @@ func parseQueryBool(name string, raw string) (*bool, error) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return false
+	return httpapi.DecodeJSON(w, r, target)
+}
+
+func validateCreateBoardText(w http.ResponseWriter, input CreateBoardInput) bool {
+	return httpapi.RuneLimit(w, "name", strings.TrimSpace(input.Name), httpapi.BoardNameRunes) &&
+		httpapi.RuneLimit(w, "backgroundKind", strings.TrimSpace(input.BackgroundKind), httpapi.BoardBackgroundKind) &&
+		httpapi.RuneLimit(w, "backgroundValue", input.BackgroundValue, httpapi.BoardBackgroundRunes)
+}
+
+func validateUpdateBoardText(w http.ResponseWriter, input UpdateBoardInput) bool {
+	return optionalRuneLimit(w, "name", input.Name, httpapi.BoardNameRunes, true) &&
+		optionalRuneLimit(w, "backgroundKind", input.BackgroundKind, httpapi.BoardBackgroundKind, true) &&
+		optionalRuneLimit(w, "backgroundValue", input.BackgroundValue, httpapi.BoardBackgroundRunes, false)
+}
+
+func validateCreateBucketText(w http.ResponseWriter, input CreateBucketInput) bool {
+	return httpapi.RuneLimit(w, "name", strings.TrimSpace(input.Name), httpapi.ListNameRunes) &&
+		httpapi.ByteLimit(w, "goal", input.Goal, httpapi.ListGoalBytes)
+}
+
+func validateUpdateBucketText(w http.ResponseWriter, input UpdateBucketInput) bool {
+	return optionalRuneLimit(w, "name", input.Name, httpapi.ListNameRunes, true) &&
+		optionalByteLimit(w, "goal", input.Goal, httpapi.ListGoalBytes)
+}
+
+func validateCreateTaskText(w http.ResponseWriter, input CreateTaskInput) bool {
+	return httpapi.RuneLimit(w, "title", strings.TrimSpace(input.Title), httpapi.TaskTitleRunes) &&
+		httpapi.ByteLimit(w, "description", input.Description, httpapi.TaskDescriptionBytes)
+}
+
+func validateUpdateTaskText(w http.ResponseWriter, input UpdateTaskInput) bool {
+	return optionalRuneLimit(w, "title", input.Title, httpapi.TaskTitleRunes, true) &&
+		optionalByteLimit(w, "description", input.Description, httpapi.TaskDescriptionBytes)
+}
+
+func validateTaskIdempotencyKey(w http.ResponseWriter, key string) bool {
+	return httpapi.ByteLimit(w, "Idempotency-Key", strings.TrimSpace(key), httpapi.TaskIdempotencyBytes)
+}
+
+func optionalRuneLimit(w http.ResponseWriter, field string, value *string, limit int, trim bool) bool {
+	if value == nil {
+		return true
 	}
-	return true
+	checked := *value
+	if trim {
+		checked = strings.TrimSpace(checked)
+	}
+	return httpapi.RuneLimit(w, field, checked, limit)
+}
+
+func optionalByteLimit(w http.ResponseWriter, field string, value *string, limit int) bool {
+	return value == nil || httpapi.ByteLimit(w, field, *value, limit)
 }
 
 func handleStoreError(w http.ResponseWriter, err error, account ...entitlements.Entitlement) bool {

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/owainlewis/slate.do/server/internal/database"
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 )
 
 var (
@@ -478,8 +479,8 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 		return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 	}
 	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
-	if len(idempotencyKey) > 200 {
-		return Task{}, fmt.Errorf("%w: idempotency key must be 200 characters or fewer", ErrInvalidData)
+	if len(idempotencyKey) > httpapi.TaskIdempotencyBytes {
+		return Task{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
 	}
 	if idempotencyKey != "" {
 		fingerprint, err := taskCreateFingerprint(bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, input.OverrideLimit)

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/owainlewis/slate.do/server/internal/auth"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 )
 
 type fakeStore struct {
@@ -209,6 +210,70 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 	handler.Update(response, request, user)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin update = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestUpdateAgentEnforcesNameAndInstructionLimits(t *testing.T) {
+	user := auth.User{ID: "owner-1"}
+	tests := []struct {
+		name        string
+		displayName string
+		purpose     string
+		status      int
+	}{
+		{name: "exact", displayName: strings.Repeat("🙂", httpapi.AgentNameRunes), purpose: strings.Repeat("é", httpapi.AgentInstructionsBytes/2), status: http.StatusOK},
+		{name: "name one over", displayName: strings.Repeat("🙂", httpapi.AgentNameRunes+1), status: http.StatusBadRequest},
+		{name: "instructions one over", displayName: "Agent", purpose: strings.Repeat("é", httpapi.AgentInstructionsBytes/2+1), status: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeStore{updateAgent: auth.AgentUser{ID: "agent-1"}}
+			handler := NewHandler(store)
+			body, err := json.Marshal(map[string]string{"displayName": test.displayName, "purpose": test.purpose})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := lifecycleRequest(t, handler.Update, user, http.MethodPatch, string(body))
+			if response.Code != test.status {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			if test.status == http.StatusOK && (store.lastName != test.displayName || store.lastPurpose != test.purpose) {
+				t.Fatalf("stored name/purpose lengths = %d/%d", len([]rune(store.lastName)), len([]byte(store.lastPurpose)))
+			}
+			if test.status == http.StatusBadRequest && (!strings.Contains(response.Body.String(), `"code":"field_too_long"`) || store.lastName != "") {
+				t.Fatalf("store called or unstable response: %s", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestRotateCredentialEnforcesIdempotencyKeyByteLimit(t *testing.T) {
+	user := auth.User{ID: "owner-1"}
+	tests := []struct {
+		name   string
+		key    string
+		status int
+		called bool
+	}{
+		{name: "exact", key: strings.Repeat("a", httpapi.AgentRotationKeyBytes-2) + "é", status: http.StatusOK, called: true},
+		{name: "one byte over", key: strings.Repeat("a", httpapi.AgentRotationKeyBytes-1) + "é", status: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeStore{rotateApplied: true}
+			handler := NewHandler(store)
+			body, err := json.Marshal(map[string]string{"idempotencyKey": test.key})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := lifecycleRequest(t, handler.RotateCredential, user, http.MethodPost, string(body))
+			if response.Code != test.status || (store.lastKey != "") != test.called {
+				t.Fatalf("status = %d, key bytes = %d, body = %s", response.Code, len(store.lastKey), response.Body.String())
+			}
+			if !test.called && !strings.Contains(response.Body.String(), `"code":"field_too_long"`) {
+				t.Fatalf("body = %s", response.Body.String())
+			}
+		})
 	}
 }
 

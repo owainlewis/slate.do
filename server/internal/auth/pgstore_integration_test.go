@@ -14,6 +14,7 @@ import (
 
 	"github.com/owainlewis/slate.do/server/internal/database"
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 	"github.com/owainlewis/slate.do/server/internal/migrations"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -580,8 +581,14 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 	}
 	assertFreeEntitlement(t, byToken)
 
-	if _, err := store.CreateAgent(ctx, userID, "Free Agent", "", fmt.Sprintf("free-agent-%d", time.Now().UnixNano()), "slate_agent_free"); err != nil {
+	agentName := strings.Repeat("🙂", httpapi.AgentNameRunes)
+	agentPurpose := strings.Repeat("é", httpapi.AgentInstructionsBytes/2)
+	createdAgent, err := store.CreateAgent(ctx, userID, agentName, agentPurpose, fmt.Sprintf("free-agent-%d", time.Now().UnixNano()), "slate_agent_free")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if createdAgent.DisplayName != agentName || createdAgent.Purpose != agentPurpose {
+		t.Fatalf("agent text lengths = %d/%d", len([]rune(createdAgent.DisplayName)), len([]byte(createdAgent.Purpose)))
 	}
 	if _, err := store.CreateAgent(ctx, userID, "Second Agent", "", fmt.Sprintf("free-agent-over-%d", time.Now().UnixNano()), "slate_agent_over"); !errors.Is(err, ErrAgentLimit) {
 		t.Fatalf("second free agent error = %v", err)
