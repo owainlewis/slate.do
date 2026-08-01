@@ -55,6 +55,8 @@ test("the CLI guide covers installation, authentication, and agent workflows", (
   assert.match(cliGuide, /slate tasks claim &lt;task-id&gt;/);
   assert.match(cliGuide, /CLAUDE\.md/);
   assert.match(cliGuide, /AGENTS\.md/);
+  assert.match(cliGuide, /Poll no faster than once every five seconds/);
+  assert.match(cliGuide, /Retry-After/);
 });
 
 test("early access form shows every required field and password requirements", () => {

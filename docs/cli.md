@@ -162,6 +162,10 @@ Claiming is atomic. If another agent already claimed the task, the command
 fails and the agent should choose another queued task. This prevents two agents
 from silently doing the same work.
 
+If an agent polls for new work, poll no faster than once every five seconds,
+slow down while idle, and add jitter when several agents start together. A 429
+response includes `Retry-After`; wait for that interval before trying again.
+
 ## Upgrade or uninstall
 
 Run the one-line installer again to replace the current binary with the latest

@@ -105,6 +105,7 @@ claude</code></pre>
 - After acceptance, run `slate tasks done &lt;task-id&gt;`.
 - Treat output as JSON and preserve IDs exactly.</code></pre>
           <p>Claims are atomic. If another agent already claimed the task, Slate rejects the second claim so the agent can select different work.</p>
+          <p>Poll no faster than once every five seconds, slow down while idle, and add jitter when several agents start together. After a 429 response, wait for the <code>Retry-After</code> interval before trying again.</p>
         </section>
 
         <section id="upgrade" class="docs-section">
