@@ -110,6 +110,23 @@ func TestRequireSessionUserAcceptsSessionCookie(t *testing.T) {
 	}
 }
 
+func TestUserFromRequestAttributesBearerWhenInvalidSessionCookieIsPresent(t *testing.T) {
+	service := NewService(requestAuthStore{}, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: "invalid-session"})
+	req.Header.Set("Authorization", "Bearer slate_ok")
+
+	user, credential, ok := service.UserFromRequestWithCredential(req)
+
+	if !ok || user.ID != "api-user" {
+		t.Fatalf("user = %#v, authenticated = %v", user, ok)
+	}
+	want := "bearer:" + hashToken("slate_ok")
+	if credential != want {
+		t.Fatalf("credential = %q, want %q", credential, want)
+	}
+}
+
 func TestMeExposesResolvedProPlanAndLimits(t *testing.T) {
 	service := NewService(requestAuthStore{}, false)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)

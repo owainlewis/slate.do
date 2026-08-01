@@ -503,6 +503,10 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, meResponse{Authenticated: false})
 		return
 	}
+	s.MeForUser(w, r, user)
+}
+
+func (s *Service) MeForUser(w http.ResponseWriter, r *http.Request, user User) {
 	if user.AgentID == "" {
 		if err := s.populateUsage(r.Context(), &user); err != nil {
 			writeError(w, http.StatusInternalServerError, "account usage could not be loaded")
@@ -580,45 +584,73 @@ func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User)
 }
 
 func (s *Service) UserFromRequest(r *http.Request) (User, bool) {
-	if user, ok := s.UserFromSessionRequest(r); ok {
-		return user, true
+	user, _, ok := s.UserFromRequestWithCredential(r)
+	return user, ok
+}
+
+func (s *Service) UserFromRequestWithCredential(r *http.Request) (User, string, bool) {
+	if user, credential, ok := s.UserFromSessionRequestWithCredential(r); ok {
+		return user, credential, true
 	}
 	token, ok := readBearerToken(r)
 	if !ok {
-		return User{}, false
+		return User{}, "", false
 	}
 	user, err := s.store.FindUserByAPITokenHash(r.Context(), hashToken(token), s.now())
-	return user, err == nil
+	if err != nil {
+		return User{}, "", false
+	}
+	return user, "bearer:" + hashToken(token), true
 }
 
 func (s *Service) UserFromSessionRequest(r *http.Request) (User, bool) {
+	user, _, ok := s.UserFromSessionRequestWithCredential(r)
+	return user, ok
+}
+
+func (s *Service) UserFromSessionRequestWithCredential(r *http.Request) (User, string, bool) {
 	token, ok := s.readSessionToken(r)
 	if !ok {
-		return User{}, false
+		return User{}, "", false
 	}
 	user, err := s.store.FindUserBySessionHash(r.Context(), hashToken(token), s.now())
-	return user, err == nil
+	if err != nil {
+		return User{}, "", false
+	}
+	return user, "session:" + hashToken(token), true
 }
 
 func (s *Service) RequireUser(next func(http.ResponseWriter, *http.Request, User)) http.HandlerFunc {
+	return s.RequireUserWithCredential(func(w http.ResponseWriter, r *http.Request, user User, _ string) {
+		next(w, r, user)
+	})
+}
+
+func (s *Service) RequireUserWithCredential(next func(http.ResponseWriter, *http.Request, User, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		user, ok := s.UserFromRequest(r)
+		user, credential, ok := s.UserFromRequestWithCredential(r)
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		next(w, r, user)
+		next(w, r, user, credential)
 	}
 }
 
 func (s *Service) RequireSessionUser(next func(http.ResponseWriter, *http.Request, User)) http.HandlerFunc {
+	return s.RequireSessionUserWithCredential(func(w http.ResponseWriter, r *http.Request, user User, _ string) {
+		next(w, r, user)
+	})
+}
+
+func (s *Service) RequireSessionUserWithCredential(next func(http.ResponseWriter, *http.Request, User, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		user, ok := s.UserFromSessionRequest(r)
+		user, credential, ok := s.UserFromSessionRequestWithCredential(r)
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		next(w, r, user)
+		next(w, r, user, credential)
 	}
 }
 
@@ -897,6 +929,10 @@ func randomToken(prefix string) (string, error) {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func RateLimitIPKey(r *http.Request) string {
+	return hashToken(clientIP(r))
 }
 
 func tokenDisplayPrefix(token string) string {

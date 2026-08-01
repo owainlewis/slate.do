@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"strconv"
 
 	"github.com/owainlewis/slate.do/server/internal/agents"
 	"github.com/owainlewis/slate.do/server/internal/auth"
 	"github.com/owainlewis/slate.do/server/internal/boards"
 	"github.com/owainlewis/slate.do/server/internal/database"
+	"github.com/owainlewis/slate.do/server/internal/ratelimit"
 )
 
 type App struct {
@@ -18,6 +20,7 @@ type App struct {
 	auth   *auth.Service
 	agents *agents.Handler
 	boards *boards.Handler
+	limits ratelimit.Limiter
 }
 
 func (a *App) RunPasswordResetWorker(ctx context.Context) {
@@ -33,6 +36,7 @@ func NewApp(static fs.FS, db *database.Pool, cookieSecure bool, options auth.Opt
 		app.auth = auth.NewServiceWithOptions(authStore, cookieSecure, options)
 		app.agents = agents.NewHandler(agents.NewStore(db, authStore))
 		app.boards = boards.NewHandler(boards.NewStore(db))
+		app.limits = ratelimit.NewPG(db)
 	}
 	return app
 }
@@ -42,11 +46,11 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/health", a.health)
 	mux.HandleFunc("GET /api/v1/me", a.me)
 	mux.HandleFunc("PATCH /api/v1/me", a.session(a.auth.UpdateTheme))
-	mux.HandleFunc("POST /api/v1/auth/login", a.login)
-	mux.HandleFunc("POST /api/v1/auth/register", a.register)
+	mux.HandleFunc("POST /api/v1/auth/login", a.publicAuth(a.login))
+	mux.HandleFunc("POST /api/v1/auth/register", a.publicAuth(a.register))
 	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
-	mux.HandleFunc("POST /api/v1/auth/password-reset/request", a.requestPasswordReset)
-	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", a.resetPassword)
+	mux.HandleFunc("POST /api/v1/auth/password-reset/request", a.publicAuth(a.requestPasswordReset))
+	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", a.publicAuth(a.resetPassword))
 	mux.HandleFunc("GET /api/v1/api-tokens", a.session(a.auth.ListAPITokens))
 	mux.HandleFunc("POST /api/v1/api-tokens", a.session(a.auth.CreateAPIToken))
 	mux.HandleFunc("DELETE /api/v1/api-tokens/{id}", a.session(a.auth.RevokeAPIToken))
@@ -129,7 +133,18 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 		return
 	}
-	a.auth.Me(w, r)
+	user, credential, ok := a.auth.UserFromRequestWithCredential(r)
+	if !ok {
+		if !a.allowPublicAuth(w, r) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
+		return
+	}
+	if !a.allowAuthenticated(w, r, user, credential) {
+		return
+	}
+	a.auth.MeForUser(w, r, user)
 }
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +188,12 @@ func (a *App) user(next func(http.ResponseWriter, *http.Request, auth.User)) htt
 		if !a.ready(w) {
 			return
 		}
-		a.auth.RequireUser(next)(w, r)
+		a.auth.RequireUserWithCredential(func(w http.ResponseWriter, r *http.Request, user auth.User, credential string) {
+			if !a.allowAuthenticated(w, r, user, credential) {
+				return
+			}
+			next(w, r, user)
+		})(w, r)
 	}
 }
 
@@ -196,8 +216,68 @@ func (a *App) session(next func(http.ResponseWriter, *http.Request, auth.User)) 
 		if !a.ready(w) {
 			return
 		}
-		a.auth.RequireSessionUser(next)(w, r)
+		a.auth.RequireSessionUserWithCredential(func(w http.ResponseWriter, r *http.Request, user auth.User, credential string) {
+			if !a.allowAuthenticated(w, r, user, credential) {
+				return
+			}
+			next(w, r, user)
+		})(w, r)
 	}
+}
+
+func (a *App) publicAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.allowPublicAuth(w, r) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (a *App) allowPublicAuth(w http.ResponseWriter, r *http.Request) bool {
+	if a.limits == nil {
+		return true
+	}
+	decision, err := a.limits.Allow(r.Context(), []ratelimit.Key{{Scope: ratelimit.ScopeIP, Value: auth.RateLimitIPKey(r)}}, ratelimit.ClassPublicAuth)
+	return writeRateLimitDecision(w, decision, err)
+}
+
+func (a *App) allowAuthenticated(w http.ResponseWriter, r *http.Request, user auth.User, credential string) bool {
+	if a.limits == nil {
+		return true
+	}
+	keys := []ratelimit.Key{
+		{Scope: ratelimit.ScopeAccount, Value: user.ID},
+		{Scope: ratelimit.ScopeCredential, Value: credential},
+	}
+	routeClass := ratelimit.ClassAuthenticatedWrite
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		routeClass = ratelimit.ClassAuthenticatedRead
+	}
+	decision, err := a.limits.Allow(r.Context(), keys, routeClass)
+	return writeRateLimitDecision(w, decision, err)
+}
+
+func writeRateLimitDecision(w http.ResponseWriter, decision ratelimit.Decision, err error) bool {
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"code":  "rate_limit_unavailable",
+			"error": "Request capacity could not be checked.",
+		})
+		return false
+	}
+	w.Header().Set("RateLimit-Limit", strconv.Itoa(decision.Limit))
+	w.Header().Set("RateLimit-Remaining", strconv.Itoa(decision.Remaining))
+	if decision.Allowed {
+		return true
+	}
+	retrySeconds := ratelimit.RetryAfterSeconds(decision.RetryAfter)
+	w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
+	writeJSON(w, http.StatusTooManyRequests, map[string]string{
+		"code":  "rate_limit_exceeded",
+		"error": "Too many requests. Retry later.",
+	})
+	return false
 }
 
 func (a *App) ready(w http.ResponseWriter) bool {
