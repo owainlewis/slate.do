@@ -47,7 +47,7 @@ func (h *Handler) GetDetail(w http.ResponseWriter, r *http.Request, user auth.Us
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "agent details could not be loaded")
+		writeInternalError(w, err, "agent details could not be loaded")
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
@@ -75,7 +75,7 @@ func (h *Handler) ListWork(w http.ResponseWriter, r *http.Request, user auth.Use
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "assigned work could not be loaded")
+		writeInternalError(w, err, "assigned work could not be loaded")
 		return
 	}
 	writeJSON(w, http.StatusOK, work)
@@ -111,7 +111,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request, user auth.User)
 	case errors.Is(err, auth.ErrAgentNameTaken):
 		writeCodedError(w, http.StatusConflict, "agent_name_taken", "An active agent with that name already exists.")
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, "agent settings could not be saved")
+		writeInternalError(w, err, "agent settings could not be saved")
 	default:
 		writeJSON(w, http.StatusOK, agent)
 	}
@@ -138,7 +138,7 @@ func (h *Handler) RotateCredential(w http.ResponseWriter, r *http.Request, user 
 	}
 	plain, err := randomAgentToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "credential could not be rotated")
+		writeInternalError(w, err, "credential could not be rotated")
 		return
 	}
 	sum := sha256.Sum256([]byte(plain))
@@ -149,7 +149,7 @@ func (h *Handler) RotateCredential(w http.ResponseWriter, r *http.Request, user 
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeCodedError(w, http.StatusConflict, "idempotency_conflict", "This rotation key was already used for another agent.")
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, "credential could not be rotated")
+		writeInternalError(w, err, "credential could not be rotated")
 	default:
 		token := ""
 		if applied {
@@ -176,7 +176,7 @@ func (h *Handler) RevokeCredential(w http.ResponseWriter, r *http.Request, user 
 	case errors.Is(err, auth.ErrAgentNotFound):
 		writeError(w, http.StatusNotFound, "agent not found")
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, "credential could not be revoked")
+		writeInternalError(w, err, "credential could not be revoked")
 	default:
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
@@ -208,7 +208,7 @@ func (h *Handler) Archive(w http.ResponseWriter, r *http.Request, user auth.User
 			Conflict: conflict.Counts,
 		})
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, "agent could not be archived")
+		writeInternalError(w, err, "agent could not be archived")
 	default:
 		writeJSON(w, http.StatusOK, struct {
 			OK bool `json:"ok"`
@@ -232,7 +232,7 @@ func (h *Handler) Restore(w http.ResponseWriter, r *http.Request, user auth.User
 	case errors.Is(err, auth.ErrUnauthorized):
 		writeError(w, http.StatusUnauthorized, "authentication required")
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, "agent could not be restored")
+		writeInternalError(w, err, "agent could not be restored")
 	default:
 		writeJSON(w, http.StatusOK, agent)
 	}
@@ -296,6 +296,13 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeInternalError(w http.ResponseWriter, err error, message string) {
+	if httpapi.WriteServiceUnavailable(w, err) {
+		return
+	}
+	writeError(w, http.StatusInternalServerError, message)
 }
 
 func writeCodedError(w http.ResponseWriter, status int, code string, message string) {

@@ -222,7 +222,7 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "too many registration attempts; try again later")
 		return
 	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "registration is temporarily unavailable")
+		writeInternalError(w, err, "registration is temporarily unavailable")
 		return
 	}
 
@@ -244,12 +244,12 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "account could not be created")
+		writeInternalError(w, err, "account could not be created")
 		return
 	}
 	sessionToken, err := randomToken("sess")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "account could not be created")
+		writeInternalError(w, err, "account could not be created")
 		return
 	}
 	expiresAt := s.now().Add(sessionDuration)
@@ -259,7 +259,7 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "account could not be created")
+		writeInternalError(w, err, "account could not be created")
 		return
 	}
 	setSessionCookie(w, s.cookieSecure, sessionToken, expiresAt)
@@ -311,7 +311,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "login failed")
+		writeInternalError(w, err, "login failed")
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(input.Password)) != nil {
@@ -319,7 +319,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.populateUsage(r.Context(), &account.User); err != nil {
-		writeError(w, http.StatusInternalServerError, "account usage could not be loaded")
+		writeInternalError(w, err, "account usage could not be loaded")
 		return
 	}
 	if !s.createSession(w, r, account.User, account.PasswordHash) {
@@ -459,7 +459,7 @@ func (s *Service) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	valid, err := s.store.PasswordResetTokenValid(r.Context(), hashToken(input.Token), s.now())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "password could not be reset")
+		writeInternalError(w, err, "password could not be reset")
 		return
 	}
 	if !valid {
@@ -475,7 +475,7 @@ func (s *Service) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "reset link is invalid or has expired")
 		return
 	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "password could not be reset")
+		writeInternalError(w, err, "password could not be reset")
 		return
 	}
 	clearSessionCookie(w, s.cookieSecure)
@@ -489,7 +489,7 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	if token, ok := s.readSessionToken(r); ok {
 		if err := s.store.DeleteSession(r.Context(), hashToken(token)); err != nil {
 			clearSessionCookie(w, s.cookieSecure)
-			writeError(w, http.StatusInternalServerError, "logout failed")
+			writeInternalError(w, err, "logout failed")
 			return
 		}
 	}
@@ -498,9 +498,13 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.UserFromRequest(r)
-	if !ok {
-		writeJSON(w, http.StatusOK, meResponse{Authenticated: false})
+	user, _, err := s.ResolveUserFromRequest(r)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			writeJSON(w, http.StatusOK, meResponse{Authenticated: false})
+			return
+		}
+		writeInternalError(w, err, "authentication failed")
 		return
 	}
 	s.MeForUser(w, r, user)
@@ -509,7 +513,7 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 func (s *Service) MeForUser(w http.ResponseWriter, r *http.Request, user User) {
 	if user.AgentID == "" {
 		if err := s.populateUsage(r.Context(), &user); err != nil {
-			writeError(w, http.StatusInternalServerError, "account usage could not be loaded")
+			writeInternalError(w, err, "account usage could not be loaded")
 			return
 		}
 	}
@@ -573,51 +577,67 @@ func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User)
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "profile could not be updated")
+		writeInternalError(w, err, "profile could not be updated")
 		return
 	}
 	if err := s.populateUsage(r.Context(), &updated); err != nil {
-		writeError(w, http.StatusInternalServerError, "account usage could not be loaded")
+		writeInternalError(w, err, "account usage could not be loaded")
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Service) UserFromRequest(r *http.Request) (User, bool) {
-	user, _, ok := s.UserFromRequestWithCredential(r)
-	return user, ok
+	user, _, err := s.ResolveUserFromRequest(r)
+	return user, err == nil
 }
 
 func (s *Service) UserFromRequestWithCredential(r *http.Request) (User, string, bool) {
-	if user, credential, ok := s.UserFromSessionRequestWithCredential(r); ok {
-		return user, credential, true
+	user, credential, err := s.ResolveUserFromRequest(r)
+	return user, credential, err == nil
+}
+
+func (s *Service) ResolveUserFromRequest(r *http.Request) (User, string, error) {
+	if _, ok := s.readSessionToken(r); ok {
+		user, credential, err := s.ResolveSessionUserFromRequest(r)
+		if err == nil {
+			return user, credential, nil
+		}
+		if !errors.Is(err, ErrUnauthorized) {
+			return User{}, "", err
+		}
 	}
 	token, ok := readBearerToken(r)
 	if !ok {
-		return User{}, "", false
+		return User{}, "", ErrUnauthorized
 	}
 	user, err := s.store.FindUserByAPITokenHash(r.Context(), hashToken(token), s.now())
 	if err != nil {
-		return User{}, "", false
+		return User{}, "", err
 	}
-	return user, "bearer:" + hashToken(token), true
+	return user, "bearer:" + hashToken(token), nil
 }
 
 func (s *Service) UserFromSessionRequest(r *http.Request) (User, bool) {
-	user, _, ok := s.UserFromSessionRequestWithCredential(r)
-	return user, ok
+	user, _, err := s.ResolveSessionUserFromRequest(r)
+	return user, err == nil
 }
 
 func (s *Service) UserFromSessionRequestWithCredential(r *http.Request) (User, string, bool) {
+	user, credential, err := s.ResolveSessionUserFromRequest(r)
+	return user, credential, err == nil
+}
+
+func (s *Service) ResolveSessionUserFromRequest(r *http.Request) (User, string, error) {
 	token, ok := s.readSessionToken(r)
 	if !ok {
-		return User{}, "", false
+		return User{}, "", ErrUnauthorized
 	}
 	user, err := s.store.FindUserBySessionHash(r.Context(), hashToken(token), s.now())
 	if err != nil {
-		return User{}, "", false
+		return User{}, "", err
 	}
-	return user, "session:" + hashToken(token), true
+	return user, "session:" + hashToken(token), nil
 }
 
 func (s *Service) RequireUser(next func(http.ResponseWriter, *http.Request, User)) http.HandlerFunc {
@@ -628,8 +648,12 @@ func (s *Service) RequireUser(next func(http.ResponseWriter, *http.Request, User
 
 func (s *Service) RequireUserWithCredential(next func(http.ResponseWriter, *http.Request, User, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		user, credential, ok := s.UserFromRequestWithCredential(r)
-		if !ok {
+		user, credential, err := s.ResolveUserFromRequest(r)
+		if err != nil {
+			if !errors.Is(err, ErrUnauthorized) {
+				writeInternalError(w, err, "authentication failed")
+				return
+			}
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
@@ -645,8 +669,12 @@ func (s *Service) RequireSessionUser(next func(http.ResponseWriter, *http.Reques
 
 func (s *Service) RequireSessionUserWithCredential(next func(http.ResponseWriter, *http.Request, User, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		user, credential, ok := s.UserFromSessionRequestWithCredential(r)
-		if !ok {
+		user, credential, err := s.ResolveSessionUserFromRequest(r)
+		if err != nil {
+			if !errors.Is(err, ErrUnauthorized) {
+				writeInternalError(w, err, "authentication failed")
+				return
+			}
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
@@ -657,7 +685,7 @@ func (s *Service) RequireSessionUserWithCredential(next func(http.ResponseWriter
 func (s *Service) ListAPITokens(w http.ResponseWriter, r *http.Request, user User) {
 	tokens, err := s.store.ListAPITokens(r.Context(), user.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "API tokens could not be loaded")
+		writeInternalError(w, err, "API tokens could not be loaded")
 		return
 	}
 	if tokens == nil {
@@ -685,7 +713,7 @@ func (s *Service) CreateAPIToken(w http.ResponseWriter, r *http.Request, user Us
 
 	plain, err := randomToken("slate")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "API token could not be created")
+		writeInternalError(w, err, "API token could not be created")
 		return
 	}
 	token, err := s.store.CreateAPIToken(r.Context(), user.ID, name, hashToken(plain))
@@ -699,7 +727,7 @@ func (s *Service) CreateAPIToken(w http.ResponseWriter, r *http.Request, user Us
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "API token could not be created")
+		writeInternalError(w, err, "API token could not be created")
 		return
 	}
 	writeJSON(w, http.StatusCreated, createAPITokenResponse{Token: plain, APIToken: token})
@@ -723,7 +751,7 @@ func (s *Service) RevokeAPIToken(w http.ResponseWriter, r *http.Request, user Us
 	}
 	err := s.store.RevokeAPIToken(r.Context(), user.ID, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "API token could not be revoked")
+		writeInternalError(w, err, "API token could not be revoked")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -737,7 +765,7 @@ func (s *Service) ListAgents(w http.ResponseWriter, r *http.Request, user User) 
 	}
 	agents, err := store.ListAgents(r.Context(), user.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "agents could not be loaded")
+		writeInternalError(w, err, "agents could not be loaded")
 		return
 	}
 	if agents == nil {
@@ -785,7 +813,7 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 	}
 	plain, err := randomToken("slate_agent")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "agent could not be created")
+		writeInternalError(w, err, "agent could not be created")
 		return
 	}
 	store, ok := s.store.(agentStore)
@@ -808,7 +836,7 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "agent could not be created")
+		writeInternalError(w, err, "agent could not be created")
 		return
 	}
 	writeJSON(w, http.StatusCreated, createAgentResponse{Token: plain, AgentUser: agent})
@@ -834,7 +862,7 @@ func (s *Service) RevokeAgentToken(w http.ResponseWriter, r *http.Request, user 
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "agent token could not be revoked")
+		writeInternalError(w, err, "agent token could not be revoked")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -860,7 +888,7 @@ func (s *Service) DeleteAgent(w http.ResponseWriter, r *http.Request, user User)
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "agent could not be deleted")
+		writeInternalError(w, err, "agent could not be deleted")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -869,7 +897,7 @@ func (s *Service) DeleteAgent(w http.ResponseWriter, r *http.Request, user User)
 func (s *Service) createSession(w http.ResponseWriter, r *http.Request, user User, expectedPasswordHash string) bool {
 	token, err := randomToken("sess")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "session could not be created")
+		writeInternalError(w, err, "session could not be created")
 		return false
 	}
 	expiresAt := s.now().Add(sessionDuration)
@@ -879,7 +907,7 @@ func (s *Service) createSession(w http.ResponseWriter, r *http.Request, user Use
 			writeError(w, http.StatusUnauthorized, "invalid email or password")
 			return false
 		}
-		writeError(w, http.StatusInternalServerError, "session could not be created")
+		writeInternalError(w, err, "session could not be created")
 		return false
 	}
 	setSessionCookie(w, s.cookieSecure, token, expiresAt)
@@ -1030,6 +1058,13 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeInternalError(w http.ResponseWriter, err error, message string) {
+	if httpapi.WriteServiceUnavailable(w, err) {
+		return
+	}
+	writeError(w, http.StatusInternalServerError, message)
 }
 
 func writeCodedError(w http.ResponseWriter, status int, code string, message string) {

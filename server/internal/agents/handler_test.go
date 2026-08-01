@@ -105,6 +105,13 @@ func TestGetDetailMapsOwnedAgentResponses(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("failed load status = %d, want 500", response.Code)
 	}
+
+	store.detailErr = context.DeadlineExceeded
+	response = httptest.NewRecorder()
+	handler.GetDetail(response, request, auth.User{ID: "owner-1"})
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"code":"service_unavailable"`) {
+		t.Fatalf("capacity timeout response = %d %q", response.Code, response.Body.String())
+	}
 }
 
 func TestListWorkValidatesAndBoundsPagination(t *testing.T) {

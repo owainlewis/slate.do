@@ -32,7 +32,10 @@ func run(args []string) error {
 	if len(args) < 2 {
 		return usage()
 	}
-	cfg := config.FromEnv()
+	cfg, err := config.FromEnv()
+	if err != nil {
+		return err
+	}
 	switch args[1] {
 	case "serve":
 		return serve(cfg)
@@ -59,11 +62,22 @@ func serve(cfg config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := database.Open(ctx, cfg.DatabaseURL)
+	db, err := database.Open(ctx, cfg.DatabaseURL, database.Options{
+		MaxConnections:         cfg.DBMaxConnections,
+		AcquireTimeout:         cfg.DBAcquireTimeout,
+		StatementTimeout:       cfg.DBStatementTimeout,
+		IdleTransactionTimeout: cfg.DBIdleTransactionTimeout,
+		MaxConnectionIdleTime:  cfg.DBMaxConnectionIdleTime,
+		MaxConnectionLifetime:  cfg.DBMaxConnectionLifetime,
+		ConnectionLimit:         cfg.DBConnectionAllowance - cfg.DBReservedConnections,
+	})
 	if err != nil {
 		return fmt.Errorf("connect database: %w", err)
 	}
 	defer db.Close()
+	if err := verifyDatabaseCapacity(ctx, db, cfg); err != nil {
+		return err
+	}
 	if _, err := migrations.Apply(ctx, db); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
@@ -85,13 +99,23 @@ func serve(cfg config.Config) error {
 	go app.RunPasswordResetWorker(ctx)
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           app.Routes(),
+		Handler:           slatehttp.WithRequestTimeout(app.Routes(), cfg.RequestTimeout),
 		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
 	}
 
 	errs := make(chan error, 1)
 	go func() {
-		slog.Info("serving slate", "addr", server.Addr)
+		slog.Info("serving slate",
+			"addr", server.Addr,
+			"app_max_instances", cfg.AppMaxInstances,
+			"db_pool_max_connections", db.MaxConnections(),
+			"db_connection_allowance", cfg.DBConnectionAllowance,
+			"db_reserved_connections", cfg.DBReservedConnections,
+			"db_acquire_timeout", cfg.DBAcquireTimeout,
+			"db_statement_timeout", cfg.DBStatementTimeout,
+			"request_timeout", cfg.RequestTimeout,
+		)
 		errs <- server.ListenAndServe()
 	}()
 
@@ -208,9 +232,37 @@ func openDB(cfg config.Config) (*database.Pool, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, errors.New("DATABASE_URL is required")
 	}
-	db, err := database.Open(context.Background(), cfg.DatabaseURL)
+	db, err := database.Open(context.Background(), cfg.DatabaseURL, database.Options{
+		MaxConnections:         cfg.DBMaxConnections,
+		AcquireTimeout:         cfg.DBAcquireTimeout,
+		StatementTimeout:       cfg.DBStatementTimeout,
+		IdleTransactionTimeout: cfg.DBIdleTransactionTimeout,
+		MaxConnectionIdleTime:  cfg.DBMaxConnectionIdleTime,
+		MaxConnectionLifetime:  cfg.DBMaxConnectionLifetime,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("connect database: %w", err)
 	}
+	if err := verifyDatabaseCapacity(context.Background(), db, cfg); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+func verifyDatabaseCapacity(ctx context.Context, db *database.Pool, cfg config.Config) error {
+	maximum, current, err := db.ServerCapacity(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect database capacity: %w", err)
+	}
+	if maximum < cfg.DBConnectionAllowance {
+		return fmt.Errorf("unsafe database capacity: server max_connections is %d, below configured allowance %d", maximum, cfg.DBConnectionAllowance)
+	}
+	slog.Info("database capacity verified",
+		"server_max_connections", maximum,
+		"current_connections", current,
+		"configured_allowance", cfg.DBConnectionAllowance,
+		"reserved_connections", cfg.DBReservedConnections,
+	)
+	return nil
 }

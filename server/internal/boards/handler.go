@@ -31,7 +31,7 @@ func (h *Handler) ListBoards(w http.ResponseWriter, r *http.Request, user auth.U
 		listed, err = h.store.ListBoards(r.Context(), user.ID)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "boards could not be loaded")
+		writeInternalError(w, err, "boards could not be loaded")
 		return
 	}
 	if listed == nil {
@@ -286,7 +286,7 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request, user auth.Us
 	}
 	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "tasks could not be loaded")
+		writeInternalError(w, err, "tasks could not be loaded")
 		return
 	}
 	if tasks == nil {
@@ -314,7 +314,7 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 	}
 	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "tasks could not be loaded")
+		writeInternalError(w, err, "tasks could not be loaded")
 		return
 	}
 	if tasks == nil {
@@ -494,7 +494,7 @@ func handleStoreError(w http.ResponseWriter, err error, account ...entitlements.
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		slog.Error("board API request failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "request failed")
+		writeInternalError(w, err, "request failed")
 	}
 	return true
 }
@@ -525,6 +525,13 @@ func limitContext(account []entitlements.Entitlement, value func(entitlements.Li
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeInternalError(w http.ResponseWriter, err error, message string) {
+	if httpapi.WriteServiceUnavailable(w, err) {
+		return
+	}
+	writeError(w, http.StatusInternalServerError, message)
 }
 
 func writeLimitError(w http.ResponseWriter, code string, message string) {

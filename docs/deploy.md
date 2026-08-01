@@ -63,6 +63,60 @@ The required runtime secrets are `slate-database-url`, `slate-session-secret`, a
 
 Admin credentials are only needed while running `seed-admin` and should be supplied through a secure operator environment. Do not add them to the Cloud Run service or source control.
 
+## Launch capacity envelope
+
+The paid-launch deployment uses a service-level Cloud Run maximum of 4 instances and a pool maximum of 2 Postgres connections per instance. The normal application ceiling is therefore `4 × 2 = 8` connections. Cloud Run documents its maximum as a soft bound: under normal scaling it can briefly run fewer than twice the configured maximum, and sudden spikes can exceed that. At the normal transient envelope, 7 instances × 2 connections is 14.
+
+To make the database bound independent of Cloud Run's soft maximum, every service connection claims one of 16 Postgres advisory-lock slots when it is created. The slots are shared across every revision and instance. A seventeenth service connection is closed and its request receives the stable capacity response. Migration and operator connections do not claim app slots. The configured database allowance is 25, so the distributed application cap of 16 leaves 9 connections for the migration job, Cloud SQL internals, and operator access.
+
+The server verifies `SHOW max_connections` at startup and refuses to run when it is below `DB_CONNECTION_ALLOWANCE`. The current values are:
+
+```text
+APP_MAX_INSTANCES=4
+DB_MAX_CONNECTIONS=2
+DB_CONNECTION_ALLOWANCE=25
+DB_RESERVED_CONNECTIONS=9
+DB_ACQUIRE_TIMEOUT=2s
+DB_STATEMENT_TIMEOUT=10s
+DB_IDLE_TRANSACTION_TIMEOUT=10s
+DB_MAX_CONNECTION_IDLE_TIME=5m
+DB_MAX_CONNECTION_LIFETIME=30m
+REQUEST_TIMEOUT=15s
+HTTP_IDLE_TIMEOUT=60s
+```
+
+Cloud Run has a 20-second outer request timeout and accepts 16 concurrent requests per instance. Deployment derives that outer timeout as `REQUEST_TIMEOUT` plus 5 seconds, so it cannot be configured below the app deadline. The app returns `503` with code `service_unavailable` when pool acquisition, statement execution, an idle transaction, or the 15-second request deadline reaches its limit. Pool acquisition stops after 2 seconds, Postgres stops statements after 10 seconds, and idle transactions are stopped after 10 seconds. These values leave time for a controlled response before Cloud Run terminates the request.
+
+Cloud Build and `scripts/gcp-deploy.sh` print the effective instance, pool, connection, reserve, and concurrency values after a deploy. They also verify the service-level maximum and the pool size reported by `/api/health`. Inspect the live values at any time with:
+
+```bash
+gcloud run services describe slate \
+  --project=slate-do-production \
+  --region=europe-west1
+```
+
+Only raise an instance or pool limit in the same change as `DB_CONNECTION_ALLOWANCE`, after `SHOW max_connections` confirms the database can support it and the product still leaves an explicit reserve. Google recommends a service-level maximum when protecting a backing database, warns that autoscaling can exceed that maximum, and recommends keeping connection pools small: [Cloud Run maximum instances](https://cloud.google.com/run/docs/about-instance-autoscaling#exceeding_maximum_instances) and [Cloud SQL connection management](https://cloud.google.com/sql/docs/postgres/manage-connections).
+
+### Capacity check and upgrade trigger
+
+Set `STAGING_HEALTH_URL` to the deployed staging `/api/health` URL, then run this before a production capacity change:
+
+```bash
+REQUESTS=64 CONCURRENCY=16 scripts/check-capacity.sh "$STAGING_HEALTH_URL"
+```
+
+The check must finish with no timeout, non-2xx response, or unhealthy database response. The production deploy repeats the same bounded check after the new revision is healthy.
+
+Upgrade Cloud SQL before increasing either application limit, and upgrade when any one of these is true:
+
+- `database/postgresql/num_backends` is at or above 12 for 15 minutes. That is 75% of the distributed 16-connection application cap.
+- Database CPU is at or above 70% for 15 minutes during representative traffic.
+- Any pool-acquisition or statement timeout reaches customers during the staging capacity check or normal operation.
+- The staging capacity check exceeds one second at p95, or any request fails.
+- Paid traffic requires more than 4 Cloud Run instances or 2 pooled connections per instance.
+
+The present `db-f1-micro` tier is a low-cost shared-core tier without a Cloud SQL SLA. Treat moving to a supported production tier as a paid-launch readiness trigger, even if the measured thresholds remain below their limits. Performing that upgrade is intentionally separate from this runbook change.
+
 ## Password reset email
 
 Password reset links are single-use, expire after one hour, and revoke all browser sessions when consumed. Request responses do not reveal whether an account exists. Requests are rate-limited by both client IP and normalized email.
