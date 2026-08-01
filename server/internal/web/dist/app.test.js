@@ -622,8 +622,11 @@ test("new-agent route has inline limits and one-time CLI connection instructions
     state.agentCreationResult = null;
   `, app);
   const form = app.agentsHTML();
-  assert.match(form, /id="agent-name"[^>]*maxlength="80"/);
-  assert.match(form, /id="agent-purpose"[^>]*maxlength="500"/);
+  assert.match(form, /id="agent-name"/);
+  assert.match(form, /up to 100 Unicode characters/);
+  assert.match(form, /id="agent-purpose"/);
+  assert.match(form, /Up to 4 KiB in UTF-8/);
+  assert.equal(app.utf8Length("é🙂"), 6);
   assert.match(form, /id="agent-name-error" role="alert"/);
   assert.match(form, /id="agent-purpose-error" role="alert"/);
 

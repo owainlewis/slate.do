@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 )
 
 func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
@@ -78,6 +80,104 @@ func TestBoardUpdateRejectionsUseValidationAndNotFoundResponses(t *testing.T) {
 			}
 			if response["error"] != test.message {
 				t.Fatalf("error = %q, want %q", response["error"], test.message)
+			}
+		})
+	}
+}
+
+func TestStoredTextLimitsAcceptExactBoundariesAndRejectOneOver(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		exact func(http.ResponseWriter) bool
+		over  func(http.ResponseWriter) bool
+	}{
+		{
+			name: "board name", field: "name",
+			exact: func(w http.ResponseWriter) bool {
+				return validateCreateBoardText(w, CreateBoardInput{Name: strings.Repeat("🙂", httpapi.BoardNameRunes)})
+			},
+			over: func(w http.ResponseWriter) bool {
+				return validateCreateBoardText(w, CreateBoardInput{Name: strings.Repeat("🙂", httpapi.BoardNameRunes+1)})
+			},
+		},
+		{
+			name: "board background kind", field: "backgroundKind",
+			exact: func(w http.ResponseWriter) bool {
+				return validateCreateBoardText(w, CreateBoardInput{Name: "Board", BackgroundKind: strings.Repeat("a", httpapi.BoardBackgroundKind)})
+			},
+			over: func(w http.ResponseWriter) bool {
+				return validateCreateBoardText(w, CreateBoardInput{Name: "Board", BackgroundKind: strings.Repeat("a", httpapi.BoardBackgroundKind+1)})
+			},
+		},
+		{
+			name: "board background value", field: "backgroundValue",
+			exact: func(w http.ResponseWriter) bool {
+				return validateCreateBoardText(w, CreateBoardInput{Name: "Board", BackgroundValue: strings.Repeat("🙂", httpapi.BoardBackgroundRunes)})
+			},
+			over: func(w http.ResponseWriter) bool {
+				return validateCreateBoardText(w, CreateBoardInput{Name: "Board", BackgroundValue: strings.Repeat("🙂", httpapi.BoardBackgroundRunes+1)})
+			},
+		},
+		{
+			name: "list name", field: "name",
+			exact: func(w http.ResponseWriter) bool {
+				return validateCreateBucketText(w, CreateBucketInput{Name: strings.Repeat("🙂", httpapi.ListNameRunes)})
+			},
+			over: func(w http.ResponseWriter) bool {
+				return validateCreateBucketText(w, CreateBucketInput{Name: strings.Repeat("🙂", httpapi.ListNameRunes+1)})
+			},
+		},
+		{
+			name: "list goal bytes", field: "goal",
+			exact: func(w http.ResponseWriter) bool {
+				return validateCreateBucketText(w, CreateBucketInput{Name: "List", Goal: strings.Repeat("é", httpapi.ListGoalBytes/2)})
+			},
+			over: func(w http.ResponseWriter) bool {
+				return validateCreateBucketText(w, CreateBucketInput{Name: "List", Goal: strings.Repeat("é", httpapi.ListGoalBytes/2+1)})
+			},
+		},
+		{
+			name: "task title", field: "title",
+			exact: func(w http.ResponseWriter) bool {
+				return validateCreateTaskText(w, CreateTaskInput{Title: strings.Repeat("🙂", httpapi.TaskTitleRunes)})
+			},
+			over: func(w http.ResponseWriter) bool {
+				return validateCreateTaskText(w, CreateTaskInput{Title: strings.Repeat("🙂", httpapi.TaskTitleRunes+1)})
+			},
+		},
+		{
+			name: "task description bytes", field: "description",
+			exact: func(w http.ResponseWriter) bool {
+				return validateCreateTaskText(w, CreateTaskInput{Title: "Task", Description: strings.Repeat("é", httpapi.TaskDescriptionBytes/2)})
+			},
+			over: func(w http.ResponseWriter) bool {
+				return validateCreateTaskText(w, CreateTaskInput{Title: "Task", Description: strings.Repeat("é", httpapi.TaskDescriptionBytes/2+1)})
+			},
+		},
+		{
+			name: "task idempotency key bytes", field: "Idempotency-Key",
+			exact: func(w http.ResponseWriter) bool {
+				return validateTaskIdempotencyKey(w, strings.Repeat("a", httpapi.TaskIdempotencyBytes-2)+"é")
+			},
+			over: func(w http.ResponseWriter) bool {
+				return validateTaskIdempotencyKey(w, strings.Repeat("a", httpapi.TaskIdempotencyBytes-1)+"é")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exact := httptest.NewRecorder()
+			if !test.exact(exact) {
+				t.Fatalf("exact boundary rejected: %s", exact.Body.String())
+			}
+			over := httptest.NewRecorder()
+			if test.over(over) {
+				t.Fatal("one-over boundary accepted")
+			}
+			body := over.Body.String()
+			if over.Code != http.StatusBadRequest || !strings.Contains(body, `"code":"field_too_long"`) || !strings.Contains(body, `"field":"`+test.field+`"`) {
+				t.Fatalf("status = %d, body = %s", over.Code, body)
 			}
 		})
 	}

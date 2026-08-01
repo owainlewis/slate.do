@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -218,6 +219,36 @@ func TestUpdateProfilePersistsThemeAndDisplayNameTogether(t *testing.T) {
 	}
 }
 
+func TestUpdateProfileEnforcesDisplayNameRuneLimit(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		value  string
+		status int
+		calls  int
+	}{
+		{name: "exact", value: strings.Repeat("🙂", httpapi.DisplayNameRunes), status: http.StatusOK, calls: 1},
+		{name: "one over", value: strings.Repeat("🙂", httpapi.DisplayNameRunes+1), status: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &themeAuthStore{requestAuthStore: requestAuthStore{}}
+			service := NewService(store, false)
+			body, err := json.Marshal(map[string]string{"displayName": test.value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			service.UpdateTheme(recorder, httptest.NewRequest(http.MethodPatch, "/api/v1/me", strings.NewReader(string(body))), User{ID: "owner"})
+
+			if recorder.Code != test.status || store.profileCalls != test.calls {
+				t.Fatalf("status = %d, calls = %d, body = %s", recorder.Code, store.profileCalls, recorder.Body.String())
+			}
+			if test.calls == 0 && !strings.Contains(recorder.Body.String(), `"code":"field_too_long"`) {
+				t.Fatalf("body = %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestCreateAgentReturnsPlainTokenOnceAndStoresOnlyHash(t *testing.T) {
 	store := &agentAuthStore{requestAuthStore: requestAuthStore{}}
 	service := NewService(store, false)
@@ -256,6 +287,42 @@ func TestCreateAgentReturnsPlainTokenOnceAndStoresOnlyHash(t *testing.T) {
 	}
 }
 
+func TestCreateAgentEnforcesNameAndInstructionLimits(t *testing.T) {
+	proUser := User{ID: "owner", Entitlement: entitlements.Pro(entitlements.SourceManual)}
+	tests := []struct {
+		name        string
+		displayName string
+		purpose     string
+		status      int
+	}{
+		{name: "exact", displayName: strings.Repeat("🙂", httpapi.AgentNameRunes), purpose: strings.Repeat("é", httpapi.AgentInstructionsBytes/2), status: http.StatusCreated},
+		{name: "name one over", displayName: strings.Repeat("🙂", httpapi.AgentNameRunes+1), status: http.StatusBadRequest},
+		{name: "instructions one character over", displayName: "Agent", purpose: strings.Repeat("é", httpapi.AgentInstructionsBytes/2+1), status: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &agentAuthStore{requestAuthStore: requestAuthStore{}}
+			service := NewService(store, false)
+			body, err := json.Marshal(map[string]string{"displayName": test.displayName, "purpose": test.purpose})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			service.CreateAgent(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(string(body))), proUser)
+
+			if recorder.Code != test.status {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+			if test.status == http.StatusCreated && (store.displayName != test.displayName || store.purpose != test.purpose) {
+				t.Fatalf("stored name/purpose lengths = %d/%d", len([]rune(store.displayName)), len([]byte(store.purpose)))
+			}
+			if test.status == http.StatusBadRequest && (!strings.Contains(recorder.Body.String(), `"code":"field_too_long"`) || store.displayName != "") {
+				t.Fatalf("store called or unstable response: %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestCreateAgentReturnsStableLimitConflict(t *testing.T) {
 	store := &agentAuthStore{requestAuthStore: requestAuthStore{}, createErr: ErrAgentLimit}
 	service := NewService(store, false)
@@ -279,6 +346,39 @@ func TestCreateAPITokenReturnsFreePlanLimitConflict(t *testing.T) {
 
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"code":"api_token_limit_reached"`) || !strings.Contains(recorder.Body.String(), "Free allows up to 3 API tokens") {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCreateAPITokenEnforcesNameRuneLimit(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		value  string
+		status int
+		calls  int
+	}{
+		{name: "exact", value: strings.Repeat("🙂", httpapi.APITokenNameRunes), status: http.StatusCreated, calls: 1},
+		{name: "one over", value: strings.Repeat("🙂", httpapi.APITokenNameRunes+1), status: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &apiTokenAuthStore{requestAuthStore: requestAuthStore{}}
+			service := NewService(store, false)
+			body, err := json.Marshal(map[string]string{"name": test.value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			service.CreateAPIToken(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/api-tokens", strings.NewReader(string(body))), User{ID: "owner"})
+
+			if recorder.Code != test.status || store.calls != test.calls {
+				t.Fatalf("status = %d, calls = %d, body = %s", recorder.Code, store.calls, recorder.Body.String())
+			}
+			if test.calls == 1 && store.name != test.value {
+				t.Fatalf("name runes = %d", len([]rune(store.name)))
+			}
+			if test.calls == 0 && !strings.Contains(recorder.Body.String(), `"code":"field_too_long"`) {
+				t.Fatalf("body = %s", recorder.Body.String())
+			}
+		})
 	}
 }
 
@@ -342,6 +442,53 @@ func TestRegisterCreatesInvitedProMemberAndSessionCookie(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "correct horse battery staple") || strings.Contains(rec.Body.String(), "abcd1234") {
 		t.Fatal("response exposed credentials")
+	}
+}
+
+func TestStoredEmailByteLimitUsesStableBoundaryResponse(t *testing.T) {
+	exactEmail := strings.Repeat("a", 64) + "@" + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
+	if len(exactEmail) != httpapi.EmailBytes || !validEmail(exactEmail) {
+		t.Fatalf("boundary email bytes = %d, valid = %v", len(exactEmail), validEmail(exactEmail))
+	}
+	tests := []struct {
+		name   string
+		email  string
+		status int
+		stored bool
+	}{
+		{name: "exact", email: exactEmail, status: http.StatusCreated, stored: true},
+		{name: "one byte over", email: exactEmail + "d", status: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run("register "+test.name, func(t *testing.T) {
+			store := &signupAuthStore{}
+			service := NewService(store, false, "secret")
+			body, err := json.Marshal(map[string]string{"email": test.email, "password": "a secure password", "inviteCode": "secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			service.Register(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(string(body))))
+
+			if recorder.Code != test.status || (store.email != "") != test.stored {
+				t.Fatalf("status = %d, stored = %q, body = %s", recorder.Code, store.email, recorder.Body.String())
+			}
+			if !test.stored && !strings.Contains(recorder.Body.String(), `"code":"field_too_long"`) {
+				t.Fatalf("body = %s", recorder.Body.String())
+			}
+		})
+	}
+
+	resetStore := &passwordResetAuthStore{}
+	resetService := NewServiceWithOptions(resetStore, false, Options{AppBaseURL: "https://slate.do", PasswordResetSender: &recordingPasswordResetSender{}})
+	resetBody, err := json.Marshal(map[string]string{"email": exactEmail + "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetRecorder := httptest.NewRecorder()
+	resetService.RequestPasswordReset(resetRecorder, httptest.NewRequest(http.MethodPost, "/api/v1/auth/password-reset/request", strings.NewReader(string(resetBody))))
+	if resetRecorder.Code != http.StatusBadRequest || resetStore.queuedEmail != "" || !strings.Contains(resetRecorder.Body.String(), `"code":"field_too_long"`) {
+		t.Fatalf("reset status = %d, queued = %q, body = %s", resetRecorder.Code, resetStore.queuedEmail, resetRecorder.Body.String())
 	}
 }
 
@@ -631,8 +778,20 @@ type apiTokenLimitAuthStore struct {
 	requestAuthStore
 }
 
+type apiTokenAuthStore struct {
+	requestAuthStore
+	name  string
+	calls int
+}
+
 func (s *apiTokenLimitAuthStore) CreateAPIToken(context.Context, string, string, string) (APIToken, error) {
 	return APIToken{}, ErrAPITokenLimit
+}
+
+func (s *apiTokenAuthStore) CreateAPIToken(_ context.Context, _ string, name string, _ string) (APIToken, error) {
+	s.name = name
+	s.calls++
+	return APIToken{ID: "token-1", Name: name}, nil
 }
 
 func (s *freeUsageAuthStore) FindUserBySessionHash(_ context.Context, tokenHash string, _ time.Time) (User, error) {

@@ -42,6 +42,29 @@ Completed items do not count toward the active-item maximum. A board can configu
 
 Board, list, active-agent, and API-token limits are enforced transactionally on the server. UI checks explain obvious over-limit actions but are not an authorization boundary. Every query and mutation continues to scope resources to the authenticated account owner.
 
+## Request and text limits
+
+Every JSON mutation request is limited to 64 KiB before decoding. Oversized bodies return HTTP 413 with `request_body_too_large`. Invalid JSON returns HTTP 400 with `invalid_json`. Stored text is checked at the API boundary for browser, CLI, human API-token, and agent-token requests:
+
+| Field | Maximum | Measurement |
+| --- | ---: | --- |
+| Task title | 300 | Unicode characters |
+| Task description | 16 KiB | UTF-8 bytes |
+| Board name | 100 | Unicode characters |
+| Board background kind | 32 | Unicode characters |
+| Board background value | 100 | Unicode characters |
+| List name | 100 | Unicode characters |
+| List goal | 4 KiB | UTF-8 bytes |
+| Agent name | 100 | Unicode characters |
+| Agent purpose or instructions | 4 KiB | UTF-8 bytes |
+| API token name | 80 | Unicode characters |
+| Account display name | 80 | Unicode characters |
+| Account email | 254 | UTF-8 bytes and a valid email address |
+| Task idempotency key | 200 | UTF-8 bytes |
+| Agent credential-rotation key | 128 | UTF-8 bytes |
+
+An oversized field returns HTTP 400 with `field_too_long`, the JSON field name, limit, and measurement unit. Responses never echo submitted content. Existing reads do not apply these write limits, and partial updates validate only fields included in that request.
+
 ## Agent identities and credentials
 
 An account owner can create named agent identities without an email, password, registration, or browser session. Identity and credential lifecycle are separate:

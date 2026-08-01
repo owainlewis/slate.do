@@ -21,6 +21,9 @@ const ICON_PATHS = {
   inboxTray: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 13h4.6a3.4 3.4 0 0 0 6.8 0H20"/>',
 };
 
+const AGENT_NAME_LIMIT = 100;
+const AGENT_INSTRUCTIONS_BYTE_LIMIT = 4096;
+
 function icon(name, cls = "") {
   const paths = ICON_PATHS[name] || "";
   return `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
@@ -73,6 +76,15 @@ function decodeResponseBody(text, ok) {
     if (!ok) throw new Error(text.trim() || "Request failed");
     throw new Error("Invalid server response");
   }
+}
+
+function utf8Length(value) {
+  let bytes = 0;
+  for (const character of String(value || "")) {
+    const codePoint = character.codePointAt(0);
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+  return bytes;
 }
 
 function listLimitUpdate(boardId, value) {
@@ -1657,8 +1669,8 @@ function agentSettingsHTML(agent) {
     ${state.agentLifecycleError ? `<p class="status-error" role="alert">${escapeHTML(state.agentLifecycleError)}</p>` : ""}
     <form class="agent-settings-card" id="agent-identity-form" novalidate>
       <header><div><p class="eyebrow">Identity</p><h2>Name and purpose</h2></div><span>Immutable ID ${escapeHTML(agent.id)}</span></header>
-      <label class="agent-create-field"><span class="field-title">Name</span><input id="agent-settings-name" name="displayName" value="${escapeAttr(agent.displayName)}" maxlength="80" required aria-describedby="agent-settings-name-error"><small class="error" id="agent-settings-name-error"></small></label>
-      <label class="agent-create-field"><span class="field-title">Purpose</span><textarea id="agent-settings-purpose" name="purpose" maxlength="500" aria-describedby="agent-settings-purpose-error">${escapeHTML(agent.purpose || "")}</textarea><small class="error" id="agent-settings-purpose-error"></small></label>
+      <label class="agent-create-field"><span class="field-title">Name</span><input id="agent-settings-name" name="displayName" value="${escapeAttr(agent.displayName)}" required aria-describedby="agent-settings-name-error"><small class="error" id="agent-settings-name-error"></small></label>
+      <label class="agent-create-field"><span class="field-title">Purpose</span><textarea id="agent-settings-purpose" name="purpose" aria-describedby="agent-settings-purpose-error">${escapeHTML(agent.purpose || "")}</textarea><small class="error" id="agent-settings-purpose-error"></small></label>
       <div class="agent-settings-actions"><button class="primary" type="submit" ${state.agentLifecyclePending ? "disabled" : ""}>${state.agentLifecyclePending === "identity" ? "Saving…" : "Save changes"}</button></div>
     </form>
     <section class="agent-settings-card" aria-labelledby="credential-settings-heading">
@@ -1883,14 +1895,14 @@ function newAgentHTML(limitReached) {
     <form class="agent-create-form" id="agent-create-form" novalidate>
       <div class="field agent-create-field">
         <label for="agent-name">Name <span>Required</span></label>
-        <input id="agent-name" name="displayName" maxlength="80" autocomplete="off" aria-describedby="agent-name-help agent-name-error" required>
-        <p class="form-help" id="agent-name-help">Use a clear name, up to 80 characters.</p>
+        <input id="agent-name" name="displayName" autocomplete="off" aria-describedby="agent-name-help agent-name-error" required>
+        <p class="form-help" id="agent-name-help">Use a clear name, up to ${AGENT_NAME_LIMIT} Unicode characters.</p>
         <p class="error field-error" id="agent-name-error" role="alert"></p>
       </div>
       <div class="field agent-create-field">
         <label for="agent-purpose">Purpose <span>Optional</span></label>
-        <textarea id="agent-purpose" name="purpose" maxlength="500" rows="4" aria-describedby="agent-purpose-help agent-purpose-error" placeholder="What should this agent help with?"></textarea>
-        <p class="form-help" id="agent-purpose-help">A short description helps you assign the right work. Up to 500 characters.</p>
+        <textarea id="agent-purpose" name="purpose" rows="4" aria-describedby="agent-purpose-help agent-purpose-error" placeholder="What should this agent help with?"></textarea>
+        <p class="form-help" id="agent-purpose-help">A short description helps you assign the right work. Up to 4 KiB in UTF-8.</p>
         <p class="error field-error" id="agent-purpose-error" role="alert"></p>
       </div>
       <p class="error agent-create-error" role="alert">${escapeHTML(state.error)}</p>
@@ -2968,15 +2980,15 @@ function bindAgents() {
       name.focus();
       return;
     }
-    if ([...displayName].length > 80) {
-      name.setAttribute("aria-invalid", "true");
-      nameError.textContent = "Agent name must be 80 characters or fewer.";
+    if ([...displayName].length > AGENT_NAME_LIMIT) {
+	  name.setAttribute("aria-invalid", "true");
+	  nameError.textContent = `Agent name must be ${AGENT_NAME_LIMIT} Unicode characters or fewer.`;
       name.focus();
       return;
     }
-    if ([...purposeValue].length > 500) {
-      purpose.setAttribute("aria-invalid", "true");
-      purposeError.textContent = "Purpose must be 500 characters or fewer.";
+    if (utf8Length(purposeValue) > AGENT_INSTRUCTIONS_BYTE_LIMIT) {
+	  purpose.setAttribute("aria-invalid", "true");
+	  purposeError.textContent = "Purpose must be 4 KiB in UTF-8 or fewer.";
       purpose.focus();
       return;
     }
@@ -3073,15 +3085,15 @@ function bindAgentLifecycle() {
       name.focus();
       return;
     }
-    if ([...displayName].length > 80) {
-      name.setAttribute("aria-invalid", "true");
-      document.querySelector("#agent-settings-name-error").textContent = "Agent name must be 80 characters or fewer.";
+    if ([...displayName].length > AGENT_NAME_LIMIT) {
+	  name.setAttribute("aria-invalid", "true");
+	  document.querySelector("#agent-settings-name-error").textContent = `Agent name must be ${AGENT_NAME_LIMIT} Unicode characters or fewer.`;
       name.focus();
       return;
     }
-    if ([...purposeValue].length > 500) {
-      purpose.setAttribute("aria-invalid", "true");
-      document.querySelector("#agent-settings-purpose-error").textContent = "Purpose must be 500 characters or fewer.";
+    if (utf8Length(purposeValue) > AGENT_INSTRUCTIONS_BYTE_LIMIT) {
+	  purpose.setAttribute("aria-invalid", "true");
+	  document.querySelector("#agent-settings-purpose-error").textContent = "Purpose must be 4 KiB in UTF-8 or fewer.";
       purpose.focus();
       return;
     }

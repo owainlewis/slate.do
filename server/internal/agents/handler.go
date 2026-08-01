@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/owainlewis/slate.do/server/internal/auth"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 )
 
 type detailStore interface {
@@ -97,12 +98,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request, user auth.User)
 		writeError(w, http.StatusBadRequest, "agent name is required")
 		return
 	}
-	if len([]rune(displayName)) > 80 {
-		writeError(w, http.StatusBadRequest, "agent name must be 80 characters or fewer")
+	if !httpapi.RuneLimit(w, "displayName", displayName, httpapi.AgentNameRunes) {
 		return
 	}
-	if len([]rune(purpose)) > 500 {
-		writeError(w, http.StatusBadRequest, "agent purpose must be 500 characters or fewer")
+	if !httpapi.ByteLimit(w, "purpose", purpose, httpapi.AgentInstructionsBytes) {
 		return
 	}
 	agent, err := h.store.UpdateAgent(r.Context(), user.ID, agentID(r), displayName, purpose)
@@ -130,7 +129,10 @@ func (h *Handler) RotateCredential(w http.ResponseWriter, r *http.Request, user 
 		return
 	}
 	key := strings.TrimSpace(input.IdempotencyKey)
-	if len(key) < 16 || len(key) > 128 {
+	if !httpapi.ByteLimit(w, "idempotencyKey", key, httpapi.AgentRotationKeyBytes) {
+		return
+	}
+	if len(key) < 16 {
 		writeError(w, http.StatusBadRequest, "a stable idempotency key is required")
 		return
 	}
@@ -271,14 +273,7 @@ func validateMutation(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	defer r.Body.Close()
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return false
-	}
-	return true
+	return httpapi.DecodeJSON(w, r, target)
 }
 
 func positiveQueryInt(r *http.Request, name string, fallback int, maximum int) (int, error) {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -201,13 +202,15 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 	if !validateAuthPost(w, r) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var input signupInput
 	if !decodeJSON(w, r, &input) {
 		return
 	}
 
 	email := normalizeEmail(input.Email)
+	if !httpapi.ByteLimit(w, "email", email, httpapi.EmailBytes) {
+		return
+	}
 	ipHash := hashToken(clientIP(r))
 	emailHash := hashToken(email)
 	if retryAfter, err := s.store.ConsumeSignupAttempt(r.Context(), ipHash, emailHash, s.now(), signupWindow, signupLimit); errors.Is(err, ErrRateLimited) {
@@ -329,7 +332,6 @@ func (s *Service) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
 	if !validateAuthPost(w, r) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var input struct {
 		Email string `json:"email"`
 	}
@@ -337,6 +339,9 @@ func (s *Service) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := normalizeEmail(input.Email)
+	if !httpapi.ByteLimit(w, "email", email, httpapi.EmailBytes) {
+		return
+	}
 	if email == "" || !validEmail(email) {
 		writeError(w, http.StatusBadRequest, "enter a valid email address")
 		return
@@ -425,7 +430,6 @@ func (s *Service) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	if !validateAuthPost(w, r) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var input struct {
 		Token    string `json:"token"`
 		Password string `json:"password"`
@@ -548,8 +552,7 @@ func (s *Service) UpdateTheme(w http.ResponseWriter, r *http.Request, user User)
 			writeError(w, http.StatusBadRequest, "display name is required")
 			return
 		}
-		if len([]rune(displayName)) > 80 {
-			writeError(w, http.StatusBadRequest, "display name must be 80 characters or fewer")
+		if !httpapi.RuneLimit(w, "displayName", displayName, httpapi.DisplayNameRunes) {
 			return
 		}
 		input.DisplayName = &displayName
@@ -644,8 +647,7 @@ func (s *Service) CreateAPIToken(w http.ResponseWriter, r *http.Request, user Us
 		writeError(w, http.StatusBadRequest, "token name is required")
 		return
 	}
-	if len([]rune(name)) > 80 {
-		writeError(w, http.StatusBadRequest, "token name must be 80 characters or fewer")
+	if !httpapi.RuneLimit(w, "name", name, httpapi.APITokenNameRunes) {
 		return
 	}
 
@@ -742,13 +744,11 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 		writeError(w, http.StatusBadRequest, "agent name is required")
 		return
 	}
-	if len([]rune(displayName)) > 80 {
-		writeError(w, http.StatusBadRequest, "agent name must be 80 characters or fewer")
+	if !httpapi.RuneLimit(w, "displayName", displayName, httpapi.AgentNameRunes) {
 		return
 	}
 	purpose := strings.TrimSpace(input.Purpose)
-	if len([]rune(purpose)) > 500 {
-		writeError(w, http.StatusBadRequest, "agent purpose must be 500 characters or fewer")
+	if !httpapi.ByteLimit(w, "purpose", purpose, httpapi.AgentInstructionsBytes) {
 		return
 	}
 	plain, err := randomToken("slate_agent")
@@ -941,7 +941,7 @@ func normalizeEmail(email string) string {
 }
 
 func validEmail(email string) bool {
-	if len(email) > 254 {
+	if len(email) > httpapi.EmailBytes {
 		return false
 	}
 	address, err := mail.ParseAddress(email)
@@ -989,14 +989,7 @@ func clearSessionCookie(w http.ResponseWriter, secure bool) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return false
-	}
-	return true
+	return httpapi.DecodeJSON(w, r, target)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
