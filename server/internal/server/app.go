@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/owainlewis/slate.do/server/internal/auth"
 	"github.com/owainlewis/slate.do/server/internal/boards"
 	"github.com/owainlewis/slate.do/server/internal/database"
+	"github.com/owainlewis/slate.do/server/internal/httpapi"
 	"github.com/owainlewis/slate.do/server/internal/ratelimit"
 )
 
@@ -119,12 +121,27 @@ func (a *App) earlyAccess(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) health(w http.ResponseWriter, r *http.Request) {
 	status := "not_configured"
+	maxConnections := int32(0)
+	connectionLimit := 0
 	if a.db != nil {
+		if err := a.db.Ping(r.Context()); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"code":  "service_unavailable",
+				"error": "Database capacity is temporarily unavailable.",
+			})
+			return
+		}
 		status = "ok"
+		maxConnections = a.db.MaxConnections()
+		connectionLimit = a.db.ConnectionLimit()
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"database": status,
+		"capacity": map[string]any{
+			"databaseMaxConnections":     maxConnections,
+			"applicationConnectionLimit": connectionLimit,
+		},
 	})
 }
 
@@ -133,8 +150,15 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 		return
 	}
-	user, credential, ok := a.auth.UserFromRequestWithCredential(r)
-	if !ok {
+	user, credential, err := a.auth.ResolveUserFromRequest(r)
+	if err != nil {
+		if httpapi.WriteServiceUnavailable(w, err) {
+			return
+		}
+		if !errors.Is(err, auth.ErrUnauthorized) {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
+			return
+		}
 		if !a.allowPublicAuth(w, r) {
 			return
 		}

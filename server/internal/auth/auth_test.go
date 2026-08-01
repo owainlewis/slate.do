@@ -127,6 +127,25 @@ func TestUserFromRequestAttributesBearerWhenInvalidSessionCookieIsPresent(t *tes
 	}
 }
 
+func TestRequireUserReturnsServiceUnavailableForAuthenticationCapacityTimeout(t *testing.T) {
+	service := NewService(&capacityAuthStore{}, false)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: "session"})
+	recorder := httptest.NewRecorder()
+	called := false
+
+	service.RequireUser(func(http.ResponseWriter, *http.Request, User) {
+		called = true
+	})(recorder, req)
+
+	if called {
+		t.Fatal("capacity timeout reached authenticated handler")
+	}
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), `"code":"service_unavailable"`) {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestMeExposesResolvedProPlanAndLimits(t *testing.T) {
 	service := NewService(requestAuthStore{}, false)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
@@ -781,6 +800,14 @@ func TestSeedAdminDoesNotPromoteExistingMember(t *testing.T) {
 }
 
 type requestAuthStore struct{}
+
+type capacityAuthStore struct {
+	requestAuthStore
+}
+
+func (*capacityAuthStore) FindUserBySessionHash(context.Context, string, time.Time) (User, error) {
+	return User{}, context.DeadlineExceeded
+}
 
 type freeUsageAuthStore struct {
 	requestAuthStore

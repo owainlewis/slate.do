@@ -31,7 +31,21 @@ for file in cloudbuild.yaml scripts/gcp-deploy.sh; do
   assert_contains "$file" '"database":"ok"'
   assert_contains "$file" "--ingress"
   assert_contains "$file" "all"
+  assert_contains "$file" "DB_MAX_CONNECTIONS"
+  assert_contains "$file" "DB_ACQUIRE_TIMEOUT"
+  assert_contains "$file" "DB_STATEMENT_TIMEOUT"
+  assert_contains "$file" "DB_IDLE_TRANSACTION_TIMEOUT"
+  assert_contains "$file" "REQUEST_TIMEOUT"
+  assert_contains "$file" "scripts/check-capacity.sh"
+  assert_contains "$file" "scripts/validate-capacity.sh"
+  assert_contains "$file" "Effective capacity:"
+  assert_contains "$file" "databaseMaxConnections"
+  assert_contains "$file" "applicationConnectionLimit"
+  assert_contains "$file" "--max"
+  assert_contains "$file" "--concurrency"
+  assert_contains "$file" "--timeout"
   assert_not_contains "$file" "--add-cloudsql-instances"
+  assert_not_contains "$file" "--max-instances"
   assert_not_contains "$file" "europe-west2"
   assert_not_contains "$file" "slate-postgres,"
 done
@@ -49,11 +63,31 @@ assert_contains cloudbuild.yaml 'Expected deployed image'
 assert_contains cloudbuild.yaml '$COMMIT_SHA-$BUILD_ID'
 assert_contains cloudbuild.yaml 'image_summary.fully_qualified_digest'
 assert_contains cloudbuild.yaml 'go test ./...'
+assert_contains cloudbuild.yaml "_MAX_INSTANCES: '4'"
+assert_contains cloudbuild.yaml "_DB_MAX_CONNECTIONS: '2'"
+assert_contains cloudbuild.yaml "_DB_CONNECTION_ALLOWANCE: '25'"
+assert_contains cloudbuild.yaml "_DB_RESERVED_CONNECTIONS: '9'"
+assert_contains cloudbuild.yaml "_REQUEST_TIMEOUT_SECONDS: '15'"
+assert_contains cloudbuild.yaml '_REQUEST_TIMEOUT_SECONDS + 5'
+assert_not_contains cloudbuild.yaml '_CLOUD_RUN_REQUEST_TIMEOUT'
 assert_not_contains cloudbuild.yaml '-lc'
 assert_contains docs/deploy.md 'roles/cloudbuild.builds.viewer'
+assert_contains docs/deploy.md '4 × 2 = 8'
+assert_contains docs/deploy.md 'scripts/check-capacity.sh'
+assert_contains docs/deploy.md 'database/postgresql/num_backends'
 
 lock_attempts="$(grep -c -- '--if-generation-match=0' cloudbuild.yaml)"
 if [ "$lock_attempts" -ne 2 ]; then
   printf 'cloudbuild.yaml must attempt lock creation twice, found %s attempts\n' "$lock_attempts" >&2
+  exit 1
+fi
+
+sh scripts/validate-capacity.sh 4 2 25 9 15 >/dev/null
+if sh scripts/validate-capacity.sh 9 2 25 9 15 >/dev/null 2>&1; then
+  printf '%s\n' 'capacity preflight accepted an unsafe instance and pool product' >&2
+  exit 1
+fi
+if sh scripts/validate-capacity.sh 4 2 25 9 0 >/dev/null 2>&1; then
+  printf '%s\n' 'capacity preflight accepted an invalid request timeout' >&2
   exit 1
 fi

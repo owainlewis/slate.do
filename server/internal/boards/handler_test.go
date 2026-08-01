@@ -1,6 +1,7 @@
 package boards
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,16 @@ import (
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
 	"github.com/owainlewis/slate.do/server/internal/httpapi"
 )
+
+func TestStoreCapacityTimeoutUsesStableServiceUnavailableResponse(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	if !handleStoreError(recorder, context.DeadlineExceeded) {
+		t.Fatal("capacity timeout was not handled")
+	}
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), `"code":"service_unavailable"`) {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
 
 func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
 	tests := []struct {
