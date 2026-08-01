@@ -53,6 +53,8 @@ gcloud builds triggers create github \
 
 Every push to `main` runs the Go tests, builds and pushes a build-unique image, resolves it to an immutable digest, executes a per-commit migration job, deploys the service only after migrations pass, verifies the deployed digest, and checks `https://slate.do/api/health`. A failed test, build, migration, deploy, or health check stops the pipeline. Builds can compile in parallel, but a Cloud Storage lock serializes migrations and service deployment. After acquiring the lock, stale builds stop before changing production, so an older overlapping build cannot replace a newer release. An abandoned lock is removed only after Cloud Build confirms its owning build is no longer running. The build service account therefore needs `roles/cloudbuild.builds.viewer` in addition to its deploy, Artifact Registry, Secret Manager, logging, and Cloud Storage permissions.
 
+The deploy also updates the independent `slate-cleanup` Cloud Run Job and its daily Cloud Scheduler trigger. Its bounded retention policy and operations are documented in [data retention](data-retention.md). A cleanup execution failure is visible in Cloud Run Jobs but does not stop the serving service.
+
 The migration job and service attach the production Cloud SQL instance in Europe West 1 because `slate-database-url` uses that socket. Deploys always replace the complete required secret mapping. They add `INVITE_CODE` only when `slate-invite-code:latest` is accessible. If the live service already uses `INVITE_CODE` but that version becomes inaccessible, deployment fails instead of silently disabling early-access registration.
 
 The production Cloud Run service is `slate` in `europe-west1`; the `slate.do` domain mapping routes to it.

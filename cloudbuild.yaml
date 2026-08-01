@@ -149,6 +149,37 @@ steps:
           "$$effective_max" "$_DB_MAX_CONNECTIONS" "$$((effective_max * $_DB_MAX_CONNECTIONS))" \
           "$$(( $_DB_CONNECTION_ALLOWANCE - $_DB_RESERVED_CONNECTIONS ))" "$_DB_RESERVED_CONNECTIONS" "$_CONCURRENCY"
         REQUESTS=64 CONCURRENCY=16 sh scripts/check-capacity.sh "$_HEALTH_URL"
+
+        gcloud run jobs deploy slate-cleanup \
+          --image "$$image" \
+          --region "$_REGION" \
+          --command /app/slate \
+          --args cleanup \
+          --set-cloudsql-instances "$PROJECT_ID:$_REGION:slate-postgres-ew1" \
+          --set-secrets DATABASE_URL=slate-database-url:latest \
+          --set-env-vars "APP_MAX_INSTANCES=1,DB_MAX_CONNECTIONS=1,DB_CONNECTION_ALLOWANCE=$_DB_CONNECTION_ALLOWANCE,DB_RESERVED_CONNECTIONS=$_DB_RESERVED_CONNECTIONS,DB_ACQUIRE_TIMEOUT=$_DB_ACQUIRE_TIMEOUT,DB_STATEMENT_TIMEOUT=$_DB_STATEMENT_TIMEOUT,DB_IDLE_TRANSACTION_TIMEOUT=$_DB_IDLE_TRANSACTION_TIMEOUT,DB_MAX_CONNECTION_IDLE_TIME=$_DB_MAX_CONNECTION_IDLE_TIME,DB_MAX_CONNECTION_LIFETIME=$_DB_MAX_CONNECTION_LIFETIME,REQUEST_TIMEOUT=${_REQUEST_TIMEOUT_SECONDS}s,HTTP_IDLE_TIMEOUT=$_HTTP_IDLE_TIMEOUT" \
+          --tasks 1 \
+          --parallelism 1 \
+          --max-retries 1 \
+          --task-timeout 5m \
+          --quiet
+        cleanup_uri="https://run.googleapis.com/v2/projects/$PROJECT_ID/locations/$_REGION/jobs/slate-cleanup:run"
+        cleanup_service_account="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+        if gcloud scheduler jobs describe slate-cleanup --location "$_REGION" >/dev/null 2>&1; then
+          gcloud scheduler jobs update http slate-cleanup \
+            --location "$_REGION" --schedule "17 3 * * *" --time-zone "Etc/UTC" \
+            --uri "$$cleanup_uri" --http-method POST \
+            --oauth-service-account-email "$$cleanup_service_account" \
+            --oauth-token-scope "https://www.googleapis.com/auth/cloud-platform" \
+            --attempt-deadline 300s --quiet
+        else
+          gcloud scheduler jobs create http slate-cleanup \
+            --location "$_REGION" --schedule "17 3 * * *" --time-zone "Etc/UTC" \
+            --uri "$$cleanup_uri" --http-method POST \
+            --oauth-service-account-email "$$cleanup_service_account" \
+            --oauth-token-scope "https://www.googleapis.com/auth/cloud-platform" \
+            --attempt-deadline 300s --quiet
+        fi
 images:
   - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID
 substitutions:

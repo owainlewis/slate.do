@@ -82,3 +82,31 @@ printf 'Effective capacity: max instances=%s, DB connections/instance=%s, normal
   "$effective_max" "$DB_MAX_CONNECTIONS" "$((effective_max * DB_MAX_CONNECTIONS))" \
   "$((DB_CONNECTION_ALLOWANCE - DB_RESERVED_CONNECTIONS))" "$DB_RESERVED_CONNECTIONS" "$CONCURRENCY"
 REQUESTS=64 CONCURRENCY=16 sh scripts/check-capacity.sh "$health_url"
+
+gcloud run jobs deploy slate-cleanup \
+  --image "$IMAGE" \
+  --region "$REGION" \
+  --command /app/slate \
+  --args cleanup \
+  --set-cloudsql-instances "$CLOUD_SQL_INSTANCES" \
+  --set-secrets DATABASE_URL=slate-database-url:latest \
+  --set-env-vars "APP_MAX_INSTANCES=1,DB_MAX_CONNECTIONS=1,DB_CONNECTION_ALLOWANCE=$DB_CONNECTION_ALLOWANCE,DB_RESERVED_CONNECTIONS=$DB_RESERVED_CONNECTIONS,DB_ACQUIRE_TIMEOUT=$DB_ACQUIRE_TIMEOUT,DB_STATEMENT_TIMEOUT=$DB_STATEMENT_TIMEOUT,DB_IDLE_TRANSACTION_TIMEOUT=$DB_IDLE_TRANSACTION_TIMEOUT,DB_MAX_CONNECTION_IDLE_TIME=$DB_MAX_CONNECTION_IDLE_TIME,DB_MAX_CONNECTION_LIFETIME=$DB_MAX_CONNECTION_LIFETIME,REQUEST_TIMEOUT=${REQUEST_TIMEOUT_SECONDS}s,HTTP_IDLE_TIMEOUT=$HTTP_IDLE_TIMEOUT" \
+  --tasks 1 \
+  --parallelism 1 \
+  --max-retries 1 \
+  --task-timeout 5m \
+  --quiet
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+cleanup_uri="https://run.googleapis.com/v2/projects/$PROJECT_ID/locations/$REGION/jobs/slate-cleanup:run"
+cleanup_service_account="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+if gcloud scheduler jobs describe slate-cleanup --location "$REGION" >/dev/null 2>&1; then
+  scheduler_action=update
+else
+  scheduler_action=create
+fi
+gcloud scheduler jobs "$scheduler_action" http slate-cleanup \
+  --location "$REGION" --schedule "17 3 * * *" --time-zone "Etc/UTC" \
+  --uri "$cleanup_uri" --http-method POST \
+  --oauth-service-account-email "$cleanup_service_account" \
+  --oauth-token-scope "https://www.googleapis.com/auth/cloud-platform" \
+  --attempt-deadline 300s --quiet

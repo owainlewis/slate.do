@@ -8,7 +8,20 @@ DB_NAME="${DB_NAME:-slate}"
 DB_USER="${DB_USER:-slate}"
 
 gcloud config set project "$PROJECT_ID"
-gcloud services enable run.googleapis.com sqladmin.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
+gcloud services enable run.googleapis.com cloudscheduler.googleapis.com sqladmin.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+CLEANUP_SERVICE_ACCOUNT="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$CLEANUP_SERVICE_ACCOUNT" \
+  --role=roles/run.invoker \
+  --condition=None
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$CLEANUP_SERVICE_ACCOUNT" \
+  --role=roles/cloudscheduler.admin \
+  --condition=None
+gcloud iam service-accounts add-iam-policy-binding "$CLEANUP_SERVICE_ACCOUNT" \
+  --member="serviceAccount:$CLEANUP_SERVICE_ACCOUNT" \
+  --role=roles/iam.serviceAccountUser
 gcloud artifacts repositories create slate --repository-format=docker --location="$REGION" --description="Slate containers" || true
 gcloud sql instances create "$INSTANCE" --database-version=POSTGRES_18 --edition=ENTERPRISE --tier=db-f1-micro --region="$REGION" --storage-size=10GB || true
 gcloud sql databases create "$DB_NAME" --instance="$INSTANCE" || true

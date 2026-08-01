@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/owainlewis/slate.do/server/internal/auth"
 	"github.com/owainlewis/slate.do/server/internal/boards"
+	"github.com/owainlewis/slate.do/server/internal/cleanup"
 	"github.com/owainlewis/slate.do/server/internal/config"
 	"github.com/owainlewis/slate.do/server/internal/database"
 	"github.com/owainlewis/slate.do/server/internal/migrations"
@@ -41,6 +43,8 @@ func run(args []string) error {
 		return serve(cfg)
 	case "migrate":
 		return migrate(cfg)
+	case "cleanup":
+		return cleanupOperationalData(cfg)
 	case "seed-admin", "seed-owner":
 		return seedAdmin(cfg)
 	case "accounts":
@@ -51,7 +55,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return errors.New("usage: slate serve|migrate|seed-admin|accounts list|accounts disable <email>|accounts enable <email>")
+	return errors.New("usage: slate serve|migrate|cleanup|seed-admin|accounts list|accounts disable <email>|accounts enable <email>")
 }
 
 func serve(cfg config.Config) error {
@@ -69,7 +73,7 @@ func serve(cfg config.Config) error {
 		IdleTransactionTimeout: cfg.DBIdleTransactionTimeout,
 		MaxConnectionIdleTime:  cfg.DBMaxConnectionIdleTime,
 		MaxConnectionLifetime:  cfg.DBMaxConnectionLifetime,
-		ConnectionLimit:         cfg.DBConnectionAllowance - cfg.DBReservedConnections,
+		ConnectionLimit:        cfg.DBConnectionAllowance - cfg.DBReservedConnections,
 	})
 	if err != nil {
 		return fmt.Errorf("connect database: %w", err)
@@ -197,6 +201,22 @@ func migrate(cfg config.Config) error {
 		fmt.Println(version)
 	}
 	return nil
+}
+
+func cleanupOperationalData(cfg config.Config) error {
+	db, err := openDB(cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := migrations.Apply(context.Background(), db); err != nil {
+		return err
+	}
+	report, cleanupErr := cleanup.Run(context.Background(), db, time.Now().UTC(), cleanup.DefaultBatchSize)
+	if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
+		return err
+	}
+	return cleanupErr
 }
 
 func seedAdmin(cfg config.Config) error {
