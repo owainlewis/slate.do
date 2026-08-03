@@ -1597,6 +1597,7 @@ function router({ signedIn = false, boards = [], url = "/" } = {}) {
     error: () => vm.runInContext("state.error", context),
     routeError: () => vm.runInContext("state.routeError && state.routeError.name", context),
     go: value => context.navigate(value),
+    home: () => context.goHome(),
     apply: () => context.applyRoute(),
     back: () => { entries.pop(); return context.applyRoute(); },
   };
@@ -1704,6 +1705,28 @@ test("/app resolves to the first board, or stays put when there are none", async
   assert.equal(empty.url(), "/app");
   assert.equal(empty.view(), "app");
   assert.equal(empty.board(), null);
+});
+
+test("the brand link goes to the board when signed in, and to the landing page when not", async () => {
+  const onBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
+  await onBoard.apply();
+  await onBoard.home();
+  assert.equal(onBoard.url(), "/app/boards/board_2", "the brand must not drop a signed-in user onto the landing page");
+
+  const noBoardLoaded = router({ url: "/app/settings/profile", signedIn: true, boards: [{ id: "board_1" }] });
+  await noBoardLoaded.apply();
+  await noBoardLoaded.home();
+  assert.equal(noBoardLoaded.url(), "/app/boards/board_1", "settings falls back to the first board");
+
+  const noBoards = router({ url: "/app", signedIn: true, boards: [] });
+  await noBoards.apply();
+  await noBoards.home();
+  assert.equal(noBoards.url(), "/app");
+
+  const signedOut = router({ url: "/login" });
+  await signedOut.apply();
+  await signedOut.home();
+  assert.equal(signedOut.url(), "/");
 });
 
 test("a board deep link loads that board, and an unknown id is not found", async () => {
