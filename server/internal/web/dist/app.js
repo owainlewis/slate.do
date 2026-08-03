@@ -929,7 +929,7 @@ function landingHTML() {
         <section class="landing-hero">
           <div class="hero-copy">
             <h1 class="rise" style="--d:0">Decide what deserves <em>attention</em>.</h1>
-            <p class="landing-lede rise" style="--d:1">Work is infinite. Attention is not. Slate is a planning and execution tool for you and your agents: think clearly about what matters, then let your agents execute it. A few lists, a hard limit on open actions, and one honest view of today.</p>
+            <p class="landing-lede rise" style="--d:1">Work is infinite. Attention is not. Slate is one plan you and your agents share. You decide what matters. They pick up the work and hand it back done. A few lists, a hard cap on open work, and one honest view of today.</p>
             <div class="landing-actions rise" style="--d:2">
               ${signedIn ? `<button class="primary" id="open-app">Open app</button>` : `<button class="primary" id="hero-login">Log in</button>`}
               <a class="secondary-link" href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>
@@ -952,13 +952,13 @@ function landingHTML() {
           </div>
           <p class="preview-caption" data-reveal>
             <span class="tour-caption on" data-tour-caption="lists">A few lists, each with a hard cap on open work.</span>
-            <span class="tour-caption" data-tour-caption="flow">Every item moves through the same four honest states.</span>
+            <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same four states.</span>
             <span class="tour-caption" data-tour-caption="week">See the week before you're already in it.</span>
           </p>
         </section>
         <section class="landing-principles">
           <h2 class="principles-head" data-reveal>Less, on purpose.</h2>
-          <p class="principles-sub" data-reveal style="--d:0">Radical productivity comes from getting clear on what actually matters, not from doing more. Avoid the busy work. Scale yourself by letting your agents do it for you.</p>
+          <p class="principles-sub" data-reveal style="--d:0">You do not get more done by taking on more. You get more done by being clear about what matters, then giving the rest to agents that can run it in parallel.</p>
           <div class="principle" data-reveal style="--d:0">
             <span class="principle-num">01</span>
             <h3>Limits, not lists</h3>
@@ -966,13 +966,13 @@ function landingHTML() {
           </div>
           <div class="principle" data-reveal style="--d:1">
             <span class="principle-num">02</span>
-            <h3>Clear state, less noise</h3>
-            <p>Every item is completable and moves through the same small set of states, so open work stays honest.</p>
+            <h3>One shared state</h3>
+            <p>Every item is completable and moves through the same four states. You and your agents are always reading the same truth.</p>
           </div>
           <div class="principle" data-reveal style="--d:2">
             <span class="principle-num">03</span>
             <h3>You think, they execute</h3>
-            <p>Agents pull, claim, and finish work through the same plan you read. You stay clear on what matters. They handle the busy work and scale what you can get done.</p>
+            <p>Agents read the plan, claim work, and return it finished. You keep the judgement. They cover the ground. Together you get through far more than either could alone.</p>
           </div>
         </section>
         <section class="landing-manifesto">
@@ -988,15 +988,15 @@ function landingHTML() {
           <p class="note-label" data-reveal>A note from the founder</p>
           <div class="note-body">
             <p data-reveal style="--d:0">I have used a lot of task apps over the years. The problem was always the same: I spent more time learning or configuring the software than actually getting work done.</p>
-            <p data-reveal style="--d:1">Then agents changed how fast we can execute. We can move faster than ever now, but we still need a clear place to think about what work matters. That place got harder to find, not easier, as I added more tools.</p>
+            <p data-reveal style="--d:1">Then agents changed how much one person can execute. The limit moved. It is no longer how much work you can do, it is how clearly you can say what is worth doing. More tools made that harder to see, not easier.</p>
             <p data-reveal style="--d:2">So I stripped things back instead of adding more. Slate is the one app I use to plan and track everything in my business, as a founder running a lot of moving pieces day to day. I plan there. I hand work to my agents there. I review what comes back there. One place, not five.</p>
-            <p data-reveal style="--d:3">If you want to get more done, the fastest path is often to simplify your tools, not add to them. That is what Slate is for me. It might not be the answer for you, but it is mine.</p>
+            <p data-reveal style="--d:3">If you want to get more done, the fastest path is usually to simplify, not to add. Fewer tools, clearer priorities, and a team of agents that can act on them. That is what Slate is for me.</p>
           </div>
           <p class="note-sign" data-reveal style="--d:4">Owain Lewis<span>Founder, Slate</span></p>
         </section>
         <section class="landing-close">
           <h2 data-reveal>Begin with a clear slate.</h2>
-          <p data-reveal style="--d:1">A short note about how you work is enough to get started.</p>
+          <p data-reveal style="--d:1">Bring your work and your agents. A short note about how you work is enough to get started.</p>
           <div data-reveal style="--d:2"><a class="landing-request" href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a></div>
         </section>
       </main>
