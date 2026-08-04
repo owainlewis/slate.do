@@ -165,19 +165,20 @@ default_role_state="$(mktemp)"
 retry_state="$(mktemp)"
 retry_output="$(mktemp)"
 trap 'rm -f "$retry_state" "$retry_output" "$default_role_state"' EXIT INT TERM
-awk '/^for role in /,/^do$/ { if ($1 ~ /^roles\//) { gsub(/\\/, "", $1); print $1 } }' \
+awk '/^SLATE_ROLES=\(/,/^\)$/ { if ($1 ~ /^roles\//) { print $1 } }' \
   scripts/gcp-remove-default-roles.sh >"$default_role_state"
 if [ "$(wc -l <"$default_role_state" | tr -d ' ')" -ne 10 ]; then
   printf '%s\n' 'default-role removal test did not discover all ten legacy roles' >&2
   exit 1
 fi
+printf '%s\n' roles/editor >>"$default_role_state"
 for _ in 1 2; do
   GCP_DEFAULT_ROLE_STATE="$default_role_state" \
     PATH="$PWD/scripts/testdata/gcp-identities:$PATH" \
     PROJECT_ID=slate-test bash scripts/gcp-remove-default-roles.sh >/dev/null
 done
-if [ -s "$default_role_state" ]; then
-  printf '%s\n' 'default-role removal was not complete and idempotent' >&2
+if [ "$(cat "$default_role_state")" != roles/editor ]; then
+  printf '%s\n' 'default-role removal did not preserve only the unrelated role' >&2
   exit 1
 fi
 

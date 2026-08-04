@@ -12,19 +12,21 @@ project_roles() {
     --format='value(bindings.role)' | sort
 }
 
-current_roles="$(project_roles)"
-for role in \
-  roles/artifactregistry.writer \
-  roles/cloudbuild.builds.viewer \
-  roles/cloudscheduler.admin \
-  roles/cloudsql.client \
-  roles/iam.serviceAccountUser \
-  roles/logging.logWriter \
-  roles/run.admin \
-  roles/run.invoker \
-  roles/secretmanager.secretAccessor \
+SLATE_ROLES=(
+  roles/artifactregistry.writer
+  roles/cloudbuild.builds.viewer
+  roles/cloudscheduler.admin
+  roles/cloudsql.client
+  roles/iam.serviceAccountUser
+  roles/logging.logWriter
+  roles/run.admin
+  roles/run.invoker
+  roles/secretmanager.secretAccessor
   roles/storage.objectAdmin
-do
+)
+
+current_roles="$(project_roles)"
+for role in "${SLATE_ROLES[@]}"; do
   if grep -Fx "$role" <<<"$current_roles" >/dev/null; then
     gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
       --member "$default_member" --role "$role" --condition=None >/dev/null
@@ -32,9 +34,19 @@ do
 done
 
 remaining_roles="$(project_roles)"
-if [ -n "$remaining_roles" ]; then
-  printf 'Default compute service account still has project roles:\n%s\n' "$remaining_roles" >&2
+remaining_slate_roles=""
+for role in "${SLATE_ROLES[@]}"; do
+  if grep -Fx "$role" <<<"$remaining_roles" >/dev/null; then
+    remaining_slate_roles="${remaining_slate_roles}${remaining_slate_roles:+$'\n'}${role}"
+  fi
+done
+if [ -n "$remaining_slate_roles" ]; then
+  printf 'Default compute service account still has Slate project roles:\n%s\n' "$remaining_slate_roles" >&2
   exit 1
+fi
+
+if [ -n "$remaining_roles" ]; then
+  printf 'Preserved unrelated project roles on the default compute service account:\n%s\n' "$remaining_roles"
 fi
 
 printf 'Removed Slate project roles from %s.\n' "$DEFAULT_SERVICE_ACCOUNT"
