@@ -343,6 +343,17 @@ test("opening a task loads its full description from the exact endpoint", async 
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
 
   vm.runInContext(`
+    state.board.buckets[0].tasks = [];
+    state.selectedTask = null;
+  `, app);
+  assert.equal(await app.openTaskDetail("task-one"), true);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
+    "/api/v1/tasks/task-one",
+    "/api/v1/tasks/task-one",
+  ]);
+  assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
+
+  vm.runInContext(`
     render = savedDetailRender;
     api.get = savedDetailGet;
     state.me = null;

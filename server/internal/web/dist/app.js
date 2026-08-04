@@ -716,8 +716,7 @@ async function loadCompletedHistory(listID, trigger) {
 }
 
 async function openTaskDetail(taskID, trigger) {
-  const summary = findTask(taskID);
-  if (!summary) return false;
+  const summary = findTask(taskID) || {};
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   const version = routeVersion;
