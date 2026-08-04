@@ -58,6 +58,13 @@ function board(deleted) {
   };
 }
 
+function closeTestServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+    server.closeAllConnections();
+  });
+}
+
 test("a board can be renamed, cancelled, validated, and reloaded in place", async t => {
   let boardName = "Business";
   const patches = [];
@@ -87,7 +94,7 @@ test("a board can be renamed, cancelled, validated, and reloaded in place", asyn
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -167,7 +174,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -295,7 +302,7 @@ test("saving an item moves it to the chosen position on another board", async t 
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -374,10 +381,7 @@ test("a committed move stays successful when the source board refresh fails", { 
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => {
-    server.closeAllConnections();
-    server.close(resolve);
-  }));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -424,7 +428,7 @@ test("Pro resource limits block obvious actions and show server rejection messag
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -473,7 +477,7 @@ test("server limit rejections stay visible for board, list, and active-item crea
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -515,7 +519,7 @@ test("early access submits credentials in the body and opens the app", async t =
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -590,7 +594,7 @@ test("logging out and into another account cannot show the previous account's da
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -647,7 +651,7 @@ test("concurrent login submissions create only one authenticated session", async
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -691,7 +695,7 @@ test("failed logout keeps account data hidden and requires a retry", async t => 
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -735,7 +739,7 @@ test("route load failures replace stale UI and retry without changing history", 
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -834,7 +838,7 @@ test("account and exact-board settings stay synchronized, safe, and responsive",
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -968,7 +972,7 @@ test("password reset request and confirmation work without exposing the token in
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -1053,7 +1057,7 @@ test("agent directory handles loading, errors, limits, archives, themes, keyboar
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -1140,7 +1144,7 @@ test("shared new-board flow stays on agents and exposes a default-list failure",
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -1205,7 +1209,7 @@ test("guided agent creation validates, preserves one-time credentials on refresh
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -1432,7 +1436,7 @@ test("agent detail routes paginate, assign, edit, regroup, and stay safe across 
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -1686,7 +1690,7 @@ test("agent settings safely edit, rotate, revoke, archive, restore, and scrub on
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());

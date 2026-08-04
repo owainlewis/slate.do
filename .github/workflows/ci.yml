@@ -9,6 +9,7 @@ jobs:
   test-ci:
     name: Required CI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:18-alpine

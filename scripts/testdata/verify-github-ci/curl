@@ -9,8 +9,25 @@ fi
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" >"$state"
 
-if [ "$attempt" -eq 1 ]; then
-  exit 22
-fi
-
-printf '%s\n' '{"check_runs":[{"status":"completed","conclusion":"success","app":{"slug":"github-actions","id":15368}}]}'
+case "${VERIFY_GITHUB_CI_CURL_MODE:-transient-success}" in
+  transient-success)
+    if [ "$attempt" -eq 1 ]; then
+      exit 22
+    fi
+    printf '%s\n' '{"check_runs":[{"status":"completed","conclusion":"success","app":{"slug":"github-actions","id":15368}}]}'
+    ;;
+  pending)
+    printf '%s\n' '{"check_runs":[{"status":"in_progress","conclusion":null,"app":{"slug":"github-actions","id":15368}}]}'
+    ;;
+  timed-out)
+    printf '%s\n' '{"check_runs":[{"status":"completed","conclusion":"timed_out","app":{"slug":"github-actions","id":15368}}]}'
+    ;;
+  slow-pending)
+    /bin/sleep 2
+    printf '%s\n' '{"check_runs":[{"status":"in_progress","conclusion":null,"app":{"slug":"github-actions","id":15368}}]}'
+    ;;
+  *)
+    printf 'unknown test mode: %s\n' "$VERIFY_GITHUB_CI_CURL_MODE" >&2
+    exit 2
+    ;;
+esac
