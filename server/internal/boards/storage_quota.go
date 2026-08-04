@@ -37,8 +37,9 @@ type storageQuota struct {
 }
 
 // lockStorageQuota locks the account and its bounded-cost usage counters.
-// Every task transaction that changes measured storage takes locks in this
-// order, so concurrent writes cannot observe the same remaining allowance.
+// Every task transaction that changes measured storage takes the account and
+// usage locks before task rows. The database trigger skips unchanged storage
+// updates so status and metadata-only writes never reverse this order.
 func lockStorageQuota(ctx context.Context, tx pgx.Tx, userID string) (*storageQuota, error) {
 	limits, err := accountLimitsForUpdate(ctx, tx, userID)
 	if err != nil {
