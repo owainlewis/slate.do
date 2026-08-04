@@ -98,6 +98,7 @@ expect_resource_role "Artifact Registry deploy access" "$artifact_roles" roles/a
 bucket_roles="$(gcloud storage buckets get-iam-policy "gs://${PROJECT_ID}-slate-build" \
   --flatten='bindings[].members' --filter="bindings.members=$deploy_member" --format='value(bindings.role)')"
 expect_resource_role "build bucket deploy access" "$bucket_roles" roles/storage.objectAdmin
+expect_resource_role "build bucket metadata access" "$bucket_roles" roles/storage.bucketViewer
 
 for service_account in "$WEB_SERVICE_ACCOUNT" "$MAINTENANCE_SERVICE_ACCOUNT" "$SCHEDULER_SERVICE_ACCOUNT"; do
   identity_roles="$(gcloud iam service-accounts get-iam-policy "$service_account" --project "$PROJECT_ID" \

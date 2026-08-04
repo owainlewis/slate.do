@@ -105,6 +105,8 @@ gcloud artifacts repositories add-iam-policy-binding "$ARTIFACT_REPOSITORY" \
   --member "$deploy_member" --role roles/artifactregistry.writer >/dev/null
 gcloud storage buckets add-iam-policy-binding "$BUILD_BUCKET" \
   --member "$deploy_member" --role roles/storage.objectAdmin >/dev/null
+gcloud storage buckets add-iam-policy-binding "$BUILD_BUCKET" \
+  --member "$deploy_member" --role roles/storage.bucketViewer >/dev/null
 
 for runtime_member in "$web_member" "$maintenance_member"; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
