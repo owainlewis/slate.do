@@ -23,21 +23,24 @@ Open `http://localhost:8080`.
 ## GCP
 
 1. Set `PROJECT_ID=slate-do-production`.
-2. Set `DB_PASSWORD`, `DATABASE_URL`, and `SESSION_SECRET`.
-3. Run `scripts/gcp-bootstrap.sh` once for a new project.
+2. Set `DB_PASSWORD`, `DATABASE_URL`, `SESSION_SECRET`, and `RESEND_API_KEY`.
+   Set `INVITE_CODE` too when invite registration should be enabled.
+3. Run `scripts/gcp-bootstrap.sh` once for a new project. This creates the
+   dedicated Slate service accounts and their scoped access.
 4. Connect the GitHub repo to Cloud Build.
 5. Create the `slate-main-deploy` Cloud Build trigger for `^main$` using `cloudbuild.yaml`.
-6. Run `scripts/gcp-deploy.sh` only when a manual recovery deploy is needed.
+6. Run `scripts/gcp-deploy.sh` only when a manual recovery deploy is needed. It impersonates `slate-deploy` for every GCP operation, while health and capacity checks still run from the operator's machine.
 
 After authorizing the Cloud Build GitHub App for the repository, create the trigger once:
 
 ```bash
 PROJECT_ID=slate-do-production
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
-BUILD_SERVICE_ACCOUNT="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+BUILD_SERVICE_ACCOUNT="slate-deploy@$PROJECT_ID.iam.gserviceaccount.com"
+OPERATOR_PRINCIPAL="user:$(gcloud config get-value account)"
+PROJECT_ID="$PROJECT_ID" OPERATOR_PRINCIPAL="$OPERATOR_PRINCIPAL" bash scripts/gcp-identities.sh
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:$BUILD_SERVICE_ACCOUNT" \
-  --role=roles/cloudbuild.builds.viewer \
+  --role=roles/cloudbuild.builds.editor \
   --condition=None
 gcloud builds triggers create github \
   --project="$PROJECT_ID" \
@@ -51,7 +54,7 @@ gcloud builds triggers create github \
   --service-account="projects/$PROJECT_ID/serviceAccounts/$BUILD_SERVICE_ACCOUNT"
 ```
 
-Every pull request and push to `main` must pass the GitHub `Required CI` check. It provisions disposable PostgreSQL 18, fails on skipped database tests, and runs the Chromium browser suite. Server test events stream while the suite runs, Go emits goroutine stacks after five minutes, each browser test stops after one minute, and GitHub stops the complete job after ten minutes. Cloud Build waits up to fifteen minutes for that exact check, so a hung CI run reaches a visible final conclusion before the deploy gate exits. It then runs the fast Go checks, builds and pushes a build-unique image, resolves it to an immutable digest, executes a per-commit migration job, deploys the service only after migrations pass, verifies the deployed digest, and checks `https://slate.do/api/health`. A failed test, build, migration, deploy, or health check stops the pipeline. Builds can compile in parallel, but a Cloud Storage lock serializes migrations and service deployment. After acquiring the lock, stale builds stop before changing production, so an older overlapping build cannot replace a newer release. An abandoned lock is removed only after Cloud Build confirms its owning build is no longer running. The build service account therefore needs `roles/cloudbuild.builds.viewer` in addition to its deploy, Artifact Registry, Secret Manager, logging, and Cloud Storage permissions.
+Every pull request and push to `main` must pass the GitHub `Required CI` check. It provisions disposable PostgreSQL 18, fails on skipped database tests, and runs the Chromium browser suite. Server test events stream while the suite runs, Go emits goroutine stacks after five minutes, each browser test stops after one minute, and GitHub stops the complete job after ten minutes. Cloud Build waits up to fifteen minutes for that exact check, so a hung CI run reaches a visible final conclusion before the deploy gate exits. It then runs the fast Go checks, builds and pushes a build-unique image, resolves it to an immutable digest, executes a per-commit migration job, deploys the service only after migrations pass, verifies the deployed digest, and checks `https://slate.do/api/health`. A failed test, build, migration, deploy, or health check stops the pipeline. Builds can compile in parallel, but a Cloud Storage lock serializes migrations and service deployment. After acquiring the lock, stale builds stop before changing production, so an older overlapping build cannot replace a newer release. An abandoned lock is removed only after Cloud Build confirms its owning build is no longer running. The identity cutover keeps the existing `${PROJECT_ID}_cloudbuild/deploy/slate.lock` location so builds started with either configuration coordinate on the same lock. The deploy identity uses `roles/cloudbuild.builds.editor` to let the trigger create builds and to inspect or stop lock owners, plus `roles/serviceusage.serviceUsageConsumer` so an impersonated manual build can consume the Cloud Build API. It has `iam.serviceAccounts.actAs` on itself because the same identity triggers and executes each build. The operator has Service Account User and Token Creator only on `slate-deploy`, allowing the manual recovery script to impersonate the deploy identity without granting the human project-wide Run or Scheduler roles. Artifact Registry and build-bucket access is scoped to those resources. The dedicated build bucket grants object administration for manual source and logs, plus bucket metadata viewing required by manual Cloud Build submission. The existing Cloud Build bucket grants the same bucket-scoped roles for deployment locking.
 
 `main` branch protection requires a pull request and the `Required CI` check for
 all users, including administrators. Repository administrators should verify
@@ -62,6 +65,56 @@ gh api repos/owainlewis/slate.do/branches/main/protection
 ```
 
 The deploy also updates the independent `slate-cleanup` Cloud Run Job and its daily Cloud Scheduler trigger. Its bounded retention policy and operations are documented in [data retention](data-retention.md). A cleanup execution failure is visible in Cloud Run Jobs but does not stop the serving service.
+
+### Production identities
+
+Slate uses four user-managed service accounts. No public or maintenance
+runtime can deploy Cloud Run resources, administer Scheduler, impersonate
+another service account, or access build storage.
+
+| Identity | Purpose | Access |
+| --- | --- | --- |
+| `slate-deploy` | Cloud Build and deploy | Cloud Build execution, Cloud Run and Scheduler deployment, Cloud Logging, the `slate` Artifact Registry repository, object and metadata access on the dedicated build and deployment-lock buckets, and `actAs` only for the three runtime identities |
+| `slate-web` | Public `slate` service | Cloud SQL Client conditionally restricted to `slate-postgres-ew1`; accessor on `slate-database-url`, `slate-session-secret`, `slate-resend-api-key`, and the optional `slate-invite-code` |
+| `slate-maintenance` | Migration and cleanup jobs | Cloud SQL Client conditionally restricted to `slate-postgres-ew1`; accessor on `slate-database-url` only |
+| `slate-scheduler` | Scheduler caller | Cloud Run Invoker on the `slate-cleanup` job only |
+
+Cloud Build uses `slate-deploy` in both the trigger and `cloudbuild.yaml`.
+Manual recovery builds also select it explicitly. Every Cloud Run service and
+job deployment supplies its runtime service account explicitly.
+
+For an existing project, stage the cutover without removing old access:
+
+```bash
+PROJECT_ID=slate-do-production bash scripts/gcp-identities.sh
+```
+
+After the new main build has deployed successfully, inspect its migration
+execution and run the guarded production verification. This checks the trigger,
+runtime, job, and Scheduler identities, verifies health, runs cleanup directly,
+runs it through Scheduler, waits for success, and only then removes the old
+Slate project roles from the default compute service account:
+
+```bash
+PROJECT_ID=slate-do-production bash scripts/gcp-finalize-identities.sh
+```
+
+Inspect the final policies with:
+
+```bash
+gcloud projects get-iam-policy slate-do-production \
+  --flatten='bindings[].members' \
+  --filter='bindings.members:slate-' \
+  --format='table(bindings.members,bindings.role,bindings.condition.expression)'
+gcloud secrets get-iam-policy slate-database-url --project=slate-do-production
+gcloud run jobs get-iam-policy slate-cleanup --region=europe-west1 --project=slate-do-production
+```
+
+The role choices follow Google Cloud's guidance for
+[user-specified Cloud Build accounts](https://cloud.google.com/build/docs/securing-builds/configure-user-specified-service-accounts),
+[Cloud Run service identities](https://cloud.google.com/run/docs/configuring/services/service-identity),
+[instance-scoped Cloud SQL IAM conditions](https://cloud.google.com/sql/docs/postgres/iam-conditions),
+and [authenticated Scheduler targets](https://cloud.google.com/scheduler/docs/http-target-auth).
 
 The migration job and service attach the production Cloud SQL instance in Europe West 1 because `slate-database-url` uses that socket. Deploys always replace the complete required secret mapping. They add `INVITE_CODE` only when `slate-invite-code:latest` is accessible. If the live service already uses `INVITE_CODE` but that version becomes inaccessible, deployment fails instead of silently disabling early-access registration.
 
@@ -155,16 +208,19 @@ When `INVITE_CODE` is present, `/early-access` accepts a reusable shared code an
 Configure the Cloud Run service with a Secret Manager reference:
 
 ```bash
-gcloud secrets create slate-invite-code --replication-policy=automatic
-gcloud secrets versions add slate-invite-code --data-file=-
-gcloud run services update slate --region=europe-west1 \
+PROJECT_ID=slate-do-production
+gcloud secrets create slate-invite-code --project="$PROJECT_ID" --replication-policy=automatic
+gcloud secrets versions add slate-invite-code --project="$PROJECT_ID" --data-file=-
+PROJECT_ID="$PROJECT_ID" bash scripts/gcp-identities.sh
+gcloud run services update slate --project="$PROJECT_ID" --region=europe-west1 \
   --update-secrets INVITE_CODE=slate-invite-code:latest
 ```
 
-Enter the secret value on standard input when prompted. To rotate it, add a new secret version and deploy a new Cloud Run revision. The old code stops working as soon as all traffic uses the new revision. To disable registration, remove the mapping and deploy a new revision:
+Enter the secret value on standard input when prompted. The identity script must run after the secret exists and before invite registration is enabled. It grants `slate-web` access to the value and `slate-deploy` access to verify that the latest version is enabled. To rotate it, add a new secret version and deploy a new Cloud Run revision. The old code stops working as soon as all traffic uses the new revision. To disable registration, remove the mapping and deploy a new revision:
 
 ```bash
-gcloud run services update slate --region=europe-west1 \
+PROJECT_ID=slate-do-production
+gcloud run services update slate --project="$PROJECT_ID" --region=europe-west1 \
   --remove-secrets INVITE_CODE
 ```
 

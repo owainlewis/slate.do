@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+state="${GCP_DEFAULT_ROLE_STATE:?}"
+command="$1 $2"
+shift 2
+
+case "$command" in
+  "projects describe")
+    printf '%s\n' 926478741825
+    ;;
+  "projects get-iam-policy")
+    if [ -f "$state" ]; then
+      sed '/^$/d' "$state"
+    fi
+    ;;
+  "projects remove-iam-policy-binding")
+    role=""
+    previous=""
+    for argument in "$@"; do
+      if [ "$previous" = "--role" ]; then
+        role="$argument"
+      fi
+      case "$argument" in
+        --role=*) role="${argument#--role=}" ;;
+      esac
+      previous="$argument"
+    done
+    if ! grep -Fx "$role" "$state" >/dev/null 2>&1; then
+      printf 'IamPolicyBindingNotFound: %s\n' "$role" >&2
+      exit 1
+    fi
+    grep -Fvx "$role" "$state" >"$state.next" || true
+    mv "$state.next" "$state"
+    ;;
+  *)
+    printf 'Unexpected fake gcloud command: %s %s\n' "$command" "$*" >&2
+    exit 1
+    ;;
+esac
