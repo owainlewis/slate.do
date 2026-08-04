@@ -93,7 +93,8 @@ for role in \
   roles/cloudbuild.builds.editor \
   roles/cloudscheduler.admin \
   roles/logging.logWriter \
-  roles/run.admin
+  roles/run.admin \
+  roles/serviceusage.serviceUsageConsumer
 do
   grant_project_role "$deploy_member" "$role"
 done

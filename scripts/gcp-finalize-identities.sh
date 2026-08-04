@@ -45,7 +45,7 @@ maintenance_member="serviceAccount:$MAINTENANCE_SERVICE_ACCOUNT"
 scheduler_member="serviceAccount:$SCHEDULER_SERVICE_ACCOUNT"
 
 expect_equal "deploy project roles" \
-  $'roles/cloudbuild.builds.editor\nroles/cloudscheduler.admin\nroles/logging.logWriter\nroles/run.admin' \
+  $'roles/cloudbuild.builds.editor\nroles/cloudscheduler.admin\nroles/logging.logWriter\nroles/run.admin\nroles/serviceusage.serviceUsageConsumer' \
   "$(project_roles "$deploy_member")"
 expect_equal "web project roles" "roles/cloudsql.client" "$(project_roles "$web_member")"
 expect_equal "maintenance project roles" "roles/cloudsql.client" "$(project_roles "$maintenance_member")"

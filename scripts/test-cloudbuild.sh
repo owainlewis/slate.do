@@ -130,6 +130,8 @@ assert_contains scripts/gcp-identities.sh 'roles/cloudbuild.builds.editor'
 assert_contains scripts/gcp-identities.sh 'remove_project_role_if_present "$deploy_member" roles/cloudbuild.builds.viewer'
 assert_contains scripts/gcp-identities.sh 'roles/cloudscheduler.admin'
 assert_contains scripts/gcp-identities.sh 'roles/run.admin'
+assert_contains scripts/gcp-identities.sh 'roles/serviceusage.serviceUsageConsumer'
+assert_contains scripts/gcp-finalize-identities.sh 'roles/serviceusage.serviceUsageConsumer'
 assert_contains scripts/gcp-identities.sh 'roles/artifactregistry.writer'
 assert_contains scripts/gcp-identities.sh 'roles/storage.objectAdmin'
 assert_contains scripts/gcp-identities.sh "resource.name == 'projects/\$PROJECT_ID/instances/\$INSTANCE'"
