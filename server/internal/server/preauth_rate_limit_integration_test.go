@@ -68,12 +68,19 @@ func TestCredentialLimitRejectsBeforeAuthenticationMutation(t *testing.T) {
 		t.Fatalf("exhausted valid and invalid credentials differed: valid=%s invalid=%s", second.Body.String(), invalidSecond.Body.String())
 	}
 
-	var allowedBefore, rejectedBefore int
+	var allowedBefore, rejectedBefore, publicAllowedBefore, publicRejectedBefore int
 	if err := db.QueryRow(ctx, `
 		SELECT COALESCE(sum(request_count) FILTER (WHERE outcome = 'allowed'), 0),
 			COALESCE(sum(request_count) FILTER (WHERE outcome = 'rejected'), 0)
 		FROM api_rate_limit_metrics WHERE route_class = 'authenticated_read'
 	`).Scan(&allowedBefore, &rejectedBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(sum(request_count) FILTER (WHERE outcome = 'allowed'), 0),
+			COALESCE(sum(request_count) FILTER (WHERE outcome = 'rejected'), 0)
+		FROM api_rate_limit_metrics WHERE route_class = 'public_auth'
+	`).Scan(&publicAllowedBefore, &publicRejectedBefore); err != nil {
 		t.Fatal(err)
 	}
 	mixedToken := fmt.Sprintf("slate_mixed_invalid_%d", time.Now().UnixNano())
@@ -82,7 +89,7 @@ func TestCredentialLimitRejectsBeforeAuthenticationMutation(t *testing.T) {
 	if mixedFirst.Code != http.StatusOK || mixedSecond.Code != http.StatusTooManyRequests {
 		t.Fatalf("mixed invalid responses = %d %s then %d %s", mixedFirst.Code, mixedFirst.Body.String(), mixedSecond.Code, mixedSecond.Body.String())
 	}
-	var allowedAfter, rejectedAfter int
+	var allowedAfter, rejectedAfter, publicAllowedAfter, publicRejectedAfter int
 	if err := db.QueryRow(ctx, `
 		SELECT COALESCE(sum(request_count) FILTER (WHERE outcome = 'allowed'), 0),
 			COALESCE(sum(request_count) FILTER (WHERE outcome = 'rejected'), 0)
@@ -90,8 +97,18 @@ func TestCredentialLimitRejectsBeforeAuthenticationMutation(t *testing.T) {
 	`).Scan(&allowedAfter, &rejectedAfter); err != nil {
 		t.Fatal(err)
 	}
-	if allowedAfter-allowedBefore != 1 || rejectedAfter-rejectedBefore != 1 {
-		t.Fatalf("mixed credential metric deltas allowed=%d rejected=%d", allowedAfter-allowedBefore, rejectedAfter-rejectedBefore)
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(sum(request_count) FILTER (WHERE outcome = 'allowed'), 0),
+			COALESCE(sum(request_count) FILTER (WHERE outcome = 'rejected'), 0)
+		FROM api_rate_limit_metrics WHERE route_class = 'public_auth'
+	`).Scan(&publicAllowedAfter, &publicRejectedAfter); err != nil {
+		t.Fatal(err)
+	}
+	if allowedAfter-allowedBefore != 0 || rejectedAfter-rejectedBefore != 1 ||
+		publicAllowedAfter-publicAllowedBefore != 1 || publicRejectedAfter-publicRejectedBefore != 0 {
+		t.Fatalf("mixed credential metric deltas authenticated=%d/%d public=%d/%d",
+			allowedAfter-allowedBefore, rejectedAfter-rejectedBefore,
+			publicAllowedAfter-publicAllowedBefore, publicRejectedAfter-publicRejectedBefore)
 	}
 }
 

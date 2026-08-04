@@ -150,7 +150,7 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 		return
 	}
-	result := a.authenticateWithLimits(r, false)
+	result := a.authenticateWithLimits(r, false, false)
 	if result.limitErr != nil {
 		writeRateLimitDecision(w, ratelimit.Decision{}, result.limitErr)
 		return
@@ -180,7 +180,7 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) resolveAuthenticated(w http.ResponseWriter, r *http.Request, sessionOnly bool) (auth.User, bool) {
-	result := a.authenticateWithLimits(r, sessionOnly)
+	result := a.authenticateWithLimits(r, sessionOnly, true)
 	if result.limitErr != nil {
 		writeRateLimitDecision(w, ratelimit.Decision{}, result.limitErr)
 		return auth.User{}, false
@@ -215,7 +215,7 @@ type authenticationResult struct {
 	limited  bool
 }
 
-func (a *App) authenticateWithLimits(r *http.Request, sessionOnly bool) authenticationResult {
+func (a *App) authenticateWithLimits(r *http.Request, sessionOnly bool, recordUnauthorizedOutcome bool) authenticationResult {
 	if a.limits == nil {
 		var user auth.User
 		var err error
@@ -303,7 +303,7 @@ func (a *App) authenticateWithLimits(r *http.Request, sessionOnly bool) authenti
 		}
 		return authenticationResult{authErr: auth.ErrCredentialRejected, decision: rejectedDecision, checked: true, limited: true}
 	}
-	if lastCredential != "" {
+	if lastCredential != "" && recordUnauthorizedOutcome {
 		if err := staged.RecordCredentialOutcome(r.Context(), ratelimit.Key{Scope: ratelimit.ScopeCredential, Value: lastCredential}, routeClass, ratelimit.OutcomeAllowed); err != nil {
 			return authenticationResult{limitErr: err, checked: true}
 		}
