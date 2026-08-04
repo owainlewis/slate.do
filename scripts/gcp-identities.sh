@@ -126,6 +126,7 @@ grant_service_account_role "$DEPLOY_SERVICE_ACCOUNT" "serviceAccount:$BUILD_SERV
 
 if [ -n "$OPERATOR_PRINCIPAL" ] && [ "$OPERATOR_PRINCIPAL" != "user:" ]; then
   grant_service_account_role "$DEPLOY_SERVICE_ACCOUNT" "$OPERATOR_PRINCIPAL" roles/iam.serviceAccountUser
+  grant_service_account_role "$DEPLOY_SERVICE_ACCOUNT" "$OPERATOR_PRINCIPAL" roles/iam.serviceAccountTokenCreator
 fi
 
 if gcloud builds triggers describe "$TRIGGER_NAME" --project "$PROJECT_ID" --region global >/dev/null 2>&1; then

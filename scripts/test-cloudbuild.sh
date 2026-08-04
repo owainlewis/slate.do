@@ -28,10 +28,10 @@ for file in cloudbuild.yaml scripts/gcp-deploy.sh; do
   assert_contains "$file" "--max-retries 1"
   assert_contains "$file" "slate-postgres-ew1"
   assert_contains "$file" "INVITE_CODE=slate-invite-code:latest"
-  assert_contains "$file" "gcloud secrets versions describe latest --secret=slate-invite-code --format='value(state)'"
+  assert_contains "$file" "secrets versions describe latest --secret=slate-invite-code --format='value(state)'"
   assert_contains "$file" 'invite_secret_state'
   assert_contains "$file" '= ENABLED ]'
-  assert_contains "$file" "gcloud run services list"
+  assert_contains "$file" "run services list"
   assert_contains "$file" "existing_env_names"
   assert_contains "$file" "The live service uses INVITE_CODE, but slate-invite-code:latest is not enabled or accessible"
   assert_not_contains "$file" "env[].name)' 2>/dev/null"
@@ -119,6 +119,8 @@ assert_contains scripts/gcp-bootstrap.sh 'scripts/gcp-identities.sh'
 assert_contains cloudbuild.yaml 'https://run.googleapis.com/v2/projects/'
 
 assert_contains scripts/gcp-deploy.sh '--service-account "projects/$PROJECT_ID/serviceAccounts/$DEPLOY_SERVICE_ACCOUNT"'
+assert_contains scripts/gcp-deploy.sh 'gcloud --project "$PROJECT_ID" --impersonate-service-account="$DEPLOY_SERVICE_ACCOUNT" "$@"'
+assert_not_contains scripts/gcp-deploy.sh 'gcloud config set project'
 assert_contains scripts/gcp-deploy.sh '--service-account "$WEB_SERVICE_ACCOUNT"'
 assert_contains scripts/gcp-deploy.sh '--service-account "$MAINTENANCE_SERVICE_ACCOUNT"'
 assert_contains scripts/gcp-deploy.sh '--oauth-service-account-email "$SCHEDULER_SERVICE_ACCOUNT"'
@@ -136,6 +138,7 @@ assert_contains scripts/gcp-identities.sh 'roles/secretmanager.secretAccessor'
 assert_contains scripts/gcp-identities.sh 'roles/iam.serviceAccountUser'
 assert_contains scripts/gcp-identities.sh 'grant_service_account_role "$DEPLOY_SERVICE_ACCOUNT" "$deploy_member" roles/iam.serviceAccountUser'
 assert_contains scripts/gcp-identities.sh 'roles/iam.serviceAccountTokenCreator'
+assert_contains scripts/gcp-identities.sh 'grant_service_account_role "$DEPLOY_SERVICE_ACCOUNT" "$OPERATOR_PRINCIPAL" roles/iam.serviceAccountTokenCreator'
 assert_contains scripts/gcp-finalize-identities.sh 'expect_equal "deploy self attachment" roles/iam.serviceAccountUser'
 assert_not_contains scripts/gcp-identities.sh 'compute@developer.gserviceaccount.com'
 
