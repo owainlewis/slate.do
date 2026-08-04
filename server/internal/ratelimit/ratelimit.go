@@ -45,6 +45,28 @@ type Limiter interface {
 	Allow(context.Context, []Key, string) (Decision, error)
 }
 
+// AuthenticatedLimiter reserves an exact credential slot before authentication,
+// then admits the account and records one final metric after authentication.
+type AuthenticatedLimiter interface {
+	Limiter
+	ReserveCredential(context.Context, Key, string) (CredentialReservation, Decision, error)
+	FinalizeCredential(context.Context, CredentialReservation, *Key) (Decision, error)
+	CancelCredential(context.Context, CredentialReservation) error
+	RecordCredentialOutcome(context.Context, Key, string, string) error
+}
+
+type CredentialReservation struct {
+	scope      string
+	keyHash    string
+	routeClass string
+	recordedAt time.Time
+	decision   Decision
+}
+
+func (r CredentialReservation) Active() bool {
+	return r.scope != "" && r.keyHash != "" && !r.recordedAt.IsZero()
+}
+
 type PG struct {
 	db             *database.Pool
 	now            func() time.Time
@@ -53,6 +75,229 @@ type PG struct {
 
 func NewPG(db *database.Pool) *PG {
 	return &PG{db: db, cleanupExpired: true}
+}
+
+func (p *PG) ReserveCredential(ctx context.Context, key Key, routeClass string) (CredentialReservation, Decision, error) {
+	if p == nil || p.db == nil {
+		return CredentialReservation{}, Decision{}, errors.New("rate limit database is not configured")
+	}
+	keys := normalizedKeys([]Key{key})
+	if len(keys) != 1 || keys[0].Scope != ScopeCredential {
+		return CredentialReservation{}, Decision{}, errors.New("credential rate limit key is required")
+	}
+	tx, err := p.db.Begin(ctx)
+	if err != nil {
+		return CredentialReservation{}, Decision{}, err
+	}
+	defer tx.Rollback(ctx)
+	now, err := p.currentTime(ctx, tx)
+	if err != nil {
+		return CredentialReservation{}, Decision{}, err
+	}
+	limit, err := routeLimit(ctx, tx, routeClass)
+	if err != nil {
+		return CredentialReservation{}, Decision{}, err
+	}
+	if p.cleanupExpired {
+		if err := deleteExpiredState(ctx, tx, now); err != nil {
+			return CredentialReservation{}, Decision{}, err
+		}
+	}
+	active, err := lockedState(ctx, tx, keys[0], routeClass, now)
+	if err != nil {
+		return CredentialReservation{}, Decision{}, err
+	}
+	decision := Decision{Allowed: len(active) < limit, Limit: limit, Remaining: limit - len(active)}
+	if !decision.Allowed {
+		decision.Remaining = 0
+		decision.RetryAfter = retryAfter(active, limit, now)
+		if decision.RetryAfter <= 0 {
+			decision.RetryAfter = time.Second
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CredentialReservation{}, Decision{}, err
+		}
+		return CredentialReservation{}, decision, nil
+	}
+	decision.Remaining--
+	active = append(active, now)
+	if err := writeState(ctx, tx, keys[0], routeClass, active, now); err != nil {
+		return CredentialReservation{}, Decision{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CredentialReservation{}, Decision{}, err
+	}
+	return CredentialReservation{
+		scope: keys[0].Scope, keyHash: keys[0].Value, routeClass: routeClass,
+		recordedAt: now, decision: decision,
+	}, decision, nil
+}
+
+func (p *PG) RecordCredentialOutcome(ctx context.Context, key Key, routeClass string, outcome string) error {
+	keys := normalizedKeys([]Key{key})
+	if len(keys) != 1 || keys[0].Scope != ScopeCredential {
+		return errors.New("credential rate limit key is required")
+	}
+	if outcome != OutcomeAllowed && outcome != OutcomeRejected {
+		return errors.New("valid rate limit outcome is required")
+	}
+	tx, err := p.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	now, err := p.currentTime(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := recordMetric(ctx, tx, now, routeClass, outcome, metricShard(keys)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (p *PG) FinalizeCredential(ctx context.Context, reservation CredentialReservation, account *Key) (Decision, error) {
+	if !reservation.Active() {
+		return Decision{}, errors.New("active credential reservation is required")
+	}
+	if account == nil {
+		return reservation.decision, nil
+	}
+	tx, err := p.db.Begin(ctx)
+	if err != nil {
+		return Decision{}, err
+	}
+	defer tx.Rollback(ctx)
+	now, err := p.currentTime(ctx, tx)
+	if err != nil {
+		return Decision{}, err
+	}
+	accounts := normalizedKeys([]Key{*account})
+	if len(accounts) != 1 || accounts[0].Scope != ScopeAccount {
+		return Decision{}, errors.New("account rate limit key is required")
+	}
+	limit, err := routeLimit(ctx, tx, reservation.routeClass)
+	if err != nil {
+		return Decision{}, err
+	}
+	active, err := lockedState(ctx, tx, accounts[0], reservation.routeClass, now)
+	if err != nil {
+		return Decision{}, err
+	}
+	decision := Decision{Allowed: len(active) < limit, Limit: limit, Remaining: limit - len(active)}
+	if !decision.Allowed {
+		decision.Remaining = 0
+		decision.RetryAfter = retryAfter(active, limit, now)
+		if decision.RetryAfter <= 0 {
+			decision.RetryAfter = time.Second
+		}
+		if err := removeReservation(ctx, tx, reservation); err != nil {
+			return Decision{}, err
+		}
+		if err := recordMetric(ctx, tx, now, reservation.routeClass, OutcomeRejected, metricShard(accounts)); err != nil {
+			return Decision{}, err
+		}
+	} else {
+		decision.Remaining--
+		active = append(active, now)
+		if err := writeState(ctx, tx, accounts[0], reservation.routeClass, active, now); err != nil {
+			return Decision{}, err
+		}
+		if err := recordMetric(ctx, tx, now, reservation.routeClass, OutcomeAllowed, metricShard(accounts)); err != nil {
+			return Decision{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Decision{}, err
+	}
+	return decision, nil
+}
+
+func (p *PG) CancelCredential(ctx context.Context, reservation CredentialReservation) error {
+	if !reservation.Active() {
+		return nil
+	}
+	tx, err := p.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := removeReservation(ctx, tx, reservation); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (p *PG) currentTime(ctx context.Context, tx pgx.Tx) (time.Time, error) {
+	if p.now != nil {
+		return p.now().UTC(), nil
+	}
+	var now time.Time
+	err := tx.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now)
+	return now.UTC(), err
+}
+
+func lockedState(ctx context.Context, tx pgx.Tx, key Key, routeClass string, now time.Time) ([]time.Time, error) {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO api_rate_limit_state (scope, key_hash, route_class, expires_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT DO NOTHING
+	`, key.Scope, key.Value, routeClass, now.Add(window)); err != nil {
+		return nil, err
+	}
+	var recorded []time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT request_times FROM api_rate_limit_state
+		WHERE scope = $1 AND key_hash = $2 AND route_class = $3
+		FOR UPDATE
+	`, key.Scope, key.Value, routeClass).Scan(&recorded); err != nil {
+		return nil, err
+	}
+	cutoff := now.Add(-window)
+	active := recorded[:0]
+	for _, requestTime := range recorded {
+		if requestTime.After(cutoff) {
+			active = append(active, requestTime)
+		}
+	}
+	sort.Slice(active, func(i int, j int) bool { return active[i].Before(active[j]) })
+	return active, nil
+}
+
+func writeState(ctx context.Context, tx pgx.Tx, key Key, routeClass string, active []time.Time, now time.Time) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE api_rate_limit_state
+		SET request_times = $4, expires_at = $5, updated_at = $6
+		WHERE scope = $1 AND key_hash = $2 AND route_class = $3
+	`, key.Scope, key.Value, routeClass, active, expiry(active), now)
+	return err
+}
+
+func removeReservation(ctx context.Context, tx pgx.Tx, reservation CredentialReservation) error {
+	var recorded []time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT request_times FROM api_rate_limit_state
+		WHERE scope = $1 AND key_hash = $2 AND route_class = $3
+		FOR UPDATE
+	`, reservation.scope, reservation.keyHash, reservation.routeClass).Scan(&recorded)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for index := len(recorded) - 1; index >= 0; index-- {
+		if recorded[index].Equal(reservation.recordedAt) {
+			recorded = append(recorded[:index], recorded[index+1:]...)
+			break
+		}
+	}
+	_, err = tx.Exec(ctx, `
+		UPDATE api_rate_limit_state
+		SET request_times = $4, expires_at = COALESCE($5, expires_at), updated_at = $6
+		WHERE scope = $1 AND key_hash = $2 AND route_class = $3
+	`, reservation.scope, reservation.keyHash, reservation.routeClass, recorded, expiry(recorded), reservation.recordedAt)
+	return err
 }
 
 func (p *PG) Allow(ctx context.Context, keys []Key, routeClass string) (Decision, error) {

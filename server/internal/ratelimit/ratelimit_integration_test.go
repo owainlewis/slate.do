@@ -327,6 +327,129 @@ func TestNormalizedKeysAreHashedAndDeduplicated(t *testing.T) {
 	}
 }
 
+func TestStagedAuthenticationRefundsCredentialWhenAccountRejectsAndRecordsOneMetric(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run rate-limit integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2300, time.January, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(time.Now().UnixNano()%1_000_000) * time.Minute)
+	limiter := NewPG(db)
+	limiter.now = func() time.Time { return now }
+	limiter.cleanupExpired = false
+	account := Key{Scope: ScopeAccount, Value: fmt.Sprintf("staged-account-%d", time.Now().UnixNano())}
+	firstCredential := Key{Scope: ScopeCredential, Value: fmt.Sprintf("staged-first-%d", time.Now().UnixNano())}
+	secondCredential := Key{Scope: ScopeCredential, Value: fmt.Sprintf("staged-second-%d", time.Now().UnixNano())}
+	t.Cleanup(func() {
+		cleanupRateLimitTestData(t, db, []Key{account, firstCredential, secondCredential}, []time.Time{now})
+	})
+	first, decision, err := limiter.ReserveCredential(ctx, firstCredential, ClassAuthenticatedRead)
+	if err != nil || !decision.Allowed {
+		t.Fatalf("first reservation = %#v decision=%#v err=%v", first, decision, err)
+	}
+	if decision, err = limiter.FinalizeCredential(ctx, first, &account); err != nil || !decision.Allowed {
+		t.Fatalf("first finalize = %#v err=%v", decision, err)
+	}
+	for request := 1; request < 120; request++ {
+		decision, err := limiter.Allow(ctx, []Key{account}, ClassAuthenticatedRead)
+		if err != nil || !decision.Allowed {
+			t.Fatalf("account fill request %d = %#v err=%v", request, decision, err)
+		}
+	}
+	second, decision, err := limiter.ReserveCredential(ctx, secondCredential, ClassAuthenticatedRead)
+	if err != nil || !decision.Allowed {
+		t.Fatalf("second reservation = %#v decision=%#v err=%v", second, decision, err)
+	}
+	if decision, err = limiter.FinalizeCredential(ctx, second, &account); err != nil || decision.Allowed {
+		t.Fatalf("account rejection = %#v err=%v", decision, err)
+	}
+
+	var credentialUses int
+	if err := db.QueryRow(ctx, `
+		SELECT cardinality(request_times) FROM api_rate_limit_state
+		WHERE scope = $1 AND key_hash = $2 AND route_class = $3
+	`, ScopeCredential, hashKey(ScopeCredential, secondCredential.Value), ClassAuthenticatedRead).Scan(&credentialUses); err != nil {
+		t.Fatal(err)
+	}
+	if credentialUses != 0 {
+		t.Fatalf("rejected account left %d credential uses", credentialUses)
+	}
+	var allowed, rejected int
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(sum(request_count) FILTER (WHERE outcome = 'allowed'), 0),
+			COALESCE(sum(request_count) FILTER (WHERE outcome = 'rejected'), 0)
+		FROM api_rate_limit_metrics
+		WHERE bucket_start = $1 AND route_class = $2
+	`, now.Truncate(time.Minute), ClassAuthenticatedRead).Scan(&allowed, &rejected); err != nil {
+		t.Fatal(err)
+	}
+	if allowed != 120 || rejected != 1 {
+		t.Fatalf("staged metrics = allowed %d rejected %d", allowed, rejected)
+	}
+}
+
+func TestConcurrentCredentialReservationsDoNotExceedThreshold(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run rate-limit integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	limiter := NewPG(db)
+	limiter.cleanupExpired = false
+	credential := Key{Scope: ScopeCredential, Value: fmt.Sprintf("reservation-race-%d", time.Now().UnixNano())}
+	t.Cleanup(func() { cleanupRateLimitTestData(t, db, []Key{credential}, nil) })
+	const attempts = 150
+	start := make(chan struct{})
+	decisions := make(chan Decision, attempts)
+	errorsFound := make(chan error, attempts)
+	var workers sync.WaitGroup
+	for request := 0; request < attempts; request++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			_, decision, err := limiter.ReserveCredential(ctx, credential, ClassAuthenticatedRead)
+			if err != nil {
+				errorsFound <- err
+				return
+			}
+			decisions <- decision
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(decisions)
+	close(errorsFound)
+	for err := range errorsFound {
+		t.Fatal(err)
+	}
+	allowed := 0
+	for decision := range decisions {
+		if decision.Allowed {
+			allowed++
+		}
+	}
+	if allowed != 120 {
+		t.Fatalf("concurrent reservations allowed %d, want 120", allowed)
+	}
+}
+
 func TestRetryAfterAccountsForAConfiguredLimitReduction(t *testing.T) {
 	now := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
 	times := []time.Time{
