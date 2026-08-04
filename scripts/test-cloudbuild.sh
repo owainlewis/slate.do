@@ -28,7 +28,7 @@ for file in cloudbuild.yaml scripts/gcp-deploy.sh; do
   assert_contains "$file" "--max-retries 1"
   assert_contains "$file" "slate-postgres-ew1"
   assert_contains "$file" "INVITE_CODE=slate-invite-code:latest"
-  assert_contains "$file" "gcloud secrets versions access latest --secret=slate-invite-code"
+  assert_contains "$file" "gcloud secrets versions describe latest --secret=slate-invite-code"
   assert_contains "$file" "gcloud run services list"
   assert_contains "$file" "existing_env_names"
   assert_contains "$file" "The live service uses INVITE_CODE, but slate-invite-code:latest is not accessible"
@@ -56,6 +56,15 @@ for file in cloudbuild.yaml scripts/gcp-deploy.sh; do
 done
 
 assert_contains cloudbuild.yaml 'slate-migrate-$SHORT_SHA'
+assert_contains cloudbuild.yaml 'serviceAccount: projects/$PROJECT_ID/serviceAccounts/slate-deploy@$PROJECT_ID.iam.gserviceaccount.com'
+assert_contains cloudbuild.yaml 'slate-web@$PROJECT_ID.iam.gserviceaccount.com'
+assert_contains cloudbuild.yaml 'slate-maintenance@$PROJECT_ID.iam.gserviceaccount.com'
+assert_contains cloudbuild.yaml 'slate-scheduler@$PROJECT_ID.iam.gserviceaccount.com'
+assert_contains cloudbuild.yaml '--service-account "$$web_service_account"'
+assert_contains cloudbuild.yaml '--service-account "$$maintenance_service_account"'
+assert_contains cloudbuild.yaml '--member="serviceAccount:$$scheduler_service_account" --role=roles/run.invoker'
+assert_contains cloudbuild.yaml 'gs://${PROJECT_ID}-slate-build/deploy/slate.lock'
+assert_not_contains cloudbuild.yaml 'compute@developer.gserviceaccount.com'
 assert_contains cloudbuild.yaml '_REGION: europe-west1'
 assert_contains cloudbuild.yaml 'slate.lock'
 assert_contains cloudbuild.yaml '--if-generation-match=0'
@@ -104,14 +113,55 @@ assert_contains docs/deploy.md 'scripts/check-capacity.sh'
 assert_contains docs/deploy.md 'database/postgresql/num_backends'
 assert_contains docs/deploy.md 'data-retention.md'
 assert_contains scripts/gcp-bootstrap.sh 'cloudscheduler.googleapis.com'
-assert_contains scripts/gcp-bootstrap.sh 'roles/run.invoker'
-assert_contains scripts/gcp-bootstrap.sh 'roles/cloudscheduler.admin'
-assert_contains scripts/gcp-bootstrap.sh 'roles/iam.serviceAccountUser'
+assert_contains scripts/gcp-bootstrap.sh 'scripts/gcp-identities.sh'
 assert_contains cloudbuild.yaml 'https://run.googleapis.com/v2/projects/'
 
+assert_contains scripts/gcp-deploy.sh '--service-account "projects/$PROJECT_ID/serviceAccounts/$DEPLOY_SERVICE_ACCOUNT"'
+assert_contains scripts/gcp-deploy.sh '--service-account "$WEB_SERVICE_ACCOUNT"'
+assert_contains scripts/gcp-deploy.sh '--service-account "$MAINTENANCE_SERVICE_ACCOUNT"'
+assert_contains scripts/gcp-deploy.sh '--oauth-service-account-email "$SCHEDULER_SERVICE_ACCOUNT"'
+assert_not_contains scripts/gcp-deploy.sh 'compute@developer.gserviceaccount.com'
+
+assert_contains scripts/gcp-identities.sh 'roles/cloudbuild.builds.viewer'
+assert_contains scripts/gcp-identities.sh 'roles/cloudscheduler.admin'
+assert_contains scripts/gcp-identities.sh 'roles/run.admin'
+assert_contains scripts/gcp-identities.sh 'roles/artifactregistry.writer'
+assert_contains scripts/gcp-identities.sh 'roles/storage.objectAdmin'
+assert_contains scripts/gcp-identities.sh "resource.name == 'projects/\$PROJECT_ID/instances/\$INSTANCE'"
+assert_contains scripts/gcp-identities.sh 'gcloud secrets add-iam-policy-binding'
+assert_contains scripts/gcp-identities.sh 'roles/secretmanager.secretAccessor'
+assert_contains scripts/gcp-identities.sh 'roles/iam.serviceAccountUser'
+assert_contains scripts/gcp-identities.sh 'roles/iam.serviceAccountTokenCreator'
+assert_not_contains scripts/gcp-identities.sh 'compute@developer.gserviceaccount.com'
+
+assert_contains scripts/gcp-finalize-identities.sh 'gcloud run jobs execute slate-cleanup'
+assert_contains scripts/gcp-finalize-identities.sh 'gcloud scheduler jobs run slate-cleanup'
+assert_contains scripts/gcp-finalize-identities.sh 'roles/secretmanager.secretAccessor'
+assert_contains scripts/gcp-finalize-identities.sh 'compute@developer.gserviceaccount.com'
+assert_contains scripts/gcp-finalize-identities.sh 'scripts/gcp-remove-default-roles.sh'
+
+default_role_state="$(mktemp)"
 retry_state="$(mktemp)"
 retry_output="$(mktemp)"
-trap 'rm -f "$retry_state" "$retry_output"' EXIT INT TERM
+trap 'rm -f "$retry_state" "$retry_output" "$default_role_state"' EXIT INT TERM
+awk '/^for role in /,/^do$/ { if ($1 ~ /^roles\//) { gsub(/\\/, "", $1); print $1 } }' \
+  scripts/gcp-remove-default-roles.sh >"$default_role_state"
+if [ "$(wc -l <"$default_role_state" | tr -d ' ')" -ne 10 ]; then
+  printf '%s\n' 'default-role removal test did not discover all ten legacy roles' >&2
+  exit 1
+fi
+for _ in 1 2; do
+  GCP_DEFAULT_ROLE_STATE="$default_role_state" \
+    PATH="$PWD/scripts/testdata/gcp-identities:$PATH" \
+    PROJECT_ID=slate-test bash scripts/gcp-remove-default-roles.sh >/dev/null
+done
+if [ -s "$default_role_state" ]; then
+  printf '%s\n' 'default-role removal was not complete and idempotent' >&2
+  exit 1
+fi
+
+bash -n scripts/gcp-bootstrap.sh scripts/gcp-deploy.sh scripts/gcp-identities.sh scripts/gcp-finalize-identities.sh
+
 if ! VERIFY_GITHUB_CI_CURL_STATE="$retry_state" \
   PATH="$PWD/scripts/testdata/verify-github-ci:$PATH" \
   sh scripts/verify-github-ci.sh deadbeef >"$retry_output" 2>&1; then
