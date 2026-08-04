@@ -688,6 +688,55 @@ async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion)
   return true;
 }
 
+async function loadCompletedHistory(listID, trigger) {
+  const list = state.board?.buckets?.find(item => item.id === listID);
+  if (!list?.completedNextCursor) return;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const version = routeVersion;
+  const boardID = state.board.id;
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.textContent = "Loading…";
+  }
+  try {
+    const page = await api.get(`/api/v1/tasks?bucketId=${encodeURIComponent(listID)}&done=true&limit=20&cursor=${encodeURIComponent(list.completedNextCursor)}`);
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || state.board?.id !== boardID) return;
+    const known = new Set((list.tasks || []).map(task => task.id));
+    list.tasks = [...(list.tasks || []), ...(page.tasks || []).filter(task => !known.has(task.id))];
+    list.completedNextCursor = page.nextCursor || "";
+    state.error = "";
+    render();
+    document.querySelector(`[data-load-completed="${CSS.escape(listID)}"]`)?.focus();
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || state.board?.id !== boardID) return;
+    state.error = err.message;
+    render();
+  }
+}
+
+async function openTaskDetail(taskID, trigger) {
+  const summary = findTask(taskID);
+  if (!summary) return false;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const version = routeVersion;
+  if (trigger) trigger.disabled = true;
+  try {
+    const detail = await api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}`);
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return false;
+    state.selectedTask = { ...summary, ...detail };
+    state.error = "";
+    render();
+    return true;
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return false;
+    state.error = err.message;
+    render();
+    return false;
+  }
+}
+
 function render() {
   const root = document.querySelector("#app");
 	if (state.view === "logging-out" || state.view === "logout-error") {
@@ -1162,6 +1211,7 @@ function listHTML(list) {
       <ul class="tasks ${tasks.length ? "" : "empty"}" data-task-list="${list.id}">
         ${tasks.length ? tasks.map(taskHTML).join("") : `<li class="empty-state">${icon("inboxTray")}<p>${escapeHTML(emptyListMessage())}</p></li>`}
       </ul>
+    ${list.completedNextCursor ? `<button class="secondary completed-history" type="button" data-load-completed="${list.id}">Load older completed</button>` : ""}
     <form class="add-task" data-add-task="${list.id}">
     <button class="add-icon" type="submit" title="Add item" ${addBlocked ? "disabled" : ""} ${activeLimitReached ? 'aria-describedby="item-limit-' + list.id + '"' : ""}>${icon("plus")}</button>
     <input name="title" placeholder="${addPlaceholder}" ${addBlocked ? "disabled" : ""} ${activeLimitReached ? 'aria-describedby="item-limit-' + list.id + '"' : ""}>
@@ -2270,9 +2320,8 @@ function bindApp() {
     const notice = state.moveNotice;
     if (!notice) return;
     await loadBoard(notice.boardId);
-    state.selectedTask = findTask(notice.taskId);
     state.moveNotice = null;
-    render();
+    await openTaskDetail(notice.taskId);
   });
   document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.moveNotice = null; render(); });
   document.querySelectorAll("[data-board-mode]").forEach(el => el.onclick = () => {
@@ -2347,7 +2396,8 @@ function bindApp() {
       form.requestSubmit();
     });
   });
-  document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => { state.error = ""; state.selectedTask = findTask(el.dataset.openTask); render(); });
+  document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => openTaskDetail(el.dataset.openTask, el));
+  document.querySelectorAll("[data-load-completed]").forEach(el => el.onclick = () => loadCompletedHistory(el.dataset.loadCompleted, el));
   document.querySelectorAll("[data-toggle-done]").forEach(el => el.onclick = async event => {
     event.stopPropagation();
     const task = findTask(el.dataset.toggleDone);
@@ -3528,7 +3578,9 @@ async function openAgentTask(element) {
       if (!await loadBoard(item.boardId, sessionVersion, version)) return;
     }
     if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
-    state.selectedTask = { ...(findTask(item.id) || {}), ...item };
+    const detail = await api.get(`/api/v1/tasks/${encodeURIComponent(item.id)}`);
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    state.selectedTask = { ...(findTask(item.id) || {}), ...item, ...detail };
     state.error = "";
     render();
   } catch (err) {

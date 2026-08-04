@@ -92,12 +92,21 @@ func TestTaskFilterFromQueryIncludesPriority(t *testing.T) {
 }
 
 func TestTaskFilterFromQueryIncludesBoardAndList(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId=board-1&bucketId=list-1&status=queued&done=false&limit=12", nil)
+	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId=board-1&bucketId=list-1&status=done&done=true&limit=12&cursor=next-page", nil)
 	filter, err := taskFilterFromQuery(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filter.BoardID != "board-1" || filter.BucketID != "list-1" || filter.Status != "queued" || filter.Done == nil || *filter.Done || filter.Limit != 12 {
+	if filter.BoardID != "board-1" || filter.BucketID != "list-1" || filter.Status != "done" || filter.Done == nil || !*filter.Done || filter.Limit != 12 || filter.Cursor != "next-page" {
 		t.Fatalf("filter = %#v", filter)
+	}
+}
+
+func TestTaskFilterRejectsInvalidLimit(t *testing.T) {
+	for _, raw := range []string{"0", "-1", "many"} {
+		req := httptest.NewRequest("GET", "/api/v1/tasks?limit="+raw, nil)
+		if _, err := taskFilterFromQuery(req); err == nil {
+			t.Fatalf("limit %q was accepted", raw)
+		}
 	}
 }

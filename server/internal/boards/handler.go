@@ -284,15 +284,16 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request, user auth.Us
 	if user.AgentID != "" {
 		filter.AssigneeAgentID = user.AgentID
 	}
-	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
+	page, err := h.store.ListTaskPage(r.Context(), user.ID, filter)
 	if err != nil {
+		if errors.Is(err, ErrInvalidData) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeInternalError(w, err, "tasks could not be loaded")
 		return
 	}
-	if tasks == nil {
-		tasks = []Task{}
-	}
-	writeJSON(w, http.StatusOK, map[string][]Task{"tasks": tasks})
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.User) {
@@ -312,15 +313,16 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 	if user.AgentID != "" {
 		filter.AssigneeAgentID = user.AgentID
 	}
-	tasks, err := h.store.ListTasks(r.Context(), user.ID, filter)
+	page, err := h.store.ListTaskPage(r.Context(), user.ID, filter)
 	if err != nil {
+		if errors.Is(err, ErrInvalidData) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeInternalError(w, err, "tasks could not be loaded")
 		return
 	}
-	if tasks == nil {
-		tasks = []Task{}
-	}
-	writeJSON(w, http.StatusOK, map[string][]Task{"tasks": tasks})
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (h *Handler) AgentClaim(w http.ResponseWriter, r *http.Request, user auth.User) {
@@ -380,6 +382,7 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 		BucketID: strings.TrimSpace(q.Get("bucketId")),
 		Status:   strings.TrimSpace(q.Get("status")),
 		Priority: strings.TrimSpace(q.Get("priority")),
+		Cursor:   strings.TrimSpace(q.Get("cursor")),
 	}
 	if raw := strings.TrimSpace(q.Get("done")); raw != "" {
 		done, err := parseQueryBool("done", raw)
@@ -389,9 +392,11 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 		filter.Done = done
 	}
 	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
-		if limit, err := strconv.Atoi(raw); err == nil {
-			filter.Limit = limit
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 {
+			return TaskFilter{}, errors.New("limit must be a positive integer")
 		}
+		filter.Limit = limit
 	}
 	return filter, nil
 }

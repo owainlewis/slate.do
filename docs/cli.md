@@ -103,6 +103,20 @@ slate tasks list --list <list-id> --done false
 slate tasks get <task-id>
 ```
 
+Board and list responses include every active task plus the 20 most recently
+updated completed tasks in each list. Task collections omit descriptions to
+keep responses small. Use `slate tasks get <task-id>` when you need the full
+description.
+
+Page through older completed work with the opaque `nextCursor` returned by the
+previous command. Completed history defaults to 20 tasks per page and accepts
+up to 100:
+
+```bash
+slate tasks list --list <list-id> --done true --limit 20
+slate tasks list --list <list-id> --done true --cursor <next-cursor>
+```
+
 Priority is optional and crosses lists, so it is how you find urgent work
 wherever it lives:
 

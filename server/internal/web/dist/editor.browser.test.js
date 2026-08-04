@@ -145,6 +145,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
     if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
     if (url.pathname === "/api/v1/boards") return json(response, { boards: [board(deleted || hidden)] });
     if (url.pathname === "/api/v1/boards/board-one") return json(response, board(deleted || hidden));
+    if (url.pathname === "/api/v1/tasks/task-one" && request.method === "GET") return json(response, task);
     if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
       patchCount += 1;
       patchBodies.push(await requestJSON(request));
@@ -277,6 +278,7 @@ test("saving an item moves it to the chosen position on another board", async t 
       await new Promise(resolve => setTimeout(resolve, 200));
       return json(response, targetBoard());
     }
+    if (url.pathname === "/api/v1/tasks/task-one" && request.method === "GET") return json(response, currentTask);
     if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
       saveBody = await requestJSON(request);
       currentTask = { ...currentTask, ...saveBody };
@@ -360,6 +362,7 @@ test("a committed move stays successful when the source board refresh fails", { 
     }
     if (url.pathname === "/api/v1/boards/board-one") return json(response, sourceBoard);
     if (url.pathname === "/api/v1/boards/board-two") return json(response, targetBoard);
+    if (url.pathname === "/api/v1/tasks/task-one" && request.method === "GET") return json(response, task);
     if (url.pathname === "/api/v1/tasks/task-one/move" && request.method === "POST") {
       await requestJSON(request);
       moved = true;
@@ -1383,6 +1386,13 @@ test("agent detail routes paginate, assign, edit, regroup, and stay safe across 
     if (url.pathname === "/api/v1/agents/agent-missing") {
       response.writeHead(404, { "Content-Type": "application/json" });
       return response.end(JSON.stringify({ error: "agent not found" }));
+    }
+    if (url.pathname.startsWith("/api/v1/tasks/") && request.method === "GET") {
+      const id = url.pathname.split("/")[4];
+      const selected = tasks.find(task => task.id === id);
+      if (selected) return json(response, selected);
+      response.writeHead(404, { "Content-Type": "application/json" });
+      return response.end(JSON.stringify({ error: "task not found" }));
     }
     if (url.pathname.startsWith("/api/v1/tasks/") && url.pathname.endsWith("/status") && request.method === "PATCH") {
       const id = url.pathname.split("/")[4];
