@@ -135,7 +135,7 @@ func TestCleanupRemovesOnlyExpiredOperationalDataAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestCleanupBatchSizeBoundsEachPath(t *testing.T) {
+func TestCleanupDrainsMultipleBatches(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -152,23 +152,138 @@ func TestCleanupBatchSizeBoundsEachPath(t *testing.T) {
 	`, userID, marker, now); err != nil {
 		t.Fatal(err)
 	}
-	first, err := Run(ctx, db, now, 2)
-	if err != nil || resultAffected(first, "sessions") != 2 {
-		t.Fatalf("first bounded run = %#v err=%v", first, err)
-	}
-	second, err := Run(ctx, db, now, 2)
-	if err != nil || resultAffected(second, "sessions") != 1 {
-		t.Fatalf("second bounded run = %#v err=%v", second, err)
+	report, err := RunWithBudget(ctx, db, now, 2, 10, time.Minute)
+	result := resultFor(report, "sessions")
+	if err != nil || result.Affected != 3 || result.Batches != 2 || backlogValue(result) {
+		t.Fatalf("multi-batch run = %#v err=%v", report, err)
 	}
 }
 
-func resultAffected(report Report, name string) int64 {
+func TestCleanupReportsBudgetAndResumes(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	marker := fmt.Sprintf("cleanup-budget-%d", time.Now().UnixNano())
+	var userID string
+	if err := db.QueryRow(ctx, `INSERT INTO users (email,password_hash) VALUES ($1,'test') RETURNING id::text`, marker+"@slate.test").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+	if _, err := db.Exec(ctx, `
+		INSERT INTO sessions (user_id,token_hash,expires_at)
+		SELECT $1, $2 || generated::text, $3::timestamptz - interval '1 hour'
+		FROM generate_series(1,5) generated
+	`, userID, marker, now); err != nil {
+		t.Fatal(err)
+	}
+	first, err := RunWithBudget(ctx, db, now, 2, 3, time.Minute)
+	result := resultFor(first, "sessions")
+	if err != nil || result.Affected != 3 || result.Batches != 2 || !backlogValue(result) || !result.BudgetReached || !first.BudgetReached {
+		t.Fatalf("budgeted run = %#v err=%v", first, err)
+	}
+	second, err := RunWithBudget(ctx, db, now, 2, 10, time.Minute)
+	result = resultFor(second, "sessions")
+	if err != nil || result.Affected != 2 || backlogValue(result) || second.BudgetReached {
+		t.Fatalf("resumed run = %#v err=%v", second, err)
+	}
+}
+
+func TestCleanupRoundRobinDoesNotStarveLaterRules(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	marker := fmt.Sprintf("cleanup-fair-%d", time.Now().UnixNano())
+	var userID string
+	if err := db.QueryRow(ctx, `INSERT INTO users (email,password_hash) VALUES ($1,'test') RETURNING id::text`, marker+"@slate.test").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+	if _, err := db.Exec(ctx, `
+		INSERT INTO sessions (user_id,token_hash,expires_at)
+		SELECT $1, $2 || generated::text, $3::timestamptz - interval '1 hour' FROM generate_series(1,5) generated
+	`, userID, marker, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO api_rate_limit_metrics (bucket_start,route_class,outcome,shard,request_count)
+		VALUES ($1::timestamptz - interval '31 days','public_auth','allowed',31,1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
+	report, err := RunWithBudget(ctx, db, now, 1, 2, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resultFor(report, "sessions").Affected != 2 || resultFor(report, "api_rate_limit_metrics").Affected != 1 {
+		t.Fatalf("round-robin report = %#v", report)
+	}
+}
+
+func TestCleanupDeadlineStopsBeforeDatabaseWork(t *testing.T) {
+	db := openIntegrationDB(t)
+	started := time.Now()
+	report, err := RunWithBudget(context.Background(), db, time.Now().UTC(), 1, 1, time.Nanosecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.BudgetReached || time.Since(started) > time.Second {
+		t.Fatalf("deadline report = %#v duration=%s", report, time.Since(started))
+	}
 	for _, result := range report.Results {
-		if result.Name == name {
-			return result.Affected
+		if result.Backlog != nil {
+			t.Fatalf("deadline claimed known backlog for %s", result.Name)
 		}
 	}
-	return -1
+}
+
+func TestCleanupReportsEligibleRowsSkippedByLocks(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	marker := fmt.Sprintf("cleanup-locked-%d", time.Now().UnixNano())
+	var userID string
+	if err := db.QueryRow(ctx, `INSERT INTO users (email,password_hash) VALUES ($1,'test') RETURNING id::text`, marker+"@slate.test").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+	if _, err := db.Exec(ctx, `INSERT INTO sessions (user_id,token_hash,expires_at) VALUES ($1,$2,$3::timestamptz - interval '1 hour')`, userID, marker, now); err != nil {
+		t.Fatal(err)
+	}
+	locker, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := locker.Exec(ctx, "SELECT 1 FROM sessions WHERE token_hash = $1 FOR UPDATE", marker); err != nil {
+		t.Fatal(err)
+	}
+	report, err := RunWithBudget(ctx, db, now, 1, 10, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := resultFor(report, "sessions")
+	if result.Affected != 0 || !backlogValue(result) {
+		t.Fatalf("locked-row report = %#v", report)
+	}
+	if err := locker.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	report, err = RunWithBudget(ctx, db, now, 1, 10, time.Minute)
+	if err != nil || resultFor(report, "sessions").Affected != 1 || backlogValue(resultFor(report, "sessions")) {
+		t.Fatalf("unlocked-row report = %#v err=%v", report, err)
+	}
+}
+
+func resultFor(report Report, name string) Result {
+	for _, result := range report.Results {
+		if result.Name == name {
+			return result
+		}
+	}
+	return Result{}
+}
+
+func backlogValue(result Result) bool {
+	return result.Backlog != nil && *result.Backlog
 }
 
 func assertMarkerCount(t *testing.T, db *database.Pool, table string, column string, marker string, want int) {
