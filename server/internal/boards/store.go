@@ -3,6 +3,7 @@ package boards
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,17 @@ var (
 	ErrIdempotencyGone = errors.New("task created by idempotency key was deleted")
 	ErrAgentTaskScope  = errors.New("agent credentials cannot move, reorder, or reassign tasks")
 )
+
+const (
+	defaultCompletedHistoryLimit = 20
+	maxCompletedHistoryLimit     = 100
+)
+
+type completedTaskCursor struct {
+	UpdatedAt time.Time `json:"updatedAt"`
+	ID        string    `json:"id"`
+	Scope     string    `json:"scope"`
+}
 
 var (
 	defaultMaxBoards        = entitlements.ProLimits.Boards
@@ -142,11 +154,12 @@ func (s *Store) GetBoard(ctx context.Context, userID string, id string) (Board, 
 		return Board{}, err
 	}
 	for i := range buckets {
-		tasks, err := s.listBucketTasks(ctx, userID, buckets[i].ID)
+		tasks, nextCursor, err := s.listBucketTasks(ctx, userID, buckets[i].ID)
 		if err != nil {
 			return Board{}, err
 		}
 		buckets[i].Tasks = tasks
+		buckets[i].CompletedNextCursor = nextCursor
 	}
 	board.Buckets = buckets
 	return board, nil
@@ -182,11 +195,12 @@ func (s *Store) GetBucket(ctx context.Context, userID string, id string) (Bucket
 	if err != nil {
 		return Bucket{}, err
 	}
-	tasks, err := s.listBucketTasks(ctx, userID, id)
+	tasks, nextCursor, err := s.listBucketTasks(ctx, userID, id)
 	if err != nil {
 		return Bucket{}, err
 	}
 	bucket.Tasks = tasks
+	bucket.CompletedNextCursor = nextCursor
 	return bucket, nil
 }
 
@@ -1091,54 +1105,86 @@ func (s *Store) getTask(ctx context.Context, userID string, agentID string, id s
 }
 
 func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter) ([]Task, error) {
-	doneSQL := ""
+	page, err := s.ListTaskPage(ctx, userID, filter)
+	return page.Tasks, err
+}
+
+func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilter) (TaskPage, error) {
+	whereSQL := ""
 	args := []any{userID}
 	if filter.BoardID != "" {
 		args = append(args, filter.BoardID)
-		doneSQL += fmt.Sprintf(" AND t.board_id = $%d", len(args))
+		whereSQL += fmt.Sprintf(" AND t.board_id = $%d", len(args))
 	}
 	if filter.BucketID != "" {
 		args = append(args, filter.BucketID)
-		doneSQL += fmt.Sprintf(" AND t.bucket_id = $%d", len(args))
+		whereSQL += fmt.Sprintf(" AND t.bucket_id = $%d", len(args))
 	}
 	if filter.Status != "" {
 		args = append(args, filter.Status)
-		doneSQL += fmt.Sprintf(" AND t.status = $%d", len(args))
+		whereSQL += fmt.Sprintf(" AND t.status = $%d", len(args))
 	}
 	if filter.Priority != "" {
 		args = append(args, filter.Priority)
-		doneSQL += fmt.Sprintf(" AND t.priority = $%d", len(args))
+		whereSQL += fmt.Sprintf(" AND t.priority = $%d", len(args))
 	}
 	if filter.Done != nil {
 		args = append(args, *filter.Done)
-		doneSQL += fmt.Sprintf(" AND t.done = $%d", len(args))
+		whereSQL += fmt.Sprintf(" AND t.done = $%d", len(args))
 	}
 	if filter.ActionsOnly {
 		args = append(args, KindAction)
-		doneSQL += fmt.Sprintf(" AND t.kind = $%d", len(args))
+		whereSQL += fmt.Sprintf(" AND t.kind = $%d", len(args))
 	}
 	if filter.AssigneeAgentID != "" {
 		args = append(args, filter.AssigneeAgentID)
-		doneSQL += fmt.Sprintf(" AND t.assignee_agent_id = $%d", len(args))
+		whereSQL += fmt.Sprintf(" AND t.assignee_agent_id = $%d", len(args))
 	}
+	completedHistory := filter.Done != nil && *filter.Done
 	limit := filter.Limit
-	if limit <= 0 || limit > 200 {
+	if completedHistory {
+		if limit <= 0 {
+			limit = defaultCompletedHistoryLimit
+		}
+		if limit > maxCompletedHistoryLimit {
+			limit = maxCompletedHistoryLimit
+		}
+	} else if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	args = append(args, limit)
+	orderSQL := "t.created_at DESC, t.id DESC"
+	if completedHistory {
+		orderSQL = "t.updated_at DESC, t.id DESC"
+	}
+	if filter.Cursor != "" {
+		if !completedHistory {
+			return TaskPage{}, fmt.Errorf("%w: cursor requires done=true", ErrInvalidData)
+		}
+		cursor, err := decodeCompletedTaskCursor(filter.Cursor, taskCursorScope(userID, filter))
+		if err != nil {
+			return TaskPage{}, err
+		}
+		args = append(args, cursor.UpdatedAt, cursor.ID)
+		whereSQL += fmt.Sprintf(" AND (t.updated_at < $%d OR (t.updated_at = $%d AND t.id < $%d::uuid))", len(args)-1, len(args)-1, len(args))
+	}
+	fetchLimit := limit
+	if completedHistory {
+		fetchLimit++
+	}
+	args = append(args, fetchLimit)
 	query := `
-		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
+		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, '',
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
-		WHERE b.user_id = $1` + doneSQL + `
-		ORDER BY t.created_at DESC
+		WHERE b.user_id = $1` + whereSQL + `
+		ORDER BY ` + orderSQL + `
 		LIMIT $` + fmt.Sprint(len(args))
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return TaskPage{}, err
 	}
 	defer rows.Close()
 
@@ -1146,11 +1192,25 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 	for rows.Next() {
 		task, err := scanTask(rows)
 		if err != nil {
-			return nil, err
+			return TaskPage{}, err
 		}
 		tasks = append(tasks, task)
 	}
-	return tasks, rows.Err()
+	if err := rows.Err(); err != nil {
+		return TaskPage{}, err
+	}
+	page := TaskPage{Tasks: tasks}
+	if page.Tasks == nil {
+		page.Tasks = []Task{}
+	}
+	if completedHistory && len(page.Tasks) > limit {
+		page.Tasks = page.Tasks[:limit]
+		page.NextCursor, err = encodeCompletedTaskCursor(page.Tasks[len(page.Tasks)-1], taskCursorScope(userID, filter))
+		if err != nil {
+			return TaskPage{}, err
+		}
+	}
+	return page, nil
 }
 
 func (s *Store) listBuckets(ctx context.Context, userID string, boardID string) ([]Bucket, error) {
@@ -1294,31 +1354,71 @@ func checkTaskCapacity(ctx context.Context, tx pgx.Tx, bucket Bucket, exceptTask
 	return nil
 }
 
-func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID string) ([]Task, error) {
+func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID string) ([]Task, string, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
-			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
-			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-			COALESCE(t.assignee_agent_id::text, '')
-		FROM tasks t
-		JOIN boards b ON b.id = t.board_id
-		WHERE b.user_id = $1 AND t.bucket_id = $2
-		ORDER BY t.sort_order, t.created_at
+		WITH active AS (
+			SELECT t.id, t.board_id, t.bucket_id, t.title, COALESCE(t.scheduled_date::text, '') AS scheduled_date,
+				t.kind, t.done, t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
+				COALESCE(t.assignee_agent_id::text, '') AS assignee_agent_id, false AS completed_history
+			FROM tasks t
+			JOIN boards b ON b.id = t.board_id
+			WHERE b.user_id = $1 AND t.bucket_id = $2 AND t.done = false
+		), completed AS (
+			SELECT t.id, t.board_id, t.bucket_id, t.title, COALESCE(t.scheduled_date::text, '') AS scheduled_date,
+				t.kind, t.done, t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
+				COALESCE(t.assignee_agent_id::text, '') AS assignee_agent_id, true AS completed_history
+			FROM tasks t
+			JOIN boards b ON b.id = t.board_id
+			WHERE b.user_id = $1 AND t.bucket_id = $2 AND t.done = true
+			ORDER BY t.updated_at DESC, t.id DESC
+			LIMIT 21
+		), selected AS (
+			SELECT * FROM active
+			UNION ALL
+			SELECT * FROM completed
+		)
+		SELECT id::text, board_id::text, bucket_id::text, title, '', scheduled_date, kind, done,
+			status, priority, sort_order, created_at, updated_at, assignee_agent_id, completed_history
+		FROM selected
+		ORDER BY completed_history,
+			CASE WHEN completed_history = false THEN sort_order END,
+			CASE WHEN completed_history = false THEN created_at END,
+			CASE WHEN completed_history = true THEN updated_at END DESC,
+			CASE WHEN completed_history = true THEN id END DESC
 	`, userID, bucketID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer rows.Close()
 
 	var tasks []Task
+	var completed []Task
 	for rows.Next() {
-		task, err := scanTask(rows)
+		task, isCompletedHistory, err := scanTaskCollection(rows)
 		if err != nil {
-			return nil, err
+			return nil, "", err
+		}
+		if isCompletedHistory {
+			completed = append(completed, task)
+			continue
 		}
 		tasks = append(tasks, task)
 	}
-	return tasks, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	nextCursor := ""
+	if len(completed) > defaultCompletedHistoryLimit {
+		completed = completed[:defaultCompletedHistoryLimit]
+		done := true
+		cursor, err := encodeCompletedTaskCursor(completed[len(completed)-1], taskCursorScope(userID, TaskFilter{BucketID: bucketID, Done: &done}))
+		if err != nil {
+			return nil, "", err
+		}
+		nextCursor = cursor
+	}
+	tasks = append(tasks, completed...)
+	return tasks, nextCursor, nil
 }
 
 func (s *Store) bucketFull(ctx context.Context, bucketID string) (bool, error) {
@@ -1365,13 +1465,67 @@ func scanBucket(row rowScanner) (Bucket, error) {
 
 func scanTask(row rowScanner) (Task, error) {
 	var task Task
-	err := row.Scan(
+	err := row.Scan(taskScanDestinations(&task)...)
+	return task, err
+}
+
+func scanTaskCollection(row rowScanner) (Task, bool, error) {
+	var task Task
+	var completedHistory bool
+	destinations := append(taskScanDestinations(&task), &completedHistory)
+	err := row.Scan(destinations...)
+	return task, completedHistory, err
+}
+
+func taskScanDestinations(task *Task) []any {
+	return []any{
 		&task.ID, &task.BoardID, &task.BucketID, &task.Title, &task.Description, &task.ScheduledDate, &task.Kind, &task.Done,
 		&task.Status, &task.Priority,
 		&task.SortOrder, &task.CreatedAt, &task.UpdatedAt,
 		&task.AssigneeAgentID,
-	)
-	return task, err
+	}
+}
+
+func taskCursorScope(userID string, filter TaskFilter) string {
+	done := ""
+	if filter.Done != nil {
+		done = fmt.Sprint(*filter.Done)
+	}
+	value := strings.Join([]string{
+		userID, filter.BoardID, filter.BucketID, filter.Status, filter.Priority,
+		done, fmt.Sprint(filter.ActionsOnly), filter.AssigneeAgentID,
+	}, "\x00")
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func encodeCompletedTaskCursor(task Task, scope string) (string, error) {
+	encoded, err := json.Marshal(completedTaskCursor{UpdatedAt: task.UpdatedAt.UTC(), ID: task.ID, Scope: scope})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func decodeCompletedTaskCursor(raw string, scope string) (completedTaskCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return completedTaskCursor{}, fmt.Errorf("%w: invalid completed-task cursor", ErrInvalidData)
+	}
+	var cursor completedTaskCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.UpdatedAt.IsZero() || !validUUIDText(cursor.ID) || cursor.Scope != scope {
+		return completedTaskCursor{}, fmt.Errorf("%w: invalid completed-task cursor", ErrInvalidData)
+	}
+	return cursor, nil
+}
+
+func validUUIDText(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	compact := value[:8] + value[9:13] + value[14:18] + value[19:23] + value[24:]
+	_, err := hex.DecodeString(compact)
+	return err == nil
 }
 
 func clean(value string) string {

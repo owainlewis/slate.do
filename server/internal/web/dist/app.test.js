@@ -284,6 +284,84 @@ test("list limits remain scoped to the selected board", () => {
   assert.equal(app.validateListLimit("20", 20), "");
 });
 
+test("completed history pages append to a list and preserve the next cursor", async () => {
+  vm.runInContext(`
+    savedHistoryRender = render;
+    savedHistoryGet = api.get;
+    render = () => {};
+    document = { querySelector() { return null; } };
+    CSS = { escape(value) { return value; } };
+    authVersion = 4;
+    routeVersion = 7;
+    state.me = { id: "owner" };
+    state.board = {
+      id: "board-one",
+      buckets: [{ id: "list-one", completedNextCursor: "cursor-one", tasks: [{ id: "active", done: false }] }],
+    };
+    historyRequests = [];
+    api.get = async path => {
+      historyRequests.push(path);
+      return { tasks: [{ id: "older", bucketId: "list-one", done: true }], nextCursor: "cursor-two" };
+    };
+  `, app);
+
+  await app.loadCompletedHistory("list-one");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(historyRequests)", app)), [
+    "/api/v1/tasks?bucketId=list-one&done=true&limit=20&cursor=cursor-one",
+  ]);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.board.buckets[0].tasks.map(task => task.id))", app)), ["active", "older"]);
+  assert.equal(vm.runInContext("state.board.buckets[0].completedNextCursor", app), "cursor-two");
+  const html = app.listHTML(vm.runInContext("state.board.buckets[0]", app));
+  assert.match(html, /data-load-completed="list-one">Load older completed/);
+
+  vm.runInContext(`
+    render = savedHistoryRender;
+    api.get = savedHistoryGet;
+    state.me = null;
+    state.board = null;
+  `, app);
+});
+
+test("opening a task loads its full description from the exact endpoint", async () => {
+  vm.runInContext(`
+    savedDetailRender = render;
+    savedDetailGet = api.get;
+    render = () => {};
+    authVersion = 9;
+    routeVersion = 11;
+    state.me = { id: "owner" };
+    state.board = { id: "board-one", buckets: [{ id: "list-one", tasks: [{ id: "task-one", bucketId: "list-one", title: "Summary" }] }] };
+    detailRequests = [];
+    api.get = async path => {
+      detailRequests.push(path);
+      return { id: "task-one", bucketId: "list-one", title: "Summary", description: "Full private detail" };
+    };
+  `, app);
+
+  assert.equal(await app.openTaskDetail("task-one"), true);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), ["/api/v1/tasks/task-one"]);
+  assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
+
+  vm.runInContext(`
+    state.board.buckets[0].tasks = [];
+    state.selectedTask = null;
+  `, app);
+  assert.equal(await app.openTaskDetail("task-one"), true);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
+    "/api/v1/tasks/task-one",
+    "/api/v1/tasks/task-one",
+  ]);
+  assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
+
+  vm.runInContext(`
+    render = savedDetailRender;
+    api.get = savedDetailGet;
+    state.me = null;
+    state.board = null;
+    state.selectedTask = null;
+  `, app);
+});
+
 test("Pro limits prevent obvious list and active-item creation", () => {
 	vm.runInContext(`
 		state.me = { entitlement: { plan: "pro", source: "manual", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } } };
