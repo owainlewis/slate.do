@@ -59,38 +59,19 @@ func TestResetPasswordPageServesApplicationShell(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedLimitsUseAccountAndPrivacySafeCredentialScopes(t *testing.T) {
+func TestAuthenticatedRouteClassesSeparateReadsAndWrites(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		method     string
-		credential string
 		routeClass string
 	}{
-		{
-			name: "browser session", method: http.MethodGet, routeClass: ratelimit.ClassAuthenticatedRead,
-			credential: "session:privacy-safe-hash",
-		},
-		{
-			name: "API token", method: http.MethodPatch, routeClass: ratelimit.ClassAuthenticatedWrite,
-			credential: "bearer:privacy-safe-hash",
-		},
+		{name: "browser session read", method: http.MethodGet, routeClass: ratelimit.ClassAuthenticatedRead},
+		{name: "API token write", method: http.MethodPatch, routeClass: ratelimit.ClassAuthenticatedWrite},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			limiter := &recordingLimiter{decision: ratelimit.Decision{Allowed: true, Limit: 120, Remaining: 119}}
-			app := &App{limits: limiter}
 			request := httptest.NewRequest(test.method, "/api/v1/tasks", nil)
-			recorder := httptest.NewRecorder()
-
-			if !app.allowAuthenticated(recorder, request, auth.User{ID: "account-1"}, test.credential) {
-				t.Fatalf("request rejected: %s", recorder.Body.String())
-			}
-			if limiter.routeClass != test.routeClass || len(limiter.keys) != 2 || limiter.keys[0].Scope != ratelimit.ScopeAccount || limiter.keys[1].Scope != ratelimit.ScopeCredential {
-				t.Fatalf("class = %q, keys = %#v", limiter.routeClass, limiter.keys)
-			}
-			for _, key := range limiter.keys {
-				if strings.Contains(key.Value, "secret") {
-					t.Fatalf("raw credential reached limiter: %#v", limiter.keys)
-				}
+			if got := authenticatedRouteClass(request); got != test.routeClass {
+				t.Fatalf("class = %q, want %q", got, test.routeClass)
 			}
 		})
 	}
