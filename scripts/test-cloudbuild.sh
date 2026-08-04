@@ -80,14 +80,16 @@ assert_contains .github/workflows/ci.yml 'timeout-minutes: 10'
 assert_contains justfile 'test-ci:'
 assert_contains justfile 'scripts/test-server-ci.sh'
 assert_contains justfile 'npm run test:browser'
+assert_contains package.json '--test-timeout=60000'
 assert_contains scripts/test-server-ci.sh 'go test -count=1 -timeout=5m -json ./server/...'
 assert_contains scripts/test-server-ci.sh 'tee "$test_log"'
 assert_contains scripts/verify-github-ci.sh 'github-actions'
 assert_contains scripts/verify-github-ci.sh '15368'
 assert_contains scripts/verify-github-ci.sh 'GitHub API unavailable'
-assert_contains scripts/verify-github-ci.sh '--connect-timeout 10 --max-time 20'
+assert_contains scripts/verify-github-ci.sh '--connect-timeout 10 --max-time "$request_timeout"'
 assert_contains scripts/verify-github-ci.sh 'VERIFY_GITHUB_CI_MAX_ATTEMPTS:-45'
 assert_contains scripts/verify-github-ci.sh 'VERIFY_GITHUB_CI_POLL_SECONDS:-20'
+assert_contains scripts/verify-github-ci.sh 'VERIFY_GITHUB_CI_TIMEOUT_SECONDS:-900'
 assert_contains cloudbuild.yaml "_MAX_INSTANCES: '4'"
 assert_contains cloudbuild.yaml "_DB_MAX_CONNECTIONS: '2'"
 assert_contains cloudbuild.yaml "_DB_CONNECTION_ALLOWANCE: '25'"
@@ -146,6 +148,26 @@ fi
 assert_contains "$retry_output" 'Timed out waiting for Required CI on deadbeef'
 if [ "$(sed -n '1p' "$retry_state")" -ne 2 ]; then
   printf '%s\n' 'Required CI polling did not honor its configured attempt limit' >&2
+  exit 1
+fi
+
+: >"$retry_state"
+deadline_started="$(date +%s)"
+if VERIFY_GITHUB_CI_CURL_MODE=slow-pending \
+  VERIFY_GITHUB_CI_CURL_STATE="$retry_state" \
+  VERIFY_GITHUB_CI_MAX_ATTEMPTS=2 \
+  VERIFY_GITHUB_CI_POLL_SECONDS=0 \
+  VERIFY_GITHUB_CI_TIMEOUT_SECONDS=2 \
+  PATH="$PWD/scripts/testdata/verify-github-ci:$PATH" \
+  sh scripts/verify-github-ci.sh deadbeef >"$retry_output" 2>&1; then
+  printf '%s\n' 'Required CI polling accepted a slow workflow that never completed' >&2
+  exit 1
+fi
+deadline_elapsed="$(( $(date +%s) - deadline_started ))"
+assert_contains "$retry_output" 'Timed out waiting for Required CI on deadbeef'
+if [ "$(sed -n '1p' "$retry_state")" -ne 1 ] || [ "$deadline_elapsed" -gt 3 ]; then
+  printf 'Required CI wall-clock deadline was not enforced: attempts=%s elapsed=%ss\n' \
+    "$(sed -n '1p' "$retry_state")" "$deadline_elapsed" >&2
   exit 1
 fi
 
