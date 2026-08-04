@@ -11,6 +11,8 @@ DEPLOY_SERVICE_ACCOUNT="slate-deploy@$PROJECT_ID.iam.gserviceaccount.com"
 WEB_SERVICE_ACCOUNT="slate-web@$PROJECT_ID.iam.gserviceaccount.com"
 MAINTENANCE_SERVICE_ACCOUNT="slate-maintenance@$PROJECT_ID.iam.gserviceaccount.com"
 SCHEDULER_SERVICE_ACCOUNT="slate-scheduler@$PROJECT_ID.iam.gserviceaccount.com"
+BUILD_BUCKET="${BUILD_BUCKET:-gs://${PROJECT_ID}-slate-build}"
+LOCK_BUCKET="${LOCK_BUCKET:-gs://${PROJECT_ID}_cloudbuild}"
 
 expect_equal() {
   label="$1"
@@ -119,9 +121,12 @@ fi
 artifact_roles="$(gcloud artifacts repositories get-iam-policy slate --project "$PROJECT_ID" --location "$REGION" \
   --flatten='bindings[].members' --filter="bindings.members=$deploy_member" --format='value(bindings.role)')"
 expect_resource_role "Artifact Registry deploy access" "$artifact_roles" roles/artifactregistry.writer
-bucket_roles="$(bucket_member_roles "gs://${PROJECT_ID}-slate-build" "$deploy_member")"
+bucket_roles="$(bucket_member_roles "$BUILD_BUCKET" "$deploy_member")"
 expect_resource_role "build bucket deploy access" "$bucket_roles" roles/storage.objectAdmin
 expect_resource_role "build bucket metadata access" "$bucket_roles" roles/storage.bucketViewer
+lock_bucket_roles="$(bucket_member_roles "$LOCK_BUCKET" "$deploy_member")"
+expect_resource_role "deployment lock bucket access" "$lock_bucket_roles" roles/storage.objectAdmin
+expect_resource_role "deployment lock bucket metadata access" "$lock_bucket_roles" roles/storage.bucketViewer
 
 for service_account in "$WEB_SERVICE_ACCOUNT" "$MAINTENANCE_SERVICE_ACCOUNT" "$SCHEDULER_SERVICE_ACCOUNT"; do
   identity_roles="$(gcloud iam service-accounts get-iam-policy "$service_account" --project "$PROJECT_ID" \

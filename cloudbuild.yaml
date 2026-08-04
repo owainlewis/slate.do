@@ -30,7 +30,7 @@ steps:
     args:
       - -ceu
       - |
-        lock_uri="gs://${PROJECT_ID}-slate-build/deploy/slate.lock"
+        lock_uri="gs://${PROJECT_ID}_cloudbuild/deploy/slate.lock"
         lock_generation=""
         job_created=0
         cleanup() {

@@ -6,6 +6,7 @@ REGION="${REGION:-europe-west1}"
 INSTANCE="${INSTANCE:-slate-postgres-ew1}"
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-slate}"
 BUILD_BUCKET="${BUILD_BUCKET:-gs://${PROJECT_ID}-slate-build}"
+LOCK_BUCKET="${LOCK_BUCKET:-gs://${PROJECT_ID}_cloudbuild}"
 TRIGGER_NAME="${TRIGGER_NAME:-slate-main-deploy}"
 OPERATOR_PRINCIPAL="${OPERATOR_PRINCIPAL:-user:$(gcloud config get-value account 2>/dev/null)}"
 
@@ -79,10 +80,12 @@ ensure_service_account slate-web "Slate public web runtime"
 ensure_service_account slate-maintenance "Slate migration and cleanup jobs"
 ensure_service_account slate-scheduler "Slate cleanup Scheduler caller"
 
-if ! gcloud storage buckets describe "$BUILD_BUCKET" --project "$PROJECT_ID" >/dev/null 2>&1; then
-  gcloud storage buckets create "$BUILD_BUCKET" --project "$PROJECT_ID" \
-    --location "$REGION" --uniform-bucket-level-access
-fi
+for bucket in "$BUILD_BUCKET" "$LOCK_BUCKET"; do
+  if ! gcloud storage buckets describe "$bucket" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud storage buckets create "$bucket" --project "$PROJECT_ID" \
+      --location "$REGION" --uniform-bucket-level-access
+  fi
+done
 
 deploy_member="serviceAccount:$DEPLOY_SERVICE_ACCOUNT"
 web_member="serviceAccount:$WEB_SERVICE_ACCOUNT"
@@ -103,10 +106,12 @@ remove_project_role_if_present "$deploy_member" roles/cloudbuild.builds.viewer
 gcloud artifacts repositories add-iam-policy-binding "$ARTIFACT_REPOSITORY" \
   --project "$PROJECT_ID" --location "$REGION" \
   --member "$deploy_member" --role roles/artifactregistry.writer >/dev/null
-gcloud storage buckets add-iam-policy-binding "$BUILD_BUCKET" \
-  --member "$deploy_member" --role roles/storage.objectAdmin >/dev/null
-gcloud storage buckets add-iam-policy-binding "$BUILD_BUCKET" \
-  --member "$deploy_member" --role roles/storage.bucketViewer >/dev/null
+for bucket in "$BUILD_BUCKET" "$LOCK_BUCKET"; do
+  gcloud storage buckets add-iam-policy-binding "$bucket" \
+    --member "$deploy_member" --role roles/storage.objectAdmin >/dev/null
+  gcloud storage buckets add-iam-policy-binding "$bucket" \
+    --member "$deploy_member" --role roles/storage.bucketViewer >/dev/null
+done
 
 for runtime_member in "$web_member" "$maintenance_member"; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
