@@ -10,8 +10,8 @@ fi
 api="https://api.github.com/repos/owainlewis/slate.do/commits/$commit_sha/check-runs?check_name=Required%20CI&filter=latest&per_page=10"
 attempt=1
 while [ "$attempt" -le 45 ]; do
-  response="$(curl --fail --silent --show-error -H 'Accept: application/vnd.github+json' "$api")"
-  result="$(printf '%s' "$response" | python3 -c '
+  if response="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 -H 'Accept: application/vnd.github+json' "$api")"; then
+    if result="$(printf '%s' "$response" | python3 -c '
 import json, sys
 runs = [
     run for run in json.load(sys.stdin).get("check_runs", [])
@@ -26,7 +26,14 @@ elif any(run.get("conclusion") != "success" for run in runs):
     print("failed")
 else:
     print("success")
-')"
+')"; then
+      :
+    else
+      result="unavailable"
+    fi
+  else
+    result="unavailable"
+  fi
   case "$result" in
     success)
       printf 'Required CI passed for %s\n' "$commit_sha"
@@ -38,6 +45,9 @@ else:
       ;;
     missing|pending)
       printf 'Waiting for Required CI on %s (%s)\n' "$commit_sha" "$result"
+      ;;
+    unavailable)
+      printf 'Waiting for Required CI on %s (GitHub API unavailable)\n' "$commit_sha" >&2
       ;;
     *)
       printf 'Unexpected GitHub check response for %s: %s\n' "$commit_sha" "$result" >&2

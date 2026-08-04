@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+state="${VERIFY_GITHUB_CI_CURL_STATE:?}"
+attempt=0
+if [ -s "$state" ]; then
+  attempt="$(sed -n '1p' "$state")"
+fi
+attempt=$((attempt + 1))
+printf '%s\n' "$attempt" >"$state"
+
+if [ "$attempt" -eq 1 ]; then
+  exit 22
+fi
+
+printf '%s\n' '{"check_runs":[{"status":"completed","conclusion":"success","app":{"slug":"github-actions","id":15368}}]}'
