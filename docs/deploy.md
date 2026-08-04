@@ -208,16 +208,19 @@ When `INVITE_CODE` is present, `/early-access` accepts a reusable shared code an
 Configure the Cloud Run service with a Secret Manager reference:
 
 ```bash
-gcloud secrets create slate-invite-code --replication-policy=automatic
-gcloud secrets versions add slate-invite-code --data-file=-
-gcloud run services update slate --region=europe-west1 \
+PROJECT_ID=slate-do-production
+gcloud secrets create slate-invite-code --project="$PROJECT_ID" --replication-policy=automatic
+gcloud secrets versions add slate-invite-code --project="$PROJECT_ID" --data-file=-
+PROJECT_ID="$PROJECT_ID" bash scripts/gcp-identities.sh
+gcloud run services update slate --project="$PROJECT_ID" --region=europe-west1 \
   --update-secrets INVITE_CODE=slate-invite-code:latest
 ```
 
-Enter the secret value on standard input when prompted. To rotate it, add a new secret version and deploy a new Cloud Run revision. The old code stops working as soon as all traffic uses the new revision. To disable registration, remove the mapping and deploy a new revision:
+Enter the secret value on standard input when prompted. The identity script must run after the secret exists and before invite registration is enabled. It grants `slate-web` access to the value and `slate-deploy` access to verify that the latest version is enabled. To rotate it, add a new secret version and deploy a new Cloud Run revision. The old code stops working as soon as all traffic uses the new revision. To disable registration, remove the mapping and deploy a new revision:
 
 ```bash
-gcloud run services update slate --region=europe-west1 \
+PROJECT_ID=slate-do-production
+gcloud run services update slate --project="$PROJECT_ID" --region=europe-west1 \
   --remove-secrets INVITE_CODE
 ```
 
