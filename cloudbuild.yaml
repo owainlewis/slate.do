@@ -1,4 +1,9 @@
 steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: sh
+    args:
+      - scripts/verify-github-ci.sh
+      - $COMMIT_SHA
   - name: golang:1.26
     entrypoint: bash
     args:

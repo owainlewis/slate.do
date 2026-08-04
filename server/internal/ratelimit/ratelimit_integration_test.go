@@ -18,7 +18,14 @@ func TestSharedRollingLimitsEnforceThresholdResetAndConcurrency(t *testing.T) {
 		t.Skip("set SLATE_TEST_DATABASE_URL to run rate-limit integration tests")
 	}
 	ctx := context.Background()
-	db, err := database.Open(ctx, databaseURL)
+	db, err := database.Open(ctx, databaseURL, database.Options{
+		MaxConnections:         8,
+		AcquireTimeout:         15 * time.Second,
+		StatementTimeout:       15 * time.Second,
+		IdleTransactionTimeout: 15 * time.Second,
+		MaxConnectionIdleTime:  5 * time.Minute,
+		MaxConnectionLifetime:  30 * time.Minute,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

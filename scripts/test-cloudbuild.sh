@@ -68,6 +68,22 @@ assert_contains cloudbuild.yaml 'Expected deployed image'
 assert_contains cloudbuild.yaml '$COMMIT_SHA-$BUILD_ID'
 assert_contains cloudbuild.yaml 'image_summary.fully_qualified_digest'
 assert_contains cloudbuild.yaml 'go test ./...'
+assert_contains cloudbuild.yaml 'scripts/verify-github-ci.sh'
+assert_contains .github/workflows/ci.yml 'name: Required CI'
+assert_contains .github/workflows/ci.yml 'postgres:18-alpine'
+assert_contains .github/workflows/ci.yml 'SLATE_TEST_DATABASE_URL'
+assert_contains .github/workflows/ci.yml 'npx playwright install --with-deps chromium'
+assert_contains .github/workflows/ci.yml 'extractions/setup-just@v3'
+assert_contains .github/workflows/ci.yml 'just-version: "1.50.0"'
+assert_contains .github/workflows/ci.yml 'just test-ci'
+assert_contains justfile 'test-ci:'
+assert_contains justfile 'scripts/test-server-ci.sh'
+assert_contains justfile 'npm run test:browser'
+assert_contains scripts/test-server-ci.sh 'go test -count=1 -json ./server/...'
+assert_contains scripts/verify-github-ci.sh 'github-actions'
+assert_contains scripts/verify-github-ci.sh '15368'
+assert_contains scripts/verify-github-ci.sh 'GitHub API unavailable'
+assert_contains scripts/verify-github-ci.sh '--connect-timeout 10 --max-time 20'
 assert_contains cloudbuild.yaml "_MAX_INSTANCES: '4'"
 assert_contains cloudbuild.yaml "_DB_MAX_CONNECTIONS: '2'"
 assert_contains cloudbuild.yaml "_DB_CONNECTION_ALLOWANCE: '25'"
@@ -86,6 +102,22 @@ assert_contains scripts/gcp-bootstrap.sh 'roles/run.invoker'
 assert_contains scripts/gcp-bootstrap.sh 'roles/cloudscheduler.admin'
 assert_contains scripts/gcp-bootstrap.sh 'roles/iam.serviceAccountUser'
 assert_contains cloudbuild.yaml 'https://run.googleapis.com/v2/projects/'
+
+retry_state="$(mktemp)"
+retry_output="$(mktemp)"
+trap 'rm -f "$retry_state" "$retry_output"' EXIT INT TERM
+if ! VERIFY_GITHUB_CI_CURL_STATE="$retry_state" \
+  PATH="$PWD/scripts/testdata/verify-github-ci:$PATH" \
+  sh scripts/verify-github-ci.sh deadbeef >"$retry_output" 2>&1; then
+  printf '%s\n' 'Required CI polling did not recover from a transient GitHub API failure' >&2
+  exit 1
+fi
+assert_contains "$retry_output" 'GitHub API unavailable'
+assert_contains "$retry_output" 'Required CI passed for deadbeef'
+if [ "$(sed -n '1p' "$retry_state")" -ne 2 ]; then
+  printf '%s\n' 'Required CI polling did not retry exactly once before succeeding' >&2
+  exit 1
+fi
 
 lock_attempts="$(grep -c -- '--if-generation-match=0' cloudbuild.yaml)"
 if [ "$lock_attempts" -ne 2 ]; then
