@@ -36,10 +36,11 @@ existing_env_names=""
 if [ "$existing_service" = slate ]; then
   existing_env_names="$(gcloud run services describe slate --region "$REGION" --format='value(spec.template.spec.containers[0].env[].name)')"
 fi
-if gcloud secrets versions describe latest --secret=slate-invite-code >/dev/null 2>&1; then
+invite_secret_state="$(gcloud secrets versions describe latest --secret=slate-invite-code --format='value(state)' 2>/dev/null || true)"
+if [ "$invite_secret_state" = ENABLED ]; then
   RUNTIME_SECRETS="$RUNTIME_SECRETS,INVITE_CODE=slate-invite-code:latest"
 elif printf '%s' "$existing_env_names" | tr ';' '\n' | grep -Fx INVITE_CODE >/dev/null; then
-  printf '%s\n' 'The live service uses INVITE_CODE, but slate-invite-code:latest is not accessible' >&2
+  printf '%s\n' 'The live service uses INVITE_CODE, but slate-invite-code:latest is not enabled or accessible' >&2
   exit 1
 fi
 gcloud run jobs deploy slate-migrate \
