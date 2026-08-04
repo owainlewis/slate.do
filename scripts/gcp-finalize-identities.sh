@@ -39,6 +39,30 @@ expect_resource_role() {
   fi
 }
 
+bucket_member_roles() {
+  bucket="$1"
+  member="$2"
+  gcloud storage buckets get-iam-policy "$bucket" --format='flattened(bindings)' | awk -F ': +' -v member="$member" '
+    {
+      binding = $1
+      sub(/^bindings\[/, "", binding)
+      sub(/\].*$/, "", binding)
+      if ($1 ~ /\.members\[/ && $2 == member) {
+        selected[binding] = 1
+      } else if ($1 ~ /\.role$/) {
+        roles[binding] = $2
+      }
+    }
+    END {
+      for (binding in selected) {
+        if (roles[binding] != "") {
+          print roles[binding]
+        }
+      }
+    }
+  ' | sort
+}
+
 deploy_member="serviceAccount:$DEPLOY_SERVICE_ACCOUNT"
 web_member="serviceAccount:$WEB_SERVICE_ACCOUNT"
 maintenance_member="serviceAccount:$MAINTENANCE_SERVICE_ACCOUNT"
@@ -95,8 +119,7 @@ fi
 artifact_roles="$(gcloud artifacts repositories get-iam-policy slate --project "$PROJECT_ID" --location "$REGION" \
   --flatten='bindings[].members' --filter="bindings.members=$deploy_member" --format='value(bindings.role)')"
 expect_resource_role "Artifact Registry deploy access" "$artifact_roles" roles/artifactregistry.writer
-bucket_roles="$(gcloud storage buckets get-iam-policy "gs://${PROJECT_ID}-slate-build" \
-  --flatten='bindings[].members' --filter="bindings.members=$deploy_member" --format='value(bindings.role)')"
+bucket_roles="$(bucket_member_roles "gs://${PROJECT_ID}-slate-build" "$deploy_member")"
 expect_resource_role "build bucket deploy access" "$bucket_roles" roles/storage.objectAdmin
 expect_resource_role "build bucket metadata access" "$bucket_roles" roles/storage.bucketViewer
 

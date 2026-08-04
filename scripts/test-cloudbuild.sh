@@ -141,6 +141,8 @@ assert_contains scripts/gcp-identities.sh 'roles/artifactregistry.writer'
 assert_contains scripts/gcp-identities.sh 'roles/storage.objectAdmin'
 assert_contains scripts/gcp-identities.sh 'roles/storage.bucketViewer'
 assert_contains scripts/gcp-finalize-identities.sh 'roles/storage.bucketViewer'
+assert_contains scripts/gcp-finalize-identities.sh "--format='flattened(bindings)'"
+assert_contains scripts/gcp-finalize-identities.sh 'bucket_member_roles "gs://${PROJECT_ID}-slate-build" "$deploy_member"'
 assert_contains scripts/gcp-identities.sh "resource.name == 'projects/\$PROJECT_ID/instances/\$INSTANCE'"
 assert_contains scripts/gcp-identities.sh 'gcloud secrets add-iam-policy-binding'
 assert_contains scripts/gcp-identities.sh 'roles/secretmanager.secretAccessor'
