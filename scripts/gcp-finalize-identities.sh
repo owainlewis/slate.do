@@ -45,7 +45,7 @@ maintenance_member="serviceAccount:$MAINTENANCE_SERVICE_ACCOUNT"
 scheduler_member="serviceAccount:$SCHEDULER_SERVICE_ACCOUNT"
 
 expect_equal "deploy project roles" \
-  $'roles/cloudbuild.builds.viewer\nroles/cloudscheduler.admin\nroles/logging.logWriter\nroles/run.admin' \
+  $'roles/cloudbuild.builds.editor\nroles/cloudscheduler.admin\nroles/logging.logWriter\nroles/run.admin' \
   "$(project_roles "$deploy_member")"
 expect_equal "web project roles" "roles/cloudsql.client" "$(project_roles "$web_member")"
 expect_equal "maintenance project roles" "roles/cloudsql.client" "$(project_roles "$maintenance_member")"
@@ -104,6 +104,9 @@ for service_account in "$WEB_SERVICE_ACCOUNT" "$MAINTENANCE_SERVICE_ACCOUNT" "$S
     --flatten='bindings[].members' --filter="bindings.members=$deploy_member" --format='value(bindings.role)')"
   expect_resource_role "$service_account deploy attachment" "$identity_roles" roles/iam.serviceAccountUser
 done
+deploy_self_roles="$(gcloud iam service-accounts get-iam-policy "$DEPLOY_SERVICE_ACCOUNT" --project "$PROJECT_ID" \
+  --flatten='bindings[].members' --filter="bindings.members=$deploy_member" --format='value(bindings.role)')"
+expect_equal "deploy self attachment" roles/iam.serviceAccountUser "$deploy_self_roles"
 
 expect_equal "Cloud Build trigger identity" \
   "projects/$PROJECT_ID/serviceAccounts/$DEPLOY_SERVICE_ACCOUNT" \

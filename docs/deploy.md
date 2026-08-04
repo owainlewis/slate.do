@@ -40,7 +40,7 @@ OPERATOR_PRINCIPAL="user:$(gcloud config get-value account)"
 PROJECT_ID="$PROJECT_ID" OPERATOR_PRINCIPAL="$OPERATOR_PRINCIPAL" bash scripts/gcp-identities.sh
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:$BUILD_SERVICE_ACCOUNT" \
-  --role=roles/cloudbuild.builds.viewer \
+  --role=roles/cloudbuild.builds.editor \
   --condition=None
 gcloud builds triggers create github \
   --project="$PROJECT_ID" \

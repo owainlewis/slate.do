@@ -107,7 +107,7 @@ assert_contains cloudbuild.yaml "_REQUEST_TIMEOUT_SECONDS: '15'"
 assert_contains cloudbuild.yaml '_REQUEST_TIMEOUT_SECONDS + 5'
 assert_not_contains cloudbuild.yaml '_CLOUD_RUN_REQUEST_TIMEOUT'
 assert_not_contains cloudbuild.yaml '-lc'
-assert_contains docs/deploy.md 'roles/cloudbuild.builds.viewer'
+assert_contains docs/deploy.md 'roles/cloudbuild.builds.editor'
 assert_contains docs/deploy.md '4 × 2 = 8'
 assert_contains docs/deploy.md 'scripts/check-capacity.sh'
 assert_contains docs/deploy.md 'database/postgresql/num_backends'
@@ -122,7 +122,8 @@ assert_contains scripts/gcp-deploy.sh '--service-account "$MAINTENANCE_SERVICE_A
 assert_contains scripts/gcp-deploy.sh '--oauth-service-account-email "$SCHEDULER_SERVICE_ACCOUNT"'
 assert_not_contains scripts/gcp-deploy.sh 'compute@developer.gserviceaccount.com'
 
-assert_contains scripts/gcp-identities.sh 'roles/cloudbuild.builds.viewer'
+assert_contains scripts/gcp-identities.sh 'roles/cloudbuild.builds.editor'
+assert_contains scripts/gcp-identities.sh 'remove_project_role_if_present "$deploy_member" roles/cloudbuild.builds.viewer'
 assert_contains scripts/gcp-identities.sh 'roles/cloudscheduler.admin'
 assert_contains scripts/gcp-identities.sh 'roles/run.admin'
 assert_contains scripts/gcp-identities.sh 'roles/artifactregistry.writer'
@@ -131,7 +132,9 @@ assert_contains scripts/gcp-identities.sh "resource.name == 'projects/\$PROJECT_
 assert_contains scripts/gcp-identities.sh 'gcloud secrets add-iam-policy-binding'
 assert_contains scripts/gcp-identities.sh 'roles/secretmanager.secretAccessor'
 assert_contains scripts/gcp-identities.sh 'roles/iam.serviceAccountUser'
+assert_contains scripts/gcp-identities.sh 'grant_service_account_role "$DEPLOY_SERVICE_ACCOUNT" "$deploy_member" roles/iam.serviceAccountUser'
 assert_contains scripts/gcp-identities.sh 'roles/iam.serviceAccountTokenCreator'
+assert_contains scripts/gcp-finalize-identities.sh 'expect_equal "deploy self attachment" roles/iam.serviceAccountUser'
 assert_not_contains scripts/gcp-identities.sh 'compute@developer.gserviceaccount.com'
 
 assert_contains scripts/gcp-finalize-identities.sh 'gcloud run jobs execute slate-cleanup'

@@ -32,6 +32,18 @@ grant_project_role() {
     --member "$member" --role "$role" --condition=None >/dev/null
 }
 
+remove_project_role_if_present() {
+  member="$1"
+  role="$2"
+  existing_roles="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+    --flatten='bindings[].members' --filter="bindings.members=$member" \
+    --format='value(bindings.role)')"
+  if grep -Fx "$role" <<<"$existing_roles" >/dev/null; then
+    gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+      --member "$member" --role "$role" --condition=None >/dev/null
+  fi
+}
+
 grant_service_account_role() {
   service_account="$1"
   member="$2"
@@ -78,13 +90,14 @@ maintenance_member="serviceAccount:$MAINTENANCE_SERVICE_ACCOUNT"
 scheduler_member="serviceAccount:$SCHEDULER_SERVICE_ACCOUNT"
 
 for role in \
-  roles/cloudbuild.builds.viewer \
+  roles/cloudbuild.builds.editor \
   roles/cloudscheduler.admin \
   roles/logging.logWriter \
   roles/run.admin
 do
   grant_project_role "$deploy_member" "$role"
 done
+remove_project_role_if_present "$deploy_member" roles/cloudbuild.builds.viewer
 
 gcloud artifacts repositories add-iam-policy-binding "$ARTIFACT_REPOSITORY" \
   --project "$PROJECT_ID" --location "$REGION" \
@@ -108,6 +121,7 @@ grant_secret_role_if_present slate-invite-code "$deploy_member" roles/secretmana
 for service_account in "$WEB_SERVICE_ACCOUNT" "$MAINTENANCE_SERVICE_ACCOUNT" "$SCHEDULER_SERVICE_ACCOUNT"; do
   grant_service_account_role "$service_account" "$deploy_member" roles/iam.serviceAccountUser
 done
+grant_service_account_role "$DEPLOY_SERVICE_ACCOUNT" "$deploy_member" roles/iam.serviceAccountUser
 grant_service_account_role "$DEPLOY_SERVICE_ACCOUNT" "serviceAccount:$BUILD_SERVICE_AGENT" roles/iam.serviceAccountTokenCreator
 
 if [ -n "$OPERATOR_PRINCIPAL" ] && [ "$OPERATOR_PRINCIPAL" != "user:" ]; then
