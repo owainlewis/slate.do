@@ -6,10 +6,230 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/owainlewis/slate.do/server/internal/database"
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
 )
+
+func TestStatusOnlyUpdateDoesNotAcquireQuotaAfterTaskLock(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID, _, bucket := createFreeQuotaAccount(t, ctx, db, store)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+	task, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "status lock", OverrideLimit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	quotaTx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer quotaTx.Rollback(ctx)
+	if _, err := lockStorageQuota(ctx, quotaTx, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	taskTx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taskTx.Rollback(ctx)
+	if _, err := lockedTask(ctx, taskTx, userID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	updateCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if _, err := taskTx.Exec(updateCtx, `
+		UPDATE tasks
+		SET title = title, description = description, status = 'working', updated_at = now()
+		WHERE id = $1
+	`, task.ID); err != nil {
+		t.Fatalf("status-only update waited for quota lock: %v", err)
+	}
+}
+
+func TestTextEditsRacingTaskListAndBoardDeletionDoNotDeadlock(t *testing.T) {
+	for _, deletion := range []string{"task", "list", "board"} {
+		t.Run(deletion, func(t *testing.T) {
+			for iteration := 0; iteration < 5; iteration++ {
+				db := openIntegrationDB(t)
+				ctx := context.Background()
+				store := NewStore(db)
+				userID, board, bucket := createFreeQuotaAccount(t, ctx, db, store)
+				task, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "before", OverrideLimit: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				start := make(chan struct{})
+				results := make(chan error, 2)
+				go func() {
+					<-start
+					title := "after"
+					_, err := store.UpdateTask(ctx, userID, task.ID, UpdateTaskInput{Title: &title})
+					results <- err
+				}()
+				go func() {
+					<-start
+					var err error
+					switch deletion {
+					case "task":
+						err = store.DeleteTask(ctx, userID, task.ID)
+					case "list":
+						err = store.DeleteBucket(ctx, userID, bucket.ID)
+					case "board":
+						err = store.DeleteBoard(ctx, userID, board.ID)
+					}
+					results <- err
+				}()
+				close(start)
+				for call := 0; call < 2; call++ {
+					err := <-results
+					if err != nil && !errors.Is(err, ErrNotFound) {
+						t.Fatalf("iteration %d %s race: %v", iteration, deletion, err)
+					}
+				}
+				usage, err := accountStorageUsage(ctx, db, userID, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if usage.Tasks < 0 || usage.ContentBytes < 0 {
+					t.Fatalf("iteration %d %s negative usage: %#v", iteration, deletion, usage)
+				}
+				if _, err := db.Exec(ctx, "DELETE FROM users WHERE id = $1", userID); err != nil {
+					t.Fatal(err)
+				}
+				db.Close()
+			}
+		})
+	}
+}
+
+func TestMoveAndReorderRacingListAndBoardDeletionDoNotDeadlock(t *testing.T) {
+	for _, mutation := range []string{"move", "reorder"} {
+		for _, deletion := range []string{"list", "board"} {
+			t.Run(mutation+"-"+deletion, func(t *testing.T) {
+				for iteration := 0; iteration < 5; iteration++ {
+					db := openIntegrationDB(t)
+					ctx := context.Background()
+					store := NewStore(db)
+					userID, board, source := createFreeQuotaAccount(t, ctx, db, store)
+					destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination", LimitCount: 20})
+					if err != nil {
+						t.Fatal(err)
+					}
+					first, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "first", OverrideLimit: true})
+					if err != nil {
+						t.Fatal(err)
+					}
+					second, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "second", OverrideLimit: true})
+					if err != nil {
+						t.Fatal(err)
+					}
+					start := make(chan struct{})
+					results := make(chan error, 2)
+					go func() {
+						<-start
+						if mutation == "move" {
+							position := 0
+							_, err := store.MoveTask(ctx, userID, second.ID, MoveTaskInput{BucketID: destination.ID, Position: &position})
+							results <- err
+							return
+						}
+						results <- store.ReorderTasks(ctx, userID, source.ID, []string{second.ID, first.ID})
+					}()
+					go func() {
+						<-start
+						if deletion == "list" {
+							results <- store.DeleteBucket(ctx, userID, source.ID)
+							return
+						}
+						results <- store.DeleteBoard(ctx, userID, board.ID)
+					}()
+					close(start)
+					for call := 0; call < 2; call++ {
+						err := <-results
+						if err != nil && !errors.Is(err, ErrNotFound) {
+							t.Fatalf("iteration %d %s/%s race: %v", iteration, mutation, deletion, err)
+						}
+					}
+					usage, err := accountStorageUsage(ctx, db, userID, false)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if usage.Tasks < 0 || usage.ContentBytes < 0 {
+						t.Fatalf("iteration %d %s/%s negative usage: %#v", iteration, mutation, deletion, usage)
+					}
+					if _, err := db.Exec(ctx, "DELETE FROM users WHERE id = $1", userID); err != nil {
+						t.Fatal(err)
+					}
+					db.Close()
+				}
+			})
+		}
+	}
+}
+
+func TestUpdateTaskAcrossBoardsRacingDestinationBoardDeletionDoesNotDeadlock(t *testing.T) {
+	for iteration := 0; iteration < 5; iteration++ {
+		db := openIntegrationDB(t)
+		ctx := context.Background()
+		store := NewStore(db)
+		userID := createIntegrationUser(t, ctx, db)
+		sourceBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Source"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		source, err := store.CreateBucket(ctx, userID, sourceBoard.ID, CreateBucketInput{Name: "Source", LimitCount: 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		destinationBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Destination"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		destination, err := store.CreateBucket(ctx, userID, destinationBoard.ID, CreateBucketInput{Name: "Destination", LimitCount: 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		task, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "move me", OverrideLimit: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		go func() {
+			<-start
+			_, err := store.UpdateTask(ctx, userID, task.ID, UpdateTaskInput{BucketID: &destination.ID})
+			results <- err
+		}()
+		go func() {
+			<-start
+			results <- store.DeleteBoard(ctx, userID, destinationBoard.ID)
+		}()
+		close(start)
+		for call := 0; call < 2; call++ {
+			err := <-results
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				t.Fatalf("iteration %d update/delete race: %v", iteration, err)
+			}
+		}
+		usage, err := accountStorageUsage(ctx, db, userID, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if usage.Tasks < 0 || usage.ContentBytes < 0 {
+			t.Fatalf("iteration %d negative usage: %#v", iteration, usage)
+		}
+		if _, err := db.Exec(ctx, "DELETE FROM users WHERE id = $1", userID); err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+	}
+}
 
 func TestStoredTaskQuotaExactLimitDeleteAndConcurrentCreates(t *testing.T) {
 	db := openIntegrationDB(t)

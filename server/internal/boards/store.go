@@ -730,6 +730,12 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":task-move"); err != nil {
 		return Task{}, err
 	}
+	// Moves can lock several task rows while list or board deletion locks the
+	// same rows. Serialize them through the account-first quota lock used by
+	// every deletion path before taking any task lock.
+	if _, err := lockStorageQuota(ctx, tx, userID); err != nil {
+		return Task{}, err
+	}
 	current, err := lockedTask(ctx, tx, userID, id)
 	if err != nil {
 		return Task{}, err
@@ -834,7 +840,7 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	}
 	defer tx.Rollback(ctx)
 	var quota *storageQuota
-	if input.Title != nil || input.Description != nil {
+	if input.Title != nil || input.Description != nil || input.BucketID != nil {
 		quota, err = lockStorageQuota(ctx, tx, userID)
 		if err != nil {
 			return Task{}, err
@@ -1032,6 +1038,9 @@ func (s *Store) ReorderTasks(ctx context.Context, userID string, bucketID string
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := lockStorageQuota(ctx, tx, userID); err != nil {
+		return err
+	}
 	for i, id := range ids {
 		tag, err := tx.Exec(ctx, `
 			UPDATE tasks t
