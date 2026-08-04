@@ -1,0 +1,52 @@
+#!/bin/sh
+set -eu
+
+commit_sha="${1:-}"
+if [ -z "$commit_sha" ]; then
+  printf '%s\n' 'usage: verify-github-ci.sh <commit-sha>' >&2
+  exit 1
+fi
+
+api="https://api.github.com/repos/owainlewis/slate.do/commits/$commit_sha/check-runs?check_name=Required%20CI&filter=latest&per_page=10"
+attempt=1
+while [ "$attempt" -le 45 ]; do
+  response="$(curl --fail --silent --show-error -H 'Accept: application/vnd.github+json' "$api")"
+  result="$(printf '%s' "$response" | python3 -c '
+import json, sys
+runs = [
+    run for run in json.load(sys.stdin).get("check_runs", [])
+    if run.get("app", {}).get("slug") == "github-actions"
+    and run.get("app", {}).get("id") == 15368
+]
+if not runs:
+    print("missing")
+elif any(run.get("status") != "completed" for run in runs):
+    print("pending")
+elif any(run.get("conclusion") != "success" for run in runs):
+    print("failed")
+else:
+    print("success")
+')"
+  case "$result" in
+    success)
+      printf 'Required CI passed for %s\n' "$commit_sha"
+      exit 0
+      ;;
+    failed)
+      printf 'Required CI failed for %s\n' "$commit_sha" >&2
+      exit 1
+      ;;
+    missing|pending)
+      printf 'Waiting for Required CI on %s (%s)\n' "$commit_sha" "$result"
+      ;;
+    *)
+      printf 'Unexpected GitHub check response for %s: %s\n' "$commit_sha" "$result" >&2
+      exit 1
+      ;;
+  esac
+  attempt=$((attempt + 1))
+  sleep 20
+done
+
+printf 'Timed out waiting for Required CI on %s\n' "$commit_sha" >&2
+exit 1

@@ -15,10 +15,20 @@ seed-owner: seed-admin
 serve:
     DATABASE_URL={{database_url}} COOKIE_SECURE=false go run ./server/cmd/slate serve
 
-test:
-    cd server && go test ./...
+test: test-unit
+
+test-unit:
+    cd server && SLATE_TEST_DATABASE_URL= go test ./...
     cd cli && go test ./...
     node --test server/internal/web/dist/app.test.js
+    sh scripts/test-install.sh
+    sh scripts/test-cloudbuild.sh
+
+test-ci:
+    sh scripts/test-server-ci.sh
+    cd cli && go test ./...
+    node --test server/internal/web/dist/app.test.js
+    npm run test:browser
     sh scripts/test-install.sh
     sh scripts/test-cloudbuild.sh
 

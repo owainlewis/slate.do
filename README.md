@@ -48,6 +48,23 @@ just serve
 
 Open `http://localhost:8080`.
 
+## Tests
+
+`just test-unit` runs the fast suite without external services. The required
+release gate uses PostgreSQL and Chromium:
+
+```bash
+createdb slate_test
+export SLATE_TEST_DATABASE_URL=postgres://localhost/slate_test?sslmode=disable
+npm ci
+npx playwright install chromium
+just test-ci
+```
+
+The CI suite fails if a database-backed Go test is skipped. Keep
+`SLATE_TEST_DATABASE_URL` pointed at a disposable test database because tests
+apply migrations and create temporary records.
+
 ## CLI
 
 Install the latest release on macOS or Linux:
