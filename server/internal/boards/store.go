@@ -1090,6 +1090,8 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 		if err := writeTaskOrder(ctx, tx, sourceIDs); err != nil {
 			return Task{}, err
 		}
+	} else if err := touchTask(ctx, tx, current.ID); err != nil {
+		return Task{}, err
 	}
 	if err := writeTaskOrder(ctx, tx, destinationIDs); err != nil {
 		return Task{}, err
@@ -1196,11 +1198,16 @@ func updateChildTaskLocations(ctx context.Context, tx pgx.Tx, parentTaskID strin
 
 func writeTaskOrder(ctx context.Context, tx pgx.Tx, ids []string) error {
 	for position, id := range ids {
-		if _, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1, updated_at = now() WHERE id = $2", position, id); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1 WHERE id = $2", position, id); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func touchTask(ctx context.Context, tx pgx.Tx, taskID string) error {
+	_, err := tx.Exec(ctx, "UPDATE tasks SET updated_at = now() WHERE id = $1", taskID)
+	return err
 }
 
 func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID string, id string, input UpdateTaskInput, allowWorking bool) (Task, error) {
@@ -1246,6 +1253,9 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	var sourceOrder []string
 	var destinationOrder []string
 	if input.BucketID != nil && *input.BucketID != current.BucketID {
+		if input.SortOrder != nil {
+			return Task{}, fmt.Errorf("%w: use the move endpoint to change a task list and position together", ErrInvalidData)
+		}
 		if current.ParentTaskID != "" {
 			parent, err := lockedTask(ctx, tx, userID, current.ParentTaskID)
 			if err != nil {

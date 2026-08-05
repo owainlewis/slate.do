@@ -1309,11 +1309,83 @@ func TestUpdateTaskMovesParentAndChildrenAsOrderedGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	requestedPosition := 1
+	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID, SortOrder: &requestedPosition}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("combined list and position update error = %v, want ErrInvalidData", err)
+	}
+	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, parent.ID, firstChild.ID, secondChild.ID, after.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{destinationFirst.ID, destinationLast.ID})
+
 	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID}); err != nil {
 		t.Fatal(err)
 	}
 	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
 	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{parent.ID, firstChild.ID, secondChild.ID, destinationFirst.ID, destinationLast.ID})
+}
+
+func TestTaskMovesPreserveUnrelatedTaskTimestamps(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "History"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceHistory, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Old source completion"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Child"}); err != nil {
+		t.Fatal(err)
+	}
+	destinationHistory, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Old destination completion"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := true
+	for _, taskID := range []string{sourceHistory.ID, destinationHistory.ID} {
+		if _, err := store.UpdateTaskForHuman(ctx, userID, taskID, UpdateTaskInput{Done: &done}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const oldTimestamp = "2020-01-02T03:04:05Z"
+	if _, err := db.Exec(ctx, "UPDATE tasks SET updated_at = $1::timestamptz WHERE id = ANY($2::uuid[])", oldTimestamp, []string{sourceHistory.ID, destinationHistory.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID}); err != nil {
+		t.Fatal(err)
+	}
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: source.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
+	for _, taskID := range []string{sourceHistory.ID, destinationHistory.ID} {
+		task, err := store.GetTask(ctx, userID, taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.UpdatedAt.UTC().Format(time.RFC3339) != oldTimestamp {
+			t.Fatalf("unrelated task %s updated at %s, want %s", taskID, task.UpdatedAt.UTC().Format(time.RFC3339), oldTimestamp)
+		}
+	}
 }
 
 func TestSubtaskCreationRacingParentMoveNeverSplitsLists(t *testing.T) {
