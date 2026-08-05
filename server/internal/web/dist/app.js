@@ -530,8 +530,9 @@ async function applyRoute() {
 
     if (route.name === "workspace") {
       if (!state.board && state.boards[0]?.id && !await loadBoard(state.boards[0].id, authVersion, version)) return;
-      if (!await loadWorkspace(route, version)) return showRoute("not-found");
+      const workspaceLoaded = await loadWorkspace(route, version);
       if (routeVersion !== version) return;
+      if (!workspaceLoaded) return showRoute("not-found");
       return showRoute("app");
     }
     if (route.name === "board" || route.name === "board-settings") {

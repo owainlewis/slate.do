@@ -2107,6 +2107,54 @@ test("a stale board-list response cannot overwrite newer route navigation", asyn
   assert.equal(it.url(), "/app/tasks");
 });
 
+test("a stale workspace response cannot render Not Found over newer navigation", async () => {
+  const it = router({ url: "/", signedIn: true });
+  let releaseOldLists;
+  it.context.oldListsResponse = new Promise(resolve => { releaseOldLists = resolve; });
+  vm.runInContext(`
+    let listRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
+      if (path === "/api/v1/agents") return { agents: [] };
+      if (path === "/api/v1/lists" && ++listRequests === 1) return oldListsResponse;
+      if (path === "/api/v1/lists") return { lists: [{ id: "list-current", name: "Current" }] };
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  const staleNavigation = it.go("/app/lists/list-missing");
+  await new Promise(resolve => setImmediate(resolve));
+  await it.go("/app/tasks");
+  releaseOldLists({ lists: [] });
+  await staleNavigation;
+
+  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.view(), "app");
+  assert.equal(vm.runInContext("state.workspaceScope", it.context), "all");
+  assert.notEqual(it.rendered.at(-1), "not-found");
+});
+
+test("a current workspace request for a missing list renders Not Found", async () => {
+  const it = router({ url: "/app/lists/list-missing", signedIn: true });
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
+      if (path === "/api/v1/agents") return { agents: [] };
+      if (path === "/api/v1/lists") return { lists: [{ id: "list-current", name: "Current" }] };
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  await it.apply();
+
+  assert.equal(it.url(), "/app/lists/list-missing");
+  assert.equal(it.view(), "not-found");
+});
+
 test("a stale board-settings load cannot overwrite newer board navigation", async () => {
   const it = router({ url: "/", signedIn: true });
   let releaseSettingsBoard;
