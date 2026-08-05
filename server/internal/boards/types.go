@@ -29,17 +29,18 @@ type Board struct {
 }
 
 type Bucket struct {
-	ID         string    `json:"id"`
-	BoardID    string    `json:"boardId"`
-	Name       string    `json:"name"`
-	Goal       string    `json:"goal"`
-	IsInbox    bool      `json:"isInbox"`
-	LimitCount int       `json:"limitCount"`
-	SortOrder  int       `json:"sortOrder"`
-	OpenCount  int       `json:"openCount"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	Tasks      []Task    `json:"tasks,omitempty"`
+	ID                  string    `json:"id"`
+	BoardID             string    `json:"boardId"`
+	Name                string    `json:"name"`
+	Goal                string    `json:"goal"`
+	IsInbox             bool      `json:"isInbox"`
+	LimitCount          int       `json:"limitCount"`
+	SortOrder           int       `json:"sortOrder"`
+	OpenCount           int       `json:"openCount"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+	Tasks               []Task    `json:"tasks,omitempty"`
+	CompletedNextCursor string    `json:"completedNextCursor,omitempty"`
 }
 
 type Task struct {
@@ -47,7 +48,7 @@ type Task struct {
 	BoardID         string    `json:"boardId"`
 	BucketID        string    `json:"bucketId"`
 	Title           string    `json:"title"`
-	Description     string    `json:"description"`
+	Description     string    `json:"description,omitempty"`
 	ScheduledDate   string    `json:"scheduledDate"`
 	Kind            string    `json:"kind"`
 	Done            bool      `json:"done"`
@@ -124,6 +125,12 @@ type TaskFilter struct {
 	Priority        string
 	Done            *bool
 	Limit           int
+	Cursor          string
 	ActionsOnly     bool
 	AssigneeAgentID string
+}
+
+type TaskPage struct {
+	Tasks      []Task `json:"tasks"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }

@@ -284,6 +284,84 @@ test("list limits remain scoped to the selected board", () => {
   assert.equal(app.validateListLimit("20", 20), "");
 });
 
+test("completed history pages append to a list and preserve the next cursor", async () => {
+  vm.runInContext(`
+    savedHistoryRender = render;
+    savedHistoryGet = api.get;
+    render = () => {};
+    document = { querySelector() { return null; } };
+    CSS = { escape(value) { return value; } };
+    authVersion = 4;
+    routeVersion = 7;
+    state.me = { id: "owner" };
+    state.board = {
+      id: "board-one",
+      buckets: [{ id: "list-one", completedNextCursor: "cursor-one", tasks: [{ id: "active", done: false }] }],
+    };
+    historyRequests = [];
+    api.get = async path => {
+      historyRequests.push(path);
+      return { tasks: [{ id: "older", bucketId: "list-one", done: true }], nextCursor: "cursor-two" };
+    };
+  `, app);
+
+  await app.loadCompletedHistory("list-one");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(historyRequests)", app)), [
+    "/api/v1/tasks?bucketId=list-one&done=true&limit=20&cursor=cursor-one",
+  ]);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.board.buckets[0].tasks.map(task => task.id))", app)), ["active", "older"]);
+  assert.equal(vm.runInContext("state.board.buckets[0].completedNextCursor", app), "cursor-two");
+  const html = app.listHTML(vm.runInContext("state.board.buckets[0]", app));
+  assert.match(html, /data-load-completed="list-one">Load older completed/);
+
+  vm.runInContext(`
+    render = savedHistoryRender;
+    api.get = savedHistoryGet;
+    state.me = null;
+    state.board = null;
+  `, app);
+});
+
+test("opening a task loads its full description from the exact endpoint", async () => {
+  vm.runInContext(`
+    savedDetailRender = render;
+    savedDetailGet = api.get;
+    render = () => {};
+    authVersion = 9;
+    routeVersion = 11;
+    state.me = { id: "owner" };
+    state.board = { id: "board-one", buckets: [{ id: "list-one", tasks: [{ id: "task-one", bucketId: "list-one", title: "Summary" }] }] };
+    detailRequests = [];
+    api.get = async path => {
+      detailRequests.push(path);
+      return { id: "task-one", bucketId: "list-one", title: "Summary", description: "Full private detail" };
+    };
+  `, app);
+
+  assert.equal(await app.openTaskDetail("task-one"), true);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), ["/api/v1/tasks/task-one"]);
+  assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
+
+  vm.runInContext(`
+    state.board.buckets[0].tasks = [];
+    state.selectedTask = null;
+  `, app);
+  assert.equal(await app.openTaskDetail("task-one"), true);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
+    "/api/v1/tasks/task-one",
+    "/api/v1/tasks/task-one",
+  ]);
+  assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
+
+  vm.runInContext(`
+    render = savedDetailRender;
+    api.get = savedDetailGet;
+    state.me = null;
+    state.board = null;
+    state.selectedTask = null;
+  `, app);
+});
+
 test("Pro limits prevent obvious list and active-item creation", () => {
 	vm.runInContext(`
 		state.me = { entitlement: { plan: "pro", source: "manual", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } } };
@@ -461,6 +539,8 @@ test("account settings contain profile, preferences, and personal API access onl
   assert.match(profile, /id="profile-display-name" name="displayName" value="Owain Lewis"/);
   assert.match(profile, /class="avatar user-avatar tone-\d[^"]*avatar-large/);
   assert.match(profile, /<span class="read-only-value">owner@example.com<\/span>/);
+  assert.match(profile, /id="request-password-reset"[^>]*>Send reset link<\/button>/);
+  assert.match(profile, /Send a secure reset link to your account email/);
   assert.doesNotMatch(profile, />OL<\/span>/);
   assert.doesNotMatch(profile, /settings-list-limit|agent-limit|token-form|slate_personal_secret/);
 
@@ -491,6 +571,18 @@ test("account settings contain profile, preferences, and personal API access onl
     assert.doesNotMatch(html, /<h1>Settings<\/h1>/);
   }
   vm.runInContext(`state.me = null; state.board = null; state.agents = []; state.tokens = []; state.newToken = ""; state.newTokenOwnerID = ""; state.settingsPage = "profile";`, app);
+});
+
+test("settings use readable text sizes", () => {
+  assert.match(styles, /\.settings-nav-link \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-head \.settings-description \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-section-head p \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-row-copy strong \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-row-copy span \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.read-only-value \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-status \{[^}]*font-size: 13px;/);
+  assert.match(styles, /\.field-error \{[^}]*font-size: 13px;/);
+  assert.match(styles, /\.settings-page \.settings-nav-link \{[^}]*font-size: 14px;/);
 });
 
 test("agent directory shows credential facts, work counts, archived identities, and limits", () => {

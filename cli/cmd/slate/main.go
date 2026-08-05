@@ -107,7 +107,8 @@ Run "slate help <topic>" for every command and flag.
   slate boards update <board-id> [--name <name>] [--background-kind <kind>] [--background-value <value>] [--max-tasks-per-list <n>] [--sort-order <n>]
   slate boards delete <board-id>
 
-"get" returns the board with all of its lists and tasks.
+"get" returns every active item and the 20 most recently updated completed
+items per list. Use "tasks list --done true" to page older completed work.
 `,
 	"lists": `Usage:
   slate lists list --board <board-id>
@@ -120,7 +121,7 @@ Run "slate help <topic>" for every command and flag.
 "buckets" is accepted as an alias for "lists".
 `,
 	"tasks": `Usage:
-  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--done <true|false>] [--limit <n>]
+  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--done <true|false>] [--limit <n>] [--cursor <cursor>]
   slate tasks get <task-id>
   slate tasks pull [--board <board-id>] [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
   slate tasks create --list <list-id> --title <title> [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>] [--override-limit]
@@ -136,6 +137,8 @@ Run "slate help <topic>" for every command and flag.
 clear the priority. "working" uses the atomic claim operation, so only one
 agent can successfully claim a queued task.
 Reuse --idempotency-key when retrying task creation after an uncertain result.
+Task collections omit descriptions. Use "tasks get" for complete task detail.
+Completed pages default to 20 items and return nextCursor for --cursor.
 `,
 }
 
@@ -325,10 +328,11 @@ func tasksCmd(c client, args []string) error {
 		listID := fs.String("list", "", "list id")
 		limit := fs.Int("limit", 0, "maximum tasks")
 		priority := fs.String("priority", "", "priority filter: p0, p1, or p2")
-		var status, done *string
+		var status, done, cursor *string
 		if command == "list" {
 			status = fs.String("status", "", "status filter")
 			done = fs.String("done", "", "done filter")
+			cursor = fs.String("cursor", "", "completed history cursor")
 		}
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -349,6 +353,7 @@ func tasksCmd(c client, args []string) error {
 		if status != nil {
 			setQuery(q, "status", *status)
 			setQuery(q, "done", *done)
+			setQuery(q, "cursor", *cursor)
 		}
 		path := "/api/v1/tasks"
 		if command == "pull" {

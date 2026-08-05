@@ -39,18 +39,19 @@ const (
 )
 
 var (
-	ErrEmailTaken        = errors.New("email already exists")
-	ErrInvalidAuth       = errors.New("invalid email or password")
-	ErrUnauthorized      = errors.New("unauthorized")
-	ErrAdminExists       = errors.New("admin already exists")
-	ErrRateLimited       = errors.New("registration rate limit reached")
-	ErrMemberNotFound    = errors.New("member account not found")
-	ErrInvalidResetToken = errors.New("invalid or expired password reset token")
-	ErrNoPendingReset    = errors.New("no pending password reset request")
-	ErrAPITokenLimit     = errors.New("API token limit reached")
-	ErrAgentLimit        = errors.New("active agent limit reached")
-	ErrAgentNameTaken    = errors.New("active agent name already exists")
-	ErrAgentNotFound     = errors.New("agent not found")
+	ErrEmailTaken         = errors.New("email already exists")
+	ErrInvalidAuth        = errors.New("invalid email or password")
+	ErrUnauthorized       = errors.New("unauthorized")
+	ErrAdminExists        = errors.New("admin already exists")
+	ErrRateLimited        = errors.New("registration rate limit reached")
+	ErrMemberNotFound     = errors.New("member account not found")
+	ErrInvalidResetToken  = errors.New("invalid or expired password reset token")
+	ErrNoPendingReset     = errors.New("no pending password reset request")
+	ErrAPITokenLimit      = errors.New("API token limit reached")
+	ErrCredentialRejected = errors.New("credential rejected before authentication")
+	ErrAgentLimit         = errors.New("active agent limit reached")
+	ErrAgentNameTaken     = errors.New("active agent name already exists")
+	ErrAgentNotFound      = errors.New("agent not found")
 )
 
 type User struct {
@@ -598,24 +599,39 @@ func (s *Service) UserFromRequestWithCredential(r *http.Request) (User, string, 
 }
 
 func (s *Service) ResolveUserFromRequest(r *http.Request) (User, string, error) {
+	return s.ResolveUserFromRequestWithGate(r, nil)
+}
+
+func (s *Service) ResolveUserFromRequestWithGate(r *http.Request, gate func(string) bool) (User, string, error) {
+	sessionRejected := false
 	if _, ok := s.readSessionToken(r); ok {
-		user, credential, err := s.ResolveSessionUserFromRequest(r)
+		user, credential, err := s.ResolveSessionUserFromRequestWithGate(r, gate)
 		if err == nil {
 			return user, credential, nil
 		}
-		if !errors.Is(err, ErrUnauthorized) {
+		if errors.Is(err, ErrCredentialRejected) {
+			sessionRejected = true
+		} else if !errors.Is(err, ErrUnauthorized) {
 			return User{}, "", err
 		}
 	}
 	token, ok := readBearerToken(r)
 	if !ok {
+		if sessionRejected {
+			return User{}, "", ErrCredentialRejected
+		}
 		return User{}, "", ErrUnauthorized
 	}
-	user, err := s.store.FindUserByAPITokenHash(r.Context(), hashToken(token), s.now())
+	tokenHash := hashToken(token)
+	credential := "bearer:" + tokenHash
+	if gate != nil && !gate(credential) {
+		return User{}, "", ErrCredentialRejected
+	}
+	user, err := s.store.FindUserByAPITokenHash(r.Context(), tokenHash, s.now())
 	if err != nil {
 		return User{}, "", err
 	}
-	return user, "bearer:" + hashToken(token), nil
+	return user, credential, nil
 }
 
 func (s *Service) UserFromSessionRequest(r *http.Request) (User, bool) {
@@ -629,15 +645,24 @@ func (s *Service) UserFromSessionRequestWithCredential(r *http.Request) (User, s
 }
 
 func (s *Service) ResolveSessionUserFromRequest(r *http.Request) (User, string, error) {
+	return s.ResolveSessionUserFromRequestWithGate(r, nil)
+}
+
+func (s *Service) ResolveSessionUserFromRequestWithGate(r *http.Request, gate func(string) bool) (User, string, error) {
 	token, ok := s.readSessionToken(r)
 	if !ok {
 		return User{}, "", ErrUnauthorized
 	}
-	user, err := s.store.FindUserBySessionHash(r.Context(), hashToken(token), s.now())
+	tokenHash := hashToken(token)
+	credential := "session:" + tokenHash
+	if gate != nil && !gate(credential) {
+		return User{}, "", ErrCredentialRejected
+	}
+	user, err := s.store.FindUserBySessionHash(r.Context(), tokenHash, s.now())
 	if err != nil {
 		return User{}, "", err
 	}
-	return user, "session:" + hashToken(token), nil
+	return user, credential, nil
 }
 
 func (s *Service) RequireUser(next func(http.ResponseWriter, *http.Request, User)) http.HandlerFunc {

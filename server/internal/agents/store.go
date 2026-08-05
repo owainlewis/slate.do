@@ -469,7 +469,7 @@ func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentI
 
 const workSelect = `
 	SELECT t.id::text, t.board_id::text, b.name, t.bucket_id::text, bucket.name,
-		t.title, t.description, COALESCE(t.scheduled_date::text, ''), t.kind,
+		t.title, '', COALESCE(t.scheduled_date::text, ''), t.kind,
 		t.done, t.status, COALESCE(t.assignee_agent_id::text, ''), t.created_at, t.updated_at
 	FROM tasks t
 	JOIN boards b ON b.id = t.board_id

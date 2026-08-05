@@ -6,8 +6,26 @@ on:
   pull_request:
 
 jobs:
-  test:
+  test-ci:
+    name: Required CI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: slate_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d slate_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      SLATE_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/slate_test?sslmode=disable
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -16,11 +34,14 @@ jobs:
           cache-dependency-path: |
             server/go.mod
             cli/go.mod
-      - run: go test ./...
-        working-directory: server
-      - run: go test ./...
-        working-directory: cli
-      - run: sh -n install.sh scripts/build-cli-release.sh scripts/test-install.sh scripts/gcp-deploy.sh scripts/test-cloudbuild.sh
-      - run: sh scripts/test-cloudbuild.sh
-      - run: sh scripts/test-install.sh
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: extractions/setup-just@v3
+        with:
+          just-version: "1.50.0"
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: just test-ci
       - run: sh scripts/build-cli-release.sh v0.0.0 "$RUNNER_TEMP/slate-release"

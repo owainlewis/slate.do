@@ -1399,29 +1399,29 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 
 /* ---------- Settings ---------- */
-.settings-sidebar-title { margin: 4px 10px 0; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+.settings-sidebar-title { margin: 4px 10px 0; color: var(--faint); font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
 .settings-nav { display: flex; flex-direction: column; gap: 2px; }
-.settings-nav-link { display: flex; text-decoration: none; }
+.settings-nav-link { display: flex; font-size: 14px; text-decoration: none; }
 .settings-nav-link .icon { width: 14px; height: 14px; }
 .settings-actions { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
 .settings-account-link { text-decoration: none; }
 .settings-main { flex: 1; min-width: 0; background: var(--bg); padding: 36px 44px; }
 .settings-panel { width: min(720px, 100%); }
 .settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 24px; }
-.settings-head p:not(.settings-description) { margin: 0 0 6px; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
-.settings-head h1 { margin: 0; font-weight: 700; font-size: 24px; letter-spacing: -.02em; }
-.settings-head .settings-description { margin: 7px 0 0; color: var(--faint); font-size: 12px; line-height: 1.5; }
+.settings-head p:not(.settings-description) { margin: 0 0 6px; color: var(--faint); font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+.settings-head h1 { margin: 0; font-weight: 700; font-size: 28px; letter-spacing: -.02em; }
+.settings-head .settings-description { margin: 7px 0 0; color: var(--faint); font-size: 14px; line-height: 1.5; }
 .settings-section { padding: 22px 0; border-top: 1px solid var(--line); }
 .settings-section:first-of-type { border-top: 0; padding-top: 0; }
 .settings-section-head { margin-bottom: 14px; }
-.settings-section-head h2 { margin: 0 0 4px; font-size: 16px; }
-.settings-section-head p { margin: 0; color: var(--faint); font-size: 12px; line-height: 1.5; }
+.settings-section-head h2 { margin: 0 0 4px; font-size: 18px; }
+.settings-section-head p { margin: 0; color: var(--faint); font-size: 14px; line-height: 1.5; }
 .settings-card { display: block; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
 .settings-row { min-height: 76px; padding: 15px 17px; display: flex; align-items: center; justify-content: space-between; gap: 28px; border-bottom: 1px solid var(--line-2); }
 .settings-row:last-child { border-bottom: 0; }
 .settings-row-copy { min-width: 0; display: grid; gap: 4px; color: var(--ink); }
-.settings-row-copy strong { font-size: 12px; line-height: 1.35; }
-.settings-row-copy span { color: var(--faint); font-size: 11px; line-height: 1.45; }
+.settings-row-copy strong { font-size: 14px; line-height: 1.35; }
+.settings-row-copy span { color: var(--faint); font-size: 14px; line-height: 1.5; }
 .settings-field-wrap { width: min(280px, 48%); flex: 0 0 auto; }
 .settings-field-wrap input,
 .token-create-control input {
@@ -1438,7 +1438,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .token-create-control input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
 .settings-field-wrap input[aria-invalid="true"],
 .token-create-control input[aria-invalid="true"] { border-color: var(--danger); }
-.read-only-value { min-width: 0; max-width: 48%; overflow-wrap: anywhere; color: var(--soft); font-size: 12px; }
+.read-only-value { min-width: 0; max-width: 48%; overflow-wrap: anywhere; color: var(--soft); font-size: 14px; }
 .profile-avatar-row .avatar { margin-right: 4px; }
 .settings-card-actions {
   min-height: 58px;
@@ -1449,20 +1449,20 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   gap: 16px;
   background: color-mix(in srgb, var(--ink) 2%, var(--card));
 }
-.settings-status { min-height: 18px; margin: 0; color: var(--soft); font-size: 11px; line-height: 1.45; }
+.settings-status { min-height: 18px; margin: 0; color: var(--soft); font-size: 13px; line-height: 1.45; }
 .settings-status.error { color: var(--danger); }
-.field-error { min-height: 14px; margin: 4px 1px -2px; color: var(--danger); font-size: 10px; line-height: 1.35; }
+.field-error { min-height: 14px; margin: 4px 1px -2px; color: var(--danger); font-size: 13px; line-height: 1.35; }
 .field-error:empty { visibility: hidden; }
 .settings-page .settings-submit,
 .settings-page .settings-row-actions button {
   min-height: 32px;
   padding: 6px 9px;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.15;
   white-space: nowrap;
 }
 .settings-page .settings-submit { align-self: center; }
-.settings-page button:disabled { cursor: wait; opacity: .58; }
+.settings-page button:disabled, .settings-page button[aria-disabled="true"] { cursor: wait; opacity: .58; }
 .settings-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
 .settings-row-actions .danger { color: var(--faint); }
 .settings-row-actions .danger:hover, .settings-row-actions .danger:focus-visible { color: var(--danger); }
@@ -1477,25 +1477,25 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .token-create-control .field-error { grid-column: 1 / -1; }
 .one-time-token { padding: 16px; border-bottom: 1px solid var(--line-2); background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
 .one-time-token > div:first-child { margin-bottom: 12px; }
-.one-time-token strong { font-size: 12px; }
-.one-time-token p { margin: 4px 0 0; color: var(--soft); font-size: 11px; line-height: 1.45; }
+.one-time-token strong { font-size: 14px; }
+.one-time-token p { margin: 4px 0 0; color: var(--soft); font-size: 13px; line-height: 1.45; }
 .token-list { display: grid; }
 .token-row { display: flex; gap: 12px; align-items: center; min-height: 58px; padding: 9px 16px; border-bottom: 1px solid var(--line-2); }
 .token-row:last-child { border-bottom: 0; }
 .token-row > span { flex: 1; min-width: 0; display: grid; gap: 3px; overflow: hidden; text-overflow: ellipsis; }
-.token-row strong { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
-.token-row small { color: var(--faint); font-size: 10px; }
-.token-row code { font-size: 12px; overflow-wrap: anywhere; }
+.token-row strong { overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.token-row small { color: var(--faint); font-size: 13px; }
+.token-row code { font-size: 13px; overflow-wrap: anywhere; }
 .agent-credentials-link { min-height: 74px; padding: 15px 17px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; color: var(--ink); text-decoration: none; }
 .agent-credentials-link:hover { border-color: color-mix(in srgb, var(--ink) 24%, var(--line)); background: color-mix(in srgb, var(--ink) 2%, var(--card)); }
 .settings-link-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
 .settings-link-icon .icon { width: 18px; height: 18px; }
 .agent-credentials-link > span:nth-child(2) { min-width: 0; display: grid; gap: 4px; }
-.agent-credentials-link strong { font-size: 12px; }
-.agent-credentials-link small { color: var(--faint); font-size: 11px; line-height: 1.45; }
+.agent-credentials-link strong { font-size: 14px; }
+.agent-credentials-link small { color: var(--faint); font-size: 13px; line-height: 1.45; }
 .agent-credentials-link .chevron-right { transform: rotate(180deg); color: var(--faint); }
 .board-settings-context { margin: -4px 2px 0; padding: 10px 8px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--card); color: var(--soft); }
-.board-settings-context span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.board-settings-context span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
 .board-settings-context .icon { color: var(--accent); }
 .board-settings-head h1 { overflow-wrap: anywhere; }
 
@@ -1775,7 +1775,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .docs-section { padding: 40px 0; }
   .docs-section h2 { font-size: 29px; }
   .docs-section pre { margin-left: -4px; margin-right: -4px; padding: 16px; }
-  .settings-page .settings-nav-link { gap: 5px; font-size: 12px; }
+  .settings-page .settings-nav-link { gap: 5px; font-size: 14px; }
   .settings-page .settings-nav-link .icon { width: 13px; height: 13px; }
   .settings-row { min-height: 0; padding: 14px; align-items: stretch; flex-direction: column; gap: 10px; }
   .profile-avatar-row { flex-direction: row; align-items: center; }

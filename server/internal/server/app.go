@@ -150,12 +150,20 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 		return
 	}
-	user, credential, err := a.auth.ResolveUserFromRequest(r)
-	if err != nil {
-		if httpapi.WriteServiceUnavailable(w, err) {
+	result := a.authenticateWithLimits(r, false, false)
+	if result.limitErr != nil {
+		writeRateLimitDecision(w, ratelimit.Decision{}, result.limitErr)
+		return
+	}
+	if result.limited {
+		writeRateLimitDecision(w, result.decision, nil)
+		return
+	}
+	if result.authErr != nil {
+		if httpapi.WriteServiceUnavailable(w, result.authErr) {
 			return
 		}
-		if !errors.Is(err, auth.ErrUnauthorized) {
+		if !errors.Is(result.authErr, auth.ErrUnauthorized) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 			return
 		}
@@ -165,10 +173,142 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
 		return
 	}
-	if !a.allowAuthenticated(w, r, user, credential) {
+	if result.checked && !writeRateLimitDecision(w, result.decision, nil) {
 		return
 	}
-	a.auth.MeForUser(w, r, user)
+	a.auth.MeForUser(w, r, result.user)
+}
+
+func (a *App) resolveAuthenticated(w http.ResponseWriter, r *http.Request, sessionOnly bool) (auth.User, bool) {
+	result := a.authenticateWithLimits(r, sessionOnly, true)
+	if result.limitErr != nil {
+		writeRateLimitDecision(w, ratelimit.Decision{}, result.limitErr)
+		return auth.User{}, false
+	}
+	if result.limited {
+		writeRateLimitDecision(w, result.decision, nil)
+		return auth.User{}, false
+	}
+	if result.authErr != nil {
+		if httpapi.WriteServiceUnavailable(w, result.authErr) {
+			return auth.User{}, false
+		}
+		if !errors.Is(result.authErr, auth.ErrUnauthorized) {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
+			return auth.User{}, false
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return auth.User{}, false
+	}
+	if result.checked && !writeRateLimitDecision(w, result.decision, nil) {
+		return auth.User{}, false
+	}
+	return result.user, true
+}
+
+type authenticationResult struct {
+	user     auth.User
+	authErr  error
+	decision ratelimit.Decision
+	limitErr error
+	checked  bool
+	limited  bool
+}
+
+func (a *App) authenticateWithLimits(r *http.Request, sessionOnly bool, recordUnauthorizedOutcome bool) authenticationResult {
+	if a.limits == nil {
+		var user auth.User
+		var err error
+		if sessionOnly {
+			user, _, err = a.auth.ResolveSessionUserFromRequest(r)
+		} else {
+			user, _, err = a.auth.ResolveUserFromRequest(r)
+		}
+		return authenticationResult{user: user, authErr: err}
+	}
+	staged, ok := a.limits.(ratelimit.AuthenticatedLimiter)
+	if !ok {
+		return authenticationResult{limitErr: errors.New("authenticated rate limiter is not configured")}
+	}
+	routeClass := authenticatedRouteClass(r)
+	reservations := make(map[string]ratelimit.CredentialReservation, 2)
+	var rejectedCredential string
+	var lastCredential string
+	var rejectedDecision ratelimit.Decision
+	var gateErr error
+	gate := func(credential string) bool {
+		lastCredential = credential
+		reservation, decision, err := staged.ReserveCredential(r.Context(), ratelimit.Key{Scope: ratelimit.ScopeCredential, Value: credential}, routeClass)
+		if err != nil {
+			gateErr = err
+			return false
+		}
+		if !decision.Allowed {
+			rejectedCredential = credential
+			rejectedDecision = decision
+			return false
+		}
+		reservations[credential] = reservation
+		return true
+	}
+	var (
+		user       auth.User
+		credential string
+		authErr    error
+	)
+	if sessionOnly {
+		user, credential, authErr = a.auth.ResolveSessionUserFromRequestWithGate(r, gate)
+	} else {
+		user, credential, authErr = a.auth.ResolveUserFromRequestWithGate(r, gate)
+	}
+	cancelReservations := func(except string) error {
+		for candidate, reservation := range reservations {
+			if candidate == except {
+				continue
+			}
+			if err := staged.CancelCredential(r.Context(), reservation); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if gateErr != nil {
+		_ = cancelReservations("")
+		return authenticationResult{limitErr: gateErr, checked: true}
+	}
+	if authErr == nil {
+		if err := cancelReservations(credential); err != nil {
+			return authenticationResult{limitErr: err, checked: true}
+		}
+		reservation, ok := reservations[credential]
+		if !ok {
+			return authenticationResult{limitErr: errors.New("credential reservation is missing"), checked: true}
+		}
+		account := ratelimit.Key{Scope: ratelimit.ScopeAccount, Value: user.ID}
+		decision, err := staged.FinalizeCredential(r.Context(), reservation, &account)
+		return authenticationResult{user: user, decision: decision, limitErr: err, checked: true, limited: err == nil && !decision.Allowed}
+	}
+	if !errors.Is(authErr, auth.ErrUnauthorized) && !errors.Is(authErr, auth.ErrCredentialRejected) {
+		_ = cancelReservations("")
+		return authenticationResult{authErr: authErr, checked: true}
+	}
+	for _, reservation := range reservations {
+		if _, err := staged.FinalizeCredential(r.Context(), reservation, nil); err != nil {
+			return authenticationResult{limitErr: err, checked: true}
+		}
+	}
+	if rejectedCredential != "" {
+		if err := staged.RecordCredentialOutcome(r.Context(), ratelimit.Key{Scope: ratelimit.ScopeCredential, Value: rejectedCredential}, routeClass, ratelimit.OutcomeRejected); err != nil {
+			return authenticationResult{limitErr: err, checked: true}
+		}
+		return authenticationResult{authErr: auth.ErrCredentialRejected, decision: rejectedDecision, checked: true, limited: true}
+	}
+	if lastCredential != "" && recordUnauthorizedOutcome {
+		if err := staged.RecordCredentialOutcome(r.Context(), ratelimit.Key{Scope: ratelimit.ScopeCredential, Value: lastCredential}, routeClass, ratelimit.OutcomeAllowed); err != nil {
+			return authenticationResult{limitErr: err, checked: true}
+		}
+	}
+	return authenticationResult{authErr: auth.ErrUnauthorized, checked: true}
 }
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
@@ -212,12 +352,10 @@ func (a *App) user(next func(http.ResponseWriter, *http.Request, auth.User)) htt
 		if !a.ready(w) {
 			return
 		}
-		a.auth.RequireUserWithCredential(func(w http.ResponseWriter, r *http.Request, user auth.User, credential string) {
-			if !a.allowAuthenticated(w, r, user, credential) {
-				return
-			}
+		user, ok := a.resolveAuthenticated(w, r, false)
+		if ok {
 			next(w, r, user)
-		})(w, r)
+		}
 	}
 }
 
@@ -240,12 +378,10 @@ func (a *App) session(next func(http.ResponseWriter, *http.Request, auth.User)) 
 		if !a.ready(w) {
 			return
 		}
-		a.auth.RequireSessionUserWithCredential(func(w http.ResponseWriter, r *http.Request, user auth.User, credential string) {
-			if !a.allowAuthenticated(w, r, user, credential) {
-				return
-			}
+		user, ok := a.resolveAuthenticated(w, r, true)
+		if ok {
 			next(w, r, user)
-		})(w, r)
+		}
 	}
 }
 
@@ -266,20 +402,12 @@ func (a *App) allowPublicAuth(w http.ResponseWriter, r *http.Request) bool {
 	return writeRateLimitDecision(w, decision, err)
 }
 
-func (a *App) allowAuthenticated(w http.ResponseWriter, r *http.Request, user auth.User, credential string) bool {
-	if a.limits == nil {
-		return true
-	}
-	keys := []ratelimit.Key{
-		{Scope: ratelimit.ScopeAccount, Value: user.ID},
-		{Scope: ratelimit.ScopeCredential, Value: credential},
-	}
+func authenticatedRouteClass(r *http.Request) string {
 	routeClass := ratelimit.ClassAuthenticatedWrite
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		routeClass = ratelimit.ClassAuthenticatedRead
 	}
-	decision, err := a.limits.Allow(r.Context(), keys, routeClass)
-	return writeRateLimitDecision(w, decision, err)
+	return routeClass
 }
 
 func writeRateLimitDecision(w http.ResponseWriter, decision ratelimit.Decision, err error) bool {

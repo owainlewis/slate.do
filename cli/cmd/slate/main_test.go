@@ -154,12 +154,12 @@ func TestTasksListSendsAllFilters(t *testing.T) {
 	defer server.Close()
 
 	err := tasksCmd(client{baseURL: server.URL, token: "test", http: server.Client()}, []string{
-		"list", "--board", "board-1", "--list", "list-1", "--status", "queued", "--done", "false", "--limit", "12",
+		"list", "--board", "board-1", "--list", "list-1", "--status", "done", "--done", "true", "--limit", "12", "--cursor", "next-page",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"boardId=board-1", "bucketId=list-1", "done=false", "limit=12", "status=queued"} {
+	for _, value := range []string{"boardId=board-1", "bucketId=list-1", "cursor=next-page", "done=true", "limit=12", "status=done"} {
 		if !strings.Contains(requestedPath, value) {
 			t.Fatalf("requested %q, missing %q", requestedPath, value)
 		}

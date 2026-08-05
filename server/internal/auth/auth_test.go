@@ -127,6 +127,47 @@ func TestUserFromRequestAttributesBearerWhenInvalidSessionCookieIsPresent(t *tes
 	}
 }
 
+func TestCredentialGateRunsBeforeSessionAndBearerLookups(t *testing.T) {
+	store := &countingRequestAuthStore{}
+	service := NewService(store, false)
+
+	sessionRequest := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	sessionRequest.AddCookie(&http.Cookie{Name: CookieName, Value: "sess_ok"})
+	_, _, err := service.ResolveSessionUserFromRequestWithGate(sessionRequest, func(credential string) bool {
+		return credential != "session:"+hashToken("sess_ok")
+	})
+	if !errors.Is(err, ErrCredentialRejected) || store.sessionCalls != 0 {
+		t.Fatalf("session gate error = %v, lookup calls = %d", err, store.sessionCalls)
+	}
+
+	bearerRequest := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	bearerRequest.Header.Set("Authorization", "Bearer slate_ok")
+	_, _, err = service.ResolveUserFromRequestWithGate(bearerRequest, func(credential string) bool {
+		return credential != "bearer:"+hashToken("slate_ok")
+	})
+	if !errors.Is(err, ErrCredentialRejected) || store.bearerCalls != 0 {
+		t.Fatalf("bearer gate error = %v, lookup calls = %d", err, store.bearerCalls)
+	}
+}
+
+func TestRejectedSessionGateStillFallsBackToBearer(t *testing.T) {
+	store := &countingRequestAuthStore{}
+	service := NewService(store, false)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	request.AddCookie(&http.Cookie{Name: CookieName, Value: "stale-session"})
+	request.Header.Set("Authorization", "Bearer slate_ok")
+
+	user, credential, err := service.ResolveUserFromRequestWithGate(request, func(credential string) bool {
+		return !strings.HasPrefix(credential, "session:")
+	})
+	if err != nil || user.ID != "api-user" || credential != "bearer:"+hashToken("slate_ok") {
+		t.Fatalf("fallback user = %#v credential=%q err=%v", user, credential, err)
+	}
+	if store.sessionCalls != 0 || store.bearerCalls != 1 {
+		t.Fatalf("lookup calls session=%d bearer=%d", store.sessionCalls, store.bearerCalls)
+	}
+}
+
 func TestRequireUserReturnsServiceUnavailableForAuthenticationCapacityTimeout(t *testing.T) {
 	service := NewService(&capacityAuthStore{}, false)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
@@ -800,6 +841,22 @@ func TestSeedAdminDoesNotPromoteExistingMember(t *testing.T) {
 }
 
 type requestAuthStore struct{}
+
+type countingRequestAuthStore struct {
+	requestAuthStore
+	sessionCalls int
+	bearerCalls  int
+}
+
+func (s *countingRequestAuthStore) FindUserBySessionHash(ctx context.Context, tokenHash string, now time.Time) (User, error) {
+	s.sessionCalls++
+	return s.requestAuthStore.FindUserBySessionHash(ctx, tokenHash, now)
+}
+
+func (s *countingRequestAuthStore) FindUserByAPITokenHash(ctx context.Context, tokenHash string, now time.Time) (User, error) {
+	s.bearerCalls++
+	return s.requestAuthStore.FindUserByAPITokenHash(ctx, tokenHash, now)
+}
 
 type capacityAuthStore struct {
 	requestAuthStore

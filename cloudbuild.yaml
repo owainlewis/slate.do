@@ -1,4 +1,9 @@
 steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: sh
+    args:
+      - scripts/verify-github-ci.sh
+      - $COMMIT_SHA
   - name: golang:1.26
     entrypoint: bash
     args:
@@ -85,6 +90,9 @@ steps:
         image_tag="$_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID"
         image="$$(gcloud artifacts docker images describe "$$image_tag" --format='value(image_summary.fully_qualified_digest)')"
         test -n "$$image"
+        web_service_account="slate-web@$PROJECT_ID.iam.gserviceaccount.com"
+        maintenance_service_account="slate-maintenance@$PROJECT_ID.iam.gserviceaccount.com"
+        scheduler_service_account="slate-scheduler@$PROJECT_ID.iam.gserviceaccount.com"
         runtime_secrets="DATABASE_URL=slate-database-url:latest,SESSION_SECRET=slate-session-secret:latest,RESEND_API_KEY=slate-resend-api-key:latest"
         sh scripts/validate-capacity.sh "$_MAX_INSTANCES" "$_DB_MAX_CONNECTIONS" "$_DB_CONNECTION_ALLOWANCE" "$_DB_RESERVED_CONNECTIONS" "$_REQUEST_TIMEOUT_SECONDS"
         runtime_env="COOKIE_SECURE=true,APP_BASE_URL=https://slate.do,RESEND_FROM=Slate <passwords@mail.slate.do>,APP_MAX_INSTANCES=$_MAX_INSTANCES,DB_MAX_CONNECTIONS=$_DB_MAX_CONNECTIONS,DB_CONNECTION_ALLOWANCE=$_DB_CONNECTION_ALLOWANCE,DB_RESERVED_CONNECTIONS=$_DB_RESERVED_CONNECTIONS,DB_ACQUIRE_TIMEOUT=$_DB_ACQUIRE_TIMEOUT,DB_STATEMENT_TIMEOUT=$_DB_STATEMENT_TIMEOUT,DB_IDLE_TRANSACTION_TIMEOUT=$_DB_IDLE_TRANSACTION_TIMEOUT,DB_MAX_CONNECTION_IDLE_TIME=$_DB_MAX_CONNECTION_IDLE_TIME,DB_MAX_CONNECTION_LIFETIME=$_DB_MAX_CONNECTION_LIFETIME,REQUEST_TIMEOUT=${_REQUEST_TIMEOUT_SECONDS}s,HTTP_IDLE_TIMEOUT=$_HTTP_IDLE_TIMEOUT"
@@ -93,10 +101,11 @@ steps:
         if [ "$$existing_service" = slate ]; then
           existing_env_names="$$(gcloud run services describe slate --region "$_REGION" --format='value(spec.template.spec.containers[0].env[].name)')"
         fi
-        if gcloud secrets versions access latest --secret=slate-invite-code >/dev/null 2>&1; then
+        invite_secret_state="$$(gcloud secrets versions describe latest --secret=slate-invite-code --format='value(state)' 2>/dev/null || true)"
+        if [ "$$invite_secret_state" = ENABLED ]; then
           runtime_secrets="$$runtime_secrets,INVITE_CODE=slate-invite-code:latest"
         elif printf '%s' "$$existing_env_names" | tr ';' '\n' | grep -Fx INVITE_CODE >/dev/null; then
-          echo "The live service uses INVITE_CODE, but slate-invite-code:latest is not accessible" >&2
+          echo "The live service uses INVITE_CODE, but slate-invite-code:latest is not enabled or accessible" >&2
           exit 1
         fi
         gcloud run jobs deploy "slate-migrate-$SHORT_SHA" \
@@ -104,6 +113,7 @@ steps:
           --region "$_REGION" \
           --command /app/slate \
           --args migrate \
+          --service-account "$$maintenance_service_account" \
           --set-cloudsql-instances "$PROJECT_ID:$_REGION:slate-postgres-ew1" \
           --set-secrets DATABASE_URL=slate-database-url:latest \
           --set-env-vars "APP_MAX_INSTANCES=1,DB_MAX_CONNECTIONS=1,DB_CONNECTION_ALLOWANCE=$_DB_CONNECTION_ALLOWANCE,DB_RESERVED_CONNECTIONS=$_DB_RESERVED_CONNECTIONS,DB_ACQUIRE_TIMEOUT=$_DB_ACQUIRE_TIMEOUT,DB_STATEMENT_TIMEOUT=$_DB_STATEMENT_TIMEOUT,DB_IDLE_TRANSACTION_TIMEOUT=$_DB_IDLE_TRANSACTION_TIMEOUT,DB_MAX_CONNECTION_IDLE_TIME=$_DB_MAX_CONNECTION_IDLE_TIME,DB_MAX_CONNECTION_LIFETIME=$_DB_MAX_CONNECTION_LIFETIME,REQUEST_TIMEOUT=${_REQUEST_TIMEOUT_SECONDS}s,HTTP_IDLE_TIMEOUT=$_HTTP_IDLE_TIMEOUT" \
@@ -111,12 +121,18 @@ steps:
           --task-timeout 10m \
           --quiet
         job_created=1
+        effective_migration_identity="$$(gcloud run jobs describe "slate-migrate-$SHORT_SHA" --region "$_REGION" --format='value(spec.template.spec.template.spec.serviceAccountName)')"
+        test "$$effective_migration_identity" = "$$maintenance_service_account" || {
+          echo "Expected migration identity $$maintenance_service_account, got $$effective_migration_identity" >&2
+          exit 1
+        }
         gcloud run jobs execute "slate-migrate-$SHORT_SHA" --region "$_REGION" --wait --quiet
 
         gcloud run deploy slate \
           --image "$$image" \
           --region "$_REGION" \
           --platform managed \
+          --service-account "$$web_service_account" \
           --no-invoker-iam-check \
           --no-cpu-throttling \
           --min 1 \
@@ -140,6 +156,11 @@ steps:
           echo "Expected maximum instances $_MAX_INSTANCES, got $$effective_max" >&2
           exit 1
         }
+        effective_web_identity="$$(gcloud run services describe slate --region "$_REGION" --format='value(spec.template.spec.serviceAccountName)')"
+        test "$$effective_web_identity" = "$$web_service_account" || {
+          echo "Expected web identity $$web_service_account, got $$effective_web_identity" >&2
+          exit 1
+        }
         response="$$(curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 --max-time 10 "$_HEALTH_URL")"
         printf '%s\n' "$$response"
         grep -F '"database":"ok"' <<<"$$response"
@@ -155,6 +176,7 @@ steps:
           --region "$_REGION" \
           --command /app/slate \
           --args cleanup \
+          --service-account "$$maintenance_service_account" \
           --set-cloudsql-instances "$PROJECT_ID:$_REGION:slate-postgres-ew1" \
           --set-secrets DATABASE_URL=slate-database-url:latest \
           --set-env-vars "APP_MAX_INSTANCES=1,DB_MAX_CONNECTIONS=1,DB_CONNECTION_ALLOWANCE=$_DB_CONNECTION_ALLOWANCE,DB_RESERVED_CONNECTIONS=$_DB_RESERVED_CONNECTIONS,DB_ACQUIRE_TIMEOUT=$_DB_ACQUIRE_TIMEOUT,DB_STATEMENT_TIMEOUT=$_DB_STATEMENT_TIMEOUT,DB_IDLE_TRANSACTION_TIMEOUT=$_DB_IDLE_TRANSACTION_TIMEOUT,DB_MAX_CONNECTION_IDLE_TIME=$_DB_MAX_CONNECTION_IDLE_TIME,DB_MAX_CONNECTION_LIFETIME=$_DB_MAX_CONNECTION_LIFETIME,REQUEST_TIMEOUT=${_REQUEST_TIMEOUT_SECONDS}s,HTTP_IDLE_TIMEOUT=$_HTTP_IDLE_TIMEOUT" \
@@ -163,25 +185,37 @@ steps:
           --max-retries 1 \
           --task-timeout 5m \
           --quiet
+        effective_cleanup_identity="$$(gcloud run jobs describe slate-cleanup --region "$_REGION" --format='value(spec.template.spec.template.spec.serviceAccountName)')"
+        test "$$effective_cleanup_identity" = "$$maintenance_service_account" || {
+          echo "Expected cleanup identity $$maintenance_service_account, got $$effective_cleanup_identity" >&2
+          exit 1
+        }
         cleanup_uri="https://run.googleapis.com/v2/projects/$PROJECT_ID/locations/$_REGION/jobs/slate-cleanup:run"
-        cleanup_service_account="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+        gcloud run jobs add-iam-policy-binding slate-cleanup --region "$_REGION" \
+          --member="serviceAccount:$$scheduler_service_account" --role=roles/run.invoker --quiet
         if gcloud scheduler jobs describe slate-cleanup --location "$_REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http slate-cleanup \
             --location "$_REGION" --schedule "17 3 * * *" --time-zone "Etc/UTC" \
             --uri "$$cleanup_uri" --http-method POST \
-            --oauth-service-account-email "$$cleanup_service_account" \
+            --oauth-service-account-email "$$scheduler_service_account" \
             --oauth-token-scope "https://www.googleapis.com/auth/cloud-platform" \
             --attempt-deadline 300s --quiet
         else
           gcloud scheduler jobs create http slate-cleanup \
             --location "$_REGION" --schedule "17 3 * * *" --time-zone "Etc/UTC" \
             --uri "$$cleanup_uri" --http-method POST \
-            --oauth-service-account-email "$$cleanup_service_account" \
+            --oauth-service-account-email "$$scheduler_service_account" \
             --oauth-token-scope "https://www.googleapis.com/auth/cloud-platform" \
             --attempt-deadline 300s --quiet
         fi
+        effective_scheduler_identity="$$(gcloud scheduler jobs describe slate-cleanup --location "$_REGION" --format='value(httpTarget.oauthToken.serviceAccountEmail)')"
+        test "$$effective_scheduler_identity" = "$$scheduler_service_account" || {
+          echo "Expected Scheduler identity $$scheduler_service_account, got $$effective_scheduler_identity" >&2
+          exit 1
+        }
 images:
   - $_REGION-docker.pkg.dev/$PROJECT_ID/slate/slate:$COMMIT_SHA-$BUILD_ID
+serviceAccount: projects/$PROJECT_ID/serviceAccounts/slate-deploy@$PROJECT_ID.iam.gserviceaccount.com
 substitutions:
   _REGION: europe-west1
   _HEALTH_URL: https://slate.do/api/health

@@ -19,7 +19,7 @@ type WorkItem struct {
 	BucketID        string    `json:"bucketId"`
 	BucketName      string    `json:"bucketName"`
 	Title           string    `json:"title"`
-	Description     string    `json:"description"`
+	Description     string    `json:"description,omitempty"`
 	ScheduledDate   string    `json:"scheduledDate"`
 	Kind            string    `json:"kind"`
 	Done            bool      `json:"done"`

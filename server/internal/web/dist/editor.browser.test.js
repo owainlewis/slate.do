@@ -58,6 +58,13 @@ function board(deleted) {
   };
 }
 
+function closeTestServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+    server.closeAllConnections();
+  });
+}
+
 test("a board can be renamed, cancelled, validated, and reloaded in place", async t => {
   let boardName = "Business";
   const patches = [];
@@ -87,7 +94,7 @@ test("a board can be renamed, cancelled, validated, and reloaded in place", asyn
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -145,6 +152,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
     if (url.pathname === "/api/v1/me") return json(response, { authenticated: true, user: { id: "owner", email: "owner@example.com" } });
     if (url.pathname === "/api/v1/boards") return json(response, { boards: [board(deleted || hidden)] });
     if (url.pathname === "/api/v1/boards/board-one") return json(response, board(deleted || hidden));
+    if (url.pathname === "/api/v1/tasks/task-one" && request.method === "GET") return json(response, task);
     if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
       patchCount += 1;
       patchBodies.push(await requestJSON(request));
@@ -166,7 +174,7 @@ test("editor prevents duplicate saves, preserves failures, and restores focus", 
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -277,6 +285,7 @@ test("saving an item moves it to the chosen position on another board", async t 
       await new Promise(resolve => setTimeout(resolve, 200));
       return json(response, targetBoard());
     }
+    if (url.pathname === "/api/v1/tasks/task-one" && request.method === "GET") return json(response, currentTask);
     if (url.pathname === "/api/v1/tasks/task-one/status" && request.method === "PATCH") {
       saveBody = await requestJSON(request);
       currentTask = { ...currentTask, ...saveBody };
@@ -293,7 +302,7 @@ test("saving an item moves it to the chosen position on another board", async t 
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -360,6 +369,7 @@ test("a committed move stays successful when the source board refresh fails", { 
     }
     if (url.pathname === "/api/v1/boards/board-one") return json(response, sourceBoard);
     if (url.pathname === "/api/v1/boards/board-two") return json(response, targetBoard);
+    if (url.pathname === "/api/v1/tasks/task-one" && request.method === "GET") return json(response, task);
     if (url.pathname === "/api/v1/tasks/task-one/move" && request.method === "POST") {
       await requestJSON(request);
       moved = true;
@@ -371,10 +381,7 @@ test("a committed move stays successful when the source board refresh fails", { 
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => {
-    server.closeAllConnections();
-    server.close(resolve);
-  }));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -421,7 +428,7 @@ test("Pro resource limits block obvious actions and show server rejection messag
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -470,7 +477,7 @@ test("server limit rejections stay visible for board, list, and active-item crea
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -512,7 +519,7 @@ test("early access submits credentials in the body and opens the app", async t =
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -587,7 +594,7 @@ test("logging out and into another account cannot show the previous account's da
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -644,7 +651,7 @@ test("concurrent login submissions create only one authenticated session", async
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -688,7 +695,7 @@ test("failed logout keeps account data hidden and requires a retry", async t => 
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -732,7 +739,7 @@ test("route load failures replace stale UI and retry without changing history", 
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -771,7 +778,12 @@ test("account and exact-board settings stay synchronized, safe, and responsive",
   let markBoardPatchStarted;
   const boardPatchResponse = new Promise(resolve => { releaseBoardPatch = resolve; });
   const boardPatchStarted = new Promise(resolve => { markBoardPatchStarted = resolve; });
+  let releasePasswordReset;
+  let markPasswordResetStarted;
+  const passwordResetResponse = new Promise(resolve => { releasePasswordReset = resolve; });
+  const passwordResetStarted = new Promise(resolve => { markPasswordResetStarted = resolve; });
   const profilePatches = [];
+  const passwordResetRequests = [];
   const boardPatches = [];
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
@@ -788,6 +800,12 @@ test("account and exact-board settings stay synchronized, safe, and responsive",
       }
       user = { ...user, ...input };
       return json(response, user);
+    }
+    if (url.pathname === "/api/v1/auth/password-reset/request" && request.method === "POST") {
+      passwordResetRequests.push(await requestJSON(request));
+      markPasswordResetStarted();
+      await passwordResetResponse;
+      return accepted(response, { message: "If an account exists for that email, a password reset link is on its way." });
     }
     if (url.pathname === "/api/v1/boards") {
       return json(response, { boards: boards.map(({ buckets, ...item }) => item) });
@@ -831,7 +849,7 @@ test("account and exact-board settings stay synchronized, safe, and responsive",
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -845,6 +863,20 @@ test("account and exact-board settings stay synchronized, safe, and responsive",
   const displayName = page.locator("#profile-display-name");
   assert.equal(await displayName.inputValue(), "Owner");
   assert.equal(await page.getByText("owner@example.com", { exact: true }).count(), 1);
+  await page.getByRole("button", { name: "Send reset link", exact: true }).click();
+  await passwordResetStarted;
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "request-password-reset");
+  assert.equal(await page.locator("#request-password-reset").innerText(), "Sending…");
+  releasePasswordReset();
+  await page.getByRole("status").filter({ hasText: "password reset link is on its way" }).waitFor();
+  assert.deepEqual(passwordResetRequests, [{ email: "owner@example.com" }]);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "request-password-reset");
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    assert.ok(parseFloat(await page.locator(".settings-nav-link").first().evaluate(element => getComputedStyle(element).fontSize)) >= 14);
+    assert.ok(parseFloat(await page.locator(".settings-row-copy span").first().evaluate(element => getComputedStyle(element).fontSize)) >= 14);
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
   assert.match(await page.locator(".profile-card .user-avatar").getAttribute("class"), /tone-\d/);
   assert.equal(await page.getByRole("spinbutton", { name: "Max active items per list", exact: true }).count(), 0);
   assert.equal(await page.locator('.settings-nav-link[aria-current="page"]').innerText(), "Profile");
@@ -965,7 +997,7 @@ test("password reset request and confirmation work without exposing the token in
 		response.writeHead(404).end();
 	});
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-	t.after(() => new Promise(resolve => server.close(resolve)));
+	t.after(() => closeTestServer(server));
 
 	const browser = await chromium.launch({ headless: true });
 	t.after(() => browser.close());
@@ -1050,7 +1082,7 @@ test("agent directory handles loading, errors, limits, archives, themes, keyboar
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -1137,7 +1169,7 @@ test("shared new-board flow stays on agents and exposes a default-list failure",
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -1202,7 +1234,7 @@ test("guided agent creation validates, preserves one-time credentials on refresh
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -1384,6 +1416,13 @@ test("agent detail routes paginate, assign, edit, regroup, and stay safe across 
       response.writeHead(404, { "Content-Type": "application/json" });
       return response.end(JSON.stringify({ error: "agent not found" }));
     }
+    if (url.pathname.startsWith("/api/v1/tasks/") && request.method === "GET") {
+      const id = url.pathname.split("/")[4];
+      const selected = tasks.find(task => task.id === id);
+      if (selected) return json(response, selected);
+      response.writeHead(404, { "Content-Type": "application/json" });
+      return response.end(JSON.stringify({ error: "task not found" }));
+    }
     if (url.pathname.startsWith("/api/v1/tasks/") && url.pathname.endsWith("/status") && request.method === "PATCH") {
       const id = url.pathname.split("/")[4];
       const input = await requestJSON(request);
@@ -1422,7 +1461,7 @@ test("agent detail routes paginate, assign, edit, regroup, and stay safe across 
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -1676,7 +1715,7 @@ test("agent settings safely edit, rotate, revoke, archive, restore, and scrub on
     response.writeHead(404).end();
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => closeTestServer(server));
 
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
