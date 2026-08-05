@@ -1726,10 +1726,12 @@ function detailHTML(task) {
               <div class="field"><label for="detail-status">State</label><select id="detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
               <div class="field"><label for="detail-priority">Priority</label><select id="detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
               <div class="field"><label for="detail-assignee">Agent</label><select id="detail-assignee" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
-              <div class="field"><label>Location</label><button class="location-button" id="open-move" type="button"><span>${escapeHTML(state.board.name)} / ${escapeHTML(list?.name || "List")}</span><b>Move…</b></button></div>
+              <div class="field"><label>Location</label>${task.parentTaskId
+                ? `<div class="location-button" aria-describedby="detail-location-help"><span>${escapeHTML(state.board.name)} / ${escapeHTML(list?.name || "List")}</span><b>Fixed</b></div><small id="detail-location-help">Subtasks stay with their parent task.</small>`
+                : `<button class="location-button" id="open-move" type="button"><span>${escapeHTML(state.board.name)} / ${escapeHTML(list?.name || "List")}</span><b>Move…</b></button>`}</div>
               <div class="field"><label for="detail-date">Plan for</label><input id="detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
             </div>
-            <section class="move-panel" id="move-panel" aria-labelledby="move-heading" hidden>
+            ${task.parentTaskId ? "" : `<section class="move-panel" id="move-panel" aria-labelledby="move-heading" hidden>
               <div class="move-panel-head"><div><span>Change location</span><h3 id="move-heading">Move item</h3></div><button class="detail-close" id="close-move" type="button" aria-label="Close move options">${icon("x")}</button></div>
               <div class="move-fields">
                 <div class="field"><label for="move-board">Board</label><select id="move-board">${state.boards.map(board => `<option value="${board.id}" ${board.id === state.board.id ? "selected" : ""}>${escapeHTML(board.name)}</option>`).join("")}</select></div>
@@ -1737,7 +1739,7 @@ function detailHTML(task) {
                 <div class="field"><label for="move-position">Position</label><select id="move-position">${movePositionOptionsHTML(list, task)}</select></div>
               </div>
               <div class="move-panel-actions"><button class="primary" id="move-item" type="button">Move item</button></div>
-            </section>
+            </section>`}
             <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
           </div>
           <footer class="detail-actions">
@@ -3335,6 +3337,9 @@ function bindDetail(options = {}) {
 }
 
 function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submitButton, afterMove, handleError }) {
+  if (task.parentTaskId) {
+    return { hasPendingMove: () => false, isLoading: () => false, move: async () => {} };
+  }
   const panel = document.querySelector("#move-panel");
   const boardSelect = document.querySelector("#move-board");
   const listSelect = document.querySelector("#move-list");

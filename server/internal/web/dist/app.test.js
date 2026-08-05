@@ -370,6 +370,18 @@ test("subtask detail keeps its list fixed to the parent", () => {
   assert.match(html, /Subtasks stay with their parent task\./);
 });
 
+test("legacy agent task detail does not offer subtask moves", () => {
+  vm.runInContext(`
+    state.board = { id: "board-one", name: "Work", buckets: [{ id: "list-one", name: "Product", tasks: [] }] };
+    state.boards = [{ id: "board-one", name: "Work" }];
+  `, app);
+  const html = vm.runInContext(`detailHTML({ id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" })`, app);
+  assert.match(html, /Work \/ Product/);
+  assert.match(html, />Fixed</);
+  assert.match(html, /Subtasks stay with their parent task\./);
+  assert.doesNotMatch(html, /id="open-move"|id="move-panel"|>Move…</);
+});
+
 test("list limits remain scoped to the selected board", () => {
   assert.deepEqual(
     JSON.parse(JSON.stringify(app.listLimitUpdate("current-board", "12"))),
