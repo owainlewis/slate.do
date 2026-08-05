@@ -658,7 +658,7 @@ async function loadWorkspace(route, expectedRouteVersion) {
   state.workspaceScope = route.scope || "all";
   state.workspaceListID = route.listId || "";
   const requestedView = new URLSearchParams(location.search).get("view");
-  if (["list", "flow", "table"].includes(requestedView)) state.workspaceView = requestedView;
+  if (route.scope !== "week" && ["list", "flow", "table"].includes(requestedView)) state.workspaceView = requestedView;
   state.workspaceLoading = false;
   if (route.scope === "list" && !state.workspaceLists.some(list => list.id === route.listId)) return false;
   return true;
@@ -1275,10 +1275,10 @@ function appHTML() {
     </header>
     ${statusErrorHTML(state.error)}
     ${statusNoticeHTML(state.moveNotice)}
-    <div class="workspace-viewbar">
-      <div class="workspace-tabs" role="tablist" aria-label="Task view">
+    <div class="workspace-viewbar ${state.workspaceScope === "week" ? "week-only" : ""}">
+      ${state.workspaceScope === "week" ? "" : `<div class="workspace-tabs" role="tablist" aria-label="Task view">
         ${["list", "flow", "table"].map(view => `<button data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" aria-selected="${state.workspaceView === view}">${view === "flow" ? icon("kanban") : view === "table" ? icon("columns") : icon("rows")}<span>${view[0].toUpperCase() + view.slice(1)}</span></button>`).join("")}
-      </div>
+      </div>`}
       <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
     </div>
     ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
@@ -1352,7 +1352,7 @@ function workspaceFlowHTML(tasks) {
 
 function workspaceWeekHTML(tasks) {
   const start = startOfWeek(new Date());
-  return `<section class="workspace-week">${Array.from({ length: 7 }, (_, index) => addDays(start, index)).map(day => {
+  return `<section class="workspace-week" aria-label="Week calendar">${Array.from({ length: 7 }, (_, index) => addDays(start, index)).map(day => {
     const key = dateKey(day);
     const items = tasks.filter(task => task.scheduledDate === key);
     return `<section><header><span>${day.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${day.getDate()}</b></header>${items.map(task => `<button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.listName || "Inbox")}</small></button>`).join("") || `<p>Nothing planned</p>`}</section>`;
@@ -2643,7 +2643,7 @@ function bindWorkspace() {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const query = new URLSearchParams();
-    if (state.workspaceView !== "table") query.set("view", state.workspaceView);
+    if (state.workspaceScope !== "week" && state.workspaceView !== "table") query.set("view", state.workspaceView);
     for (const name of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
       const value = String(data.get(name) || "").trim();
       if (value) query.set(name, value);
@@ -2652,7 +2652,7 @@ function bindWorkspace() {
   });
   document.querySelector("#clear-workspace-filters")?.addEventListener("click", () => {
     const query = new URLSearchParams();
-    if (state.workspaceView !== "table") query.set("view", state.workspaceView);
+    if (state.workspaceScope !== "week" && state.workspaceView !== "table") query.set("view", state.workspaceView);
     navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
   });
   document.querySelector("#new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));

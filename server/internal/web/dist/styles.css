@@ -40,6 +40,7 @@
 .workspace-topbar > button { display: flex; align-items: center; gap: 6px; }
 .workspace-topbar > button .icon { width: 14px; height: 14px; }
 .workspace-viewbar { min-height: 48px; padding: 0 30px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-2); }
+.workspace-viewbar.week-only { justify-content: flex-end; }
 .workspace-tabs { height: 48px; display: flex; gap: 20px; }
 .workspace-tabs button { height: 48px; padding: 0 2px; display: flex; align-items: center; gap: 7px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--faint); cursor: pointer; font-size: 13px; }
 .workspace-tabs button.on { border-bottom-color: var(--ink); color: var(--ink); font-weight: 700; }

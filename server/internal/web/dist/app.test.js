@@ -130,6 +130,30 @@ test("Today and Week keep their planned-date scope when other filters are applie
 	delete app.location;
 });
 
+test("Week exposes its calendar and filters without unrelated view tabs", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", displayName: "Owain", theme: "dark" };
+    state.workspaceScope = "week";
+    state.workspaceTasks = [];
+    state.workspaceLoading = false;
+    state.workspaceFiltersOpen = false;
+  `, app);
+
+  const html = app.appHTML();
+  assert.match(html, /class="workspace-viewbar week-only"/);
+  assert.match(html, /id="workspace-filter-toggle"/);
+  assert.match(html, /class="workspace-week" aria-label="Week calendar"/);
+  assert.doesNotMatch(html, /aria-label="Task view"/);
+  assert.doesNotMatch(html, /data-workspace-view=/);
+
+  vm.runInContext(`
+    state.me = null;
+    state.workspaceScope = "all";
+    state.workspaceTasks = [];
+    state.workspaceLoading = false;
+  `, app);
+});
+
 test("Review owns its status scope without showing a conflicting status filter", () => {
   app.location = { search: "?status=working&q=brief" };
   vm.runInContext(`state.workspaceScope = "review";`, app);
