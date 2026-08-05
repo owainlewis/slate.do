@@ -901,6 +901,71 @@ func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 	}
 }
 
+func TestInboxCaptureIdempotencySurvivesInboxReplacement(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Capture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "First Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Replacement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Captured once", IdempotencyKey: "stable-inbox-capture"}
+	first, err := store.CreateInboxTask(ctx, userID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.BucketID != firstInbox.ID {
+		t.Fatalf("first capture list = %q, want %q", first.BucketID, firstInbox.ID)
+	}
+
+	trueValue, falseValue := true, false
+	if _, err := store.UpdateBucket(ctx, userID, replacement.ID, UpdateBucketInput{IsInbox: &trueValue}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateBucket(ctx, userID, firstInbox.ID, UpdateBucketInput{IsInbox: &falseValue}); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.CreateInboxTask(ctx, userID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != first.ID || retry.BucketID != firstInbox.ID {
+		t.Fatalf("retry = %#v, want original %#v", retry, first)
+	}
+	changed := input
+	changed.Title = "Different capture"
+	if _, err := store.CreateInboxTask(ctx, userID, changed); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("changed retry error = %v, want ErrIdempotencyKey", err)
+	}
+
+	second, err := store.CreateInboxTask(ctx, userID, CreateTaskInput{Title: "Captured after replacement", IdempotencyKey: "replacement-capture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.BucketID != replacement.ID {
+		t.Fatalf("new capture list = %q, want replacement %q", second.BucketID, replacement.ID)
+	}
+	if err := store.DeleteBucket(ctx, userID, firstInbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateInboxTask(ctx, userID, input); !errors.Is(err, ErrIdempotencyGone) {
+		t.Fatalf("retry after original Inbox deletion error = %v, want ErrIdempotencyGone", err)
+	}
+}
+
 func TestTaskCreationAcceptsALegacyStoredFingerprint(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

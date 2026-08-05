@@ -35,6 +35,8 @@ const (
 	maxCompletedHistoryLimit     = 100
 )
 
+const inboxCaptureFingerprintTarget = "account-inbox"
+
 type completedTaskCursor struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	ID        string    `json:"id"`
@@ -722,7 +724,19 @@ func (s *Store) ReorderBuckets(ctx context.Context, userID string, boardID strin
 	return tx.Commit(ctx)
 }
 
+func (s *Store) CreateInboxTask(ctx context.Context, userID string, input CreateTaskInput) (Task, error) {
+	bucketID, err := s.EnsureInboxBucketID(ctx, userID)
+	if err != nil {
+		return Task{}, err
+	}
+	return s.createTaskForTarget(ctx, userID, bucketID, inboxCaptureFingerprintTarget, input)
+}
+
 func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, input CreateTaskInput) (Task, error) {
+	return s.createTaskForTarget(ctx, userID, bucketID, bucketID, input)
+}
+
+func (s *Store) createTaskForTarget(ctx context.Context, userID string, bucketID string, fingerprintTarget string, input CreateTaskInput) (Task, error) {
 	title := clean(input.Title)
 	if title == "" {
 		return Task{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
@@ -756,13 +770,13 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 		return Task{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
 	}
 	if idempotencyKey != "" {
-		fingerprint, err := taskCreateFingerprint(bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, input.OverrideLimit)
+		fingerprint, err := taskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, input.OverrideLimit)
 		if err != nil {
 			return Task{}, err
 		}
 		compatibleFingerprint := ""
 		if parentTaskID == "" {
-			compatibleFingerprint, err = parentAwareTaskCreateFingerprint(bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", input.OverrideLimit)
+			compatibleFingerprint, err = parentAwareTaskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", input.OverrideLimit)
 			if err != nil {
 				return Task{}, err
 			}
