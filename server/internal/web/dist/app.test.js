@@ -366,7 +366,7 @@ test("subtask detail keeps its list fixed to the parent", () => {
   `, app);
   const html = vm.runInContext(`workspaceDetailHTML(state.selectedTask)`, app);
   assert.match(html, /id="workspace-detail-list" disabled aria-describedby="workspace-detail-list-help"/);
-  assert.match(html, /type="hidden" name="bucketId" value="list-one"/);
+  assert.doesNotMatch(html, /name="bucketId"/);
   assert.match(html, /Subtasks stay with their parent task\./);
 });
 

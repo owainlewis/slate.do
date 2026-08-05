@@ -1388,7 +1388,7 @@ function workspaceDetailHTML(task) {
           ${task.parentTaskId ? `<div class="workspace-parent-context"><span>Part of a larger task</span>${subtaskSection}</div>` : ""}
           <div class="detail-properties">
             <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
-            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(item.isInbox ? "Inbox" : item.name)}</option>`).join("")}</select>${task.parentTaskId ? `<input type="hidden" name="bucketId" value="${escapeAttr(task.bucketId)}"><small id="workspace-detail-list-help">Subtasks stay with their parent task.</small>` : ""}</div>
+            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(item.isInbox ? "Inbox" : item.name)}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Subtasks stay with their parent task.</small>` : ""}</div>
             <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
             <div class="field"><label for="workspace-detail-owner">Owner</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
             <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
@@ -2708,7 +2708,7 @@ function bindWorkspaceDetail() {
       title: String(data.get("title") || ""),
       description: String(data.get("description") || ""),
       status: String(data.get("status") || "queued"),
-      bucketId: String(data.get("bucketId") || ""),
+      bucketId: state.selectedTask.parentTaskId ? state.selectedTask.bucketId : String(data.get("bucketId") || ""),
       priority: String(data.get("priority") || ""),
       assigneeAgentId: String(data.get("assigneeAgentId") || ""),
       scheduledDate: String(data.get("scheduledDate") || ""),
@@ -2901,11 +2901,13 @@ function bindWorkspaceDetail() {
     submit.disabled = true;
     submit.textContent = "Saving…";
     try {
-      const updated = await api.patch(`/api/v1/tasks/${taskID}/status`, {
+      const input = {
         title: form.get("title"), description: form.get("description"), status: form.get("status"),
-        bucketId: form.get("bucketId"), priority: form.get("priority"),
-        assigneeAgentId: form.get("assigneeAgentId"), scheduledDate: form.get("scheduledDate"),
-      });
+        priority: form.get("priority"), assigneeAgentId: form.get("assigneeAgentId"),
+        scheduledDate: form.get("scheduledDate"),
+      };
+      if (!parentTaskID) input.bucketId = form.get("bucketId");
+      const updated = await api.patch(`/api/v1/tasks/${taskID}/status`, input);
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
