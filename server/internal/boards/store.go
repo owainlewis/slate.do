@@ -916,6 +916,13 @@ func taskByID(ctx context.Context, db queryRower, id string) (Task, error) {
 }
 
 func taskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string, overrideLimit bool) (string, error) {
+	// Keep the original top-level task payload byte-for-byte compatible with
+	// fingerprints stored before subtasks were introduced. Idempotency keys live
+	// for seven days, so adding an empty parentTaskId field here would turn valid
+	// retries during a rolling deployment into conflicts.
+	if parentTaskID == "" {
+		return topLevelTaskCreateFingerprint(bucketID, title, description, scheduledDate, kind, assigneeAgentID, overrideLimit)
+	}
 	raw, err := json.Marshal(struct {
 		BucketID        string `json:"bucketId"`
 		Title           string `json:"title"`
@@ -926,6 +933,23 @@ func taskCreateFingerprint(bucketID string, title string, description string, sc
 		ParentTaskID    string `json:"parentTaskId"`
 		OverrideLimit   bool   `json:"overrideLimit"`
 	}{bucketID, title, description, scheduledDate, kind, strings.TrimSpace(assigneeAgentID), parentTaskID, overrideLimit})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func topLevelTaskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, overrideLimit bool) (string, error) {
+	raw, err := json.Marshal(struct {
+		BucketID        string `json:"bucketId"`
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		ScheduledDate   string `json:"scheduledDate"`
+		Kind            string `json:"kind"`
+		AssigneeAgentID string `json:"assigneeAgentId"`
+		OverrideLimit   bool   `json:"overrideLimit"`
+	}{bucketID, title, description, scheduledDate, kind, strings.TrimSpace(assigneeAgentID), overrideLimit})
 	if err != nil {
 		return "", err
 	}
