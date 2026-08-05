@@ -419,9 +419,150 @@ func TestDeletingBucketsAndBoardsReleasesCascadeTaskUsage(t *testing.T) {
 	assertStorageUsage(t, ctx, db, userID, 0, 0)
 }
 
+func TestDeletingAParentContainerReleasesMovedSubtaskUsage(t *testing.T) {
+	for _, deletion := range []string{"same-list", "cross-list", "cross-board"} {
+		t.Run(deletion, func(t *testing.T) {
+			db := openIntegrationDB(t)
+			ctx := context.Background()
+			store := NewStore(db)
+			userID, sourceBoard, source := createProQuotaAccount(t, ctx, db, store)
+			t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+			parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "parent", Description: "source", OverrideLimit: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "child", Description: "moved", OverrideLimit: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertStorageUsage(t, ctx, db, userID, 2, taskContentBytes(parent)+taskContentBytes(child))
+
+			if deletion != "same-list" {
+				destinationBoard := sourceBoard
+				if deletion == "cross-board" {
+					destinationBoard, err = store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Destination board"})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				destination, err := store.CreateBucket(ctx, userID, destinationBoard.ID, CreateBucketInput{Name: "Destination", LimitCount: 20})
+				if err != nil {
+					t.Fatal(err)
+				}
+				position := 0
+				if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: destination.ID, Position: &position}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if deletion == "cross-board" {
+				err = store.DeleteBoard(ctx, userID, sourceBoard.ID)
+			} else {
+				err = store.DeleteBucket(ctx, userID, source.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertStoredUsageMatchesTasks(t, ctx, db, userID)
+			assertStorageUsage(t, ctx, db, userID, 0, 0)
+		})
+	}
+}
+
+func TestMovingASubtaskWhileDeletingItsParentContainerKeepsUsageExact(t *testing.T) {
+	for _, deletion := range []string{"list", "board"} {
+		t.Run(deletion, func(t *testing.T) {
+			db := openIntegrationDB(t)
+			ctx := context.Background()
+			store := NewStore(db)
+			for iteration := 0; iteration < 5; iteration++ {
+				userID, sourceBoard, source := createProQuotaAccount(t, ctx, db, store)
+				destinationBoard := sourceBoard
+				var err error
+				if deletion == "board" {
+					destinationBoard, err = store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Destination board"})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				destination, err := store.CreateBucket(ctx, userID, destinationBoard.ID, CreateBucketInput{Name: "Destination", LimitCount: 20})
+				if err != nil {
+					t.Fatal(err)
+				}
+				parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "parent", OverrideLimit: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "child", OverrideLimit: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				start := make(chan struct{})
+				results := make(chan error, 2)
+				go func() {
+					<-start
+					position := 0
+					_, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: destination.ID, Position: &position})
+					results <- err
+				}()
+				go func() {
+					<-start
+					if deletion == "board" {
+						results <- store.DeleteBoard(ctx, userID, sourceBoard.ID)
+						return
+					}
+					results <- store.DeleteBucket(ctx, userID, source.ID)
+				}()
+				close(start)
+				for call := 0; call < 2; call++ {
+					err := <-results
+					if err != nil && !errors.Is(err, ErrNotFound) {
+						t.Fatalf("iteration %d %s race: %v", iteration, deletion, err)
+					}
+				}
+				assertStoredUsageMatchesTasks(t, ctx, db, userID)
+				assertStorageUsage(t, ctx, db, userID, 0, 0)
+				if _, err := db.Exec(ctx, "DELETE FROM users WHERE id = $1", userID); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func assertStoredUsageMatchesTasks(t *testing.T, ctx context.Context, db *database.Pool, userID string) {
+	t.Helper()
+	var tasks, contentBytes int64
+	if err := db.QueryRow(ctx, `
+		SELECT count(t.id)::bigint, COALESCE(sum(t.storage_bytes), 0)::bigint
+		FROM tasks t
+		JOIN boards b ON b.id = t.board_id
+		WHERE b.user_id = $1
+	`, userID).Scan(&tasks, &contentBytes); err != nil {
+		t.Fatal(err)
+	}
+	assertStorageUsage(t, ctx, db, userID, tasks, contentBytes)
+}
+
 func createFreeQuotaAccount(t *testing.T, ctx context.Context, db *database.Pool, store *Store) (string, Board, Bucket) {
 	t.Helper()
 	userID := createFreeIntegrationUser(t, ctx, db)
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Quota"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Tasks", LimitCount: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return userID, board, bucket
+}
+
+func createProQuotaAccount(t *testing.T, ctx context.Context, db *database.Pool, store *Store) (string, Board, Bucket) {
+	t.Helper()
+	userID := createIntegrationUser(t, ctx, db)
 	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Quota"})
 	if err != nil {
 		t.Fatal(err)
