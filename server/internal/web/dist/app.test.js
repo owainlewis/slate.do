@@ -539,6 +539,8 @@ test("account settings contain profile, preferences, and personal API access onl
   assert.match(profile, /id="profile-display-name" name="displayName" value="Owain Lewis"/);
   assert.match(profile, /class="avatar user-avatar tone-\d[^"]*avatar-large/);
   assert.match(profile, /<span class="read-only-value">owner@example.com<\/span>/);
+  assert.match(profile, /id="request-password-reset"[^>]*>Send reset link<\/button>/);
+  assert.match(profile, /Send a secure reset link to your account email/);
   assert.doesNotMatch(profile, />OL<\/span>/);
   assert.doesNotMatch(profile, /settings-list-limit|agent-limit|token-form|slate_personal_secret/);
 
@@ -569,6 +571,18 @@ test("account settings contain profile, preferences, and personal API access onl
     assert.doesNotMatch(html, /<h1>Settings<\/h1>/);
   }
   vm.runInContext(`state.me = null; state.board = null; state.agents = []; state.tokens = []; state.newToken = ""; state.newTokenOwnerID = ""; state.settingsPage = "profile";`, app);
+});
+
+test("settings use readable text sizes", () => {
+  assert.match(styles, /\.settings-nav-link \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-head \.settings-description \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-section-head p \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-row-copy strong \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-row-copy span \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.read-only-value \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.settings-status \{[^}]*font-size: 13px;/);
+  assert.match(styles, /\.field-error \{[^}]*font-size: 13px;/);
+  assert.match(styles, /\.settings-page \.settings-nav-link \{[^}]*font-size: 14px;/);
 });
 
 test("agent directory shows credential facts, work counts, archived identities, and limits", () => {

@@ -778,7 +778,12 @@ test("account and exact-board settings stay synchronized, safe, and responsive",
   let markBoardPatchStarted;
   const boardPatchResponse = new Promise(resolve => { releaseBoardPatch = resolve; });
   const boardPatchStarted = new Promise(resolve => { markBoardPatchStarted = resolve; });
+  let releasePasswordReset;
+  let markPasswordResetStarted;
+  const passwordResetResponse = new Promise(resolve => { releasePasswordReset = resolve; });
+  const passwordResetStarted = new Promise(resolve => { markPasswordResetStarted = resolve; });
   const profilePatches = [];
+  const passwordResetRequests = [];
   const boardPatches = [];
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
@@ -795,6 +800,12 @@ test("account and exact-board settings stay synchronized, safe, and responsive",
       }
       user = { ...user, ...input };
       return json(response, user);
+    }
+    if (url.pathname === "/api/v1/auth/password-reset/request" && request.method === "POST") {
+      passwordResetRequests.push(await requestJSON(request));
+      markPasswordResetStarted();
+      await passwordResetResponse;
+      return accepted(response, { message: "If an account exists for that email, a password reset link is on its way." });
     }
     if (url.pathname === "/api/v1/boards") {
       return json(response, { boards: boards.map(({ buckets, ...item }) => item) });
@@ -852,6 +863,20 @@ test("account and exact-board settings stay synchronized, safe, and responsive",
   const displayName = page.locator("#profile-display-name");
   assert.equal(await displayName.inputValue(), "Owner");
   assert.equal(await page.getByText("owner@example.com", { exact: true }).count(), 1);
+  await page.getByRole("button", { name: "Send reset link", exact: true }).click();
+  await passwordResetStarted;
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "request-password-reset");
+  assert.equal(await page.locator("#request-password-reset").innerText(), "Sending…");
+  releasePasswordReset();
+  await page.getByRole("status").filter({ hasText: "password reset link is on its way" }).waitFor();
+  assert.deepEqual(passwordResetRequests, [{ email: "owner@example.com" }]);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "request-password-reset");
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    assert.ok(parseFloat(await page.locator(".settings-nav-link").first().evaluate(element => getComputedStyle(element).fontSize)) >= 14);
+    assert.ok(parseFloat(await page.locator(".settings-row-copy span").first().evaluate(element => getComputedStyle(element).fontSize)) >= 14);
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
   assert.match(await page.locator(".profile-card .user-avatar").getAttribute("class"), /tone-\d/);
   assert.equal(await page.getByRole("spinbutton", { name: "Max active items per list", exact: true }).count(), 0);
   assert.equal(await page.locator('.settings-nav-link[aria-current="page"]').innerText(), "Profile");
