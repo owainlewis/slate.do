@@ -200,7 +200,7 @@ func (h *Handler) CreateInboxTask(w http.ResponseWriter, r *http.Request, user a
 	if !validateTaskIdempotencyKey(w, input.IdempotencyKey) {
 		return
 	}
-	inboxID, err := h.store.InboxBucketID(r.Context(), user.ID)
+	inboxID, err := h.store.EnsureInboxBucketID(r.Context(), user.ID)
 	if handleStoreError(w, err, user.Entitlement) {
 		return
 	}
