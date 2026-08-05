@@ -56,7 +56,7 @@ func TestEnsureAccountInboxMigrationSkipsAnInFlightBoardCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer migrationConn.Release()
-	body, err := files.ReadFile("031_ensure_account_inbox.sql")
+	body, err := files.ReadFile("032_repair_account_inbox.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestEnsureAccountInboxMigrationRepairsEveryExistingAccountState(t *testing.
 		t.Fatal(err)
 	}
 
-	body, err := files.ReadFile("031_ensure_account_inbox.sql")
+	body, err := files.ReadFile("032_repair_account_inbox.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
