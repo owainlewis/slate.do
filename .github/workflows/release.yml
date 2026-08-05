@@ -36,6 +36,8 @@ jobs:
         run: sh scripts/build-cli-release.sh "$GITHUB_REF_NAME" dist
       - name: Create checksums
         run: cd dist && sha256sum *.tar.gz > checksums.txt
+      - name: Verify release artifacts
+        run: sh scripts/verify-cli-release.sh "$GITHUB_REF_NAME" dist
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

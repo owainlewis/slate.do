@@ -124,7 +124,7 @@ items per list. Use "tasks list --done true" to page older completed work.
   slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--done <true|false>] [--limit <n>] [--cursor <cursor>]
   slate tasks get <task-id>
   slate tasks pull [--board <board-id>] [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
-	  slate tasks create --title <title> [--list <list-id> | --parent <task-id>] [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>]
+  slate tasks create --title <title> [--list <list-id> | --parent <task-id>] [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>]
   slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>] [--priority <p0|p1|p2>]
   slate tasks delete <task-id>
   slate tasks reorder --list <list-id> <task-id>...
