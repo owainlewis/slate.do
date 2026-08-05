@@ -717,23 +717,13 @@ func (s *PGStore) RevokeAgentToken(ctx context.Context, userID string, agentID s
 }
 
 func (s *PGStore) DeleteAgent(ctx context.Context, userID string, agentID string) error {
-	var found bool
+	var deletedID string
 	err := s.db.QueryRow(ctx, `
-		WITH archived AS (
-			UPDATE agents
-			SET archived_at = now(), updated_at = now()
-			WHERE owner_user_id = $1 AND id = $2 AND archived_at IS NULL
-			RETURNING id
-		), revoked AS (
-			UPDATE agent_credentials c
-			SET revoked_at = COALESCE(c.revoked_at, now()), updated_at = now()
-			FROM archived a
-			WHERE c.agent_id = a.id
-			RETURNING c.id
-		)
-		SELECT EXISTS (SELECT 1 FROM archived)
-	`, userID, agentID).Scan(&found)
-	if err == nil && !found {
+		DELETE FROM agents
+		WHERE owner_user_id = $1 AND id = $2
+		RETURNING id::text
+	`, userID, agentID).Scan(&deletedID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrAgentNotFound
 	}
 	return err

@@ -69,7 +69,7 @@ An oversized field returns HTTP 400 with `field_too_long`, the JSON field name, 
 
 An account owner can create named agent identities without an email, password, registration, or browser session. Identity and credential lifecycle are separate:
 
-- An `agents` row is the durable identity. Its immutable ID owns every task assignment. It has a name, an optional purpose, archive state, and timestamps.
+- An `agents` row is the durable identity until the owner deletes it. Its immutable ID owns every task assignment. It has a name, an optional purpose, archive state, and timestamps.
 - An `agent_credentials` row authenticates one identity. It contains a SHA-256 token hash, a safe display prefix when available, last-used and revoked times, and timestamps. The database permits at most one active credential per agent.
 
 Creation returns one plaintext `slate_agent_...` token once. Slate stores only its SHA-256 hash and safe prefix. List and creation responses expose identity and credential state but never a token hash. Credentials migrated from the earlier combined model have no display prefix because the plaintext token cannot be recovered from its hash.
@@ -78,6 +78,6 @@ An agent token resolves to its owning account and immutable agent ID for assigne
 
 Free permits one active agent and Pro permits five. Archived agents do not consume the limit. Active names are stored trimmed and must be unique per account using case-insensitive comparison. Creation locks the account while checking the plan limit, so concurrent requests cannot exceed it.
 
-Revoking a credential leaves the agent identity and assignments intact, and the active identity still consumes a Pro slot. Archiving an agent also revokes its active credential, removes the identity from future assignment choices, and frees the slot. Existing assignments keep the archived identity so task history remains understandable. Existing live, revoked, and deleted agent records migrate without changing identity IDs; deleted records become archived identities and no migration creates or logs plaintext credentials.
+Revoking a credential leaves the agent identity and assignments intact, and the active identity still consumes a Pro slot. Archiving an agent also revokes its active credential, removes the identity from future assignment choices, and frees the slot. Existing assignments keep the archived identity so task history remains understandable. Deleting an agent permanently removes its identity and credentials; assigned tasks remain but become unassigned. The browser presents deletion as the main lifecycle action and archive as the history-preserving alternative. Existing live, revoked, and deleted agent records migrate without changing identity IDs; legacy deleted records become archived identities and no migration creates or logs plaintext credentials.
 
 Slate does not currently have a vetted image upload or object-storage pipeline. Primary users and agent identities therefore use deterministic initials-and-colour avatars derived from their stored identity. Display names are escaped before rendering. Uploaded files and external avatar URLs are intentionally unsupported until image validation, processing, scanning, and durable storage are designed.

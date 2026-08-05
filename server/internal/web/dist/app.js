@@ -1549,7 +1549,7 @@ function agentDirectoryHTML(active, archived, limitReached) {
         <div>
           <h2 id="active-agents-heading">Active agents <span>${active.length}</span></h2>
           <p id="agents-limit">${limitReached
-            ? `${state.maxAgents} of ${state.maxAgents} active agents. Archive an agent before creating another.`
+            ? `${state.maxAgents} of ${state.maxAgents} active agents. Delete or archive an agent before creating another.`
             : `${state.activeAgents} of ${state.maxAgents} active agent slots used.`}</p>
         </div>
       </div>
@@ -1731,9 +1731,14 @@ function agentSettingsHTML(agent) {
       </div>`}
     </section>
     <section class="agent-settings-card agent-danger-zone" aria-labelledby="agent-lifecycle-heading">
-      <header><div><p class="eyebrow">Lifecycle</p><h2 id="agent-lifecycle-heading">${archived ? "Restore identity" : "Archive agent"}</h2></div>${icon("archive")}</header>
-      <p>${archived ? "Restore this identity as Needs connection. Historical assignments remain attached." : "Archiving removes this agent from assignment choices and revokes every credential. Review and Done history remains attached."}</p>
-      <div class="agent-settings-actions"><button class="${archived ? "secondary" : "danger"}" id="${archived ? "restore-agent" : "archive-agent"}" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>${archived ? "Restore agent" : "Archive agent"}</button></div>
+      <header><div><p class="eyebrow">Lifecycle</p><h2 id="agent-lifecycle-heading">${archived ? "Manage archived agent" : "Delete agent"}</h2></div>${icon(archived ? "archive" : "trash")}</header>
+      <p>${archived ? "Restore this identity with its assignment history, or delete it permanently." : "Deleting permanently removes this identity and its credentials. Assigned tasks remain in Slate but become unassigned. Archive instead to preserve assignment history."}</p>
+      <div class="agent-settings-actions">
+        ${archived
+          ? `<button class="secondary" id="restore-agent" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>Restore agent</button>`
+          : `<button class="secondary" id="archive-agent" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>Archive agent</button>`}
+        <button class="danger" id="delete-agent" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>Delete agent</button>
+      </div>
     </section>`;
 }
 
@@ -1775,6 +1780,11 @@ function agentLifecycleConfirmHTML() {
         : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for Ready and Working work.",
       confirm: conflict ? "Unassign open work and archive" : "Archive agent",
     },
+    delete: {
+      title: "Delete this agent permanently?",
+      body: "The identity and every credential will be deleted. Assigned tasks will remain but become unassigned, including completed task history. This cannot be undone.",
+      confirm: "Delete agent",
+    },
     restore: {
       title: "Restore this identity?",
       body: "It will return as Needs connection and use one active agent slot. Existing credentials stay revoked.",
@@ -1784,7 +1794,7 @@ function agentLifecycleConfirmHTML() {
   return `
     <div class="detail-overlay agent-lifecycle-overlay">
       <section class="agent-lifecycle-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-lifecycle-confirm-heading" ${pending ? 'aria-busy="true"' : ""}>
-        <header><span class="agent-state-icon">${icon(action === "rotate" ? "key" : action === "restore" ? "bot" : "archive")}</span><div><h2 id="agent-lifecycle-confirm-heading">${escapeHTML(config.title)}</h2><p>${escapeHTML(config.body)}</p></div></header>
+        <header><span class="agent-state-icon">${icon(action === "rotate" ? "key" : action === "restore" ? "bot" : action === "delete" ? "trash" : "archive")}</span><div><h2 id="agent-lifecycle-confirm-heading">${escapeHTML(config.title)}</h2><p>${escapeHTML(config.body)}</p></div></header>
         ${pending ? '<p class="agent-lifecycle-pending" id="agent-lifecycle-pending" role="status" tabindex="-1">Working… Keep this page open.</p>' : ""}
         ${state.agentLifecycleError ? `<p class="status-error" role="alert">${escapeHTML(state.agentLifecycleError)}</p>` : ""}
         <footer><button class="secondary" id="cancel-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>Cancel</button><button class="${action === "rotate" || action === "restore" ? "primary" : "danger"}" id="confirm-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>${pending ? "Working…" : escapeHTML(config.confirm)}</button></footer>
@@ -3214,6 +3224,7 @@ function bindAgentLifecycle() {
   document.querySelector("#rotate-agent-credential")?.addEventListener("click", () => openConfirm("rotate"));
   document.querySelector("#revoke-agent-credential")?.addEventListener("click", () => openConfirm("revoke"));
   document.querySelector("#archive-agent")?.addEventListener("click", () => openConfirm("archive"));
+  document.querySelector("#delete-agent")?.addEventListener("click", () => openConfirm("delete"));
   document.querySelector("#restore-agent")?.addEventListener("click", () => openConfirm("restore"));
   document.querySelector("#finish-lifecycle-credential")?.addEventListener("click", () => {
     clearAgentLifecycleCredential();
@@ -3249,7 +3260,7 @@ function bindAgentLifecycleDialog() {
     state.agentArchiveConflict = null;
     state.agentLifecycleError = "";
     render();
-    document.querySelector(`#${action === "rotate" ? "rotate-agent-credential" : action === "revoke" ? "revoke-agent-credential" : action === "restore" ? "restore-agent" : "archive-agent"}`)?.focus();
+    document.querySelector(`#${action === "rotate" ? "rotate-agent-credential" : action === "revoke" ? "revoke-agent-credential" : action === "restore" ? "restore-agent" : action === "delete" ? "delete-agent" : "archive-agent"}`)?.focus();
   };
   document.querySelector("#cancel-agent-lifecycle")?.addEventListener("click", cancel);
   overlay.addEventListener("click", event => { if (event.target === overlay) cancel(); });
@@ -3315,6 +3326,19 @@ async function runAgentLifecycleMutation() {
       };
       updateAgentCache(state.agentDetail.agent);
       state.activeAgents = Math.max(0, state.activeAgents - 1);
+    } else if (action === "delete") {
+      const wasActive = !state.agentDetail.agent.archivedAt && !state.agentDetail.agent.deletedAt;
+      await api.del(`/api/v1/agents/${encodeURIComponent(context.agentID)}`);
+      if (!agentMutationIsCurrent(context)) return;
+      state.agents = state.agents.filter(agent => agent.id !== context.agentID);
+      if (wasActive) state.activeAgents = Math.max(0, state.activeAgents - 1);
+      state.agentDetail = null;
+      state.agentWorkPage = null;
+      state.agentLifecycleConfirm = "";
+      state.agentArchiveConflict = null;
+      state.agentLifecyclePending = "";
+      await navigate(AGENTS_PATH);
+      return;
     } else if (action === "restore") {
       const restored = await api.post(`/api/v1/agents/${encodeURIComponent(context.agentID)}/restore`, {});
       if (!agentMutationIsCurrent(context)) return;

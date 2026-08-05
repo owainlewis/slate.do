@@ -1601,7 +1601,7 @@ test("agent detail routes paginate, assign, edit, regroup, and stay safe across 
   assert.equal(await page.getByText("Ready item", { exact: true }).count(), 0);
 });
 
-test("agent settings safely edit, rotate, revoke, archive, restore, and scrub one-time credentials", async t => {
+test("agent settings safely edit, rotate, revoke, archive, restore, delete, and scrub one-time credentials", async t => {
   const owner = { id: "owner", email: "owner@example.com", displayName: "Owner", theme: "light" };
   const agent = {
     id: "agent-one", displayName: "Builder", purpose: "Ships work",
@@ -1609,6 +1609,7 @@ test("agent settings safely edit, rotate, revoke, archive, restore, and scrub on
     workCounts: { ready: 2, working: 1, review: 1 },
   };
   let archived = false;
+  let deleted = false;
   let connected = true;
   let failDetailRefresh = false;
   let loseRotationResponse = false;
@@ -1642,7 +1643,7 @@ test("agent settings safely edit, rotate, revoke, archive, restore, and scrub on
     if (url.pathname === "/api/v1/boards") return json(response, { boards: [{ id: "board-one", name: "Business" }], maxBoards: 5 });
     if (url.pathname === "/api/v1/boards/board-one") return json(response, { ...board(false), buckets: [] });
     if (url.pathname === "/api/v1/agents" && request.method === "GET") {
-      return json(response, { agents: [detail().agent], activeAgents: archived ? 0 : 1, maxAgents: 5 });
+      return json(response, { agents: deleted ? [] : [detail().agent], activeAgents: archived || deleted ? 0 : 1, maxAgents: 5 });
     }
     if (url.pathname === "/api/v1/agents/agent-one" && request.method === "GET") {
       if (failDetailRefresh) {
@@ -1658,6 +1659,12 @@ test("agent settings safely edit, rotate, revoke, archive, restore, and scrub on
       agent.displayName = String(input.displayName).trim();
       agent.purpose = String(input.purpose).trim();
       return json(response, detail().agent);
+    }
+    if (url.pathname === "/api/v1/agents/agent-one" && request.method === "DELETE") {
+      deleted = true;
+      archived = false;
+      connected = false;
+      return json(response, { ok: true });
     }
     if (url.pathname === "/api/v1/agents/agent-one/credential" && request.method === "DELETE") {
       const gate = revokeGate;
@@ -1810,6 +1817,13 @@ test("agent settings safely edit, rotate, revoke, archive, restore, and scrub on
   await page.reload();
   await page.getByRole("tab", { name: "Settings", exact: true }).waitFor();
   assert.equal(await page.getByText("slate_agent_once_only_browser", { exact: true }).count(), 0);
+
+  await page.getByRole("button", { name: "Delete agent", exact: true }).click();
+  await page.getByRole("dialog").getByText("This cannot be undone.", { exact: false }).waitFor();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete agent", exact: true }).click();
+  await page.waitForURL(`${baseURL}/app/agents`);
+  await page.getByRole("heading", { name: "Bring an agent into the plan.", exact: true }).waitFor();
+  assert.equal(deleted, true);
 });
 
 function json(response, body) {
