@@ -962,6 +962,57 @@ func TestTaskCreationAcceptsALegacyStoredFingerprint(t *testing.T) {
 	}
 }
 
+func TestTaskCreationAcceptsTheImmediatePredeploymentFingerprint(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Rolling deployment retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Retry during rollout", IdempotencyKey: "rolling-deployment-request"}
+	original, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: input.Title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousFingerprint, err := parentAwareTaskCreateFingerprint(
+		bucket.ID,
+		input.Title,
+		input.Description,
+		"",
+		KindAction,
+		input.AssigneeAgentID,
+		"",
+		input.OverrideLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, input.IdempotencyKey, previousFingerprint, original.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != original.ID {
+		t.Fatalf("rolling deployment retry task = %q, want original %q", retry.ID, original.ID)
+	}
+}
+
 func TestTopLevelTaskFingerprintKeepsLegacyShape(t *testing.T) {
 	const bucketID = "00000000-0000-0000-0000-000000000001"
 	const legacyFingerprint = "455c2f24afe83518bf7e89324993aec306c701c81cc6b21db9340888e7d5df05"

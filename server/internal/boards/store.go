@@ -760,9 +760,16 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 		if err != nil {
 			return Task{}, err
 		}
-		return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, idempotencyKey, fingerprint, input.OverrideLimit)
+		compatibleFingerprint := ""
+		if parentTaskID == "" {
+			compatibleFingerprint, err = parentAwareTaskCreateFingerprint(bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", input.OverrideLimit)
+			if err != nil {
+				return Task{}, err
+			}
+		}
+		return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, idempotencyKey, fingerprint, compatibleFingerprint, input.OverrideLimit)
 	}
-	return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, "", "", input.OverrideLimit)
+	return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, "", "", "", input.OverrideLimit)
 }
 
 func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID string, input CreateTaskInput) (Task, error) {
@@ -777,7 +784,7 @@ func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID s
 	return s.CreateTask(ctx, userID, parent.BucketID, input)
 }
 
-func (s *Store) createTask(ctx context.Context, userID string, bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string, key string, fingerprint string, overrideLimit bool) (Task, error) {
+func (s *Store) createTask(ctx context.Context, userID string, bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string, key string, fingerprint string, compatibleFingerprint string, overrideLimit bool) (Task, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Task{}, err
@@ -794,7 +801,9 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 			WHERE user_id = $1 AND key = $2
 		`, userID, key).Scan(&existingFingerprint, &existingTaskID)
 		if err == nil {
-			if existingFingerprint != fingerprint {
+			fingerprintMatches := existingFingerprint == fingerprint ||
+				(compatibleFingerprint != "" && existingFingerprint == compatibleFingerprint)
+			if !fingerprintMatches {
 				return Task{}, ErrIdempotencyKey
 			}
 			if existingTaskID == "" {
@@ -923,6 +932,10 @@ func taskCreateFingerprint(bucketID string, title string, description string, sc
 	if parentTaskID == "" {
 		return topLevelTaskCreateFingerprint(bucketID, title, description, scheduledDate, kind, assigneeAgentID, overrideLimit)
 	}
+	return parentAwareTaskCreateFingerprint(bucketID, title, description, scheduledDate, kind, assigneeAgentID, parentTaskID, overrideLimit)
+}
+
+func parentAwareTaskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string, overrideLimit bool) (string, error) {
 	raw, err := json.Marshal(struct {
 		BucketID        string `json:"bucketId"`
 		Title           string `json:"title"`
