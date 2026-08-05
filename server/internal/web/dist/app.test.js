@@ -343,10 +343,10 @@ test("the task table exposes native headers, cells, and keyboard-operable rows",
   for (const heading of ["Task", "List", "Status", "Priority", "Owner", "Planned"]) {
     assert.match(html, new RegExp(`<th scope="col">${heading}<\\/th>`));
   }
-  assert.match(html, /<tr class="workspace-table-row" data-open-task="task-one" tabindex="0">/);
-  assert.match(html, /<td><strong>Accessible task<\/strong><\/td>/);
+  assert.match(html, /<tr class="workspace-table-row" data-task-row>/);
+  assert.match(html, /<button type="button" class="workspace-table-open" data-open-task="task-one" aria-label="Open task: Accessible task"><strong>Accessible task<\/strong><\/button>/);
   assert.match(html, /<span class="sr-only">Open<\/span>/);
-  assert.doesNotMatch(html, /<section class="workspace-table"|<button class="workspace-table-row"/);
+  assert.doesNotMatch(html, /<section class="workspace-table"|<tr[^>]*tabindex=/);
   vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
 

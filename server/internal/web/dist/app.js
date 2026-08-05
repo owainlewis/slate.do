@@ -1341,7 +1341,7 @@ function workspaceTableHTML(tasks) {
   return `<table class="workspace-table" aria-label="Tasks">
     <colgroup><col class="workspace-table-check"><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
     <thead><tr class="workspace-table-head"><th scope="col"><span class="sr-only">Completion</span></th><th scope="col">Task</th><th scope="col">List</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
-    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-open-task="${task.id}" tabindex="0"><td><span class="workspace-check ${task.done ? "done" : ""}" aria-hidden="true">${task.done ? icon("check") : ""}</span><span class="sr-only">${task.done ? "Complete" : "Open"}</span></td><td><strong>${escapeHTML(task.title)}</strong></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="7"><div class="workspace-empty">No tasks match these filters.</div></td></tr>`}</tbody>
+    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><span class="workspace-check ${task.done ? "done" : ""}" aria-hidden="true">${task.done ? icon("check") : ""}</span><span class="sr-only">${task.done ? "Complete" : "Open"}</span></td><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong></button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="7"><div class="workspace-empty">No tasks match these filters.</div></td></tr>`}</tbody>
   </table>`;
 }
 
@@ -2639,6 +2639,10 @@ function bindWorkspace() {
       element.click();
     });
   });
+  document.querySelectorAll("[data-task-row]").forEach(row => row.addEventListener("click", event => {
+    if (event.target.closest("button, a")) return;
+    row.querySelector("[data-open-task]")?.click();
+  }));
   const viewTabs = [...document.querySelectorAll("[data-workspace-view]")];
   const activateView = async element => {
     const view = element.dataset.workspaceView;

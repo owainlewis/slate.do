@@ -232,7 +232,7 @@ test("task view tabs and table rows work from the keyboard and accessibility tre
   const scan = await new AxeBuilder({ page }).include(".workspace-main").analyze();
   assert.deepEqual(scan.violations.map(violation => ({ id: violation.id, nodes: violation.nodes.map(node => node.target) })), []);
 
-  const row = page.locator('.workspace-table-row[data-open-task="task-parent"]');
+  const row = page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true });
   await row.focus();
   await page.keyboard.press("Enter");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
