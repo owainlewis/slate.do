@@ -46,7 +46,7 @@ sh install-slate.sh
 Pin a release by setting `SLATE_VERSION`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/v1.0.0/install.sh | SLATE_VERSION=v1.0.0 sh
+curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/v1.1.0/install.sh | SLATE_VERSION=v1.1.0 sh
 ```
 
 Choose another install directory with `SLATE_INSTALL_DIR`:
@@ -210,5 +210,5 @@ If you used `SLATE_INSTALL_DIR`, remove `slate` from that directory instead.
   token and try `slate auth status` again.
 
 For release archives and checksums, see
-[Slate CLI v1.0.0](https://github.com/owainlewis/slate.do/releases/tag/v1.0.0)
+[Slate CLI v1.1.0](https://github.com/owainlewis/slate.do/releases/tag/v1.1.0)
 or the [latest release](https://github.com/owainlewis/slate.do/releases/latest).
