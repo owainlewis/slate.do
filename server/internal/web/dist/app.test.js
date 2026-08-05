@@ -1810,6 +1810,12 @@ test("the brand link goes to the board when signed in, and to the landing page w
   await noBoardLoaded.home();
   assert.equal(noBoardLoaded.url(), "/app/boards/board_1", "settings falls back to the first board");
 
+  const staleBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
+  await staleBoard.apply();
+  vm.runInContext(`state.boards = [{ id: "board_1" }];`, staleBoard.context);
+  await staleBoard.home();
+  assert.equal(staleBoard.url(), "/app/boards/board_1", "a removed cached board falls back to the first available board");
+
   const noBoards = router({ url: "/app", signedIn: true, boards: [] });
   await noBoards.apply();
   await noBoards.home();

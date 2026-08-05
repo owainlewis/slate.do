@@ -3712,7 +3712,8 @@ function openApp() {
 
 function goHome() {
   if (!state.me || state.view === "logging-out" || state.view === "logout-error") return navigate(HOME_PATH);
-  const boardID = state.board?.id || state.boards[0]?.id;
+  const currentBoardID = state.board?.id;
+  const boardID = state.boards.some(board => board.id === currentBoardID) ? currentBoardID : state.boards[0]?.id;
   return navigate(boardID ? boardPath(boardID) : APP_PATH);
 }
 
