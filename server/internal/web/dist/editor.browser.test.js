@@ -34,7 +34,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, releaseWorkspaceTasks: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -67,6 +67,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
       state.taskQueries.push(url.search);
       if (url.searchParams.has("parentTaskId")) return json(response, { tasks: state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId")) });
+      if (state.delayNextWorkspaceTasks) {
+        state.delayNextWorkspaceTasks = false;
+        await new Promise(resolve => { state.releaseWorkspaceTasks = resolve; });
+      }
       let tasks = [...state.tasks];
       const listID = url.searchParams.get("bucketId");
       const query = url.searchParams.get("q")?.toLowerCase();
@@ -185,6 +189,23 @@ test("the task workspace supports lists, flow, table, and filters", async t => {
   await page.getByRole("heading", { name: "YouTube", exact: true }).waitFor();
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
   assert.equal(await page.locator('[data-open-task="task-inbox"]').count(), 0);
+});
+
+test("an older workspace response cannot replace the latest route", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.delayNextWorkspaceTasks = true;
+  await page.getByRole("button", { name: "Flow", exact: true }).click();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+  await page.getByRole("button", { name: "List", exact: true }).click();
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  state.releaseWorkspaceTasks();
+  await page.waitForTimeout(100);
+
+  assert.match(page.url(), /\/app\/tasks\?view=list$/);
+  assert.equal(await page.getByRole("heading", { name: "All tasks", exact: true }).isVisible(), true);
+  assert.equal(await page.getByRole("heading", { name: "Not found.", exact: true }).count(), 0);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("New task captures directly into Inbox and opens a normal task editor", async t => {
