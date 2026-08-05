@@ -19,6 +19,15 @@ test("the app provides its branded favicon", () => {
   assert.match(favicon, /<rect[^>]*fill="#4f5bc2"/);
 });
 
+test("landing and docs pages use Castoro for serif text", () => {
+  const castoroImport = /family=Castoro:ital@0;1/;
+
+  assert.match(index, castoroImport);
+  assert.match(cliGuide, castoroImport);
+  assert.match(styles, /--serif: "Castoro", "Iowan Old Style", Georgia, "Times New Roman", serif;/);
+  assert.doesNotMatch(`${index}\n${cliGuide}\n${styles}`, /Newsreader/);
+});
+
 test("theme palettes use neutral surfaces and an indigo accent", () => {
   const light = themeTokens(":root");
   const dark = themeTokens(".theme-dark");

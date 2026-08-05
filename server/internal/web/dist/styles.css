@@ -889,7 +889,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   --faint: #8b8880;
   --line: #e1ded7;
   --line-2: #eae7e0;
-  --serif: "Newsreader", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --serif: "Castoro", "Iowan Old Style", Georgia, "Times New Roman", serif;
   height: 100%;
   overflow-y: auto;
   background: var(--bg);
