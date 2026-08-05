@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/owainlewis/slate.do/server/internal/boards"
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
 
-func TestEnsureAccountInboxMigrationSerializesFirstBoardCreation(t *testing.T) {
+func TestEnsureAccountInboxMigrationSkipsAnInFlightBoardCreation(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
@@ -55,10 +56,6 @@ func TestEnsureAccountInboxMigrationSerializesFirstBoardCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer migrationConn.Release()
-	applicationName := fmt.Sprintf("slate-inbox-migration-race-%d", time.Now().UnixNano())
-	if _, err := migrationConn.Exec(ctx, "SELECT set_config('application_name', $1, false)", applicationName); err != nil {
-		t.Fatal(err)
-	}
 	body, err := files.ReadFile("031_ensure_account_inbox.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -69,24 +66,13 @@ func TestEnsureAccountInboxMigrationSerializesFirstBoardCreation(t *testing.T) {
 		migrationResult <- err
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		var waiting bool
-		err := db.QueryRow(ctx, `
-			SELECT COALESCE(bool_or(wait_event_type = 'Lock'), false)
-			FROM pg_stat_activity
-			WHERE application_name = $1
-		`, applicationName).Scan(&waiting)
+	select {
+	case err := <-migrationResult:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if waiting {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("migration did not wait for the in-flight board creation")
-		}
-		time.Sleep(10 * time.Millisecond)
+	case <-time.After(5 * time.Second):
+		t.Fatal("migration waited for an account with an in-flight board creation")
 	}
 
 	if _, err := createTx.Exec(ctx, `
@@ -98,7 +84,7 @@ func TestEnsureAccountInboxMigrationSerializesFirstBoardCreation(t *testing.T) {
 	if err := createTx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-migrationResult; err != nil {
+	if _, err := boards.NewStore(db).EnsureInboxBucketID(ctx, userID); err != nil {
 		t.Fatal(err)
 	}
 

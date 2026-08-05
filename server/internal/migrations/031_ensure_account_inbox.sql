@@ -1,19 +1,30 @@
--- Board and list writes lock the account row before checking entitlements.
--- Follow the same order so a write that already passed its count check cannot
--- race this backfill and create a second default after the migration commits.
-SELECT id
-FROM users
-ORDER BY id
-FOR UPDATE;
+-- Board and list creation locks the account row before checking entitlements.
+-- Repair only accounts that are not being written during this rolling deploy.
+-- A skipped account is repaired transactionally by its next Inbox capture.
+CREATE TEMP TABLE IF NOT EXISTS slate_inbox_backfill_users (
+	id uuid PRIMARY KEY
+) ON COMMIT DROP;
+TRUNCATE slate_inbox_backfill_users;
 
--- The migration runs while the previous service revision is still live. Block
--- concurrent board and list writes briefly so the backfill cannot race a
--- user-created board or list and leave duplicate defaults behind.
-LOCK TABLE boards, buckets IN SHARE ROW EXCLUSIVE MODE;
+WITH candidates AS (
+	SELECT u.id
+	FROM users u
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM boards existing_board
+		JOIN buckets existing_list ON existing_list.board_id = existing_board.id
+		WHERE existing_board.user_id = u.id
+			AND existing_list.is_inbox = true
+	)
+	ORDER BY u.id
+	FOR UPDATE OF u SKIP LOCKED
+)
+INSERT INTO slate_inbox_backfill_users (id)
+SELECT id FROM candidates;
 
 INSERT INTO boards (user_id, name, sort_order)
 SELECT u.id, 'Today', 0
-FROM users u
+FROM slate_inbox_backfill_users u
 WHERE NOT EXISTS (
 	SELECT 1
 	FROM boards existing_board
@@ -26,6 +37,7 @@ WITH first_board AS (
 		b.id,
 		b.max_tasks_per_list
 	FROM boards b
+	JOIN slate_inbox_backfill_users backfill_user ON backfill_user.id = b.user_id
 	ORDER BY b.user_id, b.sort_order, b.created_at, b.id
 )
 INSERT INTO buckets (board_id, name, goal, is_inbox, limit_count, sort_order)
@@ -47,6 +59,7 @@ WHERE NOT EXISTS (
 WITH first_list AS (
 	SELECT DISTINCT ON (b.user_id) l.id
 	FROM boards b
+	JOIN slate_inbox_backfill_users backfill_user ON backfill_user.id = b.user_id
 	JOIN buckets l ON l.board_id = b.id
 	WHERE NOT EXISTS (
 		SELECT 1
