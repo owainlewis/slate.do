@@ -784,6 +784,51 @@ test("agent detail presents real grouped task data, bounded history, and distinc
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentWorkPage = null; state.agentDetailLoadState = "idle";`, app);
 });
 
+test("a newly refreshed list is immediately available for agent assignment", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Other" }];
+    state.board = { id: "board-one", name: "Workspace", buckets: [{ id: "list-old", boardId: "board-one", name: "Old" }] };
+    state.workspaceLists = [
+      { id: "list-old", boardId: "board-one", name: "Old" },
+      { id: "list-new", boardId: "board-one", name: "Launch plan" },
+      { id: "list-stale", boardId: "board-two", name: "Stale other-board list" },
+    ];
+    state.agentDetail = { agent: { id: "agent-one", displayName: "Builder" } };
+    state.agentAssignBoardID = "board-one";
+    state.agentAssignDraft = null;
+  `, app);
+
+  const refreshed = app.assignWorkHTML();
+  assert.match(refreshed, /value="list-new"[^>]*>Launch plan<\/option>/);
+
+  vm.runInContext(`state.agentAssignBoardID = "board-two";`, app);
+  const failedSwitch = app.assignWorkHTML();
+  assert.match(failedSwitch, /No available lists/);
+  assert.doesNotMatch(failedSwitch, /Stale other-board list/);
+
+  const loadedBoard = {
+    id: "board-two",
+    name: "Other",
+    buckets: [{ id: "list-current", name: "Current other-board list" }],
+  };
+  app.synchronizeWorkspaceListsForBoard(loadedBoard);
+  app.loadedAssignmentBoard = loadedBoard;
+  vm.runInContext(`state.board = loadedAssignmentBoard;`, app);
+  const switched = app.assignWorkHTML();
+  assert.match(switched, /value="list-current"[^>]*>Current other-board list<\/option>/);
+  assert.doesNotMatch(switched, /Stale other-board list/);
+
+  vm.runInContext(`
+    state.boards = [];
+    state.board = null;
+    state.workspaceLists = [];
+    state.agentDetail = null;
+    state.agentAssignBoardID = "";
+    state.agentAssignDraft = null;
+  `, app);
+  delete app.loadedAssignmentBoard;
+});
+
 test("new-agent route has inline limits and one-time CLI connection instructions", () => {
   vm.runInContext(`
     state.me = { id: "owner", theme: "light" };

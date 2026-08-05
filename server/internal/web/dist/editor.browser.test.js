@@ -34,7 +34,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, releaseWorkspaceTasks: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, releaseWorkspaceTasks: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -48,6 +48,13 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     });
     if (url.pathname === "/api/v1/boards" && request.method === "GET") return json(response, { boards: [{ id: "board-one", name: "Workspace" }] });
     if (url.pathname === "/api/v1/boards/board-one" && request.method === "GET") return json(response, { id: "board-one", name: "Workspace", buckets: state.lists });
+    if (url.pathname === "/api/v1/boards/board-one/buckets" && request.method === "POST") {
+      const input = await requestJSON(request);
+      const created = { id: `list-created-${state.createdLists.length + 1}`, boardId: "board-one", boardName: "Workspace", name: input.name, goal: "", isInbox: false, openCount: 0 };
+      state.lists.push(created);
+      state.createdLists.push(created);
+      return json(response, created, 201);
+    }
     if (url.pathname === "/api/v1/lists" && request.method === "GET") return json(response, { lists: state.lists });
     if (url.pathname === "/api/v1/agents" && request.method === "GET") return json(response, { agents: state.agents, maxAgents: 5 });
     const permanentAgentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/permanent$/);
@@ -205,6 +212,27 @@ test("an older workspace response cannot replace the latest route", async t => {
   assert.match(page.url(), /\/app\/tasks\?view=list$/);
   assert.equal(await page.getByRole("heading", { name: "All tasks", exact: true }).isVisible(), true);
   assert.equal(await page.getByRole("heading", { name: "Not found.", exact: true }).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a new list is available for agent assignment without refreshing", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  page.once("dialog", dialog => dialog.accept("Launch plan"));
+  await page.getByRole("button", { name: "New list", exact: true }).click();
+  await waitFor(() => state.createdLists.length === 1);
+  await page.getByText("Launch plan", { exact: true }).waitFor();
+
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  await page.locator('[data-agent-link="agent-research"]').click();
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Assign work", exact: true }).click();
+
+  const list = page.getByLabel("List", { exact: true });
+  await list.selectOption(state.createdLists[0].id);
+  assert.equal(await list.inputValue(), state.createdLists[0].id);
+  assert.equal(await list.locator("option", { hasText: "Launch plan" }).count(), 1);
   assert.deepEqual(pageErrors, []);
 });
 
