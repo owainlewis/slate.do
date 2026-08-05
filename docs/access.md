@@ -30,17 +30,17 @@ The authenticated user response exposes the resolved plan, grant source, server-
 | --- | ---: | ---: |
 | Boards | 1 | 5 |
 | Lists per board | 5 | 9 |
-| Active items per list | 20 | 20 |
+| Legacy active-item setting | 20 | 20 |
 | Active agents | 1 | 5 |
 | Stored tasks | 500 | 10,000 |
 | Stored task content | 10 MiB | 250 MiB |
 | API tokens | 3 | 20 |
 
-Usage reports boards, the largest list count on a board, the largest active-item count on a list, active agents, all stored tasks, stored task-content bytes, and active API tokens. Content is measured as UTF-8 bytes from task titles and descriptions. Stored-task and content quotas are reported here but are enforced by the separate storage-quota work.
+Usage reports boards, the largest list count on a board, the largest active-item count on a list, active agents, all stored tasks, stored task-content bytes, and active API tokens. Content is measured as UTF-8 bytes from task titles and descriptions.
 
-Completed items do not count toward the active-item maximum. A board can configure a lower Max active items per list value as a working constraint. API input cannot configure a value above 20. An explicit override can bypass only the lower working constraint, never the Pro maximum.
+The active-item value remains in entitlement and board responses for compatibility, but task creation, reopening, and movement do not enforce it. Lists organise work and account-level stored-task and content quotas provide the capacity boundary. The legacy override flag is accepted and ignored.
 
-Board, list, active-agent, and API-token limits are enforced transactionally on the server. UI checks explain obvious over-limit actions but are not an authorization boundary. Every query and mutation continues to scope resources to the authenticated account owner.
+Board, list, active-agent, stored-task, stored-content, and API-token limits are enforced transactionally on the server. Every query and mutation continues to scope resources to the authenticated account owner.
 
 ## Request and text limits
 

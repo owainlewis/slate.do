@@ -40,6 +40,19 @@ func (h *Handler) ListBoards(w http.ResponseWriter, r *http.Request, user auth.U
 	writeJSON(w, http.StatusOK, map[string]any{"boards": listed, "maxBoards": user.Entitlement.Limits.Boards})
 }
 
+func (h *Handler) ListAllBuckets(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if user.AgentID != "" {
+		writeError(w, http.StatusForbidden, "agent credentials cannot list workspace lists")
+		return
+	}
+	lists, err := h.store.ListAllBuckets(r.Context(), user.ID)
+	if err != nil {
+		writeInternalError(w, err, "lists could not be loaded")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lists": lists})
+}
+
 func (h *Handler) CreateBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input CreateBoardInput
 	if !decodeJSON(w, r, &input) {
@@ -175,6 +188,48 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	writeJSON(w, http.StatusCreated, task)
 }
 
+func (h *Handler) CreateInboxTask(w http.ResponseWriter, r *http.Request, user auth.User) {
+	var input CreateTaskInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !validateCreateTaskText(w, input) {
+		return
+	}
+	input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if !validateTaskIdempotencyKey(w, input.IdempotencyKey) {
+		return
+	}
+	inboxID, err := h.store.InboxBucketID(r.Context(), user.ID)
+	if handleStoreError(w, err, user.Entitlement) {
+		return
+	}
+	task, err := h.store.CreateTask(r.Context(), user.ID, inboxID, input)
+	if handleStoreError(w, err, user.Entitlement) {
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
+}
+
+func (h *Handler) CreateSubtask(w http.ResponseWriter, r *http.Request, user auth.User) {
+	var input CreateTaskInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !validateCreateTaskText(w, input) {
+		return
+	}
+	input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if !validateTaskIdempotencyKey(w, input.IdempotencyKey) {
+		return
+	}
+	task, err := h.store.CreateSubtask(r.Context(), user.ID, r.PathValue("id"), input)
+	if handleStoreError(w, err, user.Entitlement) {
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
+}
+
 func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var task Task
 	var err error
@@ -283,6 +338,7 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request, user auth.Us
 	}
 	if user.AgentID != "" {
 		filter.AssigneeAgentID = user.AgentID
+		filter.Unassigned = false
 	}
 	page, err := h.store.ListTaskPage(r.Context(), user.ID, filter)
 	if err != nil {
@@ -378,11 +434,51 @@ func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.Us
 func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 	q := r.URL.Query()
 	filter := TaskFilter{
-		BoardID:  strings.TrimSpace(q.Get("boardId")),
-		BucketID: strings.TrimSpace(q.Get("bucketId")),
-		Status:   strings.TrimSpace(q.Get("status")),
-		Priority: strings.TrimSpace(q.Get("priority")),
-		Cursor:   strings.TrimSpace(q.Get("cursor")),
+		BoardID:       strings.TrimSpace(q.Get("boardId")),
+		BucketID:      strings.TrimSpace(q.Get("bucketId")),
+		Status:        strings.TrimSpace(q.Get("status")),
+		Priority:      strings.TrimSpace(q.Get("priority")),
+		Cursor:        strings.TrimSpace(q.Get("cursor")),
+		Query:         strings.TrimSpace(q.Get("q")),
+		ScheduledFrom: strings.TrimSpace(q.Get("plannedFrom")),
+		ScheduledTo:   strings.TrimSpace(q.Get("plannedTo")),
+		ParentTaskID:  strings.TrimSpace(q.Get("parentTaskId")),
+	}
+	assignee := strings.TrimSpace(q.Get("assigneeAgentId"))
+	if assignee == "unassigned" {
+		filter.Unassigned = true
+	} else {
+		filter.AssigneeAgentID = assignee
+	}
+	if filter.AssigneeAgentID != "" && !validUUID(filter.AssigneeAgentID) {
+		return TaskFilter{}, errors.New("assigneeAgentId must be a valid ID")
+	}
+	if filter.ParentTaskID != "" && !validUUID(filter.ParentTaskID) {
+		return TaskFilter{}, errors.New("parentTaskId must be a valid ID")
+	}
+	if filter.ScheduledFrom != "" {
+		if _, err := validDate(filter.ScheduledFrom); err != nil {
+			return TaskFilter{}, errors.New("plannedFrom must be YYYY-MM-DD")
+		}
+	}
+	if filter.ScheduledTo != "" {
+		if _, err := validDate(filter.ScheduledTo); err != nil {
+			return TaskFilter{}, errors.New("plannedTo must be YYYY-MM-DD")
+		}
+	}
+	if raw := strings.TrimSpace(q.Get("topLevel")); raw != "" {
+		topLevel, err := parseQueryBool("topLevel", raw)
+		if err != nil {
+			return TaskFilter{}, err
+		}
+		filter.TopLevelOnly = *topLevel
+	}
+	if raw := strings.TrimSpace(q.Get("inbox")); raw != "" {
+		inboxOnly, err := parseQueryBool("inbox", raw)
+		if err != nil {
+			return TaskFilter{}, err
+		}
+		filter.InboxOnly = *inboxOnly
 	}
 	if raw := strings.TrimSpace(q.Get("done")); raw != "" {
 		done, err := parseQueryBool("done", raw)

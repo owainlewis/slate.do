@@ -1,6 +1,6 @@
 # Slate CLI
 
-The Slate CLI lets you manage boards, lists, and tasks from a terminal. Its
+The Slate CLI lets you capture, organise, and execute tasks from a terminal. Its
 data and workflow commands return JSON, so the same interface works for people,
 scripts, and coding agents such as Claude Code and Codex.
 
@@ -83,14 +83,13 @@ export SLATE_BASE_URL=http://localhost:8080
 
 ## Basic commands
 
-Start by finding the IDs for your board and list:
+Create a task without a list to put it in Inbox:
 
 ```bash
-slate boards list
-slate lists list --board <board-id>
+slate tasks create --title "Draft launch note"
 ```
 
-Create and inspect work:
+Use a list when the bucket is already clear, or a parent when splitting complex work:
 
 ```bash
 slate tasks create \
@@ -99,9 +98,16 @@ slate tasks create \
   --description "Write the first version" \
   --date 2026-07-21
 
+slate tasks create \
+  --parent <task-id> \
+  --title "Human review"
+
 slate tasks list --list <list-id> --done false
 slate tasks get <task-id>
 ```
+
+Subtasks are one level deep. They are normal tasks with independent status,
+priority, planned date, and agent assignment.
 
 Board and list responses include every active task plus the 20 most recently
 updated completed tasks in each list. Task collections omit descriptions to

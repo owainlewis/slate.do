@@ -10,6 +10,8 @@ const ICON_PATHS = {
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   rows: '<path d="M8.5 6h11.5M8.5 12h11.5M8.5 18h11.5"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
   kanban: '<rect x="4" y="4.5" width="6.4" height="15" rx="1.6"/><rect x="13.6" y="4.5" width="6.4" height="10" rx="1.6"/>',
+  columns: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M9 5v14M15 5v14"/>',
+  filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
   calendar: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10.5h16M8.5 3.5v4M15.5 3.5v4"/>',
   sun: '<circle cx="12" cy="12" r="3.6"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6L18 18M18 6l-1.4 1.4M7.4 16.6L6 18"/>',
   moon: '<path d="M20 13.2A7.8 7.8 0 0 1 10.8 4a7.8 7.8 0 1 0 9.2 9.2z"/>',
@@ -114,6 +116,7 @@ const state = {
   board: null,
   renamingBoardId: "",
   selectedTask: null,
+  selectedSubtasks: [],
   settings: false,
   settingsPage: "profile",
   view: "home",
@@ -156,6 +159,14 @@ const state = {
   flowListId: "",
   priorityFilter: "",
   weekStart: "",
+  workspaceLists: [],
+  workspaceTasks: [],
+  workspaceScope: "all",
+  workspaceListID: "",
+  workspaceView: "table",
+  workspaceNextCursor: "",
+  workspaceLoading: false,
+  workspaceFiltersOpen: false,
   theme: "",
   moveNotice: null,
   routeError: null,
@@ -185,6 +196,11 @@ const PRIORITIES = [
 const HOME_PATH = "/";
 const LOGIN_PATH = "/login";
 const APP_PATH = "/app";
+const TASKS_PATH = "/app/tasks";
+const INBOX_PATH = "/app/inbox";
+const TODAY_PATH = "/app/today";
+const REVIEW_PATH = "/app/review";
+const WEEK_PATH = "/app/week";
 const SETTINGS_PATH = "/app/settings";
 const SETTINGS_PAGES = [
   { id: "profile", label: "Profile", icon: "user", title: "Profile", description: "Your identity across Slate." },
@@ -198,6 +214,10 @@ const RESET_PASSWORD_PATH = "/reset-password";
 
 function boardPath(id) {
   return `/app/boards/${encodeURIComponent(id)}`;
+}
+
+function listPath(id) {
+  return `/app/lists/${encodeURIComponent(id)}`;
 }
 
 function boardSettingsPath(id) {
@@ -240,7 +260,20 @@ function parseRoute(pathname) {
   if (path === LOGIN_PATH) return { name: "login" };
   if (path === EARLY_ACCESS_PATH) return { name: "early-access" };
   if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
-  if (path === APP_PATH) return { name: "app" };
+  if (path === APP_PATH) return { name: "workspace", scope: "all", redirect: true };
+  if (path === TASKS_PATH) return { name: "workspace", scope: "all" };
+  if (path === INBOX_PATH) return { name: "workspace", scope: "inbox" };
+  if (path === TODAY_PATH) return { name: "workspace", scope: "today" };
+  if (path === REVIEW_PATH) return { name: "workspace", scope: "review" };
+  if (path === WEEK_PATH) return { name: "workspace", scope: "week" };
+  const list = /^\/app\/lists\/([^/]+)$/.exec(path);
+  if (list) {
+    try {
+      return { name: "workspace", scope: "list", listId: decodeURIComponent(list[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
   if (path === SETTINGS_PATH) return { name: "settings", settingsPage: "profile", redirect: true };
   if (path === `${SETTINGS_PATH}/agents`) return { name: "agents", redirect: true };
   if (path === AGENTS_PATH) return { name: "agents" };
@@ -293,7 +326,7 @@ function parseRoute(pathname) {
 }
 
 function isProtectedRoute(name) {
-  return name === "app" || name === "board" || name === "board-settings" || name === "settings"
+  return name === "workspace" || name === "board" || name === "board-settings" || name === "settings"
     || name === "agents" || name === "agent-new" || name === "agent-detail" || name === "agent-work" || name === "agent-settings";
 }
 
@@ -347,6 +380,7 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.agentDetail = null;
   state.agentWorkPage = null;
   state.selectedTask = null;
+  state.selectedSubtasks = [];
   state.agentAssignOpen = false;
   state.agentAssignError = "";
   state.agentAssignNotice = "";
@@ -415,7 +449,9 @@ async function applyRoute() {
   }
   if (!state.me) return navigate(loginPathFor(currentLocationPath()), { replace: true });
   if (route.redirect) {
-    return route.name === "agents"
+    return route.name === "workspace"
+      ? navigate(TASKS_PATH, { replace: true })
+      : route.name === "agents"
       ? navigate(AGENTS_PATH, { replace: true })
       : navigate(settingsPath(route.settingsPage), { replace: true });
   }
@@ -474,10 +510,10 @@ async function applyRoute() {
     await loadAgents(true, authVersion, state.me?.id, version);
     if (routeVersion !== version) return;
 
-    if (route.name === "app") {
-      const first = state.boards[0]?.id;
-      if (first) return navigate(boardPath(first), { replace: true });
-      state.board = null;
+    if (route.name === "workspace") {
+      if (!state.board && state.boards[0]?.id && !await loadBoard(state.boards[0].id, authVersion, version)) return;
+      if (!await loadWorkspace(route, version)) return showRoute("not-found");
+      if (routeVersion !== version) return;
       return showRoute("app");
     }
     if (route.name === "board" || route.name === "board-settings") {
@@ -492,7 +528,7 @@ async function applyRoute() {
       if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
       if (routeVersion !== version) return;
       if (route.name === "board-settings") return showRoute("board-settings");
-      return showRoute("app");
+      return navigate(TASKS_PATH, { replace: true });
     }
     if (route.settingsPage === "api" && !await loadTokens(authVersion, state.me?.id, version)) return;
     if (routeVersion !== version) return;
@@ -564,6 +600,78 @@ async function loadBoards(selectId, expectedRouteVersion) {
   return true;
 }
 
+function workspaceQuery(route, cursor = "") {
+  const current = new URLSearchParams(location.search);
+  const query = new URLSearchParams({ limit: "200", topLevel: "true" });
+  if (route.scope === "list" && route.listId) query.set("bucketId", route.listId);
+  if (route.scope === "inbox") query.set("inbox", "true");
+  if (route.scope === "review") query.set("status", "needs_review");
+  if (route.scope === "today") {
+    const today = dateKey(new Date());
+    query.set("plannedFrom", today);
+    query.set("plannedTo", today);
+  }
+  if (route.scope === "week") {
+    const start = startOfWeek(new Date());
+    query.set("plannedFrom", dateKey(start));
+    query.set("plannedTo", dateKey(addDays(start, 6)));
+  }
+  for (const name of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
+    const routeOwnsFilter = (name === "status" && route.scope === "review")
+      || (["plannedFrom", "plannedTo"].includes(name) && ["today", "week"].includes(route.scope));
+    if (current.get(name) && !routeOwnsFilter) query.set(name, current.get(name));
+  }
+  if (cursor) query.set("cursor", cursor);
+  return query;
+}
+
+async function loadWorkspace(route, expectedRouteVersion) {
+  const sessionVersion = authVersion;
+  state.workspaceLoading = true;
+  const [listData, taskData] = await Promise.all([
+    api.get("/api/v1/lists"),
+    api.get(`/api/v1/tasks?${workspaceQuery(route)}`),
+  ]);
+  if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+  state.workspaceLists = listData.lists || [];
+  state.workspaceTasks = taskData.tasks || [];
+  state.workspaceNextCursor = taskData.nextCursor || "";
+  state.workspaceScope = route.scope || "all";
+  state.workspaceListID = route.listId || "";
+  const requestedView = new URLSearchParams(location.search).get("view");
+  if (["list", "flow", "table"].includes(requestedView)) state.workspaceView = requestedView;
+  state.workspaceLoading = false;
+  if (route.scope === "list" && !state.workspaceLists.some(list => list.id === route.listId)) return false;
+  return true;
+}
+
+async function loadMoreWorkspaceTasks() {
+  if (!state.workspaceNextCursor || state.workspaceLoading) return;
+  const route = parseRoute(location.pathname);
+  if (route.name !== "workspace") return;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const version = routeVersion;
+  const cursor = state.workspaceNextCursor;
+  const query = workspaceQuery(route, cursor).toString();
+  state.workspaceLoading = true;
+  render();
+  try {
+    const data = await api.get(`/api/v1/tasks?${query}`);
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    const known = new Set(state.workspaceTasks.map(task => task.id));
+    state.workspaceTasks = [...state.workspaceTasks, ...(data.tasks || []).filter(task => !known.has(task.id))];
+    state.workspaceNextCursor = data.nextCursor || "";
+    state.error = "";
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    state.error = err.message;
+  }
+  if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+  state.workspaceLoading = false;
+  render();
+}
+
 function resetAuthenticatedState() {
   goalSaveChains.clear();
   themeSaveChain = Promise.resolve();
@@ -615,6 +723,14 @@ function resetAuthenticatedState() {
   state.flowListId = "";
   state.priorityFilter = "";
   state.weekStart = "";
+  state.workspaceLists = [];
+  state.workspaceTasks = [];
+  state.workspaceScope = "all";
+  state.workspaceListID = "";
+  state.workspaceView = "table";
+  state.workspaceNextCursor = "";
+  state.workspaceLoading = false;
+  state.workspaceFiltersOpen = false;
   state.theme = "";
   state.routeError = null;
 }
@@ -715,16 +831,40 @@ async function loadCompletedHistory(listID, trigger) {
   }
 }
 
+async function loadAllSubtasks(taskID, isCurrent) {
+  const tasks = [];
+  const known = new Set();
+  let cursor = "";
+  do {
+    const query = new URLSearchParams({ parentTaskId: taskID, limit: "200" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await api.get(`/api/v1/tasks?${query}`);
+    if (!isCurrent()) return null;
+    for (const task of page.tasks || []) {
+      if (known.has(task.id)) continue;
+      known.add(task.id);
+      tasks.push(task);
+    }
+    cursor = page.nextCursor || "";
+  } while (cursor);
+  return tasks;
+}
+
 async function openTaskDetail(taskID, trigger) {
   const summary = findTask(taskID) || {};
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   const version = routeVersion;
+  const isCurrent = () => sessionIsCurrent(sessionVersion, userID) && version === routeVersion;
   if (trigger) trigger.disabled = true;
   try {
-    const detail = await api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}`);
-    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return false;
+    const [detail, subtasks] = await Promise.all([
+      api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}`),
+      loadAllSubtasks(taskID, isCurrent),
+    ]);
+    if (!isCurrent() || subtasks === null) return false;
     state.selectedTask = { ...summary, ...detail };
+    state.selectedSubtasks = subtasks;
     state.error = "";
     render();
     return true;
@@ -805,7 +945,13 @@ function render() {
     bindAgentDetail();
     return;
   }
-  // Whenever a board is on screen its id belongs in the URL, however it was selected.
+  if (parseRoute(location.pathname).name === "workspace") {
+    root.innerHTML = appHTML();
+    bindApp();
+    return;
+  }
+  // Legacy board routes retain their identifier until their compatibility
+  // redirect has completed.
   syncPath(state.board ? boardPath(state.board.id) : APP_PATH);
   root.innerHTML = appHTML();
   bindApp();
@@ -1009,8 +1155,8 @@ function landingHTML() {
           <p class="principles-sub" data-reveal style="--d:0">You do not get more done by taking on more. You get more done by being clear about what matters, then giving the rest to agents that can run it in parallel.</p>
           <div class="principle" data-reveal style="--d:0">
             <span class="principle-num">01</span>
-            <h3>Limits, not lists</h3>
-            <p>Every list caps its open actions. When a list is full, something has to finish before anything new begins.</p>
+            <h3>Lists for clear thinking</h3>
+            <p>Put work into the buckets that match how you think. Switch the view when you need to plan, execute, or review it.</p>
           </div>
           <div class="principle" data-reveal style="--d:1">
             <span class="principle-num">02</span>
@@ -1059,45 +1205,148 @@ function landingHTML() {
 }
 
 function appHTML() {
-  const board = state.board;
   const theme = currentTheme();
-  const lists = board?.buckets || [];
-  const listsMode = state.boardMode === "lists";
-  const flowMode = state.boardMode === "flow";
-  const calendarMode = state.boardMode === "calendar";
-  const todayMode = state.boardMode === "today";
-  const headerDays = calendarMode ? weekDays() : daysInWeek(new Date());
-  const boardLimitReached = state.boards.length >= state.maxBoards;
-  const listLimitReached = lists.length >= state.maxListsPerBoard;
+  const tasks = workspaceScopedTasks();
+  const list = state.workspaceLists.find(item => item.id === state.workspaceListID);
+  const title = state.workspaceScope === "inbox" ? "Inbox"
+    : state.workspaceScope === "today" ? "Today"
+      : state.workspaceScope === "week" ? "Week"
+        : state.workspaceScope === "review" ? "Review"
+          : state.workspaceScope === "list" ? list?.name || "List" : "All tasks";
+  const subtitle = state.workspaceScope === "inbox" ? "New work waiting to be organised."
+    : state.workspaceScope === "today" ? "Work planned for today."
+      : state.workspaceScope === "week" ? "Work planned across this week."
+        : state.workspaceScope === "review" ? "Work waiting for your judgment."
+          : state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
   return `
-    <section class="shell theme-${theme}">
-      ${appSidebarHTML({ theme, boardLimitReached })}
-      <div class="main">
-        <header class="topbar">
-          <span class="week">${formatWeekHeading(headerDays)}</span>
-          <div class="top-actions">
-            <span class="current-user">${userAvatarHTML(state.me, { small: true })}</span>
-            <div class="view-switch" aria-label="Board view">
-              <button data-board-mode="lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}" title="Lists">${icon("rows")}<span>Lists</span></button>
-              <button data-board-mode="flow" aria-pressed="${flowMode}" class="${flowMode ? "on" : ""}" title="Flow">${icon("kanban")}<span>Flow</span></button>
-              <button data-board-mode="calendar" aria-pressed="${calendarMode}" class="${calendarMode ? "on" : ""}" title="Week">${icon("calendar")}<span>Week</span></button>
-              <button data-board-mode="today" aria-pressed="${todayMode}" class="${todayMode ? "on" : ""}" title="Today">${icon("sun")}<span>Today</span></button>
-            </div>
-      <button class="icon-btn icon-label ${listsMode ? "" : "add-list-placeholder"}" id="add-list" ${listsMode ? (listLimitReached ? 'disabled aria-describedby="list-limit"' : "") : 'aria-hidden="true" tabindex="-1" disabled'}>${icon("plus")}<span>New list</span></button>
-      ${listsMode && listLimitReached ? `<span class="board-limit" id="list-limit">${state.maxListsPerBoard} list ${planLabel()} limit reached</span>` : ""}
-          </div>
+    <section class="shell task-shell theme-${theme}">
+      ${appSidebarHTML({ theme, showNewTask: false })}
+      <div class="main workspace-main">
+        <header class="workspace-topbar">
+          <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
+          <button class="primary" id="new-task">${icon("plus")}<span>New task</span></button>
         </header>
         ${statusErrorHTML(state.error)}
         ${statusNoticeHTML(state.moveNotice)}
-        ${listsMode ? priorityToolbarHTML() : ""}
-        ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
-        ${footerHTML(board, todayMode)}
+        <div class="workspace-viewbar">
+          <div class="workspace-tabs" role="tablist" aria-label="Task view">
+            ${["list", "flow", "table"].map(view => `<button data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" aria-selected="${state.workspaceView === view}">${view === "flow" ? icon("kanban") : view === "table" ? icon("columns") : icon("rows")}<span>${view[0].toUpperCase() + view.slice(1)}</span></button>`).join("")}
+          </div>
+          <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
+        </div>
+        ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
+        <div class="workspace-content">
+          ${state.workspaceLoading ? `<div class="workspace-empty">Loading tasks…</div>`
+            : state.workspaceScope === "week" ? workspaceWeekHTML(tasks)
+              : state.workspaceView === "flow" ? workspaceFlowHTML(tasks)
+                : state.workspaceView === "list" ? workspaceListHTML(tasks)
+                  : workspaceTableHTML(tasks)}
+        </div>
+        ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more tasks"}</button>` : ""}
       </div>
-      ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
+      ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : ""}
     </section>`;
 }
 
-function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, boardLimitReached = state.boards.length >= state.maxBoards } = {}) {
+function workspaceScopedTasks() {
+  if (state.workspaceScope !== "inbox") return state.workspaceTasks;
+  const inboxIDs = new Set(state.workspaceLists.filter(list => list.isInbox).map(list => list.id));
+  return state.workspaceTasks.filter(task => inboxIDs.has(task.bucketId));
+}
+
+function workspaceFilterCount() {
+  const query = new URLSearchParams(globalThis.location?.search || "");
+  const names = ["q", "priority", "assigneeAgentId"];
+  if (state.workspaceScope !== "review") names.push("status");
+  if (!["today", "week"].includes(state.workspaceScope)) names.push("plannedFrom", "plannedTo");
+  return names.filter(name => query.get(name)).length;
+}
+
+function workspaceFilterHTML() {
+  const query = new URLSearchParams(globalThis.location?.search || "");
+  const agentOptions = state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
+  return `<form class="workspace-filters" id="workspace-filters">
+    <label class="workspace-search"><span>Search</span><input name="q" value="${escapeAttr(query.get("q") || "")}" placeholder="Search tasks…"></label>
+    ${state.workspaceScope === "review" ? "" : `<label><span>Status</span><select name="status"><option value="">Any status</option>${FLOW_STATES.map(item => `<option value="${item.value}" ${query.get("status") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>`}
+    <label><span>Priority</span><select name="priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
+    <label><span>Owner</span><select name="assigneeAgentId"><option value="">Anyone</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
+    ${["today", "week"].includes(state.workspaceScope) ? "" : `<label><span>From</span><input type="date" name="plannedFrom" value="${escapeAttr(query.get("plannedFrom") || "")}"></label>
+    <label><span>To</span><input type="date" name="plannedTo" value="${escapeAttr(query.get("plannedTo") || "")}"></label>`}
+    <button class="secondary" type="submit">Apply</button><button class="plain-btn" id="clear-workspace-filters" type="button">Clear</button>
+  </form>`;
+}
+
+function workspaceTaskOwner(task) {
+  return task.assigneeAgentName || state.agents.find(agent => agent.id === task.assigneeAgentId)?.displayName || state.me?.displayName || "You";
+}
+
+function workspaceListHTML(tasks) {
+  if (!tasks.length) return `<div class="workspace-empty">Nothing here yet.</div>`;
+  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}"><span class="workspace-check ${task.done ? "done" : ""}">${task.done ? icon("check") : ""}</span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.listName || "Inbox")}</small></span>${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
+}
+
+function workspaceTableHTML(tasks) {
+  return `<section class="workspace-table" aria-label="Tasks table">
+    <div class="workspace-table-head"><span></span><span>Task</span><span>List</span><span>Status</span><span>Priority</span><span>Owner</span><span>Planned</span></div>
+    ${tasks.length ? tasks.map(task => `<button class="workspace-table-row" data-open-task="${task.id}"><span class="workspace-check ${task.done ? "done" : ""}">${task.done ? icon("check") : ""}</span><strong>${escapeHTML(task.title)}</strong><span>${escapeHTML(task.listName || "Inbox")}</span><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span><span>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</span><span>${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></button>`).join("") : `<div class="workspace-empty">No tasks match these filters.</div>`}
+  </section>`;
+}
+
+function workspaceFlowHTML(tasks) {
+  return `<section class="workspace-flow">${FLOW_STATES.map(flowState => {
+    const items = tasks.filter(task => task.status === flowState.value);
+    return `<section class="workspace-flow-column" data-flow-status="${flowState.value}"><header><h2>${flowState.label}</h2><span>${items.length}</span></header><div>${items.length ? items.map(task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.listName || "Inbox")} · ${escapeHTML(workspaceTaskOwner(task))}</small></button></article>`).join("") : `<p>Drag tasks here</p>`}</div></section>`;
+  }).join("")}</section>`;
+}
+
+function workspaceWeekHTML(tasks) {
+  const start = startOfWeek(new Date());
+  return `<section class="workspace-week">${Array.from({ length: 7 }, (_, index) => addDays(start, index)).map(day => {
+    const key = dateKey(day);
+    const items = tasks.filter(task => task.scheduledDate === key);
+    return `<section><header><span>${day.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${day.getDate()}</b></header>${items.map(task => `<button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.listName || "Inbox")}</small></button>`).join("") || `<p>Nothing planned</p>`}</section>`;
+  }).join("")}</section>`;
+}
+
+function workspaceDetailHTML(task) {
+  const list = state.workspaceLists.find(item => item.id === task.bucketId);
+  const completed = state.selectedSubtasks.filter(item => item.done).length;
+  const subtaskSection = task.parentTaskId ? `<p class="workspace-parent-note">Subtask of another task</p>` : `
+    <section class="workspace-subtasks" aria-labelledby="subtasks-heading">
+      <header><div><h3 id="subtasks-heading">Subtasks</h3><span>${completed}/${state.selectedSubtasks.length}</span></div></header>
+      <div class="workspace-subtask-list">
+        ${state.selectedSubtasks.map(item => `<button type="button" data-open-task="${item.id}"><span class="workspace-check ${item.done ? "done" : ""}">${item.done ? icon("check") : ""}</span><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button>`).join("")}
+      </div>
+      <div id="add-subtask" class="workspace-add-subtask"><input name="title" placeholder="Add a subtask" aria-label="Subtask title"><button type="button" class="plain-btn">${icon("plus")}<span>Add</span></button></div>
+    </section>`;
+  return `<div class="detail-overlay" data-detail-overlay>
+    <section class="detail workspace-detail" role="dialog" aria-modal="true" aria-labelledby="workspace-detail-title">
+      <header class="detail-head"><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Subtask" : "Task"}</b></div><button class="detail-close" type="button" data-close-detail aria-label="Close editor">${icon("x")}</button></header>
+      <form id="workspace-detail-form">
+        <div class="detail-body">
+          <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
+          <label class="workspace-brief-label" for="workspace-detail-description">Task brief</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="Add the outcome, context, and definition of done…">${escapeHTML(task.description || "")}</textarea>
+          <div class="detail-properties">
+            <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
+            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" name="bucketId">${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(item.isInbox ? "Inbox" : item.name)}</option>`).join("")}</select></div>
+            <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
+            <div class="field"><label for="workspace-detail-owner">Owner</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
+            <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
+          </div>
+          ${task.assigneeAgentId ? `<aside class="workspace-cli-handoff">${icon("bot")}<div><strong>Available to ${escapeHTML(workspaceTaskOwner(task))} through the CLI</strong><code>slate tasks pull</code></div></aside>` : ""}
+          ${subtaskSection}
+          <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
+        </div>
+        <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete task</button><div><button class="secondary" type="button" data-close-detail>Cancel</button><button class="primary" type="submit">Save changes</button></div></footer>
+      </form>
+    </section>
+  </div>`;
+}
+
+function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNewTask = true } = {}) {
+  const route = parseRoute(globalThis.location?.pathname || APP_PATH);
+  const workspaceOn = name => route.name === "workspace" && state.workspaceScope === name;
+  const inboxCount = state.workspaceLists.filter(list => list.isInbox).reduce((total, list) => total + (list.openCount || 0), 0);
   return `
     <aside class="sidebar">
       <div class="sidebar-head">
@@ -1105,19 +1354,27 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, boardLi
         <button class="icon-btn sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar-content" aria-expanded="false">${icon("menu")}</button>
       </div>
       <div class="sidebar-content" id="sidebar-content">
-        <section class="nav-sec nav-boards">
-          <h3>Boards</h3>
-          <div class="pages">
-            ${state.boards.map(boardRowHTML).join("")}
+        ${showNewTask ? globalNewTaskButtonHTML() : ""}
+        <section class="nav-sec workspace-nav">
+          <h3>Workspace</h3>
+          <div class="pages task-nav-pages">
+            <a class="nav-link ${workspaceOn("inbox") ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b>${inboxCount || ""}</b></a>
+            <a class="nav-link ${workspaceOn("today") ? "on" : ""}" href="${TODAY_PATH}">${icon("sun")}<span>Today</span></a>
+            <a class="nav-link ${workspaceOn("week") ? "on" : ""}" href="${WEEK_PATH}">${icon("calendar")}<span>Week</span></a>
+            <a class="nav-link ${workspaceOn("review") ? "on" : ""}" href="${REVIEW_PATH}">${icon("check")}<span>Review</span></a>
+            <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("rows")}<span>All tasks</span></a>
           </div>
-          <div class="board-create">
-            <button class="plain-btn icon-label" id="new-board" ${boardLimitReached ? 'disabled aria-describedby="board-limit"' : ""}>${icon("plus")}<span>New board</span></button>
-            ${boardLimitReached ? `<p class="board-limit" id="board-limit">${state.maxBoards} board limit reached</p>` : ""}
+        </section>
+        <section class="nav-sec workspace-nav">
+          <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list">${icon("plus")}</button></div>
+          <div class="pages task-nav-pages">
+            ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link ${route.name === "workspace" && state.workspaceScope === "list" && state.workspaceListID === list.id ? "on" : ""}" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b>${list.openCount || ""}</b></a>`).join("")}
           </div>
         </section>
         <section class="nav-sec nav-collaborators">
-          <h3>Collaborators</h3>
-          <a class="plain-btn icon-label nav-link ${agentsCurrent ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent ? 'aria-current="page"' : ""}>${icon("bot")}<span>Agents</span></a>
+          <h3>Agents</h3>
+          <a class="plain-btn icon-label nav-link ${agentsCurrent && !route.agentId ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent && !route.agentId ? 'aria-current="page"' : ""}>${icon("bot")}<span>All agents</span></a>
+          ${state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).map(agent => `<a class="nav-link agent-nav-link ${route.agentId === agent.id ? "on" : ""}" href="${agentPath(agent.id)}">${avatarHTML(agent, { small: true, decorative: true })}<span>${escapeHTML(agent.displayName)}</span></a>`).join("")}
         </section>
         <section class="nav-sec nav-sec-footer">
           ${themeSwitchHTML(theme)}
@@ -1133,7 +1390,11 @@ function themeSwitchHTML(theme) {
     <div class="theme-switch ${theme}" role="group" aria-label="Theme">
       <span class="theme-switch-thumb" aria-hidden="true"></span>
       ${themes.map(item => `<button type="button" data-set-theme="${item.id}" class="${theme === item.id ? "on" : ""}" aria-pressed="${theme === item.id}" title="${item.label} theme">${icon(item.id === "dark" ? "moon" : "sun")}<span>${item.label}</span></button>`).join("")}
-    </div>`;
+  </div>`;
+}
+
+function globalNewTaskButtonHTML() {
+  return `<button class="primary sidebar-new-task" id="global-new-task" type="button">${icon("plus")}<span>New task</span></button>`;
 }
 
 function boardRowHTML(board) {
@@ -1184,23 +1445,18 @@ function emptyListMessage() {
 }
 
 function listHTML(list) {
-  const over = list.openCount > list.limitCount ? "over-limit" : "";
   const tasks = (list.tasks || []).filter(priorityMatches);
-  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-  const activeLimitReached = (list.openCount || 0) >= activeLimit;
   // New items carry no priority, so adding one under a filter would create it
   // and immediately hide it. Block the form instead of failing silently.
-  const addBlocked = activeLimitReached || Boolean(state.priorityFilter);
-  const addPlaceholder = activeLimitReached
-    ? `Limit of ${activeLimit} active items reached`
-    : state.priorityFilter
+  const addBlocked = Boolean(state.priorityFilter);
+  const addPlaceholder = state.priorityFilter
       ? "Clear the filter to add items"
       : "Add item";
   return `
-    <section class="bucket ${over}" data-bucket="${list.id}" draggable="true">
+    <section class="bucket" data-bucket="${list.id}" draggable="true">
       <div class="bucket-head">
         <input data-bucket-name="${list.id}" aria-label="List name" value="${escapeAttr(list.name)}">
-        <span class="count" title="Open items / limit">${list.openCount}/${list.limitCount}</span>
+        <span class="count" title="Open items">${list.openCount}</span>
         <div class="bucket-menu">
           <button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list">${icon("trash")}</button>
         </div>
@@ -1212,10 +1468,9 @@ function listHTML(list) {
       </ul>
     ${list.completedNextCursor ? `<button class="secondary completed-history" type="button" data-load-completed="${list.id}">Load older completed</button>` : ""}
     <form class="add-task" data-add-task="${list.id}">
-    <button class="add-icon" type="submit" title="Add item" ${addBlocked ? "disabled" : ""} ${activeLimitReached ? 'aria-describedby="item-limit-' + list.id + '"' : ""}>${icon("plus")}</button>
-    <input name="title" placeholder="${addPlaceholder}" ${addBlocked ? "disabled" : ""} ${activeLimitReached ? 'aria-describedby="item-limit-' + list.id + '"' : ""}>
+    <button class="add-icon" type="submit" title="Add item" ${addBlocked ? "disabled" : ""}>${icon("plus")}</button>
+    <input name="title" placeholder="${addPlaceholder}" ${addBlocked ? "disabled" : ""}>
   </form>
-  ${activeLimitReached ? `<p class="board-limit" id="item-limit-${list.id}">${activeLimit} active item limit reached</p>` : ""}
   </section>`;
 }
 
@@ -1453,11 +1708,7 @@ function agentOptionsHTML(selectedID = "") {
 }
 
 function moveListOptionsHTML(board, task, selectedID = task.bucketId) {
-  return (board?.buckets || []).map(list => {
-    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-    const full = task.kind === "action" && !task.done && list.id !== task.bucketId && (list.openCount || 0) >= limit;
-    return `<option value="${list.id}" ${list.id === selectedID ? "selected" : ""} ${full ? "disabled" : ""}>${escapeHTML(list.name)}${full ? ` (${list.openCount}/${limit} full)` : ""}</option>`;
-  }).join("");
+  return (board?.buckets || []).map(list => `<option value="${list.id}" ${list.id === selectedID ? "selected" : ""}>${escapeHTML(list.name)}</option>`).join("");
 }
 
 function movePositionOptionsHTML(list, task) {
@@ -1882,10 +2133,7 @@ function assignWorkHTML() {
   const selectedBoardID = state.agentAssignBoardID || state.board?.id || state.boards[0]?.id || "";
   const selectedBoard = state.board?.id === selectedBoardID ? state.board : null;
   const lists = selectedBoard?.buckets || [];
-  const availableLists = lists.filter(list => {
-    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-    return (list.openCount || 0) < limit;
-  });
+  const availableLists = lists;
   return `
     <div class="detail-overlay" data-assign-overlay>
       <section class="detail assign-work-dialog" role="dialog" aria-modal="true" aria-labelledby="assign-work-heading">
@@ -1902,11 +2150,7 @@ function assignWorkHTML() {
             <textarea class="detail-description" id="assign-description" name="description" placeholder="Add a description…">${escapeHTML(draft.description || "")}</textarea>
             <div class="detail-properties" aria-label="Item properties">
               <div class="field"><label for="assign-board">Board</label><select id="assign-board" name="boardId">${state.boards.map(board => `<option value="${escapeAttr(board.id)}" ${board.id === selectedBoardID ? "selected" : ""}>${escapeHTML(board.name)}</option>`).join("")}</select></div>
-              <div class="field"><label for="assign-list">List</label><select id="assign-list" name="bucketId" ${availableLists.length ? "" : "disabled"}>${lists.map(list => {
-                const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-                const full = (list.openCount || 0) >= limit;
-                return `<option value="${escapeAttr(list.id)}" ${list.id === draft.bucketId ? "selected" : ""} ${full ? "disabled" : ""}>${escapeHTML(list.name)}${full ? ` (${list.openCount}/${limit} full)` : ""}</option>`;
-              }).join("") || '<option value="">No available lists</option>'}</select></div>
+              <div class="field"><label for="assign-list">List</label><select id="assign-list" name="bucketId" ${availableLists.length ? "" : "disabled"}>${lists.map(list => `<option value="${escapeAttr(list.id)}" ${list.id === draft.bucketId ? "selected" : ""}>${escapeHTML(list.name)}</option>`).join("") || '<option value="">No available lists</option>'}</select></div>
               <div class="field"><label for="assign-date">Plan for</label><input id="assign-date" name="scheduledDate" type="date" value="${escapeAttr(draft.scheduledDate || "")}"></div>
             </div>
             <p class="error detail-error" id="assign-error" role="alert">${escapeHTML(state.agentAssignError)}</p>
@@ -2112,6 +2356,7 @@ function settingsHTML() {
     <section class="settings-page theme-${theme}">
       <aside class="sidebar settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        ${globalNewTaskButtonHTML()}
         <p class="settings-sidebar-title">Account settings</p>
         <nav class="settings-nav" aria-label="Settings">
           ${SETTINGS_PAGES.map(item => `<a class="page-row icon-label settings-nav-link ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" ${item.id === page.id ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${item.label}</span></a>`).join("")}
@@ -2139,11 +2384,11 @@ function settingsHTML() {
 function boardSettingsHTML() {
   const theme = currentTheme();
   const board = state.board;
-  const maximum = accountLimits().activeItemsPerList;
   return `
     <section class="settings-page board-settings-page theme-${theme}">
       <aside class="sidebar settings-sidebar board-settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        ${globalNewTaskButtonHTML()}
         <p class="settings-sidebar-title">Board settings</p>
         <div class="board-settings-context">
           ${icon("rows")}
@@ -2163,27 +2408,19 @@ function boardSettingsHTML() {
               <p class="settings-description">Configuration here applies only to this board.</p>
             </div>
           </div>
-          <section class="settings-section" aria-labelledby="work-limits-heading">
+          <section class="settings-section" aria-labelledby="list-behaviour-heading">
             <div class="settings-section-head">
-              <h2 id="work-limits-heading">Work limits</h2>
-              <p>Keep active work focused across every list on ${escapeHTML(board.name)}.</p>
+              <h2 id="list-behaviour-heading">List behaviour</h2>
+              <p>Lists organise tasks into useful buckets. They do not impose an item limit.</p>
             </div>
-            <form id="board-limit-form" class="settings-card" novalidate>
+            <div class="settings-card">
               <div class="settings-row">
-                <label class="settings-row-copy" for="settings-list-limit">
-                  <strong>Maximum active items</strong>
-                  <span>The number of open items allowed in each list. ${planLabel()} supports 1 to ${maximum}.</span>
-                </label>
-                <div class="settings-field-wrap settings-limit">
-                  <input id="settings-list-limit" aria-label="Max active items per list" type="number" inputmode="numeric" min="1" max="${maximum}" value="${board.maxTasksPerList || DEFAULT_LIST_LIMIT}" aria-describedby="settings-list-limit-error">
-                  <p class="field-error" id="settings-list-limit-error" role="alert"></p>
+                <div class="settings-row-copy">
+                  <strong>No hard item limits</strong>
+                  <span>Use status, priority, filters, and views to focus the work. Account storage quotas still apply.</span>
                 </div>
               </div>
-              <div class="settings-card-actions">
-                ${settingsStatusHTML()}
-                <button class="primary settings-submit" type="submit" ${state.settingsPending === "board" ? "disabled" : ""}>${state.settingsPending === "board" ? "Saving…" : "Save limit"}</button>
-              </div>
-            </form>
+            </div>
           </section>
         </section>
       </main>
@@ -2322,8 +2559,108 @@ function bindLanding() {
   revealEls.forEach(el => io.observe(el));
 }
 
+function bindWorkspace() {
+  document.querySelectorAll("[data-open-task]").forEach(element => element.onclick = () => openTaskDetail(element.dataset.openTask, element));
+  document.querySelectorAll("[data-workspace-view]").forEach(element => element.onclick = () => {
+    const query = new URLSearchParams(location.search);
+    query.set("view", element.dataset.workspaceView);
+    navigate(`${location.pathname}?${query}`);
+  });
+  document.querySelector("#workspace-filter-toggle")?.addEventListener("click", () => {
+    state.workspaceFiltersOpen = !state.workspaceFiltersOpen;
+    render();
+  });
+  document.querySelector("#workspace-filters")?.addEventListener("submit", event => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const query = new URLSearchParams();
+    if (state.workspaceView !== "table") query.set("view", state.workspaceView);
+    for (const name of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
+      const value = String(data.get(name) || "").trim();
+      if (value) query.set(name, value);
+    }
+    navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
+  });
+  document.querySelector("#clear-workspace-filters")?.addEventListener("click", () => {
+    const query = new URLSearchParams();
+    if (state.workspaceView !== "table") query.set("view", state.workspaceView);
+    navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
+  });
+  document.querySelector("#new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
+  document.querySelector("#new-workspace-list")?.addEventListener("click", async () => {
+    const name = prompt("List name");
+    if (!name?.trim() || !state.boards[0]) return;
+    await runMutation(() => api.post(`/api/v1/boards/${state.boards[0].id}/buckets`, { name: name.trim() }), reload);
+  });
+  document.querySelector("#workspace-load-more")?.addEventListener("click", loadMoreWorkspaceTasks);
+  bindDrag();
+  bindWorkspaceDetail();
+}
+
+function bindWorkspaceDetail() {
+  if (!state.selectedTask) return;
+  const overlay = document.querySelector("[data-detail-overlay]");
+  const close = () => { state.selectedTask = null; state.selectedSubtasks = []; render(); };
+  document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
+  overlay?.addEventListener("click", event => { if (event.target === overlay) close(); });
+  overlay?.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
+  document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = () => openTaskDetail(element.dataset.openTask, element));
+  const subtaskControl = document.querySelector("#add-subtask");
+  const addSubtask = async () => {
+    const input = subtaskControl.querySelector('input[name="title"]');
+    const title = input.value.trim();
+    if (!title) return;
+    try {
+      const created = await api.post(`/api/v1/tasks/${state.selectedTask.id}/subtasks`, { title, kind: "action" });
+      await openTaskDetail(state.selectedTask.id);
+      document.querySelector(`[data-open-task="${created.id}"]`)?.focus();
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  };
+  subtaskControl?.querySelector("button")?.addEventListener("click", addSubtask);
+  subtaskControl?.querySelector("input")?.addEventListener("keydown", event => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    addSubtask();
+  });
+  document.querySelector("#delete-task")?.addEventListener("click", async () => {
+    if (!confirm("Delete this task and its subtasks?")) return;
+    await api.del(`/api/v1/tasks/${state.selectedTask.id}`);
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    await reload();
+  });
+  document.querySelector("#workspace-detail-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const submit = event.currentTarget.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "Saving…";
+    try {
+      await api.patch(`/api/v1/tasks/${state.selectedTask.id}/status`, {
+        title: form.get("title"), description: form.get("description"), status: form.get("status"),
+        bucketId: form.get("bucketId"), priority: form.get("priority"),
+        assigneeAgentId: form.get("assigneeAgentId"), scheduledDate: form.get("scheduledDate"),
+      });
+      state.selectedTask = null;
+      state.selectedSubtasks = [];
+      await reload();
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  });
+  document.querySelector("#workspace-detail-title")?.focus();
+}
+
 function bindApp() {
   bindAppShell();
+  if (parseRoute(location.pathname).name === "workspace") {
+    bindWorkspace();
+    return;
+  }
   document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
     const notice = state.moveNotice;
     if (!notice) return;
@@ -2425,6 +2762,7 @@ function bindAppShell() {
     sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
   };
   bindThemeControls();
+  bindGlobalNewTask();
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
   document.querySelectorAll("[data-board-settings]").forEach(el => el.onclick = () => navigate(boardSettingsPath(el.dataset.boardSettings)));
   document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
@@ -2443,13 +2781,32 @@ function bindAppShell() {
   });
   document.querySelector("#settings").onclick = openSettings;
   document.querySelector("#logout").onclick = logout;
-  document.querySelector("#new-board").onclick = async () => {
+  const newBoardButton = document.querySelector("#new-board");
+  if (newBoardButton) newBoardButton.onclick = async () => {
     if (state.boards.length >= state.maxBoards) return;
     const result = await createDefaultBoard();
     if (result.complete) navigate(boardPath(result.board.id));
     else render();
   };
   return sidebar;
+}
+
+async function captureInboxTask(button) {
+  button.disabled = true;
+  button.querySelector("span").textContent = "Creating…";
+  try {
+    const task = await api.post("/api/v1/tasks", { title: "New task", description: "", kind: "action" });
+    if (parseRoute(location.pathname).name === "workspace") await reload();
+    else await navigate(INBOX_PATH);
+    await openTaskDetail(task.id, button);
+  } catch (err) {
+    state.error = err.message;
+    render();
+  }
+}
+
+function bindGlobalNewTask() {
+  document.querySelector("#global-new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
 }
 
 function bindThemeControls() {
@@ -2825,6 +3182,7 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submit
 
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindGlobalNewTask();
   document.querySelectorAll(".settings-nav-link").forEach(el => el.onclick = event => {
     event.preventDefault();
     navigate(el.getAttribute("href"));
@@ -2966,47 +3324,12 @@ async function bindSettings() {
 
 function bindBoardSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
-  document.querySelector("#back-to-board").onclick = () => navigate(boardPath(state.board.id));
+  bindGlobalNewTask();
+  document.querySelector("#back-to-board").onclick = () => navigate(APP_PATH);
   document.querySelector("#account-settings-link").onclick = event => {
     event.preventDefault();
     navigate(settingsPath());
   };
-  const form = document.querySelector("#board-limit-form");
-  form.addEventListener("submit", async event => {
-    event.preventDefault();
-    const input = document.querySelector("#settings-list-limit");
-    const error = document.querySelector("#settings-list-limit-error");
-    const validation = validateListLimit(input.value);
-    error.textContent = validation;
-    input.toggleAttribute("aria-invalid", Boolean(validation));
-    if (validation) {
-      input.focus();
-      return;
-    }
-    const version = routeVersion;
-    const sessionVersion = authVersion;
-    const userID = state.me?.id;
-    const boardID = state.board.id;
-    const update = listLimitUpdate(boardID, input.value);
-    state.settingsPending = "board";
-    state.settingsNotice = "";
-    state.error = "";
-    const submit = form.querySelector('button[type="submit"]');
-    submit.disabled = true;
-    submit.textContent = "Saving…";
-    try {
-      const updated = await api.patch(update.path, update.input);
-      if (!boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) return;
-      state.board = { ...state.board, ...updated, buckets: state.board.buckets };
-      state.boards = state.boards.map(board => board.id === boardID ? { ...board, ...updated } : board);
-      state.settingsNotice = "Board limit saved.";
-    } catch (err) {
-      if (!boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) return;
-      state.error = err.message;
-    }
-    state.settingsPending = "";
-    if (boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) render();
-  });
 }
 
 function bindAgents() {
@@ -3697,8 +4020,7 @@ function openSettings() {
 }
 
 function closeSettings() {
-  const boardID = state.board?.id || state.boards[0]?.id;
-  return navigate(boardID ? boardPath(boardID) : APP_PATH);
+  return navigate(APP_PATH);
 }
 
 function showLogin() {
@@ -3712,9 +4034,7 @@ function openApp() {
 
 function goHome() {
   if (!state.me || state.view === "logging-out" || state.view === "logout-error") return navigate(HOME_PATH);
-  const currentBoardID = state.board?.id;
-  const boardID = state.boards.some(board => board.id === currentBoardID) ? currentBoardID : state.boards[0]?.id;
-  return navigate(boardID ? boardPath(boardID) : APP_PATH);
+  return navigate(APP_PATH);
 }
 
 async function addTask(event) {
@@ -3723,8 +4043,6 @@ async function addTask(event) {
   const title = new FormData(form).get("title").trim();
   if (!title) return;
   const list = state.board.buckets.find(b => b.id === form.dataset.addTask);
-  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-  if ((list.openCount || 0) >= activeLimit) return;
   await runMutation(() => api.post(`/api/v1/buckets/${list.id}/tasks`, { title }), reload);
 }
 
@@ -4126,11 +4444,18 @@ async function createAPIToken(name, expectedRouteVersion) {
 }
 
 async function reload() {
-  await loadBoards(state.board.id);
+  const route = parseRoute(location.pathname);
+  if (route.name === "workspace") {
+    await loadWorkspace(route);
+  } else {
+    await loadBoards(state.board.id);
+  }
   render();
 }
 
 function findTask(id) {
+  const workspaceTask = state.workspaceTasks.find(task => task.id === id) || state.selectedSubtasks.find(task => task.id === id);
+  if (workspaceTask) return workspaceTask;
   for (const list of state.board?.buckets || []) {
     const task = (list.tasks || []).find(t => t.id === id);
     if (task) return task;

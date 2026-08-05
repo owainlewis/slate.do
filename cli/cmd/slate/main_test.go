@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -99,6 +100,30 @@ func TestTasksCreateSendsTitleAndDescription(t *testing.T) {
 	}
 	if idempotencyKey != "review-positioning-v1" {
 		t.Fatalf("Idempotency-Key = %q", idempotencyKey)
+	}
+}
+
+func TestTasksCreateUsesInboxWithoutAListAndCanCreateASubtask(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"task-1"}`))
+	}))
+	defer server.Close()
+	c := client{baseURL: server.URL, token: "test", http: server.Client()}
+
+	if err := tasksCmd(c, []string{"create", "--title", "Captured thought"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasksCmd(c, []string{"create", "--parent", "parent-1", "--title", "Human review"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/api/v1/tasks", "/api/v1/tasks/parent-1/subtasks"}; !reflect.DeepEqual(paths, want) {
+		t.Fatalf("paths = %#v, want %#v", paths, want)
+	}
+	if err := tasksCmd(c, []string{"create", "--list", "list-1", "--parent", "parent-1", "--title", "Invalid"}); err == nil {
+		t.Fatal("expected --list and --parent conflict")
 	}
 }
 

@@ -50,7 +50,11 @@ func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
 		_, err := store.CreateTask(ctx, userID, loaded.Buckets[0].ID, CreateTaskInput{Title: fmt.Sprintf("Task %d", index), OverrideLimit: true})
 		return err
 	})
-	assertConcurrentResults(t, taskResults, defaultMaxTasksPerList, ErrActiveItemLimit)
+	for index, err := range taskResults {
+		if err != nil {
+			t.Fatalf("concurrent task %d: %v", index, err)
+		}
+	}
 }
 
 func TestFreeAccountUsesCatalogBoardAndListLimits(t *testing.T) {
@@ -162,7 +166,119 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
 	}
 }
 
-func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T) {
+func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "YouTube", Goal: "Plan useful videos"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedInboxID, err := store.InboxBucketID(ctx, userID)
+	if err != nil || resolvedInboxID != inbox.ID {
+		t.Fatalf("resolved inbox = %q, %v; want %q", resolvedInboxID, err, inbox.ID)
+	}
+
+	parent, err := store.CreateTask(ctx, userID, content.ID, CreateTaskInput{
+		Title: "Publish task-first agents video", Description: "Explain the control plane", ScheduledDate: "2026-08-12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Research examples"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.ParentTaskID != parent.ID || child.BucketID != content.ID {
+		t.Fatalf("subtask = %#v", child)
+	}
+	if _, err := store.CreateSubtask(ctx, userID, child.ID, CreateTaskInput{Title: "Nested"}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("nested subtask error = %v, want ErrInvalidData", err)
+	}
+
+	topLevel, err := store.ListTaskPage(ctx, userID, TaskFilter{TopLevelOnly: true, Query: "task-first"})
+	if err != nil || len(topLevel.Tasks) != 1 || topLevel.Tasks[0].ID != parent.ID {
+		t.Fatalf("top-level search = %#v, %v", topLevel, err)
+	}
+	children, err := store.ListTaskPage(ctx, userID, TaskFilter{ParentTaskID: parent.ID})
+	if err != nil || len(children.Tasks) != 1 || children.Tasks[0].ID != child.ID {
+		t.Fatalf("children = %#v, %v", children, err)
+	}
+	lists, err := store.ListAllBuckets(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lists) != 2 || lists[0].BoardName != board.Name || lists[1].BoardName != board.Name {
+		t.Fatalf("workspace lists = %#v", lists)
+	}
+
+	if err := store.DeleteTask(ctx, userID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetTask(ctx, userID, child.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("child after parent deletion error = %v, want ErrNotFound", err)
+	}
+	assertStorageUsage(t, ctx, db, userID, 0, 0)
+}
+
+func TestAccountAlwaysKeepsAnInboxForUniversalCapture(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	firstBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInbox, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	falseValue := false
+	if _, err := store.UpdateBucket(ctx, userID, firstInbox.ID, UpdateBucketInput{IsInbox: &falseValue}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("remove final Inbox marker error = %v, want ErrInvalidData", err)
+	}
+	if err := store.DeleteBucket(ctx, userID, firstInbox.ID); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("delete final Inbox error = %v, want ErrInvalidData", err)
+	}
+	if err := store.DeleteBoard(ctx, userID, firstBoard.ID); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("delete board containing final Inbox error = %v, want ErrInvalidData", err)
+	}
+
+	secondBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInbox, err := store.CreateBucket(ctx, userID, secondBoard.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteBucket(ctx, userID, firstInbox.ID); err != nil {
+		t.Fatalf("delete Inbox with replacement: %v", err)
+	}
+	resolved, err := store.InboxBucketID(ctx, userID)
+	if err != nil || resolved != secondInbox.ID {
+		t.Fatalf("replacement Inbox = %q, %v; want %q", resolved, err, secondInbox.ID)
+	}
+	if _, err := store.CreateTask(ctx, userID, resolved, CreateTaskInput{Title: "Captured after replacement"}); err != nil {
+		t.Fatalf("capture after Inbox replacement: %v", err)
+	}
+}
+
+func TestLegacyActiveItemConfigurationDoesNotBlockCreateRetryOrMove(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -188,15 +304,15 @@ func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "First"})
+	_, err = store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "First"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Working limit"}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("configured max active items error = %v, want ErrLimitFull", err)
+	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Past configured limit"}); err != nil {
+		t.Fatalf("create past configured limit: %v", err)
 	}
 	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Override 2", OverrideLimit: true}); err != nil {
-		t.Fatalf("override lower working limit: %v", err)
+		t.Fatalf("deprecated override remains compatible: %v", err)
 	}
 	hardMaximum := defaultMaxTasksPerList
 	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &hardMaximum}); err != nil {
@@ -216,25 +332,18 @@ func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T
 	if err != nil || retry.ID != twentieth.ID {
 		t.Fatalf("idempotent retry = %#v, %v", retry, err)
 	}
-	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Twenty first", OverrideLimit: true}); !errors.Is(err, ErrActiveItemLimit) {
-		t.Fatalf("twenty-first create error = %v, want ErrActiveItemLimit", err)
+	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Twenty first", OverrideLimit: true}); err != nil {
+		t.Fatalf("twenty-first create: %v", err)
 	}
 	moving, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Move me"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpdateTask(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); !errors.Is(err, ErrActiveItemLimit) {
-		t.Fatalf("API move into full list error = %v, want ErrActiveItemLimit", err)
-	}
-	if _, err := store.UpdateTaskForHuman(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); !errors.Is(err, ErrActiveItemLimit) {
-		t.Fatalf("human move into full list error = %v, want ErrActiveItemLimit", err)
-	}
-	done := true
-	if _, err := store.UpdateTask(ctx, userID, first.ID, UpdateTaskInput{Done: &done}); err != nil {
-		t.Fatal(err)
+	if _, err := store.UpdateTask(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); err != nil {
+		t.Fatalf("API move into populated list: %v", err)
 	}
 	if _, err := store.UpdateTask(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); err != nil {
-		t.Fatalf("move after completion freed capacity: %v", err)
+		t.Fatalf("repeated same-list move: %v", err)
 	}
 }
 
@@ -409,7 +518,7 @@ func assertConcurrentResults(t *testing.T, results []error, wantSuccess int, wan
 	}
 }
 
-func TestBoardMaxTasksPerListAppliesToAllBuckets(t *testing.T) {
+func TestBoardMaxTasksPerListIsLegacyMetadataOnly(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -439,18 +548,18 @@ func TestBoardMaxTasksPerListAppliesToAllBuckets(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "too many", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("first list error = %v, want ErrLimitFull", err)
+	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "third", Kind: KindAction}); err != nil {
+		t.Fatalf("third task in first list: %v", err)
 	}
-	if _, err := store.CreateTask(ctx, userID, second.ID, CreateTaskInput{Title: "too many", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("second list error = %v, want ErrLimitFull", err)
+	if _, err := store.CreateTask(ctx, userID, second.ID, CreateTaskInput{Title: "third", Kind: KindAction}); err != nil {
+		t.Fatalf("third task in second list: %v", err)
 	}
 
 	next := 3
 	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &next}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "now allowed", Kind: KindAction}); err != nil {
+	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "still allowed", Kind: KindAction}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -663,14 +772,23 @@ func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []bool{true, false} {
-		updated, err := store.UpdateBucket(ctx, userID, bucket.ID, UpdateBucketInput{IsInbox: &value})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if updated.IsInbox != value {
-			t.Fatalf("isInbox = %v, want %v", updated.IsInbox, value)
-		}
+	value := true
+	updated, err := store.UpdateBucket(ctx, userID, bucket.ID, UpdateBucketInput{IsInbox: &value})
+	if err != nil || !updated.IsInbox {
+		t.Fatalf("set Inbox = %#v, %v", updated, err)
+	}
+	replacement, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Replacement", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value = false
+	updated, err = store.UpdateBucket(ctx, userID, bucket.ID, UpdateBucketInput{IsInbox: &value})
+	if err != nil || updated.IsInbox {
+		t.Fatalf("clear Inbox with replacement = %#v, %v", updated, err)
+	}
+	resolved, err := store.InboxBucketID(ctx, userID)
+	if err != nil || resolved != replacement.ID {
+		t.Fatalf("resolved Inbox = %q, %v; want %q", resolved, err, replacement.ID)
 	}
 }
 
@@ -693,7 +811,7 @@ func TestCreateBoardEnforcesDefaultBoardLimit(t *testing.T) {
 	}
 }
 
-func TestUnifiedListItemsAndActionLimits(t *testing.T) {
+func TestUnifiedListItemsAndActions(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -738,8 +856,8 @@ func TestUnifiedListItemsAndActionLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Second action", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("second action error = %v, want ErrLimitFull", err)
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Second action", Kind: KindAction}); err != nil {
+		t.Fatalf("second action: %v", err)
 	}
 	updatedTitle := "Record the camera comparison"
 	unchangedKind := KindAction
@@ -755,14 +873,11 @@ func TestUnifiedListItemsAndActionLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopenAction := false
-	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("reopen action in full list error = %v, want ErrLimitFull", err)
+	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); err != nil {
+		t.Fatalf("reopen action: %v", err)
 	}
 	if err := store.DeleteTask(ctx, userID, replacement.ID); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); err != nil {
-		t.Fatalf("reopen action with capacity: %v", err)
 	}
 	claimed, err := store.ClaimTask(ctx, userID, reference.ID)
 	if err != nil {
@@ -775,14 +890,14 @@ func TestUnifiedListItemsAndActionLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(actions) != 3 {
-		t.Fatalf("actions = %#v, want all three list items", actions)
+	if len(actions) != 4 {
+		t.Fatalf("actions = %#v, want all four list items", actions)
 	}
 	loaded, err := store.GetBoard(ctx, userID, board.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Buckets[0].Goal != "Publish one strong video each week" || loaded.Buckets[0].OpenCount != 2 {
+	if loaded.Buckets[0].Goal != "Publish one strong video each week" || loaded.Buckets[0].OpenCount != 3 {
 		t.Fatalf("loaded bucket = %#v", loaded.Buckets[0])
 	}
 }
@@ -913,16 +1028,16 @@ func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
 		t.Fatal(err)
 	}
 	queued := StatusQueued
-	reopenedTitle := "Should not persist"
-	if _, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Title: &reopenedTitle, BucketID: &bucket.ID, Status: &queued}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("reopen into full list error = %v, want ErrLimitFull", err)
+	reopenedTitle := "Reopened at home"
+	if _, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Title: &reopenedTitle, BucketID: &bucket.ID, Status: &queued}); err != nil {
+		t.Fatalf("reopen into populated list: %v", err)
 	}
 	loaded, err := store.GetTask(ctx, userID, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Title != movedTitle || loaded.BucketID != target.ID || loaded.Status != StatusDone {
-		t.Fatalf("failed atomic update persisted partially: %#v", loaded)
+	if loaded.Title != reopenedTitle || loaded.BucketID != bucket.ID || loaded.Status != StatusQueued {
+		t.Fatalf("reopened task = %#v", loaded)
 	}
 }
 

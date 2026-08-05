@@ -10,7 +10,7 @@ const styles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
 const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 const cliGuide = fs.readFileSync(path.join(__dirname, "cli.html"), "utf8");
 const favicon = fs.readFileSync(path.join(__dirname, "favicon.svg"), "utf8");
-const app = { console, Date, window: { addEventListener() {} } };
+const app = { console, Date, URLSearchParams, window: { addEventListener() {} } };
 vm.createContext(app);
 vm.runInContext(source, app, { filename });
 
@@ -99,25 +99,47 @@ test("password reset forms collect email and a secure replacement password", () 
   vm.runInContext(`state.resetToken = ""`, app);
 });
 
-test("sidebar separates board creation and explains the board limit", () => {
+test("sidebar makes tasks, lists, and agents the primary control plane", () => {
   vm.runInContext(`
-    state.maxBoards = 10;
-    state.boards = Array.from({ length: 10 }, (_, index) => ({ id: String(index), name: "Board " + index }));
-    state.board = { id: "0", name: "Board 0", buckets: [] };
+    state.workspaceLists = [{ id: "youtube", name: "YouTube", openCount: 18 }];
+    state.workspaceScope = "all";
   `, app);
 
   const html = app.appHTML();
-  assert.match(html, /class="nav-sec nav-boards"/);
-  assert.match(html, /class="board-create"/);
-  assert.match(html, /id="new-board" disabled aria-describedby="board-limit"/);
-  assert.match(html, />10 board limit reached</);
+  for (const label of ["Inbox", "Today", "Week", "Review", "All tasks", "Lists", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
+  assert.match(html, /href="\/app\/lists\/youtube"[^>]*>[\s\S]*?YouTube[\s\S]*?<b>18<\/b>/);
+  assert.match(html, /id="new-workspace-list"/);
+  assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
+  vm.runInContext(`state.workspaceLists = [];`, app);
+});
 
-  vm.runInContext(`state.boards = state.boards.slice(0, 2);`, app);
-  const availableHTML = app.appHTML();
-  assert.match(availableHTML, /id="new-board"\s*>/);
-  assert.doesNotMatch(availableHTML, /id="new-board"[^>]*disabled/);
-  assert.doesNotMatch(availableHTML, /board limit reached/);
-  vm.runInContext(`state.maxBoards = 10; state.boards = []; state.board = null;`, app);
+test("the product no longer promises hard item limits", () => {
+	const landing = app.landingHTML();
+	assert.match(landing, /Lists for clear thinking/);
+	assert.doesNotMatch(landing, /Every list caps|list is full/i);
+});
+
+test("Today and Week keep their planned-date scope when other filters are applied", () => {
+	app.location = { search: "?q=brief&plannedFrom=2030-01-01&plannedTo=2030-01-31" };
+	const today = app.workspaceQuery({ scope: "today" }).toString();
+	const week = app.workspaceQuery({ scope: "week" }).toString();
+	assert.match(today, /q=brief/);
+	assert.doesNotMatch(today, /2030-01/);
+	assert.match(week, /q=brief/);
+	assert.doesNotMatch(week, /2030-01/);
+	delete app.location;
+});
+
+test("Review owns its status scope without showing a conflicting status filter", () => {
+  app.location = { search: "?status=working&q=brief" };
+  vm.runInContext(`state.workspaceScope = "review";`, app);
+  assert.equal(app.workspaceFilterCount(), 1);
+  assert.doesNotMatch(app.workspaceFilterHTML(), /name="status"/);
+  const query = app.workspaceQuery({ scope: "review" }).toString();
+  assert.match(query, /status=needs_review/);
+  assert.doesNotMatch(query, /status=working/);
+  vm.runInContext(`state.workspaceScope = "all";`, app);
+  delete app.location;
 });
 
 test("default board creation stays incomplete when either default list fails", async () => {
@@ -261,23 +283,19 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   `, app);
 
   const html = app.appHTML();
-  assert.doesNotMatch(html, /id="board-title"/);
-  assert.doesNotMatch(html, /aria-label="Board name"/);
-  assert.match(html, /class="week">Week \d+ \([^)]+\)<\/span>/);
-  for (const [mode, label] of [["lists", "Lists"], ["flow", "Flow"], ["calendar", "Week"], ["today", "Today"]]) {
-    assert.match(html, new RegExp(`data-board-mode="${mode}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
+  for (const [view, label] of [["list", "List"], ["flow", "Flow"], ["table", "Table"]]) {
+    assert.match(html, new RegExp(`data-workspace-view="${view}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
+  assert.match(html, /id="new-task"/);
+  assert.match(html, /id="workspace-filter-toggle"/);
   assert.match(html, /data-set-theme="light"[\s\S]*?<span>Light<\/span>/);
   assert.match(html, /data-set-theme="dark"[\s\S]*?<span>Dark<\/span>/);
   assert.match(html, /class="theme-switch light"[\s\S]*?id="settings"/);
   assert.match(html, /id="settings"[\s\S]*?<span>Settings<\/span>/);
   assert.match(html, /id="logout"[\s\S]*?<span>Sign out<\/span>/);
-  assert.match(html, /data-board-settings="board"[^>]*aria-label="Board settings for Board"/);
-
   const boardSettings = app.boardSettingsHTML();
-  assert.match(boardSettings, /id="settings-list-limit"[^>]*value="12"/);
-	assert.match(boardSettings, /Maximum active items/);
-	assert.match(boardSettings, /aria-label="Max active items per list"[^>]*max="20"/);
+  assert.match(boardSettings, /No hard item limits/);
+  assert.doesNotMatch(boardSettings, /settings-list-limit|Maximum active items/);
   assert.doesNotMatch(boardSettings, /data-set-theme=/);
   vm.runInContext(`state.boards = []; state.board = null;`, app);
 });
@@ -331,7 +349,7 @@ test("completed history pages append to a list and preserve the next cursor", as
   `, app);
 });
 
-test("opening a task loads its full description from the exact endpoint", async () => {
+test("opening a task loads its full description and subtasks", async () => {
   vm.runInContext(`
     savedDetailRender = render;
     savedDetailGet = api.get;
@@ -343,13 +361,25 @@ test("opening a task loads its full description from the exact endpoint", async 
     detailRequests = [];
     api.get = async path => {
       detailRequests.push(path);
+      if (path.includes("parentTaskId=") && path.includes("cursor=children-two")) {
+        return { tasks: [{ id: "subtask-two", parentTaskId: "task-one", title: "Review" }] };
+      }
+      if (path.includes("parentTaskId=")) {
+        return { tasks: [{ id: "subtask-one", parentTaskId: "task-one", title: "Research" }], nextCursor: "children-two" };
+      }
       return { id: "task-one", bucketId: "list-one", title: "Summary", description: "Full private detail" };
     };
   `, app);
 
   assert.equal(await app.openTaskDetail("task-one"), true);
-  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), ["/api/v1/tasks/task-one"]);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
+    "/api/v1/tasks/task-one",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
+  ]);
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
+  assert.equal(vm.runInContext("state.selectedSubtasks[0].parentTaskId", app), "task-one");
+  assert.equal(vm.runInContext("state.selectedSubtasks.length", app), 2);
 
   vm.runInContext(`
     state.board.buckets[0].tasks = [];
@@ -358,7 +388,11 @@ test("opening a task loads its full description from the exact endpoint", async 
   assert.equal(await app.openTaskDetail("task-one"), true);
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
     "/api/v1/tasks/task-one",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
     "/api/v1/tasks/task-one",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
   ]);
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
 
@@ -371,7 +405,42 @@ test("opening a task loads its full description from the exact endpoint", async 
   `, app);
 });
 
-test("Pro limits prevent obvious list and active-item creation", () => {
+test("loading more tasks cannot append an old list response after navigation", async () => {
+  app.location = { pathname: "/app/lists/list-a", search: "" };
+  vm.runInContext(`
+    savedWorkspaceRender = render;
+    savedWorkspaceGet = api.get;
+    render = () => {};
+    authVersion = 12;
+    routeVersion = 20;
+    state.me = { id: "owner" };
+    state.workspaceTasks = [{ id: "list-a-task" }];
+    state.workspaceNextCursor = "next-page";
+    state.workspaceLoading = false;
+    api.get = () => new Promise(resolve => { resolveOldWorkspacePage = resolve; });
+  `, app);
+
+  const pending = app.loadMoreWorkspaceTasks();
+  vm.runInContext(`
+    routeVersion = 21;
+    state.workspaceTasks = [{ id: "list-b-task" }];
+    state.workspaceNextCursor = "";
+    state.workspaceLoading = false;
+    resolveOldWorkspacePage({ tasks: [{ id: "stale-list-a-task" }], nextCursor: "" });
+  `, app);
+  await pending;
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.workspaceTasks.map(task => task.id))", app)), ["list-b-task"]);
+
+  vm.runInContext(`
+    render = savedWorkspaceRender;
+    api.get = savedWorkspaceGet;
+    state.me = null;
+    state.workspaceTasks = [];
+  `, app);
+  delete app.location;
+});
+
+test("lists never block task creation when their legacy count is reached", () => {
 	vm.runInContext(`
 		state.me = { entitlement: { plan: "pro", source: "manual", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } } };
 		state.maxListsPerBoard = 9;
@@ -387,15 +456,15 @@ test("Pro limits prevent obvious list and active-item creation", () => {
 	`, app);
 
 	const html = app.appHTML();
-	assert.match(html, /id="add-list" disabled aria-describedby="list-limit"/);
-	assert.match(html, />9 list Pro limit reached</);
-	assert.match(html, /data-add-task="list-0"[\s\S]*?placeholder="Limit of 20 active items reached" disabled/);
-	assert.match(html, />20 active item limit reached</);
+	const legacyList = app.listHTML(vm.runInContext("state.board.buckets[0]", app));
+	assert.match(legacyList, /data-add-task="list-0"/);
+	assert.match(legacyList, /placeholder="Add item"/);
+	assert.doesNotMatch(legacyList, /disabled|active item limit reached/i);
 	assert.equal(app.accountLimits().boards, 5);
 	vm.runInContext(`state.me = null; state.boards = []; state.board = null;`, app);
 });
 
-test("Free limits and plan names drive customer-facing controls", () => {
+test("account limits still govern credentials without leaking list item limits", () => {
 	vm.runInContext(`
 		state.me = { id: "free-user", entitlement: { plan: "free", source: "free", limits: { boards: 1, listsPerBoard: 5, activeItemsPerList: 20, agents: 1, storedTasks: 500, storedContentBytes: 10485760, apiTokens: 3 } } };
 		state.maxBoards = 1;
@@ -408,7 +477,7 @@ test("Free limits and plan names drive customer-facing controls", () => {
 	`, app);
 
 	const boardHTML = app.appHTML();
-	assert.match(boardHTML, />5 list Free limit reached</);
+	assert.doesNotMatch(boardHTML, /active item limit reached/i);
 	assert.equal(app.accountLimits().boards, 1);
 	assert.equal(app.planLabel(), "Free");
 	assert.match(app.newAgentHTML(true), /Free includes 1 active agent/);
@@ -854,19 +923,22 @@ test("credential copy failure leaves the token selected for manual copy", async 
   vm.runInContext(`state.credentialCopyError = "";`, app);
 });
 
-test("the board header shows a neutral user icon without their name or generated initials", () => {
+test("the task header stays focused on the workspace and new-task action", () => {
   vm.runInContext(`
     state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
     state.board = { id: "board", name: "Business", maxTasksPerList: 20, buckets: [] };
     state.boards = [{ id: "board", name: "Business" }];
   `, app);
   const html = app.appHTML();
-  const currentUser = html.match(/<span class="current-user">([\s\S]*?)<\/span>\s*<div class="view-switch"/)?.[1] || "";
-  assert.match(currentUser, /class="avatar user-avatar tone-\d avatar-small/);
-  assert.match(currentUser, /<svg class="icon /);
-  assert.doesNotMatch(currentUser, />Owain Lewis</);
-  assert.doesNotMatch(currentUser, />OL<\/span>/);
+  assert.match(html, /class="workspace-title"><h1>All tasks<\/h1>/);
+  assert.match(html, /id="new-task"/);
+  assert.doesNotMatch(html, /class="current-user"|>OL<\/span>/);
   vm.runInContext(`state.me = null; state.board = null; state.boards = [];`, app);
+});
+
+test("New task remains available from agent and account settings pages", () => {
+  assert.match(app.agentsHTML(), /id="global-new-task"[^>]*>.*New task/s);
+  assert.match(app.settingsHTML(), /id="global-new-task"[^>]*>.*New task/s);
 });
 
 test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
@@ -1184,7 +1256,8 @@ test("detail offers a board, list, and position move flow", () => {
   assert.match(html, /id="move-item"[^>]*>Move item<\/button>/);
 
   const fullBoard = vm.runInContext(`({ id: "full", buckets: [{ id: "full-list", name: "Full", openCount: 20, limitCount: 20, tasks: [] }] })`, app);
-  assert.match(app.moveListOptionsHTML(fullBoard, task), /value="full-list"[^>]*disabled[^>]*>Full \(20\/20 full\)<\/option>/);
+  assert.match(app.moveListOptionsHTML(fullBoard, task), /value="full-list"[^>]*>Full<\/option>/);
+  assert.doesNotMatch(app.moveListOptionsHTML(fullBoard, task), /disabled|full\)/);
   const reference = vm.runInContext(`({ ...state.board.buckets[0].tasks[0], kind: "reference" })`, app);
   assert.doesNotMatch(app.moveListOptionsHTML(fullBoard, reference), /disabled/);
 });
@@ -1445,9 +1518,9 @@ test("one theme holds when switching between boards", () => {
     state.board = { id: "light-board", name: "Light board", backgroundValue: "light", buckets: [] };
   `, app);
 
-  assert.match(app.appHTML(), /class="shell theme-dark"/);
+  assert.match(app.appHTML(), /class="shell task-shell theme-dark"/);
   vm.runInContext(`state.board = { id: "other-board", name: "Other board", backgroundValue: "charcoal", buckets: [] }`, app);
-  assert.match(app.appHTML(), /class="shell theme-dark"/);
+  assert.match(app.appHTML(), /class="shell task-shell theme-dark"/);
   assert.match(app.appHTML(), /class="theme-switch dark"/);
   assert.match(app.appHTML(), /data-set-theme="dark"[^>]*class="on"/);
 });
@@ -1710,7 +1783,13 @@ test("routes parse into the surface they name", () => {
 
   assert.deepEqual(route("/"), { name: "home" });
   assert.deepEqual(route("/login"), { name: "login" });
-  assert.deepEqual(route("/app"), { name: "app" });
+  assert.deepEqual(route("/app"), { name: "workspace", scope: "all", redirect: true });
+  assert.deepEqual(route("/app/tasks"), { name: "workspace", scope: "all" });
+  assert.deepEqual(route("/app/inbox"), { name: "workspace", scope: "inbox" });
+  assert.deepEqual(route("/app/today"), { name: "workspace", scope: "today" });
+  assert.deepEqual(route("/app/week"), { name: "workspace", scope: "week" });
+  assert.deepEqual(route("/app/review"), { name: "workspace", scope: "review" });
+  assert.deepEqual(route("/app/lists/list-one"), { name: "workspace", scope: "list", listId: "list-one" });
   assert.deepEqual(route("/app/settings"), { name: "settings", settingsPage: "profile", redirect: true });
   for (const page of ["profile", "preferences", "api"]) {
     assert.deepEqual(route(`/app/settings/${page}`), { name: "settings", settingsPage: page });
@@ -1730,7 +1809,7 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/app/boards/%ED%A0%80"), { name: "not-found" });
 
   // Trailing slashes, queries, and fragments never change which route is named.
-  assert.deepEqual(route("/app/"), { name: "app" });
+  assert.deepEqual(route("/app/"), { name: "workspace", scope: "all", redirect: true });
   assert.deepEqual(route("/login?next=/app"), { name: "login" });
   assert.deepEqual(route("/app/settings#token"), { name: "settings", settingsPage: "profile", redirect: true });
 
@@ -1783,7 +1862,7 @@ test("logging in returns to the requested route, defaulting to the app", async (
 
   const plain = router({ url: "/login", signedIn: true, boards: [{ id: "board_1" }] });
   await plain.apply();
-  assert.equal(plain.url(), "/app/boards/board_1");
+  assert.equal(plain.url(), "/app/tasks");
 });
 
 test("a rejected next target falls back to the app rather than leaving the origin", async () => {
@@ -1791,44 +1870,44 @@ test("a rejected next target falls back to the app rather than leaving the origi
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks");
 });
 
-test("/app resolves to the first board, or stays put when there are none", async () => {
+test("/app resolves to the account-wide task workspace", async () => {
   const withBoards = router({ url: "/app", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await withBoards.apply();
-  assert.equal(withBoards.url(), "/app/boards/board_1");
+  assert.equal(withBoards.url(), "/app/tasks");
   assert.equal(withBoards.board(), "board_1");
   assert.equal(withBoards.depth(), 1, "resolving /app must not add a history entry");
 
   const empty = router({ url: "/app", signedIn: true, boards: [] });
   await empty.apply();
-  assert.equal(empty.url(), "/app");
+  assert.equal(empty.url(), "/app/tasks");
   assert.equal(empty.view(), "app");
   assert.equal(empty.board(), null);
 });
 
-test("the brand link goes to the board when signed in, and to the landing page when not", async () => {
+test("the brand link goes to all tasks when signed in, and home when signed out", async () => {
   const onBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await onBoard.apply();
   await onBoard.home();
-  assert.equal(onBoard.url(), "/app/boards/board_2", "the brand must not drop a signed-in user onto the landing page");
+  assert.equal(onBoard.url(), "/app/tasks", "the brand must not drop a signed-in user onto the landing page");
 
   const noBoardLoaded = router({ url: "/app/settings/profile", signedIn: true, boards: [{ id: "board_1" }] });
   await noBoardLoaded.apply();
   await noBoardLoaded.home();
-  assert.equal(noBoardLoaded.url(), "/app/boards/board_1", "settings falls back to the first board");
+  assert.equal(noBoardLoaded.url(), "/app/tasks");
 
   const staleBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await staleBoard.apply();
   vm.runInContext(`state.boards = [{ id: "board_1" }];`, staleBoard.context);
   await staleBoard.home();
-  assert.equal(staleBoard.url(), "/app/boards/board_1", "a removed cached board falls back to the first available board");
+  assert.equal(staleBoard.url(), "/app/tasks");
 
   const noBoards = router({ url: "/app", signedIn: true, boards: [] });
   await noBoards.apply();
   await noBoards.home();
-  assert.equal(noBoards.url(), "/app");
+  assert.equal(noBoards.url(), "/app/tasks");
 
   const signedOut = router({ url: "/login" });
   await signedOut.apply();
@@ -1885,7 +1964,7 @@ test("a failed board-list navigation renders an error for the requested URL and 
   `, it.context);
   await it.apply();
 
-  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.url(), "/app/tasks");
   assert.equal(it.depth(), depth + 1, "retry must not add another history entry");
   assert.equal(it.view(), "app");
   assert.equal(it.board(), "board_2");
@@ -1958,10 +2037,10 @@ test("a route failure during back navigation preserves the history destination",
 
   await assert.doesNotReject(it.back());
 
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks");
   assert.equal(it.depth(), depth - 1);
   assert.equal(it.view(), "route-error");
-  assert.equal(it.routeError(), "board");
+  assert.equal(it.routeError(), "workspace");
   assert.equal(it.error(), "History destination unavailable");
 });
 
@@ -1975,6 +2054,8 @@ test("a stale board response cannot overwrite newer route navigation", async () 
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
       if (path === "/api/v1/boards/board_1") return boardOneResponse;
       if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      if (path === "/api/v1/lists") return { lists: [] };
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
       throw new Error("unexpected request: " + path);
     };
   `, it.context);
@@ -1985,7 +2066,7 @@ test("a stale board response cannot overwrite newer route navigation", async () 
   releaseBoardOne({ id: "board_1", name: "Board one", buckets: [] });
   await staleNavigation;
 
-  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.url(), "/app/tasks");
   assert.equal(it.board(), "board_2");
   assert.equal(it.view(), "app");
 });
@@ -2013,7 +2094,7 @@ test("a stale board-list response cannot overwrite newer route navigation", asyn
   const boardIds = JSON.parse(vm.runInContext("JSON.stringify(state.boards.map(board => board.id))", it.context));
   assert.deepEqual(boardIds, ["board_2"]);
   assert.equal(it.board(), "board_2");
-  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.url(), "/app/tasks");
 });
 
 test("a stale board-settings load cannot overwrite newer board navigation", async () => {
@@ -2025,6 +2106,8 @@ test("a stale board-settings load cannot overwrite newer board navigation", asyn
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
       if (path === "/api/v1/boards/board_1") return settingsBoardResponse;
       if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      if (path === "/api/v1/lists") return { lists: [] };
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
       throw new Error("unexpected request: " + path);
     };
   `, it.context);
@@ -2036,7 +2119,7 @@ test("a stale board-settings load cannot overwrite newer board navigation", asyn
   await staleSettings;
 
   assert.equal(it.board(), "board_2");
-  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.url(), "/app/tasks");
   assert.equal(it.view(), "app");
 });
 
@@ -2096,7 +2179,7 @@ test("a stale agent response cannot overwrite newer route data", async () => {
 
   const agentIDs = JSON.parse(vm.runInContext("JSON.stringify(state.agents.map(agent => agent.id))", it.context));
   assert.deepEqual(agentIDs, ["new"]);
-  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.url(), "/app/tasks");
   assert.equal(it.board(), "board_2");
 });
 
@@ -2106,28 +2189,28 @@ test("back and forward move between landing, boards, and settings", async () => 
   assert.equal(it.view(), "home");
 
   await it.go("/app");
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks");
   await it.go("/app/boards/board_2");
   assert.equal(it.board(), "board_2");
   await it.go("/app/settings/profile");
   assert.equal(it.view(), "app:settings");
 
   await it.back();
-  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.url(), "/app/tasks");
   assert.equal(it.view(), "app");
   await it.back();
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks");
   await it.back();
   assert.equal(it.url(), "/");
   assert.equal(it.view(), "home");
 });
 
-test("selecting the same board twice does not stack history entries", async () => {
-  const it = router({ url: "/app/boards/board_1", signedIn: true, boards: [{ id: "board_1" }] });
+test("selecting all tasks twice does not stack history entries", async () => {
+  const it = router({ url: "/app/tasks", signedIn: true, boards: [{ id: "board_1" }] });
   await it.apply();
   const depth = it.depth();
 
-  await it.go("/app/boards/board_1");
+  await it.go("/app/tasks");
 
   assert.equal(it.depth(), depth);
 });
@@ -2137,7 +2220,7 @@ test("an authenticated visit to early access is sent to the app", async () => {
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks");
 });
 
 test("the landing page stays public while signed in", async () => {

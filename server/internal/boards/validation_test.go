@@ -102,6 +102,27 @@ func TestTaskFilterFromQueryIncludesBoardAndList(t *testing.T) {
 	}
 }
 
+func TestTaskFilterFromQueryIncludesWorkspaceFilters(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	req := httptest.NewRequest("GET", "/api/v1/tasks?q=video&assigneeAgentId=unassigned&plannedFrom=2026-08-01&plannedTo=2026-08-31&parentTaskId="+id+"&topLevel=true&inbox=true", nil)
+	filter, err := taskFilterFromQuery(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filter.Query != "video" || !filter.Unassigned || filter.ScheduledFrom != "2026-08-01" || filter.ScheduledTo != "2026-08-31" || filter.ParentTaskID != id || !filter.TopLevelOnly || !filter.InboxOnly {
+		t.Fatalf("filter = %#v", filter)
+	}
+}
+
+func TestTaskFilterRejectsInvalidWorkspaceFilters(t *testing.T) {
+	for _, query := range []string{"assigneeAgentId=not-an-id", "parentTaskId=not-an-id", "plannedFrom=tomorrow", "plannedTo=2026-13-01", "topLevel=maybe", "inbox=maybe"} {
+		req := httptest.NewRequest("GET", "/api/v1/tasks?"+query, nil)
+		if _, err := taskFilterFromQuery(req); err == nil {
+			t.Fatalf("query %q was accepted", query)
+		}
+	}
+}
+
 func TestTaskFilterRejectsInvalidLimit(t *testing.T) {
 	for _, raw := range []string{"0", "-1", "many"} {
 		req := httptest.NewRequest("GET", "/api/v1/tasks?limit="+raw, nil)
