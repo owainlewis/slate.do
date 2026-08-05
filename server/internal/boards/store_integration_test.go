@@ -901,6 +901,189 @@ func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 	}
 }
 
+func TestTaskCreationAcceptsALegacyStoredFingerprint(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Legacy retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{
+		Title:          "Legacy retry",
+		Description:    "Context",
+		ScheduledDate:  "2026-08-12",
+		Kind:           KindAction,
+		IdempotencyKey: "legacy-client-request",
+	}
+	original, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{
+		Title:         input.Title,
+		Description:   input.Description,
+		ScheduledDate: input.ScheduledDate,
+		Kind:          input.Kind,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyFingerprint, err := topLevelTaskCreateFingerprint(
+		bucket.ID,
+		input.Title,
+		input.Description,
+		input.ScheduledDate,
+		input.Kind,
+		input.AssigneeAgentID,
+		input.OverrideLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, input.IdempotencyKey, legacyFingerprint, original.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != original.ID {
+		t.Fatalf("legacy retry task = %q, want original %q", retry.ID, original.ID)
+	}
+}
+
+func TestTaskCreationAcceptsTheImmediatePredeploymentFingerprint(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Rolling deployment retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Retry during rollout", IdempotencyKey: "rolling-deployment-request"}
+	original, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: input.Title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousFingerprint, err := parentAwareTaskCreateFingerprint(
+		bucket.ID,
+		input.Title,
+		input.Description,
+		"",
+		KindAction,
+		input.AssigneeAgentID,
+		"",
+		input.OverrideLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, input.IdempotencyKey, previousFingerprint, original.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != original.ID {
+		t.Fatalf("rolling deployment retry task = %q, want original %q", retry.ID, original.ID)
+	}
+}
+
+func TestTopLevelTaskFingerprintKeepsLegacyShape(t *testing.T) {
+	const bucketID = "00000000-0000-0000-0000-000000000001"
+	const legacyFingerprint = "455c2f24afe83518bf7e89324993aec306c701c81cc6b21db9340888e7d5df05"
+
+	fingerprint, err := taskCreateFingerprint(bucketID, "Legacy retry", "Context", "2026-08-12", KindAction, "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint != legacyFingerprint {
+		t.Fatalf("top-level fingerprint = %q, want legacy %q", fingerprint, legacyFingerprint)
+	}
+	subtaskFingerprint, err := taskCreateFingerprint(bucketID, "Legacy retry", "Context", "2026-08-12", KindAction, "", "00000000-0000-0000-0000-000000000002", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subtaskFingerprint == legacyFingerprint {
+		t.Fatal("subtask fingerprint must include its parent task")
+	}
+}
+
+func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Subtask retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Ship release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Write notes", IdempotencyKey: "subtask-request"}
+	first, err := store.CreateSubtask(ctx, userID, parent.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.CreateSubtask(ctx, userID, parent.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != first.ID {
+		t.Fatalf("subtask retry created %q, want original %q", retry.ID, first.ID)
+	}
+
+	changed := input
+	changed.Title = "Write different notes"
+	if _, err := store.CreateSubtask(ctx, userID, parent.ID, changed); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("changed subtask retry error = %v, want ErrIdempotencyKey", err)
+	}
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, input); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("top-level reuse of subtask key error = %v, want ErrIdempotencyKey", err)
+	}
+	otherParent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Publish announcement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSubtask(ctx, userID, otherParent.ID, input); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("different-parent reuse of subtask key error = %v, want ErrIdempotencyKey", err)
+	}
+}
+
 func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
