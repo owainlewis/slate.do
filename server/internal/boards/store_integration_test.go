@@ -1195,6 +1195,36 @@ func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 		t.Fatalf("direct subtask move error = %v, want ErrInvalidData", err)
 	}
 
+	// Rows written before this invariant may already be split. Both human move
+	// paths may repair them, but only by returning to the locked parent list.
+	if _, err := db.Exec(ctx, `
+		UPDATE tasks
+		SET board_id = $2, bucket_id = $3, updated_at = now()
+		WHERE id = $1
+	`, child.ID, secondBoard.ID, thirdList.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{BucketID: &secondList.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("legacy subtask update outside parent list error = %v, want ErrInvalidData", err)
+	}
+	if _, err := store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{BucketID: &firstList.ID}); err != nil {
+		t.Fatalf("repair legacy subtask with update: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE tasks
+		SET board_id = $2, bucket_id = $3, updated_at = now()
+		WHERE id = $1
+	`, child.ID, secondBoard.ID, thirdList.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: secondList.ID, Position: &position}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("legacy subtask move outside parent list error = %v, want ErrInvalidData", err)
+	}
+	repairPosition := 1
+	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: firstList.ID, Position: &repairPosition}); err != nil {
+		t.Fatalf("repair legacy subtask with move: %v", err)
+	}
+
 	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &secondList.ID}); err != nil {
 		t.Fatal(err)
 	}

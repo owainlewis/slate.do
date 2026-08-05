@@ -1042,7 +1042,13 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 		return Task{}, err
 	}
 	if current.ParentTaskID != "" && current.BucketID != bucketID {
-		return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+		parent, err := lockedTask(ctx, tx, userID, current.ParentTaskID)
+		if err != nil {
+			return Task{}, err
+		}
+		if parent.BucketID != bucketID {
+			return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+		}
 	}
 	destination, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
@@ -1191,7 +1197,13 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	moveChildren := false
 	if input.BucketID != nil && *input.BucketID != current.BucketID {
 		if current.ParentTaskID != "" {
-			return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+			parent, err := lockedTask(ctx, tx, userID, current.ParentTaskID)
+			if err != nil {
+				return Task{}, err
+			}
+			if parent.BucketID != *input.BucketID {
+				return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+			}
 		}
 		bucket, err := lockedBucket(ctx, tx, userID, *input.BucketID)
 		if err != nil {
@@ -1200,7 +1212,7 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		current.BucketID = bucket.ID
 		current.BoardID = bucket.BoardID
 		current.SortOrder = 0
-		moveChildren = true
+		moveChildren = current.ParentTaskID == ""
 	}
 	if input.Status != nil {
 		if err := applyTaskStatus(&current, *input.Status, allowWorking); err != nil {
