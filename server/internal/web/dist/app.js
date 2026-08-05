@@ -3711,7 +3711,10 @@ function openApp() {
 }
 
 function goHome() {
-  return navigate(HOME_PATH);
+  if (!state.me || state.view === "logging-out" || state.view === "logout-error") return navigate(HOME_PATH);
+  const currentBoardID = state.board?.id;
+  const boardID = state.boards.some(board => board.id === currentBoardID) ? currentBoardID : state.boards[0]?.id;
+  return navigate(boardID ? boardPath(boardID) : APP_PATH);
 }
 
 async function addTask(event) {
