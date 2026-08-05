@@ -304,12 +304,17 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
     state.boards = [{ id: "board", name: "Board" }];
     state.board = { id: "board", name: "Board", maxTasksPerList: 12, buckets: [] };
     state.boardMode = "lists";
+    state.workspaceScope = "all";
+    state.workspaceView = "table";
   `, app);
 
   const html = app.appHTML();
   for (const [view, label] of [["list", "List"], ["flow", "Flow"], ["table", "Table"]]) {
-    assert.match(html, new RegExp(`data-workspace-view="${view}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
+    assert.match(html, new RegExp(`id="workspace-tab-${view}"[^>]*data-workspace-view="${view}"[^>]*role="tab"[^>]*aria-controls="workspace-task-panel"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
+  assert.match(html, /id="workspace-tab-table"[^>]*tabindex="0"[^>]*aria-selected="true"/);
+  assert.match(html, /id="workspace-tab-list"[^>]*tabindex="-1"[^>]*aria-selected="false"/);
+  assert.match(html, /id="workspace-task-panel" role="tabpanel" tabindex="0" aria-labelledby="workspace-tab-table"/);
   assert.match(html, /id="new-task"/);
   assert.match(html, /id="workspace-filter-toggle"/);
   assert.match(html, /data-set-theme="light"[\s\S]*?<span>Light<\/span>/);
@@ -322,6 +327,27 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   assert.doesNotMatch(boardSettings, /settings-list-limit|Maximum active items/);
   assert.doesNotMatch(boardSettings, /data-set-theme=/);
   vm.runInContext(`state.boards = []; state.board = null;`, app);
+});
+
+test("the task table exposes native headers, cells, and keyboard-operable rows", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", displayName: "Owain" };
+    state.agents = [];
+  `, app);
+  const html = app.workspaceTableHTML([{
+    id: "task-one", title: "Accessible task", listName: "Inbox", status: "queued",
+    priority: "p1", scheduledDate: "2026-08-05", done: false, assigneeAgentId: "",
+  }]);
+
+  assert.match(html, /^<table class="workspace-table" aria-label="Tasks">/);
+  for (const heading of ["Task", "List", "Status", "Priority", "Owner", "Planned"]) {
+    assert.match(html, new RegExp(`<th scope="col">${heading}<\\/th>`));
+  }
+  assert.match(html, /<tr class="workspace-table-row" data-open-task="task-one" tabindex="0">/);
+  assert.match(html, /<td><strong>Accessible task<\/strong><\/td>/);
+  assert.match(html, /<span class="sr-only">Open<\/span>/);
+  assert.doesNotMatch(html, /<section class="workspace-table"|<button class="workspace-table-row"/);
+  vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
 
 test("list limits remain scoped to the selected board", () => {

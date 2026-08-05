@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/owainlewis/slate.do#readme",
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "playwright": "^1.61.1"
   }
 }
