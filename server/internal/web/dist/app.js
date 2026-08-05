@@ -1173,8 +1173,8 @@ function landingHTML() {
       <main class="landing-main">
         <section class="landing-hero">
           <div class="hero-copy">
-            <h1 class="rise" style="--d:0">Decide what deserves <em>attention</em>.</h1>
-            <p class="landing-lede rise" style="--d:1">Work is infinite. Attention is not. Slate is one plan you and your agents share. You decide what matters. They pick up the work and hand it back done. A few lists, a hard cap on open work, and one honest view of today.</p>
+            <h1 class="rise" style="--d:0">Stay on top of everything. <em>Operate at agent speed.</em></h1>
+            <p class="landing-lede rise" style="--d:1">Slate turns your emails, projects, commitments, and loose ends into one clear operating plan. Agents help you organise the noise, surface what needs your attention, and execute the work.</p>
             <div class="landing-actions rise" style="--d:2">
               ${signedIn ? `<button class="primary" id="open-app">Open app</button>` : `<button class="primary" id="hero-login">Log in</button>`}
               <a class="secondary-link" href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a>

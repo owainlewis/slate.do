@@ -58,6 +58,14 @@ test("the landing page links to the CLI guide", () => {
   assert.match(html, /href="\/cli">CLI guide<\/a>/);
 });
 
+test("the landing page leads with the dream outcome", () => {
+  const html = app.landingHTML();
+
+  assert.match(html, /Stay on top of everything\. <em>Operate at agent speed\.<\/em>/);
+  assert.match(html, /emails, projects, commitments, and loose ends/);
+  assert.match(html, /surface what needs your attention, and execute the work/);
+});
+
 test("the CLI guide covers installation, authentication, and agent workflows", () => {
   assert.match(cliGuide, /curl -fsSL https:\/\/raw\.githubusercontent\.com\/owainlewis\/slate\.do\/main\/install\.sh \| sh/);
   assert.match(cliGuide, /export SLATE_API_TOKEN=slate_\.\.\./);
