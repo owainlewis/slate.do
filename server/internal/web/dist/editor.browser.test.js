@@ -30,7 +30,11 @@ function workspaceFixture() {
     parentTaskId: "task-parent", title: "Research examples", description: "", scheduledDate: "", kind: "action",
     done: true, status: "done", priority: "p1", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent",
   }];
-  return { lists, tasks, subtasks, taskQueries: [], created: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null };
+  const agents = [
+    { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
+    { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
+  ];
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -45,10 +49,21 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     if (url.pathname === "/api/v1/boards" && request.method === "GET") return json(response, { boards: [{ id: "board-one", name: "Workspace" }] });
     if (url.pathname === "/api/v1/boards/board-one" && request.method === "GET") return json(response, { id: "board-one", name: "Workspace", buckets: state.lists });
     if (url.pathname === "/api/v1/lists" && request.method === "GET") return json(response, { lists: state.lists });
-    if (url.pathname === "/api/v1/agents" && request.method === "GET") return json(response, {
-      agents: [{ id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } }],
-      maxAgents: 5,
-    });
+    if (url.pathname === "/api/v1/agents" && request.method === "GET") return json(response, { agents: state.agents, maxAgents: 5 });
+    const permanentAgentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/permanent$/);
+    if (permanentAgentMatch && request.method === "DELETE") {
+      const index = state.agents.findIndex(agent => agent.id === permanentAgentMatch[1]);
+      if (index < 0) return json(response, { error: "agent not found" }, 404);
+      if (!state.agents[index].archivedAt) return json(response, { code: "agent_not_archived", error: "Archive this agent before permanently deleting it." }, 409);
+      state.deletedAgents.push(state.agents[index].id);
+      state.agents.splice(index, 1);
+      return json(response, { ok: true });
+    }
+    const agentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)$/);
+    if (agentMatch && request.method === "GET") {
+      const agent = state.agents.find(item => item.id === agentMatch[1]);
+      return agent ? json(response, { agent, work: { ready: [], working: [], review: [], recentlyCompleted: [], totals: agent.workCounts || {} } }) : json(response, { error: "agent not found" }, 404);
+    }
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
       state.taskQueries.push(url.search);
       if (url.searchParams.has("parentTaskId")) return json(response, { tasks: state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId")) });
@@ -212,7 +227,7 @@ test("task detail coordinates one level of human and agent subtasks through the 
   assert.equal(await page.locator(".workspace-table").count(), 0, "detail replaces the task table");
   assert.equal(await dialog.locator(".workspace-detail-main").count(), 1);
   assert.equal(await dialog.getByRole("complementary", { name: "Task properties" }).count(), 1);
-  assert.ok(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)) >= 30);
+  assert.equal(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)), 26);
 
   await page.getByLabel("Title", { exact: true }).fill("Unsaved parent title");
   await page.getByLabel("Task brief", { exact: true }).fill("Unsaved parent brief");
@@ -271,7 +286,7 @@ test("task detail remains usable on a phone-sized viewport", async t => {
   assert.ok(bounds.width >= 384, `dialog width=${bounds.width}`);
   assert.ok(bounds.height >= 780, `detail height=${bounds.height}`);
   assert.equal(await dialog.getByRole("complementary", { name: "Task properties" }).isVisible(), true);
-  assert.ok(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)) >= 26);
+  assert.equal(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)), 24);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 
@@ -283,6 +298,7 @@ test("task detail stacks its properties rail at tablet width", async t => {
   const propertyBounds = await page.locator(".workspace-detail-properties").boundingBox();
   assert.ok(mainBounds.width >= 650, `main width=${mainBounds.width}`);
   assert.ok(Math.abs(mainBounds.width - propertyBounds.width) <= 2, `main=${mainBounds.width} properties=${propertyBounds.width}`);
+  assert.equal(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)), 25);
   assert.ok(propertyBounds.y > mainBounds.y);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
@@ -399,6 +415,29 @@ test("a delayed delete closes the same task when it has been reopened", async t 
 
   assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 0);
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 0);
+});
+
+test("only archived agents can be permanently deleted from settings", async t => {
+  const { page, state, origin } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/settings`);
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  assert.equal(await page.locator("#delete-agent").count(), 0);
+
+  await page.goto(`${origin}/app/agents/agent-archived/settings`);
+  await page.getByRole("heading", { name: "Archived agent", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Restore agent", exact: true }).isVisible(), true);
+  await page.locator("#delete-agent").click();
+  const dialog = page.getByRole("dialog", { name: "Permanently delete this agent?", exact: true });
+  assert.equal(await dialog.getByText("This cannot be undone.", { exact: false }).isVisible(), true);
+  assert.equal(await dialog.getByText("Historical tasks will remain, but their agent assignment will be cleared.", { exact: false }).isVisible(), true);
+  await dialog.getByRole("button", { name: "Delete permanently", exact: true }).click();
+
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  await page.getByText("Agent permanently deleted.", { exact: true }).waitFor();
+  assert.deepEqual(state.deletedAgents, ["agent-archived"]);
+  assert.equal(await page.getByText("Archived agent", { exact: true }).count(), 0);
+  assert.ok(state.requests.includes("DELETE /api/v1/agents/agent-archived/permanent"));
 });
 
 function isAppShell(pathname) {

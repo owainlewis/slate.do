@@ -865,7 +865,17 @@ test("agent settings separate identity, credential, and archive lifecycle withou
   `, app);
   const archived = app.agentDetailHTML();
   assert.match(archived, /id="restore-agent"/);
+  assert.match(archived, /id="delete-agent"/);
+  assert.match(archived, /Delete permanently/);
+  assert.match(archived, /Historical tasks remain, but their agent assignment is cleared/);
   assert.doesNotMatch(archived, /id="rotate-agent-credential"/);
+
+  vm.runInContext(`state.agentLifecycleConfirm = "delete";`, app);
+  const deletion = app.agentLifecycleConfirmHTML();
+  assert.match(deletion, /Permanently delete this agent/);
+  assert.match(deletion, /This cannot be undone/);
+  assert.match(deletion, /id="confirm-agent-lifecycle"[^>]*>Delete permanently/);
+  assert.match(source, /\/api\/v1\/agents\/\$\{encodeURIComponent\(context\.agentID\)\}\/permanent/);
 
   assert.deepEqual(JSON.parse(JSON.stringify(app.parseRoute("/app/agents/agent-one/settings"))), { name: "agent-settings", agentId: "agent-one" });
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentCredentialResult = null;`, app);

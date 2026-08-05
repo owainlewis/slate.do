@@ -32,6 +32,7 @@ type fakeStore struct {
 	archiveErr    error
 	restoreAgent  auth.AgentUser
 	restoreErr    error
+	deleteErr     error
 	lastUserID    string
 	lastAgentID   string
 	lastName      string
@@ -77,6 +78,11 @@ func (s *fakeStore) ArchiveAgent(_ context.Context, userID, agentID string, unas
 func (s *fakeStore) RestoreAgent(_ context.Context, userID, agentID string) (auth.AgentUser, error) {
 	s.lastUserID, s.lastAgentID = userID, agentID
 	return s.restoreAgent, s.restoreErr
+}
+
+func (s *fakeStore) DeleteAgent(_ context.Context, userID, agentID string) error {
+	s.lastUserID, s.lastAgentID = userID, agentID
+	return s.deleteErr
 }
 
 func TestGetDetailMapsOwnedAgentResponses(t *testing.T) {
@@ -207,6 +213,17 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 	response = lifecycleRequest(t, handler.Restore, user, http.MethodPost, `{}`)
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "agent_limit_reached") {
 		t.Fatalf("restore limit = %d %q", response.Code, response.Body.String())
+	}
+
+	store.deleteErr = ErrDeleteRequiresArchive
+	response = lifecycleRequest(t, handler.Delete, user, http.MethodDelete, "")
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "agent_not_archived") {
+		t.Fatalf("active delete = %d %q", response.Code, response.Body.String())
+	}
+	store.deleteErr = nil
+	response = lifecycleRequest(t, handler.Delete, user, http.MethodDelete, "")
+	if response.Code != http.StatusOK || store.lastUserID != user.ID || store.lastAgentID != "agent-1" {
+		t.Fatalf("archived delete = %d %q, owner = %q/%q", response.Code, response.Body.String(), store.lastUserID, store.lastAgentID)
 	}
 
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/agent-1", strings.NewReader(`{"displayName":"Builder","purpose":""}`))

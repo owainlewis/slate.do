@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	ErrArchiveConflict     = errors.New("agent has open assigned work")
-	ErrIdempotencyConflict = errors.New("idempotency key belongs to another agent")
-	ErrRestoreLimit        = errors.New("active agent limit reached")
-	ErrRestoreNameTaken    = errors.New("active agent name already exists")
+	ErrArchiveConflict       = errors.New("agent has open assigned work")
+	ErrDeleteRequiresArchive = errors.New("agent must be archived before deletion")
+	ErrIdempotencyConflict   = errors.New("idempotency key belongs to another agent")
+	ErrRestoreLimit          = errors.New("active agent limit reached")
+	ErrRestoreNameTaken      = errors.New("active agent name already exists")
 )
 
 type ArchiveConflictError struct {
@@ -410,6 +411,42 @@ func (s *Store) RestoreAgent(ctx context.Context, userID string, agentID string)
 		return auth.AgentUser{}, err
 	}
 	return s.agents.GetAgent(ctx, activeUserID, agentID)
+}
+
+func (s *Store) DeleteAgent(ctx context.Context, userID string, agentID string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var archived bool
+	err = tx.QueryRow(ctx, `
+		SELECT archived_at IS NOT NULL
+		FROM agents
+		WHERE owner_user_id = $1 AND id::text = $2
+		FOR UPDATE
+	`, userID, agentID).Scan(&archived)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.ErrAgentNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !archived {
+		return ErrDeleteRequiresArchive
+	}
+	result, err := tx.Exec(ctx, `
+		DELETE FROM agents
+		WHERE owner_user_id = $1 AND id::text = $2 AND archived_at IS NOT NULL
+	`, userID, agentID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return auth.ErrAgentNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 func constraintViolation(err error, constraint string) bool {

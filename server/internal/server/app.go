@@ -65,6 +65,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/credential", a.session(a.agents.RevokeCredential))
 	mux.HandleFunc("POST /api/v1/agents/{id}/archive", a.session(a.agents.Archive))
 	mux.HandleFunc("POST /api/v1/agents/{id}/restore", a.session(a.agents.Restore))
+	mux.HandleFunc("DELETE /api/v1/agents/{id}/permanent", a.session(a.agents.Delete))
 	// Compatibility for clients released before credentials became their own
 	// lifecycle. Both aliases use the safe owner-scoped behavior.
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/token", a.session(a.agents.RevokeCredential))

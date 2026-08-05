@@ -385,6 +385,75 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	}
 }
 
+func TestDeleteAgentRequiresArchiveAndRemovesOwnedIdentity(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run agent deletion integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	authStore := auth.NewPGStore(db)
+	store := NewStore(db, authStore)
+	stamp := time.Now().UnixNano()
+	owner, err := authStore.CreateAdmin(ctx, fmt.Sprintf("agent-delete-owner-%d@slate.test", stamp), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherOwner, err := authStore.CreateAdmin(ctx, fmt.Sprintf("agent-delete-other-%d@slate.test", stamp), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1 OR id = $2", owner.ID, otherOwner.ID)
+	})
+	agent, err := authStore.CreateAgent(ctx, owner.ID, "Delete candidate", "Historical work", lifecycleHash("delete-candidate"), "delete-candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignAgent, err := authStore.CreateAgent(ctx, otherOwner.ID, "Other owner agent", "", lifecycleHash("other-owner-agent"), "other-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	boardID, bucketID := insertBoardAndBucket(t, ctx, db, owner.ID, "Deletion board")
+	taskID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Historical assignment", "done", true)
+
+	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); !errors.Is(err, ErrDeleteRequiresArchive) {
+		t.Fatalf("active delete error = %v", err)
+	}
+	assertLifecycleTask(t, ctx, db, taskID, agent.ID, "done", true)
+	if err := store.DeleteAgent(ctx, owner.ID, foreignAgent.ID); !errors.Is(err, auth.ErrAgentNotFound) {
+		t.Fatalf("cross-owner delete error = %v", err)
+	}
+	if _, err := store.ArchiveAgent(ctx, owner.ID, agent.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var agents, credentials int
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM agents WHERE id = $1", agent.ID).Scan(&agents); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM agent_credentials WHERE agent_id = $1", agent.ID).Scan(&credentials); err != nil {
+		t.Fatal(err)
+	}
+	if agents != 0 || credentials != 0 {
+		t.Fatalf("deleted rows = agents %d, credentials %d", agents, credentials)
+	}
+	assertLifecycleTask(t, ctx, db, taskID, "", "done", true)
+	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); !errors.Is(err, auth.ErrAgentNotFound) {
+		t.Fatalf("repeated delete error = %v", err)
+	}
+}
+
 func TestConcurrentRotationAndAssignmentArchiveKeepLifecycleInvariants(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
