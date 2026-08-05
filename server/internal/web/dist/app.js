@@ -117,6 +117,10 @@ const state = {
   renamingBoardId: "",
   selectedTask: null,
   selectedSubtasks: [],
+  taskDetailDrafts: {},
+  subtaskDraft: "",
+  subtaskPending: false,
+  subtaskError: "",
   settings: false,
   settingsPage: "profile",
   view: "home",
@@ -370,6 +374,7 @@ function navigate(path, options = {}) {
 }
 
 let routeVersion = 0;
+let taskDetailVersion = 0;
 
 function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   if (err?.status !== 401 || !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return false;
@@ -379,8 +384,13 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.agentsLoadError = "";
   state.agentDetail = null;
   state.agentWorkPage = null;
+  taskDetailVersion += 1;
   state.selectedTask = null;
   state.selectedSubtasks = [];
+  state.taskDetailDrafts = {};
+  state.subtaskDraft = "";
+  state.subtaskPending = false;
+  state.subtaskError = "";
   state.agentAssignOpen = false;
   state.agentAssignError = "";
   state.agentAssignNotice = "";
@@ -430,7 +440,15 @@ function prepareAgentRoute(route) {
 async function applyRoute() {
   const version = ++routeVersion;
   const route = parseRoute(location.pathname);
-  if (route.name !== "board" && !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) state.selectedTask = null;
+  if (route.name !== "board" && !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) {
+    taskDetailVersion += 1;
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    state.taskDetailDrafts = {};
+    state.subtaskDraft = "";
+    state.subtaskPending = false;
+    state.subtaskError = "";
+  }
   state.error = "";
   state.settingsNotice = "";
   state.settingsPending = "";
@@ -682,7 +700,13 @@ function resetAuthenticatedState() {
   state.maxListsPerBoard = DEFAULT_MAX_LISTS_PER_BOARD;
   state.board = null;
   state.renamingBoardId = "";
+  taskDetailVersion += 1;
   state.selectedTask = null;
+  state.selectedSubtasks = [];
+  state.taskDetailDrafts = {};
+  state.subtaskDraft = "";
+  state.subtaskPending = false;
+  state.subtaskError = "";
   state.settings = false;
   state.settingsPage = "profile";
   state.error = "";
@@ -851,11 +875,19 @@ async function loadAllSubtasks(taskID, isCurrent) {
 }
 
 async function openTaskDetail(taskID, trigger) {
+  const movingWithinTaskChain = Boolean(state.selectedTask);
+  const detailVersion = ++taskDetailVersion;
+  state.subtaskPending = false;
+  if (!movingWithinTaskChain) {
+    state.taskDetailDrafts = {};
+    state.subtaskDraft = "";
+    state.subtaskError = "";
+  }
   const summary = findTask(taskID) || {};
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   const version = routeVersion;
-  const isCurrent = () => sessionIsCurrent(sessionVersion, userID) && version === routeVersion;
+  const isCurrent = () => sessionIsCurrent(sessionVersion, userID) && version === routeVersion && detailVersion === taskDetailVersion;
   if (trigger) trigger.disabled = true;
   try {
     const [detail, subtasks] = await Promise.all([
@@ -863,13 +895,13 @@ async function openTaskDetail(taskID, trigger) {
       loadAllSubtasks(taskID, isCurrent),
     ]);
     if (!isCurrent() || subtasks === null) return false;
-    state.selectedTask = { ...summary, ...detail };
+    state.selectedTask = { ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) };
     state.selectedSubtasks = subtasks;
     state.error = "";
     render();
     return true;
   } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return false;
+    if (!isCurrent()) return false;
     state.error = err.message;
     render();
     return false;
@@ -1218,33 +1250,34 @@ function appHTML() {
       : state.workspaceScope === "week" ? "Work planned across this week."
         : state.workspaceScope === "review" ? "Work waiting for your judgment."
           : state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
+  const overview = `
+    <header class="workspace-topbar">
+      <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
+      <button class="primary" id="new-task">${icon("plus")}<span>New task</span></button>
+    </header>
+    ${statusErrorHTML(state.error)}
+    ${statusNoticeHTML(state.moveNotice)}
+    <div class="workspace-viewbar">
+      <div class="workspace-tabs" role="tablist" aria-label="Task view">
+        ${["list", "flow", "table"].map(view => `<button data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" aria-selected="${state.workspaceView === view}">${view === "flow" ? icon("kanban") : view === "table" ? icon("columns") : icon("rows")}<span>${view[0].toUpperCase() + view.slice(1)}</span></button>`).join("")}
+      </div>
+      <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
+    </div>
+    ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
+    <div class="workspace-content">
+      ${state.workspaceLoading ? `<div class="workspace-empty">Loading tasks…</div>`
+        : state.workspaceScope === "week" ? workspaceWeekHTML(tasks)
+          : state.workspaceView === "flow" ? workspaceFlowHTML(tasks)
+            : state.workspaceView === "list" ? workspaceListHTML(tasks)
+              : workspaceTableHTML(tasks)}
+    </div>
+    ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more tasks"}</button>` : ""}`;
   return `
     <section class="shell task-shell theme-${theme}">
       ${appSidebarHTML({ theme, showNewTask: false })}
       <div class="main workspace-main">
-        <header class="workspace-topbar">
-          <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
-          <button class="primary" id="new-task">${icon("plus")}<span>New task</span></button>
-        </header>
-        ${statusErrorHTML(state.error)}
-        ${statusNoticeHTML(state.moveNotice)}
-        <div class="workspace-viewbar">
-          <div class="workspace-tabs" role="tablist" aria-label="Task view">
-            ${["list", "flow", "table"].map(view => `<button data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" aria-selected="${state.workspaceView === view}">${view === "flow" ? icon("kanban") : view === "table" ? icon("columns") : icon("rows")}<span>${view[0].toUpperCase() + view.slice(1)}</span></button>`).join("")}
-          </div>
-          <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
-        </div>
-        ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
-        <div class="workspace-content">
-          ${state.workspaceLoading ? `<div class="workspace-empty">Loading tasks…</div>`
-            : state.workspaceScope === "week" ? workspaceWeekHTML(tasks)
-              : state.workspaceView === "flow" ? workspaceFlowHTML(tasks)
-                : state.workspaceView === "list" ? workspaceListHTML(tasks)
-                  : workspaceTableHTML(tasks)}
-        </div>
-        ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more tasks"}</button>` : ""}
+        ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : overview}
       </div>
-      ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : ""}
     </section>`;
 }
 
@@ -1311,21 +1344,28 @@ function workspaceWeekHTML(tasks) {
 function workspaceDetailHTML(task) {
   const list = state.workspaceLists.find(item => item.id === task.bucketId);
   const completed = state.selectedSubtasks.filter(item => item.done).length;
-  const subtaskSection = task.parentTaskId ? `<p class="workspace-parent-note">Subtask of another task</p>` : `
+  const subtaskSection = task.parentTaskId ? `<button class="workspace-parent-link" type="button" data-open-parent>${icon("chevronLeft")}<span>Back to parent task</span></button>` : `
     <section class="workspace-subtasks" aria-labelledby="subtasks-heading">
-      <header><div><h3 id="subtasks-heading">Subtasks</h3><span>${completed}/${state.selectedSubtasks.length}</span></div></header>
-      <div class="workspace-subtask-list">
-        ${state.selectedSubtasks.map(item => `<button type="button" data-open-task="${item.id}"><span class="workspace-check ${item.done ? "done" : ""}">${item.done ? icon("check") : ""}</span><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button>`).join("")}
-      </div>
-      <div id="add-subtask" class="workspace-add-subtask"><input name="title" placeholder="Add a subtask" aria-label="Subtask title"><button type="button" class="plain-btn">${icon("plus")}<span>Add</span></button></div>
+      <header><div><h3 id="subtasks-heading">Subtasks</h3><span>${completed} of ${state.selectedSubtasks.length} complete</span></div></header>
+      ${state.selectedSubtasks.length ? `<div class="workspace-subtask-list">
+        ${state.selectedSubtasks.map(item => `<div class="workspace-subtask-row"><button class="workspace-subtask-toggle" type="button" data-toggle-subtask="${item.id}" aria-label="Mark ${escapeAttr(item.title)} ${item.done ? "not complete" : "complete"}"><span class="workspace-check ${item.done ? "done" : ""}">${item.done ? icon("check") : ""}</span></button><button class="workspace-subtask-open" type="button" data-open-task="${item.id}"><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button></div>`).join("")}
+      </div>` : `<p class="workspace-subtask-empty">Break complex work into clear human and agent-owned steps.</p>`}
+      <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a subtask" aria-label="Subtask title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add subtask"}</span></button></div>
+      <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
     </section>`;
-  return `<div class="detail-overlay" data-detail-overlay>
-    <section class="detail workspace-detail" role="dialog" aria-modal="true" aria-labelledby="workspace-detail-title">
-      <header class="detail-head"><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Subtask" : "Task"}</b></div><button class="detail-close" type="button" data-close-detail aria-label="Close editor">${icon("x")}</button></header>
-      <form id="workspace-detail-form">
-        <div class="detail-body">
+  return `<section class="workspace-detail" aria-label="Task detail" data-detail-surface tabindex="-1">
+      <header class="detail-head"><button class="workspace-detail-back" type="button" data-close-detail aria-label="Back to tasks">${icon("chevronLeft")}<span>Back</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Subtask" : "Task"}</b></div></header>
+      <form id="workspace-detail-form" class="workspace-detail-form">
+        <div class="workspace-detail-main">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
           <label class="workspace-brief-label" for="workspace-detail-description">Task brief</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="Add the outcome, context, and definition of done…">${escapeHTML(task.description || "")}</textarea>
+          ${task.assigneeAgentId ? `<aside class="workspace-cli-handoff">${icon("bot")}<div><strong>Available to ${escapeHTML(workspaceTaskOwner(task))} through the CLI</strong><code>slate tasks pull</code></div></aside>` : ""}
+          ${task.parentTaskId ? "" : subtaskSection}
+          <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
+        </div>
+        <aside class="workspace-detail-properties" aria-label="Task properties">
+          <h2>Properties</h2>
+          ${task.parentTaskId ? `<div class="workspace-parent-context"><span>Part of a larger task</span>${subtaskSection}</div>` : ""}
           <div class="detail-properties">
             <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
             <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" name="bucketId">${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(item.isInbox ? "Inbox" : item.name)}</option>`).join("")}</select></div>
@@ -1333,14 +1373,10 @@ function workspaceDetailHTML(task) {
             <div class="field"><label for="workspace-detail-owner">Owner</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
             <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
           </div>
-          ${task.assigneeAgentId ? `<aside class="workspace-cli-handoff">${icon("bot")}<div><strong>Available to ${escapeHTML(workspaceTaskOwner(task))} through the CLI</strong><code>slate tasks pull</code></div></aside>` : ""}
-          ${subtaskSection}
-          <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
-        </div>
+        </aside>
         <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete task</button><div><button class="secondary" type="button" data-close-detail>Cancel</button><button class="primary" type="submit">Save changes</button></div></footer>
       </form>
-    </section>
-  </div>`;
+    </section>`;
 }
 
 function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNewTask = true } = {}) {
@@ -2599,55 +2635,236 @@ function bindWorkspace() {
 
 function bindWorkspaceDetail() {
   if (!state.selectedTask) return;
-  const overlay = document.querySelector("[data-detail-overlay]");
-  const close = () => { state.selectedTask = null; state.selectedSubtasks = []; render(); };
+  const detailSurface = document.querySelector("[data-detail-surface]");
+  const preserveTaskDraft = () => {
+    const form = document.querySelector("#workspace-detail-form");
+    if (!form) return;
+    const data = new FormData(form);
+    const draft = {
+      title: String(data.get("title") || ""),
+      description: String(data.get("description") || ""),
+      status: String(data.get("status") || "queued"),
+      bucketId: String(data.get("bucketId") || ""),
+      priority: String(data.get("priority") || ""),
+      assigneeAgentId: String(data.get("assigneeAgentId") || ""),
+      scheduledDate: String(data.get("scheduledDate") || ""),
+    };
+    state.taskDetailDrafts[state.selectedTask.id] = draft;
+    state.selectedTask = { ...state.selectedTask, ...draft };
+  };
+  const captureDetailFocus = () => {
+    const active = document.activeElement;
+    if (!active || !document.querySelector("[data-detail-surface]")?.contains(active)) return null;
+    return {
+      id: active.id,
+      ariaLabel: active.getAttribute("aria-label"),
+      openTask: active.dataset?.openTask,
+      toggleSubtask: active.dataset?.toggleSubtask,
+    };
+  };
+  const restoreDetailFocus = focus => {
+    if (!focus) return;
+    const element = focus.id ? document.getElementById(focus.id)
+      : focus.openTask ? document.querySelector(`[data-open-task="${focus.openTask}"]`)
+        : focus.toggleSubtask ? document.querySelector(`[data-toggle-subtask="${focus.toggleSubtask}"]`)
+          : focus.ariaLabel ? [...document.querySelectorAll("[aria-label]")].find(item => item.getAttribute("aria-label") === focus.ariaLabel) : null;
+    element?.focus();
+  };
+  const close = () => {
+    taskDetailVersion += 1;
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    state.taskDetailDrafts = {};
+    state.subtaskDraft = "";
+    state.subtaskPending = false;
+    state.subtaskError = "";
+    render();
+  };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
-  overlay?.addEventListener("click", event => { if (event.target === overlay) close(); });
-  overlay?.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
-  document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = () => openTaskDetail(element.dataset.openTask, element));
+  detailSurface?.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
+  document.querySelector("[data-open-parent]")?.addEventListener("click", event => {
+    preserveTaskDraft();
+    state.subtaskDraft = "";
+    state.subtaskError = "";
+    openTaskDetail(state.selectedTask.parentTaskId, event.currentTarget);
+  });
+  document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = () => {
+    preserveTaskDraft();
+    state.subtaskDraft = "";
+    state.subtaskError = "";
+    openTaskDetail(element.dataset.openTask, element);
+  });
+  document.querySelectorAll("[data-toggle-subtask]").forEach(element => element.onclick = async () => {
+    if (state.subtaskPending) return;
+    const parentID = state.selectedTask.id;
+    const detailVersion = taskDetailVersion;
+    const subtask = state.selectedSubtasks.find(item => item.id === element.dataset.toggleSubtask);
+    if (!subtask) return;
+    preserveTaskDraft();
+    state.subtaskPending = true;
+    state.subtaskError = "";
+    element.disabled = true;
+    try {
+      const updated = await api.patch(`/api/v1/tasks/${encodeURIComponent(subtask.id)}/status`, { status: subtask.done ? "queued" : "done" });
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        if (state.selectedTask?.id === parentID) {
+          const focus = captureDetailFocus();
+          preserveTaskDraft();
+          state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === subtask.id ? { ...item, ...updated } : item);
+          render();
+          restoreDetailFocus(focus);
+        }
+        return;
+      }
+      state.subtaskPending = false;
+      state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === subtask.id ? { ...item, ...updated } : item);
+      render();
+      document.querySelector(`[data-toggle-subtask="${subtask.id}"]`)?.focus();
+    } catch (err) {
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) return;
+      state.subtaskPending = false;
+      state.subtaskError = err.message;
+      render();
+      document.querySelector(`[data-toggle-subtask="${subtask.id}"]`)?.focus();
+    }
+  });
   const subtaskControl = document.querySelector("#add-subtask");
   const addSubtask = async () => {
+    if (!subtaskControl || state.subtaskPending) return;
     const input = subtaskControl.querySelector('input[name="title"]');
     const title = input.value.trim();
     if (!title) return;
+    const parentID = state.selectedTask.id;
+    const detailVersion = taskDetailVersion;
+    preserveTaskDraft();
+    state.subtaskDraft = title;
+    state.subtaskPending = true;
+    state.subtaskError = "";
+    input.readOnly = true;
+    const addButton = subtaskControl.querySelector("button");
+    addButton.disabled = true;
+    addButton.querySelector("span").textContent = "Adding…";
     try {
-      const created = await api.post(`/api/v1/tasks/${state.selectedTask.id}/subtasks`, { title, kind: "action" });
-      await openTaskDetail(state.selectedTask.id);
+      const created = await api.post(`/api/v1/tasks/${parentID}/subtasks`, { title, kind: "action" });
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        if (state.selectedTask?.id === parentID) {
+          const focus = captureDetailFocus();
+          preserveTaskDraft();
+          state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
+          render();
+          restoreDetailFocus(focus);
+        }
+        return;
+      }
+      state.subtaskPending = false;
+      state.subtaskDraft = "";
+      state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
+      render();
       document.querySelector(`[data-open-task="${created.id}"]`)?.focus();
     } catch (err) {
-      state.error = err.message;
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) return;
+      state.subtaskPending = false;
+      state.subtaskError = err.message;
       render();
+      document.querySelector('#add-subtask input[name="title"]')?.focus();
     }
   };
   subtaskControl?.querySelector("button")?.addEventListener("click", addSubtask);
+  subtaskControl?.querySelector("input")?.addEventListener("input", event => { state.subtaskDraft = event.currentTarget.value; });
   subtaskControl?.querySelector("input")?.addEventListener("keydown", event => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    addSubtask();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addSubtask();
+    }
   });
   document.querySelector("#delete-task")?.addEventListener("click", async () => {
     if (!confirm("Delete this task and its subtasks?")) return;
-    await api.del(`/api/v1/tasks/${state.selectedTask.id}`);
-    state.selectedTask = null;
-    state.selectedSubtasks = [];
-    await reload();
+    const taskID = state.selectedTask.id;
+    const parentTaskID = state.selectedTask.parentTaskId || "";
+    const detailVersion = taskDetailVersion;
+    preserveTaskDraft();
+    try {
+      await api.del(`/api/v1/tasks/${taskID}`);
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        state.workspaceTasks = state.workspaceTasks.filter(item => item.id !== taskID);
+        state.selectedSubtasks = state.selectedSubtasks.filter(item => item.id !== taskID);
+        if (state.selectedTask?.id !== taskID) return;
+        delete state.taskDetailDrafts[taskID];
+        state.subtaskDraft = "";
+        state.subtaskPending = false;
+        state.subtaskError = "";
+        if (parentTaskID) {
+          await openTaskDetail(parentTaskID);
+          return;
+        }
+        taskDetailVersion += 1;
+        state.selectedTask = null;
+        state.selectedSubtasks = [];
+        state.taskDetailDrafts = {};
+        await reload();
+        return;
+      }
+      if (parentTaskID) {
+        delete state.taskDetailDrafts[taskID];
+        state.subtaskDraft = "";
+        state.subtaskPending = false;
+        state.subtaskError = "";
+        await openTaskDetail(parentTaskID);
+        return;
+      }
+      taskDetailVersion += 1;
+      state.selectedTask = null;
+      state.selectedSubtasks = [];
+      state.taskDetailDrafts = {};
+      state.subtaskDraft = "";
+      state.subtaskPending = false;
+      state.subtaskError = "";
+      await reload();
+    } catch (err) {
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
+      state.error = err.message;
+      render();
+    }
   });
   document.querySelector("#workspace-detail-form")?.addEventListener("submit", async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const taskID = state.selectedTask.id;
+    const parentTaskID = state.selectedTask.parentTaskId || "";
+    const detailVersion = taskDetailVersion;
+    preserveTaskDraft();
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     submit.disabled = true;
     submit.textContent = "Saving…";
     try {
-      await api.patch(`/api/v1/tasks/${state.selectedTask.id}/status`, {
+      const updated = await api.patch(`/api/v1/tasks/${taskID}/status`, {
         title: form.get("title"), description: form.get("description"), status: form.get("status"),
         bucketId: form.get("bucketId"), priority: form.get("priority"),
         assigneeAgentId: form.get("assigneeAgentId"), scheduledDate: form.get("scheduledDate"),
       });
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
+        state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
+        return;
+      }
+      if (parentTaskID) {
+        delete state.taskDetailDrafts[taskID];
+        state.subtaskDraft = "";
+        state.subtaskPending = false;
+        state.subtaskError = "";
+        await openTaskDetail(parentTaskID);
+        return;
+      }
+      taskDetailVersion += 1;
       state.selectedTask = null;
       state.selectedSubtasks = [];
+      state.taskDetailDrafts = {};
+      state.subtaskDraft = "";
+      state.subtaskPending = false;
+      state.subtaskError = "";
       await reload();
     } catch (err) {
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
       state.error = err.message;
       render();
     }
