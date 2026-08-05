@@ -1149,6 +1149,167 @@ func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
 	}
 }
 
+func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	firstBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstList, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondList, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Working"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdList, err := store.CreateBucket(ctx, userID, secondBoard.ID, CreateBucketInput{Name: "Review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, firstList.ID, CreateTaskInput{Title: "Ship release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Human review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{BucketID: &secondList.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("direct subtask update error = %v, want ErrInvalidData", err)
+	}
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: secondList.ID, Position: &position}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("direct subtask move error = %v, want ErrInvalidData", err)
+	}
+
+	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &secondList.ID}); err != nil {
+		t.Fatal(err)
+	}
+	childAfterUpdate, err := store.GetTask(ctx, userID, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childAfterUpdate.BucketID != secondList.ID || childAfterUpdate.BoardID != firstBoard.ID {
+		t.Fatalf("child after parent update = %#v", childAfterUpdate)
+	}
+
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: thirdList.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
+	childAfterMove, err := store.GetTask(ctx, userID, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childAfterMove.BucketID != thirdList.ID || childAfterMove.BoardID != secondBoard.ID {
+		t.Fatalf("child after parent move = %#v", childAfterMove)
+	}
+}
+
+func TestSubtaskCreationRacingParentMoveNeverSplitsLists(t *testing.T) {
+	for _, mutation := range []string{"update", "move"} {
+		t.Run(mutation, func(t *testing.T) {
+			db := openIntegrationDB(t)
+			ctx := context.Background()
+			store := NewStore(db)
+			userID := createIntegrationUser(t, ctx, db)
+			t.Cleanup(func() {
+				_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+			})
+
+			board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Parent"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			parentLock, err := db.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parentLock.Rollback(ctx)
+			if _, err := lockedTask(ctx, parentLock, userID, parent.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			moveResult := make(chan error, 1)
+			go func() {
+				if mutation == "update" {
+					_, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID})
+					moveResult <- err
+					return
+				}
+				position := 0
+				_, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position})
+				moveResult <- err
+			}()
+			waitForBlockedQueryContaining(t, ctx, db, "FOR UPDATE OF t")
+
+			createResult := make(chan error, 1)
+			go func() {
+				_, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Racing child"})
+				createResult <- err
+			}()
+			waitForBlockedQueryContaining(t, ctx, db, "FROM users u")
+
+			if err := parentLock.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-moveResult; err != nil {
+				t.Fatalf("parent move: %v", err)
+			}
+			if err := <-createResult; !errors.Is(err, ErrInvalidData) {
+				t.Fatalf("racing subtask creation error = %v, want ErrInvalidData", err)
+			}
+
+			var splitChildren int
+			if err := db.QueryRow(ctx, `
+				SELECT count(*)
+				FROM tasks child
+				JOIN tasks parent ON parent.id = child.parent_task_id
+				WHERE child.parent_task_id = $1
+				  AND (child.board_id <> parent.board_id OR child.bucket_id <> parent.bucket_id)
+			`, parent.ID).Scan(&splitChildren); err != nil {
+				t.Fatal(err)
+			}
+			if splitChildren != 0 {
+				t.Fatalf("split children = %d, want 0", splitChildren)
+			}
+
+			child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Current child"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if child.BucketID != destination.ID {
+				t.Fatalf("child list = %q, want %q", child.BucketID, destination.ID)
+			}
+		})
+	}
+}
+
 func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -1508,4 +1669,28 @@ func waitForBlockedBoardUpdates(t *testing.T, ctx context.Context, db *database.
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d blocked board updates", want)
+}
+
+func waitForBlockedQueryContaining(t *testing.T, ctx context.Context, db *database.Pool, fragment string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int
+		if err := db.QueryRow(ctx, `
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND pid <> pg_backend_pid()
+			  AND state = 'active'
+			  AND wait_event_type = 'Lock'
+			  AND query LIKE '%' || $1 || '%'
+		`, fragment).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for blocked query containing %q", fragment)
 }

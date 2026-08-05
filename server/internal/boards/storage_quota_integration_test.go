@@ -450,8 +450,13 @@ func TestDeletingAParentContainerReleasesMovedSubtaskUsage(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				position := 0
-				if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: destination.ID, Position: &position}); err != nil {
+				// Preserve coverage for invalid data written before the parent/list
+				// invariant was enforced at the store boundary.
+				if _, err := db.Exec(ctx, `
+					UPDATE tasks
+					SET board_id = $2, bucket_id = $3, updated_at = now()
+					WHERE id = $1
+				`, child.ID, destination.BoardID, destination.ID); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -470,7 +475,7 @@ func TestDeletingAParentContainerReleasesMovedSubtaskUsage(t *testing.T) {
 	}
 }
 
-func TestMovingASubtaskWhileDeletingItsParentContainerKeepsUsageExact(t *testing.T) {
+func TestMovingAParentWhileDeletingItsContainerKeepsUsageExact(t *testing.T) {
 	for _, deletion := range []string{"list", "board"} {
 		t.Run(deletion, func(t *testing.T) {
 			db := openIntegrationDB(t)
@@ -494,7 +499,7 @@ func TestMovingASubtaskWhileDeletingItsParentContainerKeepsUsageExact(t *testing
 				if err != nil {
 					t.Fatal(err)
 				}
-				child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "child", OverrideLimit: true})
+				_, err = store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "child", OverrideLimit: true})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -504,7 +509,7 @@ func TestMovingASubtaskWhileDeletingItsParentContainerKeepsUsageExact(t *testing
 				go func() {
 					<-start
 					position := 0
-					_, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: destination.ID, Position: &position})
+					_, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position})
 					results <- err
 				}()
 				go func() {
@@ -523,7 +528,6 @@ func TestMovingASubtaskWhileDeletingItsParentContainerKeepsUsageExact(t *testing
 					}
 				}
 				assertStoredUsageMatchesTasks(t, ctx, db, userID)
-				assertStorageUsage(t, ctx, db, userID, 0, 0)
 				if _, err := db.Exec(ctx, "DELETE FROM users WHERE id = $1", userID); err != nil {
 					t.Fatal(err)
 				}

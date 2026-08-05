@@ -358,6 +358,18 @@ test("the task table exposes native headers, cells, and keyboard-operable rows",
   vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
 
+test("subtask detail keeps its list fixed to the parent", () => {
+  vm.runInContext(`
+    state.workspaceLists = [{ id: "list-one", name: "Product", isInbox: false }];
+    state.selectedTask = { id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" };
+    state.selectedSubtasks = [];
+  `, app);
+  const html = vm.runInContext(`workspaceDetailHTML(state.selectedTask)`, app);
+  assert.match(html, /id="workspace-detail-list" disabled aria-describedby="workspace-detail-list-help"/);
+  assert.match(html, /type="hidden" name="bucketId" value="list-one"/);
+  assert.match(html, /Subtasks stay with their parent task\./);
+});
+
 test("list limits remain scoped to the selected board", () => {
   assert.deepEqual(
     JSON.parse(JSON.stringify(app.listLimitUpdate("current-board", "12"))),

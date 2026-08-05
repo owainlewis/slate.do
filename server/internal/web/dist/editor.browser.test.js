@@ -425,6 +425,8 @@ test("task detail coordinates one level of human and agent subtasks through the 
   await page.getByText("Human final review", { exact: true }).click();
   await page.getByRole("button", { name: "Back to parent task", exact: true }).waitFor();
   assert.equal(await page.getByLabel("Subtask title", { exact: true }).count(), 0, "subtasks cannot contain subtasks");
+  assert.equal(await page.getByLabel("List", { exact: true }).isDisabled(), true, "subtasks stay in their parent list");
+  assert.equal(await page.getByText("Subtasks stay with their parent task.", { exact: true }).isVisible(), true);
   await page.getByLabel("Title", { exact: true }).fill("Unsaved child title");
   await page.getByRole("button", { name: "Back to parent task", exact: true }).click();
   await page.getByText("Subtasks", { exact: true }).waitFor();

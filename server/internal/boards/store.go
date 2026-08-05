@@ -833,6 +833,18 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 	if err != nil {
 		return Task{}, err
 	}
+	if parentTaskID != "" {
+		parent, err := lockedTask(ctx, tx, userID, parentTaskID)
+		if err != nil {
+			return Task{}, err
+		}
+		if parent.ParentTaskID != "" {
+			return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+		}
+		if parent.BucketID != bucketID {
+			return Task{}, fmt.Errorf("%w: subtask must use its parent list", ErrInvalidData)
+		}
+	}
 	bucket, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
 		return Task{}, err
@@ -1029,6 +1041,9 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	if err != nil {
 		return Task{}, err
 	}
+	if current.ParentTaskID != "" && current.BucketID != bucketID {
+		return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+	}
 	destination, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
 		return Task{}, err
@@ -1054,6 +1069,9 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 			return Task{}, err
 		}
 		if err := updateTaskLocation(ctx, tx, current.ID, destination, *input.Position); err != nil {
+			return Task{}, err
+		}
+		if err := updateChildTaskLocations(ctx, tx, current.ID, destination); err != nil {
 			return Task{}, err
 		}
 		if err := writeTaskOrder(ctx, tx, sourceIDs); err != nil {
@@ -1113,6 +1131,15 @@ func updateTaskLocation(ctx context.Context, tx pgx.Tx, taskID string, destinati
 	return err
 }
 
+func updateChildTaskLocations(ctx context.Context, tx pgx.Tx, parentTaskID string, destination Bucket) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET board_id = $2, bucket_id = $3, updated_at = now()
+		WHERE parent_task_id = $1
+	`, parentTaskID, destination.BoardID, destination.ID)
+	return err
+}
+
 func writeTaskOrder(ctx context.Context, tx pgx.Tx, ids []string) error {
 	for position, id := range ids {
 		if _, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1, updated_at = now() WHERE id = $2", position, id); err != nil {
@@ -1161,7 +1188,11 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		}
 		current.Kind = kind
 	}
+	moveChildren := false
 	if input.BucketID != nil && *input.BucketID != current.BucketID {
+		if current.ParentTaskID != "" {
+			return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+		}
 		bucket, err := lockedBucket(ctx, tx, userID, *input.BucketID)
 		if err != nil {
 			return Task{}, err
@@ -1169,6 +1200,7 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		current.BucketID = bucket.ID
 		current.BoardID = bucket.BoardID
 		current.SortOrder = 0
+		moveChildren = true
 	}
 	if input.Status != nil {
 		if err := applyTaskStatus(&current, *input.Status, allowWorking); err != nil {
@@ -1246,6 +1278,12 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	}
 	if err != nil {
 		return Task{}, err
+	}
+	if moveChildren {
+		destination := Bucket{ID: task.BucketID, BoardID: task.BoardID}
+		if err := updateChildTaskLocations(ctx, tx, task.ID, destination); err != nil {
+			return Task{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Task{}, err
