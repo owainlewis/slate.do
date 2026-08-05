@@ -527,6 +527,14 @@ func TestMoveTaskAcrossBoardsPreservesMetadataAndOrdersBothLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstChild, err := store.CreateSubtask(ctx, userID, moving.ID, CreateTaskInput{Title: "First child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondChild, err := store.CreateSubtask(ctx, userID, moving.ID, CreateTaskInput{Title: "Second child"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	after, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "After"})
 	if err != nil {
 		t.Fatal(err)
@@ -552,14 +560,14 @@ func TestMoveTaskAcrossBoardsPreservesMetadataAndOrdersBothLists(t *testing.T) {
 		t.Fatalf("moved metadata = %#v, want metadata from %#v", moved, moving)
 	}
 	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
-	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, last.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, firstChild.ID, secondChild.ID, last.ID})
 
 	invalidPosition := 4
 	if _, err := store.MoveTask(ctx, userID, moving.ID, MoveTaskInput{BucketID: source.ID, Position: &invalidPosition}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("invalid position error = %v, want ErrInvalidData", err)
 	}
 	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
-	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, last.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, firstChild.ID, secondChild.ID, last.ID})
 }
 
 func assertTaskOrder(t *testing.T, store *Store, ctx context.Context, userID string, bucketID string, want []string) {
@@ -1191,6 +1199,9 @@ func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 		t.Fatalf("direct subtask update error = %v, want ErrInvalidData", err)
 	}
 	position := 0
+	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: firstList.ID, Position: &position}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("same-list subtask move error = %v, want ErrInvalidData", err)
+	}
 	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: secondList.ID, Position: &position}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("direct subtask move error = %v, want ErrInvalidData", err)
 	}
@@ -1246,6 +1257,63 @@ func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 	if childAfterMove.BucketID != thirdList.ID || childAfterMove.BoardID != secondBoard.ID {
 		t.Fatalf("child after parent move = %#v", childAfterMove)
 	}
+}
+
+func TestUpdateTaskMovesParentAndChildrenAsOrderedGroup(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Grouped moves"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Before"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstChild, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "First child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondChild, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Second child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "After"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationFirst, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Destination first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationLast, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Destination last"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{parent.ID, firstChild.ID, secondChild.ID, destinationFirst.ID, destinationLast.ID})
 }
 
 func TestSubtaskCreationRacingParentMoveNeverSplitsLists(t *testing.T) {

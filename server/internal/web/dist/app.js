@@ -1579,7 +1579,7 @@ function taskAssigneeHTML(task, showName = false) {
 
 function taskHTML(task) {
   return `
-    <li class="task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
+    <li class="task action ${task.done ? "done" : ""}" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}">
       <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
       <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <div class="task-title">${escapeHTML(task.title)}${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}</div>
@@ -1770,7 +1770,7 @@ function moveListOptionsHTML(board, task, selectedID = task.bucketId) {
 }
 
 function movePositionOptionsHTML(list, task) {
-  const listTasks = list?.tasks || [];
+  const listTasks = (list?.tasks || []).filter(item => item.parentTaskId !== task.id);
   const tasks = listTasks.filter(item => item.id !== task.id);
   const currentIndex = list?.id === task.bucketId ? Math.max(0, listTasks.findIndex(item => item.id === task.id)) : tasks.length;
   return Array.from({ length: tasks.length + 1 }, (_, index) => {
@@ -3348,7 +3348,7 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submit
   const loadedBoards = new Map([[state.board.id, state.board]]);
   const sourceBoardID = state.board.id;
   const sourceList = state.board.buckets.find(list => list.id === task.bucketId);
-  const sourcePosition = Math.max(0, (sourceList?.tasks || []).findIndex(item => item.id === task.id));
+  const sourcePosition = Math.max(0, (sourceList?.tasks || []).filter(item => item.parentTaskId !== task.id).findIndex(item => item.id === task.id));
   let destinationLoading = false;
   const showError = message => {
     state.error = message;
@@ -4481,7 +4481,8 @@ function reorderedTaskIDs(ids, movingID, targetID, afterTarget = false) {
 }
 
 function taskDropIndex(list, y) {
-  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")];
+  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")]
+    .filter(item => !isDraggedTaskChild(item.dataset.task));
   for (let i = 0; i < items.length; i++) {
     const rect = items[i].getBoundingClientRect();
     if (y < rect.top + rect.height / 2) return i;
@@ -4493,10 +4494,12 @@ function taskDropIndex(list, y) {
 // array. While a priority filter hides cards those two disagree, so translate
 // the visible position into a real one by anchoring on the card dropped before.
 function fullTaskIndex(listElement, visibleIndex, draggingID) {
-  if (!state.priorityFilter) return visibleIndex;
   const bucket = state.board?.buckets?.find(b => b.id === listElement.dataset.taskList);
-  const remaining = (bucket?.tasks || []).filter(task => task.id !== draggingID);
-  const visibleIDs = [...listElement.querySelectorAll("[data-task]:not(.dragging)")].map(el => el.dataset.task);
+  const remaining = (bucket?.tasks || []).filter(task => task.id !== draggingID && task.parentTaskId !== draggingID);
+  if (!state.priorityFilter) return Math.min(visibleIndex, remaining.length);
+  const visibleIDs = [...listElement.querySelectorAll("[data-task]:not(.dragging)")]
+    .map(el => el.dataset.task)
+    .filter(id => id !== draggingID && findTask(id)?.parentTaskId !== draggingID);
   if (visibleIndex >= visibleIDs.length) return remaining.length;
   const anchor = remaining.findIndex(task => task.id === visibleIDs[visibleIndex]);
   return anchor < 0 ? remaining.length : anchor;
@@ -4504,7 +4507,8 @@ function fullTaskIndex(listElement, visibleIndex, draggingID) {
 
 function markTaskDrop(list, y) {
   clearDropMarks();
-  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")];
+  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")]
+    .filter(item => !isDraggedTaskChild(item.dataset.task));
   if (!items.length) {
     list.classList.add("drop-into");
     return;
@@ -4512,6 +4516,10 @@ function markTaskDrop(list, y) {
   const index = taskDropIndex(list, y);
   if (index < items.length) items[index].classList.add("drop-before");
   else items[items.length - 1].classList.add("drop-after");
+}
+
+function isDraggedTaskChild(taskID) {
+  return drag?.type === "task" && findTask(taskID)?.parentTaskId === drag.id;
 }
 
 function bucketDropIndex(event) {
@@ -4551,17 +4559,19 @@ async function dropTask(taskId, bucketId, index) {
   const task = findTask(taskId);
   const target = state.board.buckets.find(b => b.id === bucketId);
   if (!task || !target) return;
-  const moved = task.bucketId !== bucketId;
-  const from = state.board.buckets.find(b => b.id === task.bucketId);
-  if (from) from.tasks = (from.tasks || []).filter(t => t.id !== taskId);
-  task.bucketId = bucketId;
+  const children = state.board.buckets.flatMap(list => list.tasks || []).filter(item => item.parentTaskId === taskId);
+  const taskGroup = [task, ...children];
+  const taskGroupIDs = new Set(taskGroup.map(item => item.id));
+  for (const list of state.board.buckets) {
+    list.tasks = (list.tasks || []).filter(item => !taskGroupIDs.has(item.id));
+  }
+  for (const item of taskGroup) item.bucketId = bucketId;
   target.tasks = target.tasks || [];
-  target.tasks.splice(index, 0, task);
+  target.tasks.splice(Math.min(index, target.tasks.length), 0, ...taskGroup);
   state.error = "";
   render();
   try {
-    if (moved) await api.patch(`/api/v1/tasks/${taskId}`, { bucketId });
-    await api.post(`/api/v1/buckets/${bucketId}/reorder-tasks`, { ids: target.tasks.map(t => t.id) });
+    await api.post(`/api/v1/tasks/${taskId}/move`, { bucketId, position: index });
   } catch (err) {
     state.error = err.message;
   }
