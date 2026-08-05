@@ -185,6 +185,98 @@ func (s *Store) InboxBucketID(ctx context.Context, userID string) (string, error
 	return id, err
 }
 
+// EnsureInboxBucketID repairs the valid empty-account states left by older
+// clients and returns an Inbox for universal capture. The account lock is shared
+// with board, list, and task writes, so concurrent first-task requests cannot
+// create duplicate defaults.
+func (s *Store) EnsureInboxBucketID(ctx context.Context, userID string) (string, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := accountLimitsForUpdate(ctx, tx, userID); err != nil {
+		return "", err
+	}
+
+	var inboxID string
+	err = tx.QueryRow(ctx, `
+		SELECT l.id::text
+		FROM buckets l
+		JOIN boards b ON b.id = l.board_id
+		WHERE b.user_id = $1 AND l.is_inbox = true
+		ORDER BY b.sort_order, b.created_at, b.id, l.sort_order, l.created_at, l.id
+		LIMIT 1
+		FOR UPDATE OF l
+	`, userID).Scan(&inboxID)
+	if err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return inboxID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+
+	var firstListID string
+	err = tx.QueryRow(ctx, `
+		SELECT l.id::text
+		FROM buckets l
+		JOIN boards b ON b.id = l.board_id
+		WHERE b.user_id = $1
+		ORDER BY b.sort_order, b.created_at, b.id, l.sort_order, l.created_at, l.id
+		LIMIT 1
+		FOR UPDATE OF l
+	`, userID).Scan(&firstListID)
+	if err == nil {
+		if _, err := tx.Exec(ctx, "UPDATE buckets SET is_inbox = true, updated_at = now() WHERE id = $1", firstListID); err != nil {
+			return "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return firstListID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+
+	var boardID string
+	var listLimit int
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, max_tasks_per_list
+		FROM boards
+		WHERE user_id = $1
+		ORDER BY sort_order, created_at, id
+		LIMIT 1
+		FOR UPDATE
+	`, userID).Scan(&boardID, &listLimit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx, `
+			INSERT INTO boards (user_id, name, max_tasks_per_list, sort_order)
+			VALUES ($1, 'Today', $2, 0)
+			RETURNING id::text, max_tasks_per_list
+		`, userID, defaultMaxTasksPerList).Scan(&boardID, &listLimit)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO buckets (board_id, name, goal, is_inbox, limit_count, sort_order)
+		VALUES ($1, 'Inbox', 'Capture now, organise later', true, $2, 0)
+		RETURNING id::text
+	`, boardID, listLimit).Scan(&inboxID)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return inboxID, nil
+}
+
 func (s *Store) GetBoard(ctx context.Context, userID string, id string) (Board, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT id::text, name, background_kind, background_value, max_tasks_per_list, sort_order, created_at, updated_at

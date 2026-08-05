@@ -278,6 +278,152 @@ func TestAccountAlwaysKeepsAnInboxForUniversalCapture(t *testing.T) {
 	}
 }
 
+func TestEnsureInboxBucketIDRepairsEveryEmptyAccountState(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+
+	t.Run("no boards", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+		inboxID, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inbox, err := store.GetBucket(ctx, userID, inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		boards, err := store.ListBoards(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(boards) != 1 || inbox.BoardID != boards[0].ID || !inbox.IsInbox || inbox.Name != "Inbox" {
+			t.Fatalf("boards = %#v, inbox = %#v", boards, inbox)
+		}
+		if _, err := store.CreateTask(ctx, userID, inboxID, CreateTaskInput{Title: "First captured task"}); err != nil {
+			t.Fatalf("capture after repair: %v", err)
+		}
+	})
+
+	t.Run("board without lists", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		inboxID, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inbox, err := store.GetBucket(ctx, userID, inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lists, err := store.ListAllBuckets(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(lists) != 1 || inbox.BoardID != board.ID || !inbox.IsInbox {
+			t.Fatalf("lists = %#v, inbox = %#v", lists, inbox)
+		}
+	})
+
+	t.Run("existing list without Inbox", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ideas"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		inboxID, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		promoted, err := store.GetBucket(ctx, userID, inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lists, err := store.ListAllBuckets(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inboxID != list.ID || len(lists) != 1 || !promoted.IsInbox {
+			t.Fatalf("promoted = %#v, lists = %#v", promoted, lists)
+		}
+	})
+
+	t.Run("existing Inbox is stable", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Capture", IsInbox: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		first, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lists, err := store.ListAllBuckets(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first != inbox.ID || second != inbox.ID || len(lists) != 1 {
+			t.Fatalf("first = %q, second = %q, lists = %#v", first, second, lists)
+		}
+	})
+
+	t.Run("concurrent first capture creates one Inbox", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+		var mu sync.Mutex
+		var inboxIDs []string
+		results := runConcurrently(8, func(_ int) error {
+			inboxID, err := store.EnsureInboxBucketID(ctx, userID)
+			if err == nil {
+				mu.Lock()
+				inboxIDs = append(inboxIDs, inboxID)
+				mu.Unlock()
+			}
+			return err
+		})
+		assertConcurrentResults(t, results, len(results), nil)
+		boards, err := store.ListBoards(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lists, err := store.ListAllBuckets(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(boards) != 1 || len(lists) != 1 || len(inboxIDs) != len(results) {
+			t.Fatalf("boards = %#v, lists = %#v, inbox IDs = %#v", boards, lists, inboxIDs)
+		}
+		for _, inboxID := range inboxIDs {
+			if inboxID != lists[0].ID {
+				t.Fatalf("inbox ID = %q, want %q", inboxID, lists[0].ID)
+			}
+		}
+	})
+}
+
 func TestLegacyActiveItemConfigurationDoesNotBlockCreateRetryOrMove(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
