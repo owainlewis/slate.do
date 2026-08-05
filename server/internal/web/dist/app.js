@@ -821,12 +821,29 @@ async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion)
   }
   const changedBoard = previousBoardID && previousBoardID !== board.id;
   state.board = board;
+  synchronizeWorkspaceListsForBoard(board);
   if (!(board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
   // A filter carried onto another board can render every column empty, which
   // reads as a broken board rather than an active filter.
   if (changedBoard) state.priorityFilter = "";
   state.selectedTask = state.selectedTask ? findTask(state.selectedTask.id) : null;
   return true;
+}
+
+function synchronizeWorkspaceListsForBoard(board) {
+  if (!board?.id) return;
+  const lists = (board.buckets || []).map(list => ({
+    ...list,
+    boardId: list.boardId || board.id,
+    boardName: list.boardName || board.name || "",
+  }));
+  const firstBoardListIndex = state.workspaceLists.findIndex(list => list.boardId === board.id);
+  const retained = state.workspaceLists.filter(list => list.boardId !== board.id);
+  const insertionIndex = firstBoardListIndex < 0
+    ? retained.length
+    : state.workspaceLists.slice(0, firstBoardListIndex).filter(list => list.boardId !== board.id).length;
+  retained.splice(insertionIndex, 0, ...lists);
+  state.workspaceLists = retained;
 }
 
 async function loadCompletedHistory(listID, trigger) {
@@ -2179,8 +2196,7 @@ function assignWorkHTML() {
   const agent = state.agentDetail.agent;
   const draft = state.agentAssignDraft || {};
   const selectedBoardID = state.agentAssignBoardID || state.board?.id || state.boards[0]?.id || "";
-  const selectedBoard = state.board?.id === selectedBoardID ? state.board : null;
-  const lists = selectedBoard?.buckets || [];
+  const lists = assignmentListsForBoard(selectedBoardID);
   const availableLists = lists;
   return `
     <div class="detail-overlay" data-assign-overlay>
@@ -2213,6 +2229,11 @@ function assignWorkHTML() {
         </form>
       </section>
     </div>`;
+}
+
+function assignmentListsForBoard(boardID) {
+  if (!boardID || state.board?.id !== boardID) return [];
+  return state.workspaceLists.filter(list => list.boardId === boardID);
 }
 
 function formatUpdatedAt(value) {
