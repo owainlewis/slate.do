@@ -198,6 +198,46 @@ test("the task workspace supports lists, flow, table, and filters", async t => {
   assert.equal(await page.locator('[data-open-task="task-inbox"]').count(), 0);
 });
 
+test("Week shows only calendar controls while filters and task opening keep working", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  const now = new Date();
+  const offset = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+  state.tasks[0].scheduledDate = [monday.getFullYear(), String(monday.getMonth() + 1).padStart(2, "0"), String(monday.getDate()).padStart(2, "0")].join("-");
+
+  await page.goto(`${origin}/app/week?view=flow`);
+  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
+  assert.equal(await page.locator('[data-workspace-view]').count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Filter", exact: true }).isVisible(), true);
+  assert.equal(await page.getByLabel("Week calendar", { exact: true }).isVisible(), true);
+
+  await page.getByRole("button", { name: "Filter", exact: true }).click();
+  await page.getByLabel("Search", { exact: true }).fill("Publish");
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await waitFor(() => state.taskQueries.some(query => query.includes("q=Publish")));
+  assert.match(page.url(), /\/app\/week\?q=Publish$/);
+  await page.getByText("Publish task-first agents video", { exact: true }).click();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  assert.match(page.url(), /\/app\/week$/);
+
+  await page.getByRole("link", { name: "All tasks", exact: true }).click();
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  assert.equal(await page.locator(".workspace-table").count(), 1);
+  await page.getByRole("link", { name: "Week", exact: true }).click();
+  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
+
+  for (const viewport of [{ width: 1440, height: 960 }, { width: 820, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    assert.equal(await page.locator("#workspace-filter-toggle").isVisible(), true, `${viewport.width}px filter`);
+    assert.equal(await page.getByLabel("Week calendar", { exact: true }).isVisible(), true, `${viewport.width}px calendar`);
+    assert.equal(await page.locator('[data-workspace-view]').count(), 0, `${viewport.width}px tabs`);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${viewport.width}px page overflow`);
+  }
+  assert.deepEqual(pageErrors, []);
+});
+
 test("an older workspace response cannot replace the latest route", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
