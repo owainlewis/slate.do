@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const test = require("node:test");
+const AxeBuilder = require("@axe-core/playwright").default;
 const { chromium } = require("playwright");
 
 const dist = __dirname;
@@ -34,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, releaseWorkspaceTasks: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -77,6 +78,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       if (state.delayNextWorkspaceTasks) {
         state.delayNextWorkspaceTasks = false;
         await new Promise(resolve => { state.releaseWorkspaceTasks = resolve; });
+        state.delayedWorkspaceTasksCompleted = true;
       }
       let tasks = [...state.tasks];
       const listID = url.searchParams.get("bucketId");
@@ -147,7 +149,8 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport });
+  const context = await browser.newContext({ viewport });
+  const page = await context.newPage();
   const pageErrors = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   t.after(async () => {
@@ -174,7 +177,7 @@ test("the task workspace supports lists, flow, table, and filters", async t => {
   assert.ok(parseFloat(await page.locator(".workspace-table-row strong").first().evaluate(element => getComputedStyle(element).fontSize)) >= 14);
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
 
-  await page.getByRole("button", { name: "Flow", exact: true }).click();
+  await page.getByRole("tab", { name: "Flow", exact: true }).click();
   await page.waitForTimeout(300);
   assert.equal(await page.locator(".workspace-flow").count(), 1, `url=${page.url()} errors=${pageErrors.join(" | ")} queries=${state.taskQueries.join(" | ")}`);
   assert.match(page.url(), /view=flow/);
@@ -196,6 +199,49 @@ test("the task workspace supports lists, flow, table, and filters", async t => {
   await page.getByRole("heading", { name: "YouTube", exact: true }).waitFor();
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
   assert.equal(await page.locator('[data-open-task="task-inbox"]').count(), 0);
+});
+
+test("task view tabs and table rows work from the keyboard and accessibility tree", async t => {
+  const { page, pageErrors } = await startWorkspace(t);
+
+  const tableTab = page.getByRole("tab", { name: "Table", exact: true });
+  assert.equal(await tableTab.getAttribute("aria-selected"), "true");
+  assert.equal(await tableTab.getAttribute("tabindex"), "0");
+  await tableTab.focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.locator(".workspace-flow").waitFor();
+  const flowTab = page.getByRole("tab", { name: "Flow", exact: true });
+  assert.equal(await flowTab.getAttribute("aria-selected"), "true");
+  assert.equal(await flowTab.evaluate(element => element === document.activeElement), true);
+
+  await page.keyboard.press("Home");
+  await page.locator(".workspace-list-view").waitFor();
+  const listTab = page.getByRole("tab", { name: "List", exact: true });
+  assert.equal(await listTab.getAttribute("aria-selected"), "true");
+  assert.equal(await listTab.evaluate(element => element === document.activeElement), true);
+
+  await page.keyboard.press("End");
+  const table = page.getByRole("table", { name: "Tasks", exact: true });
+  await table.waitFor();
+  assert.equal(await tableTab.getAttribute("aria-selected"), "true");
+  const accessibility = await table.ariaSnapshot();
+  assert.match(accessibility, /table "Tasks"/);
+  for (const heading of ["Task", "List", "Status", "Priority", "Owner", "Planned"]) {
+    assert.match(accessibility, new RegExp(`columnheader "${heading}"`));
+  }
+  const scan = await new AxeBuilder({ page }).include(".workspace-main").analyze();
+  assert.deepEqual(scan.violations.map(violation => ({ id: violation.id, nodes: violation.nodes.map(node => node.target) })), []);
+
+  const row = page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true });
+  await row.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.getByRole("table", { name: "Tasks", exact: true }).isVisible(), true);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+  assert.deepEqual(pageErrors, []);
 });
 
 test("Week shows only calendar controls while filters and task opening keep working", async t => {
@@ -242,9 +288,9 @@ test("an older workspace response cannot replace the latest route", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
   state.delayNextWorkspaceTasks = true;
-  await page.getByRole("button", { name: "Flow", exact: true }).click();
+  await page.getByRole("tab", { name: "Flow", exact: true }).click();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
-  await page.getByRole("button", { name: "List", exact: true }).click();
+  await page.getByRole("tab", { name: "List", exact: true }).click();
   await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
   state.releaseWorkspaceTasks();
   await page.waitForTimeout(100);
@@ -252,6 +298,37 @@ test("an older workspace response cannot replace the latest route", async t => {
   assert.match(page.url(), /\/app\/tasks\?view=list$/);
   assert.equal(await page.getByRole("heading", { name: "All tasks", exact: true }).isVisible(), true);
   assert.equal(await page.getByRole("heading", { name: "Not found.", exact: true }).count(), 0);
+  const selectedTab = page.getByRole("tab", { selected: true });
+  assert.equal(await selectedTab.getAttribute("data-workspace-view"), "list");
+  assert.equal(await selectedTab.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an older same-view response cannot steal focus from the latest panel", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.evaluate(() => history.replaceState({}, "", "/app/tasks?priority=p0"));
+  state.delayNextWorkspaceTasks = true;
+  await page.getByRole("tab", { name: "Flow", exact: true }).click();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+  await page.evaluate(() => history.replaceState({}, "", "/app/tasks?priority=p1"));
+  await page.getByRole("tab", { name: "List", exact: true }).click();
+  await page.locator(".workspace-list-view").waitFor();
+  await page.evaluate(() => history.replaceState({}, "", "/app/tasks?priority=p2"));
+  await page.getByRole("tab", { name: "Flow", exact: true }).click();
+  await page.locator(".workspace-flow").waitFor();
+
+  const panel = page.getByRole("tabpanel");
+  await panel.focus();
+  state.releaseWorkspaceTasks();
+  await waitFor(() => state.delayedWorkspaceTasksCompleted);
+  await page.waitForTimeout(100);
+
+  const current = new URL(page.url());
+  assert.equal(current.searchParams.get("view"), "flow");
+  assert.equal(current.searchParams.get("priority"), "p2");
+  assert.equal(await page.getByRole("tab", { name: "Flow", selected: true }).count(), 1);
+  assert.equal(await panel.evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
 

@@ -375,6 +375,7 @@ function navigate(path, options = {}) {
 
 let routeVersion = 0;
 let taskDetailVersion = 0;
+let workspaceViewActivationVersion = 0;
 
 function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   if (err?.status !== 401 || !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return false;
@@ -1277,12 +1278,12 @@ function appHTML() {
     ${statusNoticeHTML(state.moveNotice)}
     <div class="workspace-viewbar ${state.workspaceScope === "week" ? "week-only" : ""}">
       ${state.workspaceScope === "week" ? "" : `<div class="workspace-tabs" role="tablist" aria-label="Task view">
-        ${["list", "flow", "table"].map(view => `<button data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" aria-selected="${state.workspaceView === view}">${view === "flow" ? icon("kanban") : view === "table" ? icon("columns") : icon("rows")}<span>${view[0].toUpperCase() + view.slice(1)}</span></button>`).join("")}
+        ${["list", "flow", "table"].map(view => `<button type="button" id="workspace-tab-${view}" data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" role="tab" tabindex="${state.workspaceView === view ? "0" : "-1"}" aria-selected="${state.workspaceView === view}" aria-controls="workspace-task-panel">${view === "flow" ? icon("kanban") : view === "table" ? icon("columns") : icon("rows")}<span>${view[0].toUpperCase() + view.slice(1)}</span></button>`).join("")}
       </div>`}
       <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
     </div>
     ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
-    <div class="workspace-content">
+    <div class="workspace-content" ${state.workspaceScope === "week" ? "" : `id="workspace-task-panel" role="tabpanel" tabindex="0" aria-labelledby="workspace-tab-${state.workspaceView}"`}>
       ${state.workspaceLoading ? `<div class="workspace-empty">Loading tasks…</div>`
         : state.workspaceScope === "week" ? workspaceWeekHTML(tasks)
           : state.workspaceView === "flow" ? workspaceFlowHTML(tasks)
@@ -1337,10 +1338,11 @@ function workspaceListHTML(tasks) {
 }
 
 function workspaceTableHTML(tasks) {
-  return `<section class="workspace-table" aria-label="Tasks table">
-    <div class="workspace-table-head"><span></span><span>Task</span><span>List</span><span>Status</span><span>Priority</span><span>Owner</span><span>Planned</span></div>
-    ${tasks.length ? tasks.map(task => `<button class="workspace-table-row" data-open-task="${task.id}"><span class="workspace-check ${task.done ? "done" : ""}">${task.done ? icon("check") : ""}</span><strong>${escapeHTML(task.title)}</strong><span>${escapeHTML(task.listName || "Inbox")}</span><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span><span>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</span><span>${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></button>`).join("") : `<div class="workspace-empty">No tasks match these filters.</div>`}
-  </section>`;
+  return `<table class="workspace-table" aria-label="Tasks">
+    <colgroup><col class="workspace-table-check"><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
+    <thead><tr class="workspace-table-head"><th scope="col"><span class="sr-only">Completion</span></th><th scope="col">Task</th><th scope="col">List</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
+    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><span class="workspace-check ${task.done ? "done" : ""}" aria-hidden="true">${task.done ? icon("check") : ""}</span><span class="sr-only">${task.done ? "Complete" : "Open"}</span></td><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong></button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="7"><div class="workspace-empty">No tasks match these filters.</div></td></tr>`}</tbody>
+  </table>`;
 }
 
 function workspaceFlowHTML(tasks) {
@@ -2629,11 +2631,40 @@ function bindLanding() {
 }
 
 function bindWorkspace() {
-  document.querySelectorAll("[data-open-task]").forEach(element => element.onclick = () => openTaskDetail(element.dataset.openTask, element));
-  document.querySelectorAll("[data-workspace-view]").forEach(element => element.onclick = () => {
+  document.querySelectorAll("[data-open-task]").forEach(element => {
+    element.onclick = () => openTaskDetail(element.dataset.openTask, element);
+    if (!["BUTTON", "A"].includes(element.tagName)) element.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      element.click();
+    });
+  });
+  document.querySelectorAll("[data-task-row]").forEach(row => row.addEventListener("click", event => {
+    if (event.target.closest("button, a")) return;
+    row.querySelector("[data-open-task]")?.click();
+  }));
+  const viewTabs = [...document.querySelectorAll("[data-workspace-view]")];
+  const activateView = async element => {
+    const view = element.dataset.workspaceView;
+    const activationVersion = ++workspaceViewActivationVersion;
     const query = new URLSearchParams(location.search);
-    query.set("view", element.dataset.workspaceView);
-    navigate(`${location.pathname}?${query}`);
+    query.set("view", view);
+    await navigate(`${location.pathname}?${query}`);
+    if (activationVersion !== workspaceViewActivationVersion) return;
+    document.querySelector(`[data-workspace-view="${view}"][aria-selected="true"]`)?.focus();
+  };
+  viewTabs.forEach((element, index) => {
+    element.onclick = () => activateView(element);
+    element.addEventListener("keydown", event => {
+      let targetIndex;
+      if (event.key === "ArrowRight") targetIndex = (index + 1) % viewTabs.length;
+      else if (event.key === "ArrowLeft") targetIndex = (index - 1 + viewTabs.length) % viewTabs.length;
+      else if (event.key === "Home") targetIndex = 0;
+      else if (event.key === "End") targetIndex = viewTabs.length - 1;
+      else return;
+      event.preventDefault();
+      activateView(viewTabs[targetIndex]);
+    });
   });
   document.querySelector("#workspace-filter-toggle")?.addEventListener("click", () => {
     state.workspaceFiltersOpen = !state.workspaceFiltersOpen;
