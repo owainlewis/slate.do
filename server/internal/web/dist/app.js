@@ -2020,9 +2020,18 @@ function settingsHTML() {
           </div>
           <span class="read-only-value">${escapeHTML(state.me?.email || "")}</span>
         </div>
+        <div class="settings-row">
+          <div class="settings-row-copy">
+            <strong>Password</strong>
+            <span>Send a secure reset link to your account email.</span>
+          </div>
+          <div class="settings-row-actions">
+            <button class="secondary" id="request-password-reset" type="button" ${state.settingsPending ? 'aria-disabled="true"' : ""}>${state.settingsPending === "password-reset" ? "Sending…" : "Send reset link"}</button>
+          </div>
+        </div>
         <div class="settings-card-actions">
           ${settingsStatusHTML()}
-          <button class="primary settings-submit" type="submit" ${state.settingsPending === "profile" ? "disabled" : ""}>${state.settingsPending === "profile" ? "Saving…" : "Save profile"}</button>
+          <button class="primary settings-submit" type="submit" ${state.settingsPending ? "disabled" : ""}>${state.settingsPending === "profile" ? "Saving…" : "Save profile"}</button>
         </div>
       </form>`;
   } else if (page.id === "preferences") {
@@ -2823,8 +2832,35 @@ async function bindSettings() {
   document.querySelector("#back").onclick = closeSettings;
   document.querySelector("#settings-logout").onclick = logout;
   bindThemeControls();
+  document.querySelector("#request-password-reset")?.addEventListener("click", async event => {
+    const version = routeVersion;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    const email = state.me?.email;
+    if (state.settingsPending || !email) return;
+    state.settingsPending = "password-reset";
+    state.settingsNotice = "";
+    state.error = "";
+    const button = event.currentTarget;
+    button.setAttribute("aria-disabled", "true");
+    button.textContent = "Sending…";
+    const profileSubmit = document.querySelector('#profile-form button[type="submit"]');
+    if (profileSubmit) profileSubmit.disabled = true;
+    try {
+      const result = await api.post("/api/v1/auth/password-reset/request", { email });
+      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "profile")) return;
+      state.settingsNotice = result.message;
+    } catch (err) {
+      if (!settingsMutationIsCurrent(sessionVersion, userID, version, "profile")) return;
+      state.error = err.message;
+    }
+    state.settingsPending = "";
+    render();
+    document.querySelector("#request-password-reset")?.focus();
+  });
   document.querySelector("#profile-form")?.addEventListener("submit", async event => {
     event.preventDefault();
+    if (state.settingsPending) return;
     const form = event.currentTarget;
     const input = form.elements.displayName;
     const error = document.querySelector("#profile-name-error");
