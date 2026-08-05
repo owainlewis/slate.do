@@ -833,6 +833,18 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 	if err != nil {
 		return Task{}, err
 	}
+	if parentTaskID != "" {
+		parent, err := lockedTask(ctx, tx, userID, parentTaskID)
+		if err != nil {
+			return Task{}, err
+		}
+		if parent.ParentTaskID != "" {
+			return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+		}
+		if parent.BucketID != bucketID {
+			return Task{}, fmt.Errorf("%w: subtask must use its parent list", ErrInvalidData)
+		}
+	}
 	bucket, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
 		return Task{}, err
@@ -1029,6 +1041,15 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	if err != nil {
 		return Task{}, err
 	}
+	if current.ParentTaskID != "" {
+		parent, err := lockedTask(ctx, tx, userID, current.ParentTaskID)
+		if err != nil {
+			return Task{}, err
+		}
+		if current.BucketID == parent.BucketID || parent.BucketID != bucketID {
+			return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+		}
+	}
 	destination, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
 		return Task{}, err
@@ -1043,22 +1064,34 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	if err != nil {
 		return Task{}, err
 	}
+	childIDs, err := orderedChildTaskIDs(ctx, tx, current.ID)
+	if err != nil {
+		return Task{}, err
+	}
+	destinationIDs = removeTaskIDs(destinationIDs, childIDs)
 	if *input.Position > len(destinationIDs) {
 		return Task{}, fmt.Errorf("%w: position is outside the destination list", ErrInvalidData)
 	}
-	destinationIDs = insertID(destinationIDs, current.ID, *input.Position)
+	taskGroup := append([]string{current.ID}, childIDs...)
+	destinationIDs = insertTaskIDs(destinationIDs, taskGroup, *input.Position)
 
 	if current.BucketID != destination.ID {
 		sourceIDs, err := orderedTaskIDs(ctx, tx, current.BucketID, current.ID)
 		if err != nil {
 			return Task{}, err
 		}
+		sourceIDs = removeTaskIDs(sourceIDs, childIDs)
 		if err := updateTaskLocation(ctx, tx, current.ID, destination, *input.Position); err != nil {
+			return Task{}, err
+		}
+		if err := updateChildTaskLocations(ctx, tx, current.ID, destination); err != nil {
 			return Task{}, err
 		}
 		if err := writeTaskOrder(ctx, tx, sourceIDs); err != nil {
 			return Task{}, err
 		}
+	} else if err := touchTask(ctx, tx, current.ID); err != nil {
+		return Task{}, err
 	}
 	if err := writeTaskOrder(ctx, tx, destinationIDs); err != nil {
 		return Task{}, err
@@ -1097,11 +1130,52 @@ func orderedTaskIDs(ctx context.Context, tx pgx.Tx, bucketID string, exceptID st
 	return ids, rows.Err()
 }
 
-func insertID(ids []string, id string, position int) []string {
-	ids = append(ids, "")
-	copy(ids[position+1:], ids[position:])
-	ids[position] = id
-	return ids
+func orderedChildTaskIDs(ctx context.Context, tx pgx.Tx, parentTaskID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id::text
+		FROM tasks
+		WHERE parent_task_id = $1
+		ORDER BY sort_order, created_at
+		FOR UPDATE
+	`, parentTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func removeTaskIDs(ids []string, removed []string) []string {
+	if len(removed) == 0 {
+		return ids
+	}
+	removedSet := make(map[string]struct{}, len(removed))
+	for _, id := range removed {
+		removedSet[id] = struct{}{}
+	}
+	kept := ids[:0]
+	for _, id := range ids {
+		if _, remove := removedSet[id]; !remove {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
+func insertTaskIDs(ids []string, inserted []string, position int) []string {
+	result := make([]string, 0, len(ids)+len(inserted))
+	result = append(result, ids[:position]...)
+	result = append(result, inserted...)
+	result = append(result, ids[position:]...)
+	return result
 }
 
 func updateTaskLocation(ctx context.Context, tx pgx.Tx, taskID string, destination Bucket, position int) error {
@@ -1113,13 +1187,27 @@ func updateTaskLocation(ctx context.Context, tx pgx.Tx, taskID string, destinati
 	return err
 }
 
+func updateChildTaskLocations(ctx context.Context, tx pgx.Tx, parentTaskID string, destination Bucket) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET board_id = $2, bucket_id = $3, updated_at = now()
+		WHERE parent_task_id = $1
+	`, parentTaskID, destination.BoardID, destination.ID)
+	return err
+}
+
 func writeTaskOrder(ctx context.Context, tx pgx.Tx, ids []string) error {
 	for position, id := range ids {
-		if _, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1, updated_at = now() WHERE id = $2", position, id); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1 WHERE id = $2", position, id); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func touchTask(ctx context.Context, tx pgx.Tx, taskID string) error {
+	_, err := tx.Exec(ctx, "UPDATE tasks SET updated_at = now() WHERE id = $1", taskID)
+	return err
 }
 
 func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID string, id string, input UpdateTaskInput, allowWorking bool) (Task, error) {
@@ -1161,14 +1249,46 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		}
 		current.Kind = kind
 	}
+	moveChildren := false
+	var sourceOrder []string
+	var destinationOrder []string
 	if input.BucketID != nil && *input.BucketID != current.BucketID {
+		if input.SortOrder != nil {
+			return Task{}, fmt.Errorf("%w: use the move endpoint to change a task list and position together", ErrInvalidData)
+		}
+		if current.ParentTaskID != "" {
+			parent, err := lockedTask(ctx, tx, userID, current.ParentTaskID)
+			if err != nil {
+				return Task{}, err
+			}
+			if parent.BucketID != *input.BucketID {
+				return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+			}
+		}
 		bucket, err := lockedBucket(ctx, tx, userID, *input.BucketID)
 		if err != nil {
 			return Task{}, err
 		}
+		destinationOrder, err = orderedTaskIDs(ctx, tx, bucket.ID, current.ID)
+		if err != nil {
+			return Task{}, err
+		}
+		childIDs, err := orderedChildTaskIDs(ctx, tx, current.ID)
+		if err != nil {
+			return Task{}, err
+		}
+		destinationOrder = removeTaskIDs(destinationOrder, childIDs)
+		taskGroup := append([]string{current.ID}, childIDs...)
+		destinationOrder = insertTaskIDs(destinationOrder, taskGroup, 0)
+		sourceOrder, err = orderedTaskIDs(ctx, tx, current.BucketID, current.ID)
+		if err != nil {
+			return Task{}, err
+		}
+		sourceOrder = removeTaskIDs(sourceOrder, childIDs)
 		current.BucketID = bucket.ID
 		current.BoardID = bucket.BoardID
 		current.SortOrder = 0
+		moveChildren = current.ParentTaskID == ""
 	}
 	if input.Status != nil {
 		if err := applyTaskStatus(&current, *input.Status, allowWorking); err != nil {
@@ -1246,6 +1366,22 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	}
 	if err != nil {
 		return Task{}, err
+	}
+	if moveChildren {
+		destination := Bucket{ID: task.BucketID, BoardID: task.BoardID}
+		if err := updateChildTaskLocations(ctx, tx, task.ID, destination); err != nil {
+			return Task{}, err
+		}
+	}
+	if sourceOrder != nil {
+		if err := writeTaskOrder(ctx, tx, sourceOrder); err != nil {
+			return Task{}, err
+		}
+	}
+	if destinationOrder != nil {
+		if err := writeTaskOrder(ctx, tx, destinationOrder); err != nil {
+			return Task{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Task{}, err

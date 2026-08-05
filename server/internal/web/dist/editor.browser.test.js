@@ -425,6 +425,8 @@ test("task detail coordinates one level of human and agent subtasks through the 
   await page.getByText("Human final review", { exact: true }).click();
   await page.getByRole("button", { name: "Back to parent task", exact: true }).waitFor();
   assert.equal(await page.getByLabel("Subtask title", { exact: true }).count(), 0, "subtasks cannot contain subtasks");
+  assert.equal(await page.getByLabel("List", { exact: true }).isDisabled(), true, "subtasks stay in their parent list");
+  assert.equal(await page.getByText("Subtasks stay with their parent task.", { exact: true }).isVisible(), true);
   await page.getByLabel("Title", { exact: true }).fill("Unsaved child title");
   await page.getByRole("button", { name: "Back to parent task", exact: true }).click();
   await page.getByText("Subtasks", { exact: true }).waitFor();
@@ -433,8 +435,14 @@ test("task detail coordinates one level of human and agent subtasks through the 
   await page.getByText("Human final review", { exact: true }).click();
   await page.getByRole("button", { name: "Back to parent task", exact: true }).waitFor();
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved child title");
+  state.failNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByText("Could not save task", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved child title");
+  assert.equal(await page.getByLabel("List", { exact: true }).inputValue(), "list-youtube", "failed save keeps the parent's list");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await page.getByText("Subtasks", { exact: true }).waitFor();
+  assert.equal(Object.hasOwn(state.patches.at(-1), "bucketId"), false, "subtask saves omit their immutable list");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent title");
   assert.equal(await page.getByText("Unsaved child title", { exact: true }).isVisible(), true);
   await page.getByRole("button", { name: "Back to tasks", exact: true }).click();

@@ -358,6 +358,30 @@ test("the task table exposes native headers, cells, and keyboard-operable rows",
   vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
 
+test("subtask detail keeps its list fixed to the parent", () => {
+  vm.runInContext(`
+    state.workspaceLists = [{ id: "list-one", name: "Product", isInbox: false }];
+    state.selectedTask = { id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" };
+    state.selectedSubtasks = [];
+  `, app);
+  const html = vm.runInContext(`workspaceDetailHTML(state.selectedTask)`, app);
+  assert.match(html, /id="workspace-detail-list" disabled aria-describedby="workspace-detail-list-help"/);
+  assert.doesNotMatch(html, /name="bucketId"/);
+  assert.match(html, /Subtasks stay with their parent task\./);
+});
+
+test("legacy agent task detail does not offer subtask moves", () => {
+  vm.runInContext(`
+    state.board = { id: "board-one", name: "Work", buckets: [{ id: "list-one", name: "Product", tasks: [] }] };
+    state.boards = [{ id: "board-one", name: "Work" }];
+  `, app);
+  const html = vm.runInContext(`detailHTML({ id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" })`, app);
+  assert.match(html, /Work \/ Product/);
+  assert.match(html, />Fixed</);
+  assert.match(html, /Subtasks stay with their parent task\./);
+  assert.doesNotMatch(html, /id="open-move"|id="move-panel"|>Move…</);
+});
+
 test("list limits remain scoped to the selected board", () => {
   assert.deepEqual(
     JSON.parse(JSON.stringify(app.listLimitUpdate("current-board", "12"))),
@@ -609,6 +633,11 @@ test("every list item is completable", () => {
   assert.match(html, /class="task action/);
   assert.match(html, /data-toggle-done="record"/);
   assert.doesNotMatch(html, /item-dot/);
+});
+
+test("subtasks cannot be dragged independently between lists", () => {
+  assert.match(app.taskHTML({ id: "parent", title: "Parent", done: false }), /draggable="true"/);
+  assert.match(app.taskHTML({ id: "child", parentTaskId: "parent", title: "Child", done: false }), /draggable="false"/);
 });
 
 test("list items show compact state treatment", () => {
@@ -1293,6 +1322,71 @@ test("dropping a card while filtered lands it against the real task order", () =
   vm.runInContext('state.board = null', app);
 });
 
+test("parent drag positions treat its subtasks as part of one group", () => {
+  vm.runInContext(`state.board = { buckets: [{ id: "home", tasks: [
+    { id: "other" },
+    { id: "parent" },
+    { id: "child-one", parentTaskId: "parent" },
+    { id: "child-two", parentTaskId: "parent" },
+  ] }] }`, app);
+  const listElement = {
+    dataset: { taskList: "home" },
+    querySelectorAll: () => [
+      { dataset: { task: "other" } },
+      { dataset: { task: "child-one" } },
+      { dataset: { task: "child-two" } },
+    ],
+  };
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  assert.equal(app.fullTaskIndex(listElement, 0, "parent"), 0);
+  assert.equal(app.fullTaskIndex(listElement, 1, "parent"), 1);
+  assert.equal(app.fullTaskIndex(listElement, 3, "parent"), 1, "child cards cannot inflate the bottom position");
+
+  vm.runInContext('state.board = null', app);
+});
+
+test("dropping a parent moves its ordered subtask group through the move endpoint", async () => {
+  const requests = [];
+  app.taskMoveRequests = requests;
+  vm.runInContext(`
+    savedTaskMoveRender = render;
+    savedTaskMoveReload = reload;
+    savedTaskMovePost = api.post;
+    render = () => {};
+    reload = async () => {};
+    api.post = async (path, input) => { taskMoveRequests.push({ path, input }); return {}; };
+    state.board = { buckets: [
+      { id: "source", tasks: [
+        { id: "before", bucketId: "source" },
+        { id: "parent", bucketId: "source" },
+        { id: "child-one", parentTaskId: "parent", bucketId: "source" },
+        { id: "child-two", parentTaskId: "parent", bucketId: "source" },
+        { id: "after", bucketId: "source" },
+      ] },
+      { id: "destination", tasks: [{ id: "existing", bucketId: "destination" }] },
+    ] };
+  `, app);
+
+  await app.dropTask("parent", "destination", 1);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{
+    path: "/api/v1/tasks/parent/move",
+    input: { bucketId: "destination", position: 1 },
+  }]);
+  assert.deepEqual(
+    JSON.parse(vm.runInContext("JSON.stringify(state.board.buckets.map(list => list.tasks.map(task => task.id)))", app)),
+    [["before", "after"], ["existing", "parent", "child-one", "child-two"]],
+  );
+
+  vm.runInContext(`
+    render = savedTaskMoveRender;
+    reload = savedTaskMoveReload;
+    api.post = savedTaskMovePost;
+    state.board = null;
+  `, app);
+});
+
 test("adding an item is blocked while a filter is active", () => {
   vm.runInContext('state.priorityFilter = "p0"', app);
   const filtered = app.listHTML(board.buckets[1]);
@@ -1373,6 +1467,22 @@ test("detail offers a board, list, and position move flow", () => {
   assert.doesNotMatch(app.moveListOptionsHTML(fullBoard, task), /disabled|full\)/);
   const reference = vm.runInContext(`({ ...state.board.buckets[0].tasks[0], kind: "reference" })`, app);
   assert.doesNotMatch(app.moveListOptionsHTML(fullBoard, reference), /disabled/);
+});
+
+test("move positions treat a parent and its subtasks as one group", () => {
+  const list = vm.runInContext(`({ id: "list", tasks: [
+    { id: "other" },
+    { id: "parent", bucketId: "list" },
+    { id: "child-one", parentTaskId: "parent" },
+    { id: "child-two", parentTaskId: "parent" },
+  ] })`, app);
+  const parent = list.tasks[1];
+  const html = app.movePositionOptionsHTML(list, parent);
+
+  assert.equal((html.match(/<option/g) || []).length, 2);
+  assert.match(html, /value="0"[^>]*>1 \(top\)/);
+  assert.match(html, /value="1" selected[^>]*>2 \(bottom\)/);
+  assert.doesNotMatch(html, /value="2"/);
 });
 
 test("footer reports live Working and Review counts", () => {
