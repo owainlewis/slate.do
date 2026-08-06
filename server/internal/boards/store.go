@@ -197,11 +197,23 @@ func (s *Store) EnsureInboxBucketID(ctx context.Context, userID string) (string,
 		return "", err
 	}
 	defer tx.Rollback(ctx)
+	inboxID, err := ensureInboxBucketID(ctx, tx, userID)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return inboxID, nil
+}
+
+func ensureInboxBucketID(ctx context.Context, tx pgx.Tx, userID string) (string, error) {
 	if _, err := accountLimitsForUpdate(ctx, tx, userID); err != nil {
 		return "", err
 	}
 
 	var inboxID string
+	var err error
 	err = tx.QueryRow(ctx, `
 		SELECT l.id::text
 		FROM buckets l
@@ -212,9 +224,6 @@ func (s *Store) EnsureInboxBucketID(ctx context.Context, userID string) (string,
 		FOR UPDATE OF l
 	`, userID).Scan(&inboxID)
 	if err == nil {
-		if err := tx.Commit(ctx); err != nil {
-			return "", err
-		}
 		return inboxID, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -233,9 +242,6 @@ func (s *Store) EnsureInboxBucketID(ctx context.Context, userID string) (string,
 	`, userID).Scan(&firstListID)
 	if err == nil {
 		if _, err := tx.Exec(ctx, "UPDATE buckets SET is_inbox = true, updated_at = now() WHERE id = $1", firstListID); err != nil {
-			return "", err
-		}
-		if err := tx.Commit(ctx); err != nil {
 			return "", err
 		}
 		return firstListID, nil
@@ -271,9 +277,6 @@ func (s *Store) EnsureInboxBucketID(ctx context.Context, userID string) (string,
 		RETURNING id::text
 	`, boardID, listLimit).Scan(&inboxID)
 	if err != nil {
-		return "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
 	return inboxID, nil
@@ -725,11 +728,34 @@ func (s *Store) ReorderBuckets(ctx context.Context, userID string, boardID strin
 }
 
 func (s *Store) CreateInboxTask(ctx context.Context, userID string, input CreateTaskInput) (Task, error) {
-	bucketID, err := s.EnsureInboxBucketID(ctx, userID)
+	prepared, err := prepareTaskCreate(input, inboxCaptureFingerprintTarget)
 	if err != nil {
 		return Task{}, err
 	}
-	return s.createTaskForTarget(ctx, userID, bucketID, inboxCaptureFingerprintTarget, input)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Task{}, err
+	}
+	defer tx.Rollback(ctx)
+	// Explicit-list creation takes the idempotency lock before the account lock.
+	// Keep the same order here so one key used across endpoints cannot deadlock.
+	if prepared.idempotencyKey != "" {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":"+prepared.idempotencyKey); err != nil {
+			return Task{}, err
+		}
+	}
+	bucketID, err := ensureInboxBucketID(ctx, tx, userID)
+	if err != nil {
+		return Task{}, err
+	}
+	task, err := s.createTask(ctx, tx, userID, bucketID, prepared)
+	if err != nil {
+		return Task{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Task{}, err
+	}
+	return task, nil
 }
 
 func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, input CreateTaskInput) (Task, error) {
@@ -737,53 +763,78 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 }
 
 func (s *Store) createTaskForTarget(ctx context.Context, userID string, bucketID string, fingerprintTarget string, input CreateTaskInput) (Task, error) {
+	prepared, err := prepareTaskCreate(input, fingerprintTarget)
+	if err != nil {
+		return Task{}, err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Task{}, err
+	}
+	defer tx.Rollback(ctx)
+	task, err := s.createTask(ctx, tx, userID, bucketID, prepared)
+	if err != nil {
+		return Task{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Task{}, err
+	}
+	return task, nil
+}
+
+type preparedTaskCreate struct {
+	title                 string
+	description           string
+	scheduledDate         string
+	kind                  string
+	assigneeAgentID       string
+	parentTaskID          string
+	idempotencyKey        string
+	fingerprint           string
+	compatibleFingerprint string
+	overrideLimit         bool
+}
+
+func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (preparedTaskCreate, error) {
 	title := clean(input.Title)
 	if title == "" {
-		return Task{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
+		return preparedTaskCreate{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
 	}
 	scheduledDate, err := validDate(input.ScheduledDate)
 	if err != nil {
-		return Task{}, err
+		return preparedTaskCreate{}, err
 	}
 	kind := clean(input.Kind)
 	if kind == "" {
 		kind = KindAction
 	}
 	if !validKind(kind) {
-		return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
+		return preparedTaskCreate{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 	}
 	parentTaskID := clean(input.ParentTaskID)
-	if parentTaskID != "" {
-		parent, err := s.GetTask(ctx, userID, parentTaskID)
-		if err != nil {
-			return Task{}, err
-		}
-		if parent.ParentTaskID != "" {
-			return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
-		}
-		if parent.BucketID != bucketID {
-			return Task{}, fmt.Errorf("%w: subtask must use its parent list", ErrInvalidData)
-		}
-	}
 	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
 	if len(idempotencyKey) > httpapi.TaskIdempotencyBytes {
-		return Task{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
+		return preparedTaskCreate{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
+	}
+	prepared := preparedTaskCreate{
+		title: title, description: input.Description, scheduledDate: scheduledDate, kind: kind,
+		assigneeAgentID: input.AssigneeAgentID, parentTaskID: parentTaskID,
+		idempotencyKey: idempotencyKey, overrideLimit: input.OverrideLimit,
 	}
 	if idempotencyKey != "" {
 		fingerprint, err := taskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, input.OverrideLimit)
 		if err != nil {
-			return Task{}, err
+			return preparedTaskCreate{}, err
 		}
-		compatibleFingerprint := ""
+		prepared.fingerprint = fingerprint
 		if parentTaskID == "" {
-			compatibleFingerprint, err = parentAwareTaskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", input.OverrideLimit)
+			prepared.compatibleFingerprint, err = parentAwareTaskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", input.OverrideLimit)
 			if err != nil {
-				return Task{}, err
+				return preparedTaskCreate{}, err
 			}
 		}
-		return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, idempotencyKey, fingerprint, compatibleFingerprint, input.OverrideLimit)
 	}
-	return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, "", "", "", input.OverrideLimit)
+	return prepared, nil
 }
 
 func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID string, input CreateTaskInput) (Task, error) {
@@ -798,14 +849,9 @@ func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID s
 	return s.CreateTask(ctx, userID, parent.BucketID, input)
 }
 
-func (s *Store) createTask(ctx context.Context, userID string, bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string, key string, fingerprint string, compatibleFingerprint string, overrideLimit bool) (Task, error) {
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return Task{}, err
-	}
-	defer tx.Rollback(ctx)
-	if key != "" {
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":"+key); err != nil {
+func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucketID string, input preparedTaskCreate) (Task, error) {
+	if input.idempotencyKey != "" {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":"+input.idempotencyKey); err != nil {
 			return Task{}, err
 		}
 		var existingFingerprint, existingTaskID string
@@ -813,10 +859,10 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 			SELECT request_hash, COALESCE(task_id::text, '')
 			FROM task_idempotency_keys
 			WHERE user_id = $1 AND key = $2
-		`, userID, key).Scan(&existingFingerprint, &existingTaskID)
+		`, userID, input.idempotencyKey).Scan(&existingFingerprint, &existingTaskID)
 		if err == nil {
-			fingerprintMatches := existingFingerprint == fingerprint ||
-				(compatibleFingerprint != "" && existingFingerprint == compatibleFingerprint)
+			fingerprintMatches := existingFingerprint == input.fingerprint ||
+				(input.compatibleFingerprint != "" && existingFingerprint == input.compatibleFingerprint)
 			if !fingerprintMatches {
 				return Task{}, ErrIdempotencyKey
 			}
@@ -833,8 +879,8 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 	if err != nil {
 		return Task{}, err
 	}
-	if parentTaskID != "" {
-		parent, err := lockedTask(ctx, tx, userID, parentTaskID)
+	if input.parentTaskID != "" {
+		parent, err := lockedTask(ctx, tx, userID, input.parentTaskID)
 		if err != nil {
 			return Task{}, err
 		}
@@ -849,30 +895,27 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 	if err != nil {
 		return Task{}, err
 	}
-	if err := checkTaskCapacity(ctx, tx, bucket, "", overrideLimit); err != nil {
+	if err := checkTaskCapacity(ctx, tx, bucket, "", input.overrideLimit); err != nil {
 		return Task{}, err
 	}
-	if err := quota.apply(ctx, tx, 1, inputContentBytes(title, description)); err != nil {
+	if err := quota.apply(ctx, tx, 1, inputContentBytes(input.title, input.description)); err != nil {
 		return Task{}, err
 	}
-	assigneeAgentID, err = activeAgentAssignment(ctx, tx, userID, assigneeAgentID)
+	assigneeAgentID, err := activeAgentAssignment(ctx, tx, userID, input.assigneeAgentID)
 	if err != nil {
 		return Task{}, err
 	}
-	task, err := insertTask(ctx, tx, bucket, title, description, scheduledDate, kind, assigneeAgentID, parentTaskID)
+	task, err := insertTask(ctx, tx, bucket, input.title, input.description, input.scheduledDate, input.kind, assigneeAgentID, input.parentTaskID)
 	if err != nil {
 		return Task{}, err
 	}
-	if key != "" {
+	if input.idempotencyKey != "" {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
 			VALUES ($1, $2, $3, $4)
-		`, userID, key, fingerprint, task.ID); err != nil {
+		`, userID, input.idempotencyKey, input.fingerprint, task.ID); err != nil {
 			return Task{}, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Task{}, err
 	}
 	return task, nil
 }
