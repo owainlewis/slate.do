@@ -3447,7 +3447,10 @@ function bindApp() {
   document.querySelectorAll("[data-toggle-done]").forEach(el => el.onclick = async event => {
     event.stopPropagation();
     const task = findTask(el.dataset.toggleDone);
-    await runMutation(() => api.patch(`/api/v1/tasks/${task.id}`, { done: !task.done }), reload);
+    await runMutation(
+      () => serializeTaskMutation(task.id, () => api.patch(`/api/v1/tasks/${task.id}`, { done: !task.done })),
+      reload,
+    );
   });
   bindDrag();
   bindWorkspaceDetail();
@@ -3455,6 +3458,12 @@ function bindApp() {
 
 function bindAppShell() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelectorAll(".task-nav-pages a, .agent-nav-link").forEach(el => el.addEventListener("click", event => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const target = new URL(el.href, location.origin);
+    navigate(`${target.pathname}${target.search}`);
+  }));
   const sidebar = document.querySelector(".sidebar");
   const sidebarToggle = document.querySelector("#sidebar-toggle");
   sidebarToggle.onclick = () => {
@@ -4591,7 +4600,10 @@ function bindDrag() {
       const id = drag.id;
       drag = null;
       clearDropMarks();
-      await runMutation(() => api.patch(`/api/v1/tasks/${id}`, { scheduledDate: day.dataset.calendarDate }), reload);
+      await runMutation(
+        () => serializeTaskMutation(id, () => api.patch(`/api/v1/tasks/${id}`, { scheduledDate: day.dataset.calendarDate })),
+        reload,
+      );
     });
   });
   document.querySelectorAll("[data-flow-status]").forEach(column => {
@@ -4615,19 +4627,27 @@ function bindDrag() {
 
 async function updateTaskStatus(id, status) {
   await runMutation(
-    () => api.patch(`/api/v1/tasks/${id}/status`, { status }),
+    () => serializeTaskMutation(id, () => api.patch(`/api/v1/tasks/${id}/status`, { status })),
     reload,
   );
 }
 
 async function runMutation(request, refresh) {
+  const sessionVersion = authVersion;
+  const startedRouteVersion = routeVersion;
+  const contextIsCurrent = () => sessionVersion === authVersion && startedRouteVersion === routeVersion;
   try {
-    await request();
+    const result = await request();
+    if (result === null) return false;
+    if (!contextIsCurrent()) return false;
     state.error = "";
   } catch (err) {
+    if (!contextIsCurrent()) return false;
     state.error = err.message;
   }
+  if (!contextIsCurrent()) return false;
   await refresh();
+  return true;
 }
 
 function reorderedTaskIDs(ids, movingID, targetID, afterTarget = false) {
@@ -4717,6 +4737,9 @@ function clearDropMarks() {
 }
 
 async function dropTask(taskId, bucketId, index) {
+  const sessionVersion = authVersion;
+  const startedRouteVersion = routeVersion;
+  const contextIsCurrent = () => sessionVersion === authVersion && startedRouteVersion === routeVersion;
   const task = findTask(taskId);
   const target = state.board.buckets.find(b => b.id === bucketId);
   if (!task || !target) return;
@@ -4732,10 +4755,13 @@ async function dropTask(taskId, bucketId, index) {
   state.error = "";
   render();
   try {
-    await api.post(`/api/v1/tasks/${taskId}/move`, { bucketId, position: index });
+    const moved = await serializeTaskMutation(taskId, () => api.post(`/api/v1/tasks/${taskId}/move`, { bucketId, position: index }));
+    if (moved === null) return;
   } catch (err) {
+    if (!contextIsCurrent()) return;
     state.error = err.message;
   }
+  if (!contextIsCurrent()) return;
   await reload();
 }
 

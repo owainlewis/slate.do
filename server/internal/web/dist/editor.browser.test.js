@@ -585,6 +585,66 @@ test("concurrent saves of the same agent task commit in user order", async t => 
   assert.deepEqual(pageErrors, []);
 });
 
+test("a Flow drop commits after a pending agent detail save", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Saved before Flow drop");
+  await page.getByLabel("Priority", { exact: true }).selectOption("p1");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("link", { name: "All tasks", exact: true }).click();
+  await page.getByRole("tab", { name: "Flow", exact: true }).click();
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
+  assert.equal(state.patches.length, 0, JSON.stringify({ patches: state.patches, requests: state.requests.slice(-12) }));
+
+  state.releaseStatus();
+  await waitFor(() => state.patches.length === 2);
+  await page.locator('[data-flow-status="needs_review"] [data-task="task-parent"]').waitFor();
+
+  assert.equal(state.patches[0].title, "Saved before Flow drop");
+  assert.equal(state.patches[0].priority, "p1");
+  assert.equal(state.patches[1].status, "needs_review");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Saved before Flow drop");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").priority, "p1");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").status, "needs_review");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a queued Flow drop cannot refresh over a newer agent settings draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Saved before settings navigation");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("link", { name: "All tasks", exact: true }).click();
+  await page.getByRole("tab", { name: "Flow", exact: true }).click();
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  const purpose = page.locator("#agent-settings-purpose");
+  await purpose.fill("Unsaved settings draft while task commits");
+
+  state.releaseStatus();
+  await waitFor(() => state.patches.length === 2);
+  await page.waitForTimeout(50);
+
+  assert.equal(state.patches[0].title, "Saved before settings navigation", JSON.stringify(state.patches));
+  assert.equal(state.patches[1].status, "needs_review");
+  assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research/settings");
+  assert.equal(await purpose.inputValue(), "Unsaved settings draft while task commits");
+  assert.equal(await purpose.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a queued subtask toggle commits after its pending child save", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
