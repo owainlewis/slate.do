@@ -309,8 +309,10 @@ test("Week exposes its calendar and filters without unrelated view tabs", () => 
   assert.match(html, /class="workspace-viewbar week-only"/);
   assert.match(html, /id="workspace-filter-toggle"/);
   assert.match(html, /class="workspace-week" aria-label="Week calendar"/);
+  assert.match(html, /data-calendar-date=/);
   assert.doesNotMatch(html, /aria-label="Task view"/);
   assert.doesNotMatch(html, /data-workspace-view=/);
+  assert.match(styles, /\.workspace-week \[data-calendar-date\]\.drop-into/);
 
   vm.runInContext(`
     state.me = null;

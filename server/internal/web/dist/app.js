@@ -1504,7 +1504,7 @@ function workspaceWeekHTML(tasks) {
   return `<section class="workspace-week" aria-label="Week calendar">${Array.from({ length: 7 }, (_, index) => addDays(start, index)).map(day => {
     const key = dateKey(day);
     const items = tasks.filter(task => task.scheduledDate === key);
-    return `<section><header><span>${day.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${day.getDate()}</b></header>${items.map(task => `<button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></button>`).join("") || `<p>Nothing planned</p>`}</section>`;
+    return `<section data-calendar-date="${key}"><header><span>${day.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${day.getDate()}</b></header>${items.map(task => `<button draggable="true" data-task="${task.id}" data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></button>`).join("") || `<p>Nothing planned</p>`}</section>`;
   }).join("")}</section>`;
 }
 
@@ -1620,6 +1620,33 @@ function syncWorkspaceListError() {
     element.textContent = state.workspaceListError;
     element.hidden = !state.workspaceListError;
   });
+}
+
+async function refreshCurrentWorkspaceListMetadata() {
+  const currentRoute = parseRoute(location.pathname);
+  const settingsMounted = state.settings
+    && state.settingsPage === currentRoute.settingsPage
+    && Boolean(document.querySelector(".settings-page"));
+  if (currentRoute.name === "settings" && !settingsMounted) {
+    await applyRoute();
+    const completedRoute = parseRoute(location.pathname);
+    return completedRoute.name === "settings"
+      && state.settings
+      && state.settingsPage === completedRoute.settingsPage;
+  }
+  const version = routeVersion;
+  try {
+    if (!await loadWorkspaceListIndex(version) || version !== routeVersion) return false;
+    state.workspaceListError = "";
+    syncWorkspaceSidebarCounts();
+    syncWorkspaceListError();
+    return true;
+  } catch (err) {
+    if (version !== routeVersion) return false;
+    state.workspaceListError = err.message;
+    syncWorkspaceListError();
+    return false;
+  }
 }
 
 function syncAgentTaskMutationError() {
@@ -3233,6 +3260,7 @@ function bindWorkspaceDetail(options = {}) {
     const currentRoute = parseRoute(location.pathname);
     if (currentRoute.name === "workspace") return refreshAfterTaskMutation(boundRouteVersion);
     if (boundAgentID && currentRoute.agentId === boundAgentID) return refreshCurrentAgentSurface();
+    if (currentRoute.name === "settings") return refreshCurrentWorkspaceListMetadata();
     if (!["agent-detail", "agent-work"].includes(currentRoute.name)) return true;
     let focus = captureDetailFocus();
     return refreshAgentSurface({
@@ -3696,6 +3724,8 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
       },
       afterTaskDetailRender: () => restoreTaskDetailFocus(focus),
     });
+  } else if (currentRoute.name === "settings") {
+    return refreshCurrentWorkspaceListMetadata();
   } else if (state.selectedTask || startedRouteVersion !== routeVersion) {
     return true;
   }
@@ -3743,8 +3773,15 @@ function reconcileTaskCompletion(updated, previousTask) {
   const liveStatus = live?.status || statusControl?.value || baseline.status;
   const statusWasEdited = Boolean(statusControl) && liveStatus !== baseline.status;
   const merged = { ...baseline, ...reconciled };
+  const form = globalThis.document?.querySelector?.("#workspace-detail-form");
   for (const field of ["title", "description", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
-    if (live && String(live[field] || "") !== String(baseline[field] || "")) merged[field] = live[field];
+    if (live && String(live[field] || "") !== String(baseline[field] || "")) {
+      merged[field] = live[field];
+      continue;
+    }
+    if (!(field in reconciled)) continue;
+    const control = form?.querySelector?.(`[name="${field}"]`);
+    if (control && "value" in control) control.value = String(reconciled[field] || "");
   }
   merged.status = statusWasEdited ? liveStatus : status;
   merged.done = merged.status === "done";
@@ -4889,7 +4926,7 @@ function bindDrag() {
       await dropBucket(id, index);
     });
   }
-  document.querySelectorAll(".calendar-day[data-calendar-date]").forEach(day => {
+  document.querySelectorAll(".calendar-day[data-calendar-date], .workspace-week [data-calendar-date]").forEach(day => {
     day.addEventListener("dragover", event => {
       if (drag?.type !== "task") return;
       event.preventDefault();
@@ -4902,10 +4939,7 @@ function bindDrag() {
       const id = drag.id;
       drag = null;
       clearDropMarks();
-      await runMutation(
-        () => serializeTaskMutation(id, () => api.patch(`/api/v1/tasks/${id}`, { scheduledDate: day.dataset.calendarDate })),
-        reload,
-      );
+      await updateTaskScheduledDate(id, day.dataset.calendarDate);
     });
   });
   document.querySelectorAll("[data-flow-status]").forEach(column => {
@@ -4955,6 +4989,37 @@ async function updateTaskStatus(id, status) {
   reconcileTaskCompletion(updated, previousTask);
   clearTaskMutationError(id);
   syncWorkspaceSidebarCounts();
+  await refreshAfterTaskMutation(startedRouteVersion);
+  return true;
+}
+
+async function updateTaskScheduledDate(id, scheduledDate) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const startedRouteVersion = routeVersion;
+  let previousTask = findTask(id);
+  let updated;
+  try {
+    updated = await serializeTaskMutation(id, async ({ queued }) => {
+      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(id)}`);
+      return api.patch(`/api/v1/tasks/${encodeURIComponent(id)}`, { scheduledDate });
+    });
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+    state.taskCompletionError = { taskID: id, message: err.message };
+    if (state.selectedTask?.id === id) {
+      state.error = err.message;
+      syncTaskDetailError();
+      return false;
+    }
+    if (state.selectedTask) return false;
+    state.error = err.message;
+    render();
+    return false;
+  }
+  if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
+  reconcileTaskCompletion(updated, previousTask);
+  clearTaskMutationError(id);
   await refreshAfterTaskMutation(startedRouteVersion);
   return true;
 }

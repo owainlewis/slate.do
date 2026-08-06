@@ -203,9 +203,14 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         return json(response, { error: "Could not save task" }, 500);
       }
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === statusMatch[1]);
+      const previousBucketID = task.bucketId;
       Object.assign(task, input, { done: input.status === "done" });
       if (!task.parentTaskId && input.bucketId) {
         const list = state.lists.find(item => item.id === input.bucketId);
+        if (previousBucketID !== list.id && !task.done) {
+          state.lists.find(item => item.id === previousBucketID).openCount -= 1;
+          list.openCount += 1;
+        }
         Object.assign(task, { boardId: list.boardId, listName: list.name });
         state.subtasks.filter(item => item.parentTaskId === task.id).forEach(item => {
           Object.assign(item, { boardId: list.boardId, bucketId: list.id, listName: list.name });
@@ -249,8 +254,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === taskMatch[1]);
       if (!task) return json(response, { error: "not found" }, 404);
+      const wasDone = task.done;
       Object.assign(task, input);
       if ("done" in input) task.status = input.done ? "done" : "queued";
+      if (wasDone !== task.done) state.lists.find(list => list.id === task.bucketId).openCount += task.done ? -1 : 1;
       state.patches.push({ id: task.id, ...input });
       return json(response, task);
     }
@@ -440,6 +447,69 @@ test("a pending completion updates account settings counts without resetting its
   assert.deepEqual(pageErrors, []);
 });
 
+test("a pending list move updates account settings counts without resetting its draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+  await page.getByLabel("List", { exact: true }).selectOption("list-inbox");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+
+  const youtubeCount = page.locator('[data-workspace-count="list-youtube"]');
+  const inboxCount = page.locator('[data-workspace-count="inbox"]');
+  const displayName = page.locator("#profile-display-name");
+  assert.equal(await youtubeCount.textContent(), "2");
+  assert.equal(await inboxCount.textContent(), "1");
+  await displayName.fill("Unsaved settings draft during list move");
+
+  state.releaseStatus();
+  await page.waitForFunction(() => document.querySelector('[data-workspace-count="list-youtube"]')?.textContent === "1"
+    && document.querySelector('[data-workspace-count="inbox"]')?.textContent === "2");
+
+  assert.equal(await displayName.inputValue(), "Unsaved settings draft during list move");
+  assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.find(task => task.id === "task-parent").bucketId, "list-inbox");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a pending list move completes account settings while its first list load is delayed", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+  await page.getByLabel("List", { exact: true }).selectOption("list-inbox");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  let releaseLists;
+  let listRequests = 0;
+  await page.route("**/api/v1/lists", async route => {
+    listRequests += 1;
+    if (listRequests === 1) await new Promise(resolve => { releaseLists = resolve; });
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await waitFor(() => typeof releaseLists === "function");
+  state.releaseStatus();
+
+  await waitFor(() => listRequests >= 2);
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+  const displayName = page.locator("#profile-display-name");
+  await displayName.fill("Draft after Settings route recovery");
+  releaseLists();
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/settings/profile");
+  assert.equal(await page.locator('[data-workspace-count="list-youtube"]').textContent(), "1");
+  assert.equal(await page.locator('[data-workspace-count="inbox"]').textContent(), "2");
+  assert.equal(await displayName.inputValue(), "Draft after Settings route recovery");
+  assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("closing another task after completion refreshes Review membership", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
@@ -603,6 +673,85 @@ test("Week shows only calendar controls while filters and task opening keep work
     assert.equal(await page.locator('[data-workspace-view]').count(), 0, `${viewport.width}px tabs`);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${viewport.width}px page overflow`);
   }
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed Week move reconciles an open agent task before its next save", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  const now = new Date();
+  const offset = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+  const tuesday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1);
+  const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  const mondayDate = formatDate(monday);
+  const tuesdayDate = formatDate(tuesday);
+  state.tasks[0].scheduledDate = mondayDate;
+
+  await page.goto(`${origin}/app/week`);
+  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
+  const weekTask = page.locator('.workspace-week [data-task="task-parent"]');
+  assert.equal(await weekTask.count(), 1,
+    `date=${mondayDate} queries=${state.taskQueries.join(" | ")} body=${await page.locator(".workspace-week").innerText()}`);
+  state.delayNextCompletion = true;
+  await weekTask.dragTo(page.locator(`.workspace-week [data-calendar-date="${tuesdayDate}"]`));
+  await waitFor(() => typeof state.releaseCompletion === "function");
+
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+  await page.getByRole("tab", { name: "Work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  const planned = page.getByLabel("Planned", { exact: true });
+  const brief = page.getByLabel("Task brief", { exact: true });
+  assert.equal(await planned.inputValue(), mondayDate);
+  await brief.fill("Live brief while the Week move commits");
+
+  state.releaseCompletion();
+  await page.waitForFunction(expected => document.querySelector('#workspace-detail-form [name="scheduledDate"]')?.value === expected, tuesdayDate);
+
+  assert.equal(await brief.inputValue(), "Live brief while the Week move commits");
+  assert.equal(await brief.evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => state.patches.length === 2);
+
+  assert.equal(state.patches[0].scheduledDate, tuesdayDate);
+  assert.equal(state.patches[1].scheduledDate, tuesdayDate);
+  assert.equal(state.tasks.find(task => task.id === "task-parent").scheduledDate, tuesdayDate);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a failed delayed Week move stays out of an unrelated task detail", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  const now = new Date();
+  const offset = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+  const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  const mondayDate = formatDate(monday);
+  const tuesdayDate = formatDate(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1));
+  const wednesdayDate = formatDate(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 2));
+  state.tasks[0].scheduledDate = mondayDate;
+  state.tasks[1].scheduledDate = tuesdayDate;
+
+  await page.goto(`${origin}/app/week`);
+  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
+  state.delayNextCompletion = true;
+  state.failNextCompletion = true;
+  await page.locator('.workspace-week [data-task="task-parent"]').dragTo(page.locator(`.workspace-week [data-calendar-date="${wednesdayDate}"]`));
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.locator('[data-open-task="task-inbox"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Unrelated live Week draft");
+
+  const failedResponse = page.waitForResponse(response => response.url().endsWith("/api/v1/tasks/task-parent")
+    && response.request().method() === "PATCH" && response.status() === 500);
+  state.releaseCompletion();
+  await failedResponse;
+  await page.waitForTimeout(50);
+
+  assert.equal(await page.locator(".detail-error").textContent(), "");
+  assert.equal(await title.inputValue(), "Unrelated live Week draft");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  assert.equal(await page.getByRole("alert").filter({ hasText: "Could not complete task" }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 
