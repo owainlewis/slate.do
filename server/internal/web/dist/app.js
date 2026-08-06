@@ -107,6 +107,12 @@ let themeChangeVersion = 0;
 let authVersion = 0;
 let logoutRequest = null;
 let authenticationRequest = null;
+let appliedHistoryPath = "";
+let appliedHistoryPosition = null;
+let restoringHistoryPosition = false;
+
+const HISTORY_POSITION_KEY = "slateNavigationPosition";
+const TASK_DETAIL_FIELDS = ["title", "description", "status", "bucketId", "priority", "assigneeAgentId", "scheduledDate"];
 
 const state = {
   me: null,
@@ -118,6 +124,8 @@ const state = {
   selectedTask: null,
   selectedSubtasks: [],
   taskDetailDrafts: {},
+  taskDetailBaselines: {},
+  taskDetailCommitPending: "",
   taskCompletionError: null,
   subtaskDraft: "",
   subtaskPending: false,
@@ -367,16 +375,46 @@ function currentLocationPath() {
   return `${location.pathname}${location.search || ""}`;
 }
 
+function historyPosition(value) {
+  const position = Number(value?.[HISTORY_POSITION_KEY]);
+  return Number.isInteger(position) ? position : null;
+}
+
+function ensureHistoryTracking() {
+  if (appliedHistoryPath) return;
+  appliedHistoryPath = currentLocationPath();
+  appliedHistoryPosition = historyPosition(history.state);
+  if (appliedHistoryPosition === null) {
+    appliedHistoryPosition = 0;
+    history.replaceState({ ...(history.state || {}), [HISTORY_POSITION_KEY]: appliedHistoryPosition }, "", appliedHistoryPath);
+  }
+}
+
+function trackedHistoryState(position) {
+  return { ...(history.state || {}), [HISTORY_POSITION_KEY]: position };
+}
+
 function syncPath(path) {
-  if (currentPath() !== normalizePath(path)) history.replaceState({}, "", path);
+  ensureHistoryTracking();
+  if (currentPath() !== normalizePath(path)) {
+    history.replaceState(trackedHistoryState(appliedHistoryPosition), "", path);
+    appliedHistoryPath = currentLocationPath();
+  }
 }
 
 function navigate(path, options = {}) {
+  ensureHistoryTracking();
+  if (!options.skipTaskDetailGuard && !confirmTaskDetailDiscard()) return Promise.resolve(false);
   const nextRoute = parseRoute(path);
   clearSettingsCredentialsLeaving(nextRoute.name === "settings" ? nextRoute.settingsPage : "");
   clearAgentCredentialLeaving(nextRoute);
-  if (options.replace || currentLocationPath() === path) history.replaceState({}, "", path);
-  else history.pushState({}, "", path);
+  if (options.replace || currentLocationPath() === path) {
+    history.replaceState(trackedHistoryState(appliedHistoryPosition), "", path);
+  } else {
+    appliedHistoryPosition += 1;
+    history.pushState(trackedHistoryState(appliedHistoryPosition), "", path);
+  }
+  appliedHistoryPath = currentLocationPath();
   return applyRoute();
 }
 
@@ -417,7 +455,7 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   taskDetailVersion += 1;
   state.selectedTask = null;
   state.selectedSubtasks = [];
-  state.taskDetailDrafts = {};
+  clearTaskDetailDraftTracking();
   state.subtaskDraft = "";
   state.subtaskPending = false;
   state.subtaskError = "";
@@ -481,7 +519,7 @@ async function applyRoute() {
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
-    state.taskDetailDrafts = {};
+    clearTaskDetailDraftTracking();
     state.subtaskDraft = "";
     state.subtaskPending = false;
     state.subtaskError = "";
@@ -627,6 +665,7 @@ function readResetToken() {
 }
 
 async function boot() {
+  ensureHistoryTracking();
   try {
     const me = await api.get("/api/v1/me");
     if (me.authenticated) beginAuthenticatedSession(me.user);
@@ -781,7 +820,7 @@ function resetAuthenticatedState() {
   taskDetailVersion += 1;
   state.selectedTask = null;
   state.selectedSubtasks = [];
-  state.taskDetailDrafts = {};
+  clearTaskDetailDraftTracking();
   state.taskCompletionError = null;
   state.subtaskDraft = "";
   state.subtaskPending = false;
@@ -872,6 +911,7 @@ async function establishAuthenticatedSession(path, input) {
 
 async function logout() {
   if (logoutRequest) return logoutRequest;
+  if (!confirmTaskDetailDiscard()) return false;
   authVersion += 1;
   resetAuthenticatedState();
   state.view = "logging-out";
@@ -1041,7 +1081,7 @@ async function openTaskDetail(taskID, trigger, options = {}) {
   const detailVersion = ++taskDetailVersion;
   state.subtaskPending = false;
   if (!movingWithinTaskChain) {
-    state.taskDetailDrafts = {};
+    clearTaskDetailDraftTracking();
     state.subtaskDraft = "";
     state.subtaskError = "";
   }
@@ -1057,7 +1097,10 @@ async function openTaskDetail(taskID, trigger, options = {}) {
       loadAllSubtasks(taskID, isCurrent),
     ]);
     if (!isCurrent() || subtasks === null) return false;
-    state.selectedTask = { ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) };
+    const persisted = { ...summary, ...detail };
+    state.taskDetailBaselines[taskID] = taskDetailSnapshot(persisted);
+    state.selectedTask = { ...persisted, ...(state.taskDetailDrafts[taskID] || {}) };
+    state.taskDetailCommitPending = "";
     state.selectedSubtasks = subtasks;
     state.error = "";
     render();
@@ -3026,6 +3069,68 @@ function taskDraftFromCurrentForm(task) {
   };
 }
 
+function taskDetailSnapshot(task = {}) {
+  return Object.fromEntries(TASK_DETAIL_FIELDS.map(field => [field, String(task[field] || "")]));
+}
+
+function taskDetailDraftIsDirty(baseline, draft) {
+  if (!baseline || !draft) return false;
+  return TASK_DETAIL_FIELDS.some(field => String(draft[field] || "") !== String(baseline[field] || ""));
+}
+
+function advanceTaskDetailBaseline(taskID, persisted, draft) {
+  const previous = state.taskDetailBaselines[taskID];
+  if (!previous) return;
+  const next = taskDetailSnapshot(persisted);
+  const live = draft || state.taskDetailDrafts[taskID];
+  state.taskDetailBaselines[taskID] = Object.fromEntries(TASK_DETAIL_FIELDS.map(field => {
+    const liveValue = String(live?.[field] || "");
+    const previousValue = String(previous[field] || "");
+    const nextValue = String(next[field] || "");
+    return [field, !live || liveValue === previousValue || liveValue === nextValue ? nextValue : previousValue];
+  }));
+}
+
+function updateTaskDetailBaselineFields(taskID, fields) {
+  const previous = state.taskDetailBaselines[taskID];
+  if (!previous) return;
+  state.taskDetailBaselines[taskID] = {
+    ...previous,
+    ...Object.fromEntries(Object.entries(fields).map(([field, value]) => [field, String(value || "")])),
+  };
+}
+
+function taskDetailHasUnsavedChanges() {
+  if (!state.selectedTask) return false;
+  if (state.subtaskDraft !== "") return true;
+  const drafts = { ...state.taskDetailDrafts };
+  const current = taskDraftFromCurrentForm(state.selectedTask);
+  if (current) drafts[state.selectedTask.id] = current;
+  return Object.entries(drafts).some(([taskID, draft]) => taskID !== state.taskDetailCommitPending
+    && taskDetailDraftIsDirty(state.taskDetailBaselines[taskID], draft));
+}
+
+function confirmTaskDetailDiscard() {
+  if (!taskDetailHasUnsavedChanges()) return true;
+  if (globalThis.confirm?.("Discard unsaved task changes?") !== true) return false;
+  clearTaskDetailDraftTracking();
+  return true;
+}
+
+function confirmSubtaskDraftDiscard() {
+  if (state.subtaskDraft === "") return true;
+  if (globalThis.confirm?.("Discard unsaved task changes?") !== true) return false;
+  state.subtaskDraft = "";
+  state.subtaskError = "";
+  return true;
+}
+
+function clearTaskDetailDraftTracking() {
+  state.taskDetailDrafts = {};
+  state.taskDetailBaselines = {};
+  state.taskDetailCommitPending = "";
+}
+
 function preserveCurrentTaskDraft() {
   if (!state.selectedTask) return false;
   const draft = taskDraftFromCurrentForm(state.selectedTask);
@@ -3105,6 +3210,9 @@ function bindWorkspaceDetail(options = {}) {
   };
   const reconcileLoadedTask = (task, { deleted = false, deferAgentRender = false, previousTask = null } = {}) => {
     if (!boundContextIsCurrent()) return false;
+    if (!deleted && state.selectedTask?.id === task.id) {
+      advanceTaskDetailBaseline(task.id, task, taskDraftFromCurrentForm(state.selectedTask));
+    }
     const reconcile = items => (items || []).flatMap(item => item.id !== task.id ? [item] : deleted ? [] : [{ ...item, ...task }]);
     state.workspaceTasks = reconcile(state.workspaceTasks);
     state.selectedSubtasks = reconcile(state.selectedSubtasks);
@@ -3122,6 +3230,7 @@ function bindWorkspaceDetail(options = {}) {
       state.selectedSubtasks = moveChildren(state.selectedSubtasks);
       if (state.selectedTask?.parentTaskId === task.id) {
         state.selectedTask = moveChildren([state.selectedTask])[0];
+        updateTaskDetailBaselineFields(state.selectedTask.id, { bucketId: location.bucketId });
       }
     }
 
@@ -3140,6 +3249,7 @@ function bindWorkspaceDetail(options = {}) {
     if (state.selectedTask?.id !== updated.id) return;
     const baseline = { ...state.selectedTask };
     const live = taskDraftFromForm(baseline);
+    advanceTaskDetailBaseline(updated.id, updated, live);
     const merged = { ...baseline, ...updated };
     if (!live) {
       state.selectedTask = merged;
@@ -3307,6 +3417,7 @@ function bindWorkspaceDetail(options = {}) {
     });
   };
   const close = async () => {
+    if (!confirmTaskDetailDiscard()) return false;
     const currentRoute = parseRoute(location.pathname);
     const closedTaskID = state.selectedTask?.id || "";
     const refreshWorkspace = state.workspaceRefreshOnDetailClose && currentRoute.name === "workspace";
@@ -3315,7 +3426,7 @@ function bindWorkspaceDetail(options = {}) {
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
-    state.taskDetailDrafts = {};
+    clearTaskDetailDraftTracking();
     state.subtaskDraft = "";
     state.subtaskPending = false;
     state.subtaskError = "";
@@ -3355,19 +3466,18 @@ function bindWorkspaceDetail(options = {}) {
       return;
     }
     render();
+    return true;
   };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
   detailSurface?.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
   document.querySelector("[data-open-parent]")?.addEventListener("click", event => {
+    if (!confirmSubtaskDraftDiscard()) return;
     preserveTaskDraft();
-    state.subtaskDraft = "";
-    state.subtaskError = "";
     openTaskDetail(state.selectedTask.parentTaskId, event.currentTarget);
   });
   document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = () => {
+    if (!confirmSubtaskDraftDiscard()) return;
     preserveTaskDraft();
-    state.subtaskDraft = "";
-    state.subtaskError = "";
     openTaskDetail(element.dataset.openTask, element);
   });
   document.querySelectorAll("[data-toggle-subtask]").forEach(element => element.onclick = async () => {
@@ -3481,6 +3591,7 @@ function bindWorkspaceDetail(options = {}) {
     state.agentTaskMutationError = "";
     state.agentTaskRefreshError = "";
     preserveTaskDraft();
+    state.taskDetailCommitPending = taskID;
     try {
       const deleted = await serializeTaskMutation(taskID, () => api.del(`/api/v1/tasks/${taskID}`));
       if (!deleted) return;
@@ -3499,6 +3610,8 @@ function bindWorkspaceDetail(options = {}) {
           taskDetailVersion += 1;
           for (const task of deletedTasks) delete state.taskDetailDrafts[task.id];
           delete state.taskDetailDrafts[selectedTaskID];
+          for (const task of deletedTasks) delete state.taskDetailBaselines[task.id];
+          delete state.taskDetailBaselines[selectedTaskID];
           state.selectedTask = null;
           state.selectedSubtasks = [];
           state.subtaskDraft = "";
@@ -3510,6 +3623,7 @@ function bindWorkspaceDetail(options = {}) {
         }
         if (state.selectedTask?.id !== taskID) return;
         delete state.taskDetailDrafts[taskID];
+        delete state.taskDetailBaselines[taskID];
         state.subtaskDraft = "";
         state.subtaskPending = false;
         state.subtaskError = "";
@@ -3521,12 +3635,13 @@ function bindWorkspaceDetail(options = {}) {
         taskDetailVersion += 1;
         state.selectedTask = null;
         state.selectedSubtasks = [];
-        state.taskDetailDrafts = {};
+        clearTaskDetailDraftTracking();
         await refreshAfterCommittedMutation("deleted");
         return;
       }
       if (parentTaskID) {
         delete state.taskDetailDrafts[taskID];
+        delete state.taskDetailBaselines[taskID];
         state.subtaskDraft = "";
         state.subtaskPending = false;
         state.subtaskError = "";
@@ -3537,7 +3652,7 @@ function bindWorkspaceDetail(options = {}) {
       taskDetailVersion += 1;
       state.selectedTask = null;
       state.selectedSubtasks = [];
-      state.taskDetailDrafts = {};
+      clearTaskDetailDraftTracking();
       state.subtaskDraft = "";
       state.subtaskPending = false;
       state.subtaskError = "";
@@ -3547,6 +3662,7 @@ function bindWorkspaceDetail(options = {}) {
         reportBackgroundMutationFailure("delete", taskTitle, err);
         return;
       }
+      state.taskDetailCommitPending = "";
       if (handleError(err)) return;
       state.error = err.message;
       render();
@@ -3564,6 +3680,7 @@ function bindWorkspaceDetail(options = {}) {
     state.agentTaskMutationError = "";
     state.agentTaskRefreshError = "";
     preserveTaskDraft();
+    state.taskDetailCommitPending = taskID;
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     controls.forEach(control => { control.disabled = true; });
     submit.textContent = "Saving…";
@@ -3596,6 +3713,7 @@ function bindWorkspaceDetail(options = {}) {
       }
       if (parentTaskID) {
         delete state.taskDetailDrafts[taskID];
+        delete state.taskDetailBaselines[taskID];
         state.subtaskDraft = "";
         state.subtaskPending = false;
         state.subtaskError = "";
@@ -3603,10 +3721,19 @@ function bindWorkspaceDetail(options = {}) {
         await refreshAfterSubtaskMutation();
         return;
       }
+      if (state.subtaskDraft !== "") {
+        state.selectedTask = { ...state.selectedTask, ...updated };
+        state.taskDetailBaselines[taskID] = taskDetailSnapshot(updated);
+        state.taskDetailDrafts[taskID] = taskDetailSnapshot(updated);
+        state.taskDetailCommitPending = "";
+        await refreshAfterTaskMutation(boundRouteVersion);
+        render();
+        return;
+      }
       taskDetailVersion += 1;
       state.selectedTask = null;
       state.selectedSubtasks = [];
-      state.taskDetailDrafts = {};
+      clearTaskDetailDraftTracking();
       state.subtaskDraft = "";
       state.subtaskPending = false;
       state.subtaskError = "";
@@ -3616,6 +3743,7 @@ function bindWorkspaceDetail(options = {}) {
         reportBackgroundMutationFailure("save", taskTitle, err);
         return;
       }
+      state.taskDetailCommitPending = "";
       if (handleError(err)) return;
       state.error = err.message;
       render();
@@ -3842,6 +3970,7 @@ function reconcileTaskCompletion(updated, previousTask) {
       const draft = taskDraftFromCurrentForm(state.selectedTask) || state.taskDetailDrafts[state.selectedTask.id] || {};
       state.selectedTask = { ...moveChildren([state.selectedTask])[0], ...draft, bucketId: location.bucketId };
       state.taskDetailDrafts[state.selectedTask.id] = { ...draft, bucketId: location.bucketId };
+      updateTaskDetailBaselineFields(state.selectedTask.id, { bucketId: location.bucketId });
       const listControl = globalThis.document?.querySelector?.("#workspace-detail-list");
       if (listControl) listControl.value = location.bucketId;
       const context = globalThis.document?.querySelector?.(".detail-context span");
@@ -3857,6 +3986,7 @@ function reconcileTaskCompletion(updated, previousTask) {
   if (state.selectedTask?.id !== reconciled.id) return;
   const baseline = state.selectedTask;
   const live = taskDraftFromCurrentForm(baseline);
+  advanceTaskDetailBaseline(reconciled.id, reconciled, live);
   const statusControl = globalThis.document?.querySelector?.('#workspace-detail-form [name="status"]');
   const liveStatus = live?.status || statusControl?.value || baseline.status;
   const statusWasEdited = Boolean(statusControl) && liveStatus !== baseline.status;
@@ -3930,6 +4060,18 @@ function bindWorkspaceListControl() {
 }
 
 async function captureInboxTask(button) {
+  if (!confirmTaskDetailDiscard()) return false;
+  if (state.selectedTask) {
+    taskDetailVersion += 1;
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    clearTaskDetailDraftTracking();
+    state.subtaskDraft = "";
+    state.subtaskPending = false;
+    state.subtaskError = "";
+    render();
+    button = document.querySelector("#global-new-task") || button;
+  }
   button.disabled = true;
   button.querySelector("span").textContent = "Creating…";
   try {
@@ -5630,9 +5772,36 @@ function escapeAttr(value) {
   return escapeHTML(value);
 }
 
-window.addEventListener("popstate", async () => {
+window.addEventListener("beforeunload", event => {
+  if (!taskDetailHasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+window.addEventListener("popstate", async event => {
   // Sign-out is in flight; the URL it lands on is decided when it finishes.
   if (state.view === "logging-out" || state.view === "logout-error") return;
+  ensureHistoryTracking();
+  const destinationPosition = historyPosition(event.state);
+  if (restoringHistoryPosition) {
+    restoringHistoryPosition = false;
+    appliedHistoryPath = currentLocationPath();
+    appliedHistoryPosition = destinationPosition ?? appliedHistoryPosition;
+    return;
+  }
+  if (!confirmTaskDetailDiscard()) {
+    const delta = destinationPosition === null ? 0 : appliedHistoryPosition - destinationPosition;
+    if (delta && typeof history.go === "function") {
+      restoringHistoryPosition = true;
+      history.go(delta);
+    } else {
+      appliedHistoryPosition += 1;
+      history.pushState(trackedHistoryState(appliedHistoryPosition), "", appliedHistoryPath);
+    }
+    return;
+  }
+  appliedHistoryPath = currentLocationPath();
+  if (destinationPosition !== null) appliedHistoryPosition = destinationPosition;
   const nextRoute = parseRoute(location.pathname);
   clearSettingsCredentialsLeaving(nextRoute.settingsPage || "");
   clearAgentCredentialLeaving(nextRoute);

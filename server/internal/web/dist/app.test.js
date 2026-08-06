@@ -1171,6 +1171,7 @@ test("moving a parent reconciles an open child detail without losing its draft",
     state.selectedSubtasks = [];
     state.selectedTask = { id: "child", parentTaskId: "parent", bucketId: "list-old", listName: "YouTube", title: "Live child title", description: "Live child brief", status: "queued" };
     state.taskDetailDrafts = { child: { title: "Live child title", description: "Live child brief", status: "queued", bucketId: "list-old", priority: "p1", assigneeAgentId: "", scheduledDate: "" } };
+    state.taskDetailBaselines = { child: { title: "Persisted child title", description: "Persisted child brief", status: "queued", bucketId: "list-old", priority: "p1", assigneeAgentId: "", scheduledDate: "" } };
     state.agentDetail = null;
     state.agentWorkPage = null;
   `, app);
@@ -1187,6 +1188,9 @@ test("moving a parent reconciles an open child detail without losing its draft",
   assert.equal(vm.runInContext("state.selectedTask.title", app), "Live child title");
   assert.equal(vm.runInContext("state.taskDetailDrafts.child.bucketId", app), "list-new");
   assert.equal(vm.runInContext("state.taskDetailDrafts.child.description", app), "Live child brief");
+  assert.equal(vm.runInContext("state.taskDetailBaselines.child.bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.taskDetailBaselines.child.title", app), "Persisted child title");
+  assert.equal(vm.runInContext("taskDetailDraftIsDirty(state.taskDetailBaselines.child, state.taskDetailDrafts.child)", app), true);
   assert.equal(vm.runInContext("parentMoveListControl.value", app), "list-new");
   assert.equal(vm.runInContext("parentMoveContext.textContent", app), "Inbox");
   assert.equal(vm.runInContext("parentMoveRenderCount", app), 0);
@@ -1200,6 +1204,7 @@ test("moving a parent reconciles an open child detail without losing its draft",
     state.selectedSubtasks = [];
     state.selectedTask = null;
     state.taskDetailDrafts = {};
+    state.taskDetailBaselines = {};
     delete globalThis.document;
   `, app);
 });
@@ -2248,6 +2253,25 @@ test("detail presents one inline accessible editor with clear actions", () => {
   assert.match(html, />Delete task</);
   assert.match(html, /Home list/);
   assert.match(html, /aria-label="Back to tasks"/);
+});
+
+test("task detail dirty checks compare every persisted editor field", () => {
+  const baseline = app.taskDetailSnapshot({
+    title: "Draft launch brief",
+    description: "Ship it safely",
+    status: "queued",
+    bucketId: "inbox",
+    priority: "p1",
+    assigneeAgentId: "agent-one",
+    scheduledDate: "2026-08-12",
+  });
+
+  assert.equal(app.taskDetailDraftIsDirty(baseline, { ...baseline }), false);
+  for (const field of ["title", "description", "status", "bucketId", "priority", "assigneeAgentId", "scheduledDate"]) {
+    assert.equal(app.taskDetailDraftIsDirty(baseline, { ...baseline, [field]: `${baseline[field]}-changed` }), true, field);
+  }
+  assert.equal(app.taskDetailDraftIsDirty(baseline, { ...baseline, priority: null }), true);
+  assert.match(source, /addEventListener\("beforeunload"[\s\S]*taskDetailHasUnsavedChanges\(\)[\s\S]*event\.preventDefault\(\)/);
 });
 
 test("detail can move a parent task between account-wide lists", () => {
