@@ -2824,9 +2824,15 @@ function bindWorkspaceDetail(options = {}) {
   const boundSessionVersion = authVersion;
   const boundUserID = state.me?.id;
   const boundRouteVersion = routeVersion;
+  const boundAgentID = state.agentDetail?.agent?.id || "";
   const detailSurface = document.querySelector("[data-detail-surface]");
   const reportBackgroundMutationFailure = (action, taskTitle, err) => {
-    if (!sessionIsCurrent(boundSessionVersion, boundUserID) || boundRouteVersion !== routeVersion) return false;
+    if (!sessionIsCurrent(boundSessionVersion, boundUserID)) return false;
+    const currentRoute = parseRoute(location.pathname);
+    const sameAgentContext = boundAgentID
+      && ["agent-detail", "agent-work", "agent-settings"].includes(currentRoute.name)
+      && currentRoute.agentId === boundAgentID;
+    if (boundRouteVersion !== routeVersion && !sameAgentContext) return false;
     if (handleError(err)) return true;
     const message = `Couldn’t ${action} “${taskTitle}”: ${err.message}`;
     const focus = state.selectedTask ? captureDetailFocus() : null;
@@ -2953,7 +2959,10 @@ function bindWorkspaceDetail(options = {}) {
       state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === subtask.id ? { ...item, ...updated } : item);
       await refreshAfterSubtaskMutation(focus || { toggleSubtask: subtask.id });
     } catch (err) {
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) return;
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        reportBackgroundMutationFailure("update subtask", subtask.title, err);
+        return;
+      }
       if (handleError(err)) return;
       state.subtaskPending = false;
       state.subtaskError = err.message;
@@ -2996,7 +3005,10 @@ function bindWorkspaceDetail(options = {}) {
       state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
       await refreshAfterSubtaskMutation({ openTask: created.id });
     } catch (err) {
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) return;
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        reportBackgroundMutationFailure("add subtask", title, err);
+        return;
+      }
       if (handleError(err)) return;
       state.subtaskPending = false;
       state.subtaskError = err.message;

@@ -150,13 +150,13 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const subtaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/subtasks$/);
     if (subtaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
-      if (state.failNextSubtask) {
-        state.failNextSubtask = false;
-        return json(response, { error: "Could not add subtask" }, 500);
-      }
       if (state.delayNextSubtask) {
         state.delayNextSubtask = false;
         await new Promise(resolve => { state.releaseSubtask = resolve; });
+      }
+      if (state.failNextSubtask) {
+        state.failNextSubtask = false;
+        return json(response, { error: "Could not add subtask" }, 500);
       }
       const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
       const created = { ...parent, id: `task-child-${state.subtasks.length + 1}`, parentTaskId: parent.id, title: input.title, description: "", done: false, status: "queued", priority: "", assigneeAgentId: "", assigneeAgentName: "" };
@@ -555,6 +555,38 @@ test("failed agent mutations report errors after detail has been closed", async 
   state.releaseDelete();
   await page.getByRole("alert").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
   assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("failed subtask mutations remain visible across same-agent navigation", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Delayed research add");
+  state.delayNextSubtask = true;
+  state.failNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
+  state.releaseSubtask();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t add subtask “Delayed research add”: Could not add subtask" }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research");
+
+  await page.getByRole("tab", { name: "Work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  state.delayNextStatus = true;
+  state.failNextStatus = true;
+  await page.getByRole("button", { name: "Mark Research examples not complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
+  state.releaseStatus();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t update subtask “Research examples”: Could not save task" }).waitFor();
+  assert.equal(state.subtasks.find(item => item.id === "task-child").done, true);
   assert.deepEqual(pageErrors, []);
 });
 
