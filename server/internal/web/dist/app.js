@@ -3268,7 +3268,7 @@ function bindWorkspaceDetail(options = {}) {
     const currentRoute = parseRoute(location.pathname);
     if (currentRoute.name === "workspace") return refreshAfterTaskMutation(boundRouteVersion);
     if (boundAgentID && currentRoute.agentId === boundAgentID) return refreshCurrentAgentSurface();
-    if (currentRoute.name === "settings") return refreshCurrentWorkspaceListMetadata();
+    if (["settings", "agents", "agent-new"].includes(currentRoute.name)) return refreshCurrentWorkspaceListMetadata();
     if (!["agent-detail", "agent-work"].includes(currentRoute.name)) return true;
     let focus = captureDetailFocus();
     return refreshAgentSurface({
@@ -3528,6 +3528,7 @@ function bindWorkspaceDetail(options = {}) {
   });
   document.querySelector("#workspace-detail-form")?.addEventListener("submit", async event => {
     event.preventDefault();
+    const controls = [...event.currentTarget.querySelectorAll("input, textarea, select, button")];
     const form = new FormData(event.currentTarget);
     const taskID = state.selectedTask.id;
     const taskTitle = String(form.get("title") || state.selectedTask.title);
@@ -3538,7 +3539,7 @@ function bindWorkspaceDetail(options = {}) {
     state.agentTaskRefreshError = "";
     preserveTaskDraft();
     const submit = event.currentTarget.querySelector('button[type="submit"]');
-    submit.disabled = true;
+    controls.forEach(control => { control.disabled = true; });
     submit.textContent = "Saving…";
     try {
       const input = {

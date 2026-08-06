@@ -903,6 +903,29 @@ test("a delayed agent task save refreshes the work page without reopening detail
   assert.deepEqual(pageErrors, []);
 });
 
+test("agent task properties stay locked while a save is pending", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Locked while saving");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  for (const label of ["Title", "Task brief", "Status", "List", "Priority", "Owner", "Planned"]) {
+    assert.equal(await page.getByLabel(label, { exact: true }).isDisabled(), true, `${label} should be disabled`);
+  }
+  for (const name of ["Delete task", "Cancel", "Saving…"]) {
+    assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true, `${name} should be disabled`);
+  }
+
+  state.releaseStatus();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Locked while saving");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a delayed reassignment refreshes the newly assigned agent work page", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
   state.agents.push({ id: "agent-writing", displayName: "Writing agent", purpose: "Write assigned work", credential: {}, workCounts: {} });
@@ -1825,6 +1848,49 @@ test("background agent subtask creation refreshes sidebar list counts", async t 
   assert.equal(await youtube.locator("b").textContent(), "3");
   assert.equal(await childBrief.inputValue(), "Live child edit while count refreshes");
   assert.equal(await childBrief.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("background agent mutations refresh list counts on the agent directory", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Directory count update");
+  state.delayNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  assert.equal(await page.locator('[data-workspace-count="list-youtube"]').textContent(), "2");
+
+  state.releaseSubtask();
+  await page.waitForFunction(() => document.querySelector('[data-workspace-count="list-youtube"]')?.textContent === "3");
+
+  assert.equal(state.subtasks.some(task => task.title === "Directory count update"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("background agent mutations refresh list counts on the new-agent route", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("New-agent count update");
+  state.delayNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "New agent", exact: true }).click();
+  await page.getByRole("heading", { name: "New agent", exact: true }).waitFor();
+  assert.equal(await page.locator('[data-workspace-count="list-youtube"]').textContent(), "2");
+
+  state.releaseSubtask();
+  await page.waitForFunction(() => document.querySelector('[data-workspace-count="list-youtube"]')?.textContent === "3");
+
+  assert.equal(state.subtasks.some(task => task.title === "New-agent count update"), true);
   assert.deepEqual(pageErrors, []);
 });
 
