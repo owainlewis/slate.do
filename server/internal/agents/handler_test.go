@@ -121,7 +121,11 @@ func TestGetDetailMapsOwnedAgentResponses(t *testing.T) {
 }
 
 func TestListWorkValidatesAndBoundsPagination(t *testing.T) {
-	store := &fakeStore{work: WorkPage{Page: 2, PageSize: 25}}
+	store := &fakeStore{work: WorkPage{
+		Items:    []WorkItem{{ID: "child-1", ParentTaskID: "parent-1"}},
+		Page:     2,
+		PageSize: 25,
+	}}
 	handler := NewHandler(store)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-1/work?page=2&pageSize=25", nil)
 	request.SetPathValue("id", "agent-1")
@@ -131,6 +135,9 @@ func TestListWorkValidatesAndBoundsPagination(t *testing.T) {
 
 	if response.Code != http.StatusOK || store.workPage != 2 || store.workPageSize != 25 {
 		t.Fatalf("response = %d %q, page = %d/%d", response.Code, response.Body.String(), store.workPage, store.workPageSize)
+	}
+	if !strings.Contains(response.Body.String(), `"parentTaskId":"parent-1"`) {
+		t.Fatalf("response does not expose parent task context: %s", response.Body.String())
 	}
 
 	for _, target := range []string{

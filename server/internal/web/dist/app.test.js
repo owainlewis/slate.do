@@ -1119,6 +1119,69 @@ test("agent cache reconciliation resolves location labels after a cross-list sav
   vm.runInContext(`state.boards = []; state.workspaceLists = []; state.agentDetail = null; state.agentWorkPage = null;`, app);
 });
 
+test("moving a parent reconciles cached descendant locations", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Campaigns" }];
+    state.workspaceLists = [{ id: "list-new", boardId: "board-two", name: "Launch" }];
+    state.agentDetail = {
+      agent: { id: "agent-one" },
+      work: {
+        ready: [{ id: "child", parentTaskId: "parent", boardId: "board-one", boardName: "Workspace", bucketId: "list-old", bucketName: "Inbox", assigneeAgentId: "agent-one", status: "queued" }],
+        working: [], review: [], recentlyCompleted: [], totals: { ready: 1 },
+      },
+    };
+    state.agentWorkPage = {
+      items: [{ id: "child", parentTaskId: "parent", boardId: "board-one", boardName: "Workspace", bucketId: "list-old", bucketName: "Inbox", assigneeAgentId: "agent-one", status: "queued" }],
+      page: 1, pageSize: 50, total: 1, hasPrevious: false, hasNext: false,
+    };
+  `, app);
+
+  app.reconcileAgentTaskCaches(
+    { id: "parent", bucketId: "list-new", assigneeAgentId: "agent-one", status: "working" },
+    { previousTask: { id: "parent", bucketId: "list-old", assigneeAgentId: "agent-one", status: "working" } },
+  );
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].bucketName", app), "Launch");
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].boardName", app), "Campaigns");
+  assert.equal(vm.runInContext("state.agentDetail.work.ready[0].bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.agentDetail.work.ready[0].listName", app), "Launch");
+
+  vm.runInContext(`state.boards = []; state.workspaceLists = []; state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
+test("off-page agent mutations reconcile bounded overview totals", () => {
+  vm.runInContext(`
+    state.agentDetail = {
+      agent: { id: "agent-one" },
+      work: {
+        ready: [], working: [], review: [], recentlyCompleted: [],
+        totals: { ready: 51, working: 2, review: 0, completed: 0 },
+      },
+    };
+    state.agentWorkPage = {
+      items: [], page: 1, pageSize: 50, total: 53, hasPrevious: false, hasNext: true,
+    };
+  `, app);
+
+  app.reconcileAgentTaskCaches(
+    { id: "off-page", assigneeAgentId: "agent-one", status: "working", done: false },
+    { previousTask: { id: "off-page", assigneeAgentId: "agent-one", status: "queued", done: false } },
+  );
+  assert.equal(vm.runInContext("state.agentDetail.work.totals.ready", app), 50);
+  assert.equal(vm.runInContext("state.agentDetail.work.totals.working", app), 3);
+  assert.equal(vm.runInContext("state.agentDetail.work.working.length", app), 0, "bounded groups do not grow with off-page tasks");
+  assert.equal(vm.runInContext("state.agentWorkPage.total", app), 53);
+
+  app.reconcileAgentTaskCaches(
+    { id: "off-page", assigneeAgentId: "", status: "working", done: false },
+    { previousTask: { id: "off-page", assigneeAgentId: "agent-one", status: "working", done: false } },
+  );
+  assert.equal(vm.runInContext("state.agentDetail.work.totals.working", app), 2);
+  assert.equal(vm.runInContext("state.agentWorkPage.total", app), 52);
+  assert.equal(vm.runInContext("state.agentWorkPage.hasNext", app), true);
+
+  vm.runInContext(`state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
 test("account-wide lists are immediately available for agent assignment", () => {
   vm.runInContext(`
     state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Other" }];

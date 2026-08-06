@@ -176,6 +176,13 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === statusMatch[1]);
       Object.assign(task, input, { done: input.status === "done" });
+      if (!task.parentTaskId && input.bucketId) {
+        const list = state.lists.find(item => item.id === input.bucketId);
+        Object.assign(task, { boardId: list.boardId, listName: list.name });
+        state.subtasks.filter(item => item.parentTaskId === task.id).forEach(item => {
+          Object.assign(item, { boardId: list.boardId, bucketId: list.id, listName: list.name });
+        });
+      }
       state.patches.push({ id: task.id, ...input });
       return json(response, task);
     }
@@ -555,6 +562,27 @@ test("successful agent mutations reconcile after same-agent navigation", async t
   assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research/work");
   assert.equal(state.tasks.some(item => item.id === "task-parent"), false);
   assert.equal(state.subtasks.some(item => item.parentTaskId === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed parent move reconciles descendant locations across agent tabs", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("List", { exact: true }).selectOption("list-inbox");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
+
+  state.releaseStatus();
+  await waitFor(() => state.subtasks.find(item => item.id === "task-child")?.bucketId === "list-inbox");
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).getByText("Workspace / Inbox", { exact: true }).waitFor();
+  await page.getByRole("button", { name: /Research examples/ }).getByText("Workspace / Inbox", { exact: true }).waitFor();
+
   assert.deepEqual(pageErrors, []);
 });
 

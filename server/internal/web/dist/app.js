@@ -2769,12 +2769,14 @@ function taskWithResolvedLocation(task) {
   };
 }
 
-function reconcileAgentTaskCaches(task, { deleted = false } = {}) {
+function reconcileAgentTaskCaches(task, { deleted = false, previousTask = null } = {}) {
   task = taskWithResolvedLocation(task);
+  previousTask = previousTask ? taskWithResolvedLocation(previousTask) : null;
   const workPage = state.agentWorkPage;
   const agentID = state.agentDetail?.agent?.id;
   const pageIndex = workPage?.items?.findIndex(item => item.id === task.id) ?? -1;
-  const wasAssigned = task.assigneeAgentId === agentID;
+  const isAssigned = task.assigneeAgentId === agentID;
+  const wasAssigned = previousTask ? previousTask.assigneeAgentId === agentID : isAssigned;
   let changed = false;
   const decrementPageTotal = () => {
     workPage.total = Math.max(0, Number(workPage.total || 0) - 1);
@@ -2782,7 +2784,7 @@ function reconcileAgentTaskCaches(task, { deleted = false } = {}) {
   };
   if (pageIndex >= 0) {
     changed = true;
-    const remainsAssigned = !deleted && wasAssigned;
+    const remainsAssigned = !deleted && isAssigned;
     workPage.items = remainsAssigned
       ? workPage.items.map(item => item.id === task.id ? { ...item, ...task } : item)
       : workPage.items.filter(item => item.id !== task.id);
@@ -2792,10 +2794,29 @@ function reconcileAgentTaskCaches(task, { deleted = false } = {}) {
     changed = true;
     decrementPageTotal();
   }
+  if (workPage && pageIndex < 0 && previousTask && !deleted && wasAssigned !== isAssigned) {
+    changed = true;
+    workPage.total = Math.max(0, Number(workPage.total || 0) + (isAssigned ? 1 : -1));
+    workPage.hasNext = Number(workPage.page || 1) * Number(workPage.pageSize || 50) < workPage.total;
+  }
 
-  const work = state.agentDetail?.work;
-  if (!work) return changed;
   const groups = ["ready", "working", "review", "recentlyCompleted"];
+  const work = state.agentDetail?.work;
+  const parentMoved = !task.parentTaskId && previousTask && previousTask.bucketId !== task.bucketId;
+  const childLocation = parentMoved ? {
+    boardId: task.boardId,
+    boardName: task.boardName,
+    bucketId: task.bucketId,
+    bucketName: task.bucketName,
+    listName: task.bucketName,
+  } : null;
+  const moveChildren = items => (items || []).map(item => {
+    if (!childLocation || item.parentTaskId !== task.id) return item;
+    changed = true;
+    return { ...item, ...childLocation };
+  });
+  if (workPage) workPage.items = moveChildren(workPage.items);
+  if (!work) return changed;
   const previousGroup = groups.find(group => (work[group] || []).some(item => item.id === task.id));
   const previousItem = previousGroup ? work[previousGroup].find(item => item.id === task.id) : null;
   changed ||= Boolean(previousGroup);
@@ -2812,16 +2833,21 @@ function reconcileAgentTaskCaches(task, { deleted = false } = {}) {
     return changed;
   }
 
-  const nextGroup = wasAssigned ? agentWorkGroupForTask(task) : "";
+  const previousCountedGroup = previousGroup || (previousTask && wasAssigned ? agentWorkGroupForTask(previousTask) : "");
+  const nextGroup = isAssigned ? agentWorkGroupForTask(task) : "";
   if (previousGroup && nextGroup) work[nextGroup] = [{ ...previousItem, ...task }, ...work[nextGroup]];
-  if (previousGroup && previousGroup !== nextGroup) {
-    const key = totalKey(previousGroup);
+  if (previousCountedGroup && previousCountedGroup !== nextGroup) {
+    changed = true;
+    const key = totalKey(previousCountedGroup);
     work.totals[key] = Math.max(0, Number(work.totals[key] || 0) - 1);
   }
-  if (previousGroup && nextGroup && previousGroup !== nextGroup) {
+  if (nextGroup && previousCountedGroup !== nextGroup) {
+    changed = true;
     const key = totalKey(nextGroup);
     work.totals[key] = Number(work.totals[key] || 0) + 1;
   }
+
+  for (const group of groups) work[group] = moveChildren(work[group]);
   return changed;
 }
 
@@ -2859,13 +2885,29 @@ function bindWorkspaceDetail(options = {}) {
     restoreDetailFocus(focus);
     return true;
   };
-  const reconcileLoadedTask = (task, { deleted = false, deferAgentRender = false } = {}) => {
+  const reconcileLoadedTask = (task, { deleted = false, deferAgentRender = false, previousTask = null } = {}) => {
     if (!boundContextIsCurrent()) return false;
     const reconcile = items => (items || []).flatMap(item => item.id !== task.id ? [item] : deleted ? [] : [{ ...item, ...task }]);
     state.workspaceTasks = reconcile(state.workspaceTasks);
     state.selectedSubtasks = reconcile(state.selectedSubtasks);
 
-    const agentCacheChanged = reconcileAgentTaskCaches(task, { deleted });
+    const movedParent = !deleted && previousTask && !task.parentTaskId && previousTask.bucketId !== task.bucketId;
+    if (movedParent) {
+      const location = taskWithResolvedLocation(task);
+      const moveChildren = items => (items || []).map(item => item.parentTaskId === task.id ? {
+        ...item,
+        boardId: location.boardId,
+        bucketId: location.bucketId,
+        listName: location.bucketName,
+      } : item);
+      state.workspaceTasks = moveChildren(state.workspaceTasks);
+      state.selectedSubtasks = moveChildren(state.selectedSubtasks);
+      if (state.selectedTask?.parentTaskId === task.id) {
+        state.selectedTask = moveChildren([state.selectedTask])[0];
+      }
+    }
+
+    const agentCacheChanged = reconcileAgentTaskCaches(task, { deleted, previousTask });
 
     if (!deferAgentRender && agentCacheChanged && !state.selectedTask && ["agent-detail", "agent-work"].includes(state.view)) {
       const focusedTaskID = document.activeElement?.dataset?.openAgentTask || task.id;
@@ -3109,6 +3151,7 @@ function bindWorkspaceDetail(options = {}) {
     const taskID = state.selectedTask.id;
     const taskTitle = String(form.get("title") || state.selectedTask.title);
     const parentTaskID = state.selectedTask.parentTaskId || "";
+    const previousTask = { ...state.selectedTask };
     const detailVersion = taskDetailVersion;
     state.agentTaskMutationError = "";
     preserveTaskDraft();
@@ -3123,7 +3166,7 @@ function bindWorkspaceDetail(options = {}) {
       };
       if (!parentTaskID) input.bucketId = form.get("bucketId");
       const updated = await api.patch(`/api/v1/tasks/${taskID}/status`, input);
-      reconcileLoadedTask(updated);
+      reconcileLoadedTask(updated, { previousTask });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
