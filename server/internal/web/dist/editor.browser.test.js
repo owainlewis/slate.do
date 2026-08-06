@@ -1910,7 +1910,7 @@ test("background agent mutations refresh list counts on the agent directory", as
   await waitFor(() => typeof state.releaseSubtask === "function");
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("link", { name: "All agents", exact: true }).click();
-  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Agents", exact: true, level: 1 }).waitFor();
   assert.equal(await page.locator('[data-workspace-count="list-youtube"]').textContent(), "2");
 
   state.releaseSubtask();
@@ -1999,6 +1999,71 @@ test("a background mutation completes an agent settings route whose list load it
   assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research/settings");
   assert.equal(await page.getByRole("heading", { name: "Research agent", exact: true }).isVisible(), true);
   assert.equal(await purpose.inputValue(), "Draft after background route recovery");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a background mutation completes the agent directory whose list load it supersedes", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Saved while agents load");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+
+  let releaseLists;
+  let listRequests = 0;
+  await page.route("**/api/v1/lists", async route => {
+    listRequests += 1;
+    if (listRequests === 1) await new Promise(resolve => { releaseLists = resolve; });
+    await route.continue();
+  });
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await waitFor(() => typeof releaseLists === "function");
+  state.releaseStatus();
+
+  await waitFor(() => listRequests >= 2);
+  await page.getByRole("heading", { name: "Agents", exact: true, level: 1 }).waitFor();
+  releaseLists();
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/agents");
+  assert.equal(await page.getByText("Loading agents…", { exact: true }).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a background mutation completes All tasks whose list load it supersedes", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Saved while all tasks loads");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+
+  let releaseLists;
+  let listRequests = 0;
+  await page.route("**/api/v1/lists", async route => {
+    listRequests += 1;
+    if (listRequests === 1) await new Promise(resolve => { releaseLists = resolve; });
+    await route.continue();
+  });
+  await page.getByRole("link", { name: "All tasks", exact: true }).click();
+  await waitFor(() => typeof releaseLists === "function");
+  state.releaseStatus();
+
+  await waitFor(() => listRequests >= 2);
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  await page.getByText("Saved while all tasks loads", { exact: true }).waitFor();
+  releaseLists();
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/tasks");
+  assert.equal(await page.getByRole("heading", { name: "All tasks", exact: true }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 
