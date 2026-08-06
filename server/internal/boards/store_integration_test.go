@@ -1243,6 +1243,10 @@ func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	parent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Ship release"})
 	if err != nil {
 		t.Fatal(err)
@@ -1252,12 +1256,19 @@ func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
 	retry, err := store.CreateSubtask(ctx, userID, parent.ID, input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if retry.ID != first.ID {
 		t.Fatalf("subtask retry created %q, want original %q", retry.ID, first.ID)
+	}
+	if retry.BucketID != destination.ID {
+		t.Fatalf("retried subtask list = %q, want moved parent list %q", retry.BucketID, destination.ID)
 	}
 
 	changed := input

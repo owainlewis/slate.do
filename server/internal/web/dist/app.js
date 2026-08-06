@@ -34,12 +34,13 @@ function icon(name, cls = "") {
 const api = {
   async request(path, options = {}) {
     const sessionVersion = authVersion;
+    const { headers = {}, ...requestOptions } = options;
     let res;
     try {
       res = await fetch(path, {
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options,
+        ...requestOptions,
+        headers: { "Content-Type": "application/json", ...headers },
       });
     } catch (err) {
       if (sessionVersion !== authVersion) return new Promise(() => {});
@@ -65,7 +66,7 @@ const api = {
     return data;
   },
   get(path) { return this.request(path); },
-  post(path, body) { return this.request(path, { method: "POST", body: JSON.stringify(body || {}) }); },
+  post(path, body, options = {}) { return this.request(path, { ...options, method: "POST", body: JSON.stringify(body || {}) }); },
   patch(path, body) { return this.request(path, { method: "PATCH", body: JSON.stringify(body || {}) }); },
   del(path) { return this.request(path, { method: "DELETE" }); },
 };
@@ -128,6 +129,7 @@ const state = {
   taskDetailCommitPending: "",
   taskCompletionError: null,
   subtaskDraft: "",
+  subtaskCreateAttempt: null,
   subtaskPending: false,
   subtaskError: "",
   settings: false,
@@ -3163,6 +3165,7 @@ function confirmSubtaskDraftDiscard() {
   if (state.subtaskDraft === "") return true;
   if (globalThis.confirm?.("Discard unsaved task changes?") !== true) return false;
   state.subtaskDraft = "";
+  state.subtaskCreateAttempt = null;
   state.subtaskError = "";
   return true;
 }
@@ -3183,6 +3186,7 @@ function clearTaskDetailDraftTracking() {
   state.taskDetailDrafts = {};
   state.taskDetailBaselines = {};
   state.taskDetailCommitPending = "";
+  state.subtaskCreateAttempt = null;
   taskDetailFieldEdits.clear();
 }
 
@@ -3626,12 +3630,18 @@ function bindWorkspaceDetail(options = {}) {
     state.subtaskDraft = title;
     state.subtaskPending = true;
     state.subtaskError = "";
+    const idempotencyKey = subtaskCreateIdempotencyKey(parentID, title);
+    const attemptIsCurrent = () => state.subtaskCreateAttempt?.key === idempotencyKey;
     input.readOnly = true;
     const addButton = subtaskControl.querySelector("button");
     addButton.disabled = true;
     addButton.querySelector("span").textContent = "Adding…";
     try {
-      const created = await api.post(`/api/v1/tasks/${parentID}/subtasks`, { title, kind: "action" });
+      const created = await api.post(
+        `/api/v1/tasks/${parentID}/subtasks`,
+        { title, kind: "action" },
+        { headers: { "Idempotency-Key": idempotencyKey } },
+      );
       reconcileLoadedTask(created);
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
         await refreshCurrentTaskSurface();
@@ -3639,18 +3649,28 @@ function bindWorkspaceDetail(options = {}) {
           const focus = captureDetailFocus();
           preserveTaskDraft();
           state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
-          state.subtaskPending = false;
-          state.subtaskDraft = "";
+          if (attemptIsCurrent()) {
+            state.subtaskPending = false;
+            state.subtaskDraft = "";
+            state.subtaskCreateAttempt = null;
+          }
           await refreshAfterSubtaskMutation(focus);
         }
         return;
       }
-      state.subtaskPending = false;
-      state.subtaskDraft = "";
+      if (attemptIsCurrent()) {
+        state.subtaskPending = false;
+        state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
+      }
       state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
       await refreshAfterSubtaskMutation({ openTask: created.id });
     } catch (err) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        reportBackgroundMutationFailure("add subtask", title, err);
+        return;
+      }
+      if (!attemptIsCurrent()) {
         reportBackgroundMutationFailure("add subtask", title, err);
         return;
       }
@@ -3662,7 +3682,10 @@ function bindWorkspaceDetail(options = {}) {
     }
   };
   subtaskControl?.querySelector("button")?.addEventListener("click", addSubtask);
-  subtaskControl?.querySelector("input")?.addEventListener("input", event => { state.subtaskDraft = event.currentTarget.value; });
+  subtaskControl?.querySelector("input")?.addEventListener("input", event => {
+    if (event.currentTarget.value !== state.subtaskDraft) state.subtaskCreateAttempt = null;
+    state.subtaskDraft = event.currentTarget.value;
+  });
   subtaskControl?.querySelector("input")?.addEventListener("keydown", event => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -4882,7 +4905,7 @@ function focusAfterAgentLifecycle(action) {
 }
 
 async function rotateAgentCredential(context) {
-  const idempotencyKey = newAgentRotationKey();
+  const idempotencyKey = newIdempotencyKey();
   try {
     const result = await api.post(`/api/v1/agents/${encodeURIComponent(context.agentID)}/credential/rotate`, { idempotencyKey });
     if (!agentMutationIsCurrent(context)) return;
@@ -4920,11 +4943,19 @@ async function rotateAgentCredential(context) {
   }
 }
 
-function newAgentRotationKey() {
+function newIdempotencyKey() {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
   const values = new Uint8Array(24);
   globalThis.crypto.getRandomValues(values);
   return [...values].map(value => value.toString(16).padStart(2, "0")).join("");
+}
+
+function subtaskCreateIdempotencyKey(parentID, title) {
+  const previous = state.subtaskCreateAttempt;
+  if (previous?.parentID === parentID && previous.title === title) return previous.key;
+  const key = newIdempotencyKey();
+  state.subtaskCreateAttempt = { parentID, title, key };
+  return key;
 }
 
 function agentMutationContext() {

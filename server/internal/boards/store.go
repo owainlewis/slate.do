@@ -846,7 +846,7 @@ func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID s
 		return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
 	}
 	input.ParentTaskID = parent.ID
-	return s.CreateTask(ctx, userID, parent.BucketID, input)
+	return s.createTaskForTarget(ctx, userID, parent.BucketID, "parent:"+parent.ID, input)
 }
 
 func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucketID string, input preparedTaskCreate) (Task, error) {

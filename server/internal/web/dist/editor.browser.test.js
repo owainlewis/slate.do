@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -178,6 +178,8 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const subtaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/subtasks$/);
     if (subtaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
+      const idempotencyKey = request.headers["idempotency-key"] || "";
+      state.subtaskRequestKeys.push(idempotencyKey);
       if (state.delayNextSubtask) {
         state.delayNextSubtask = false;
         await new Promise(resolve => { state.releaseSubtask = resolve; });
@@ -186,10 +188,17 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         state.failNextSubtask = false;
         return json(response, { error: "Could not add subtask" }, 500);
       }
+      const existing = idempotencyKey && state.subtaskIdempotency.get(idempotencyKey);
+      if (existing) return json(response, existing, 201);
       const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
       const created = { ...parent, id: `task-child-${state.subtasks.length + 1}`, parentTaskId: parent.id, title: input.title, description: "", done: false, status: "queued", priority: "", assigneeAgentId: "", assigneeAgentName: "" };
       state.subtasks.push(created);
+      if (idempotencyKey) state.subtaskIdempotency.set(idempotencyKey, created);
       state.lists.find(list => list.id === created.bucketId).openCount += 1;
+      if (state.commitNextSubtaskThenFail) {
+        state.commitNextSubtaskThenFail = false;
+        return json(response, { error: "Response lost after commit" }, 500);
+      }
       return json(response, created, 201);
     }
     const statusMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/status$/);
@@ -2492,6 +2501,29 @@ test("New task does not replace an unsaved task without confirmation", async t =
   assert.deepEqual(pageErrors, []);
 });
 
+test("a lost subtask response retries with one idempotency key and no duplicate", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Verify final copy");
+  state.commitNextSubtaskThenFail = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await page.getByText("Response lost after commit", { exact: true }).waitFor();
+
+  assert.equal(state.subtasks.filter(task => task.title === "Verify final copy").length, 1);
+  assert.equal(await page.getByLabel("Subtask title", { exact: true }).inputValue(), "Verify final copy");
+  assert.equal(state.subtaskRequestKeys.length, 1);
+  assert.ok(state.subtaskRequestKeys[0]);
+
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await page.getByText("Verify final copy", { exact: true }).waitFor();
+
+  assert.equal(state.subtasks.filter(task => task.title === "Verify final copy").length, 1);
+  assert.equal(state.subtaskRequestKeys.length, 2);
+  assert.equal(state.subtaskRequestKeys[1], state.subtaskRequestKeys[0]);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("task detail coordinates one level of human and agent subtasks through the CLI model", async t => {
   const { page, state } = await startWorkspace(t);
 
@@ -2605,17 +2637,30 @@ test("a delayed subtask response cannot overwrite a reopened task surface", asyn
   state.delayNextSubtask = true;
   await page.getByRole("button", { name: "Add subtask", exact: true }).click();
   await waitFor(() => typeof state.releaseSubtask === "function");
+  const releaseOldSubtask = state.releaseSubtask;
 
   page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
   await page.locator('[data-open-task="task-parent"]').click();
   await page.getByLabel("Title", { exact: true }).fill("Draft from the new surface");
-  state.releaseSubtask();
+  await page.getByLabel("Subtask title", { exact: true }).fill("New pending subtask");
+  state.delayNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function" && state.releaseSubtask !== releaseOldSubtask);
+  const releaseNewSubtask = state.releaseSubtask;
+  assert.notEqual(state.subtaskRequestKeys[1], state.subtaskRequestKeys[0]);
+
+  releaseOldSubtask();
   await waitFor(() => state.subtasks.some(item => item.title === "Delayed subtask"));
   await page.getByText("Delayed subtask", { exact: true }).waitFor();
 
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Draft from the new surface");
+  assert.equal(await page.getByLabel("Subtask title", { exact: true }).inputValue(), "New pending subtask");
   assert.equal(await page.getByText("Delayed subtask", { exact: true }).isVisible(), true);
+  assert.equal(await page.locator("#add-subtask button").isDisabled(), true);
+
+  releaseNewSubtask();
+  await page.getByText("New pending subtask", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Add subtask", exact: true }).isEnabled(), true);
 });
 

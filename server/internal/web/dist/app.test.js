@@ -2306,6 +2306,34 @@ test("accepting discard restores a mounted task to its persisted baseline", () =
   vm.runInContext("globalThis.confirm = savedMountedDiscardConfirm; state.selectedTask = null;", app);
 });
 
+test("subtask create retries keep one key until the draft changes or is discarded", () => {
+  vm.runInContext(`
+    savedSubtaskCrypto = globalThis.crypto;
+    savedSubtaskConfirm = globalThis.confirm;
+    nextSubtaskKey = 0;
+    globalThis.crypto = { randomUUID: () => "subtask-key-" + (++nextSubtaskKey) };
+    state.subtaskCreateAttempt = null;
+  `, app);
+
+  const first = app.subtaskCreateIdempotencyKey("parent-a", "Research examples");
+  assert.equal(app.subtaskCreateIdempotencyKey("parent-a", "Research examples"), first);
+  assert.notEqual(app.subtaskCreateIdempotencyKey("parent-a", "Draft examples"), first);
+  assert.notEqual(app.subtaskCreateIdempotencyKey("parent-b", "Research examples"), first);
+
+  vm.runInContext(`
+    state.subtaskDraft = "Research examples";
+    globalThis.confirm = () => true;
+  `, app);
+  assert.equal(app.confirmSubtaskDraftDiscard(), true);
+  assert.equal(vm.runInContext("state.subtaskCreateAttempt", app), null);
+
+  vm.runInContext(`
+    globalThis.crypto = savedSubtaskCrypto;
+    globalThis.confirm = savedSubtaskConfirm;
+    state.subtaskDraft = "";
+  `, app);
+});
+
 test("committed hidden-task changes rebase only clean retained fields", () => {
   vm.runInContext(`
     state.selectedTask = { id: "parent" };
