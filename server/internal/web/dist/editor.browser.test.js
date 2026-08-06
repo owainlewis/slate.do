@@ -591,6 +591,43 @@ test("concurrent saves of the same agent task commit in user order", async t => 
   assert.deepEqual(pageErrors, []);
 });
 
+test("a completed save reconciles untouched fields in a reopened task detail", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Committed title from first save");
+  await page.getByLabel("Priority", { exact: true }).selectOption("p1");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  const description = page.getByLabel("Task brief", { exact: true });
+  await description.fill("Live edit on reopened detail");
+  state.releaseStatus();
+  await waitFor(() => state.patches.length === 1);
+  await page.waitForTimeout(50);
+
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Committed title from first save", JSON.stringify({ patches: state.patches }));
+  assert.equal(await page.getByLabel("Priority", { exact: true }).inputValue(), "p1");
+  assert.equal(await description.inputValue(), "Live edit on reopened detail");
+  assert.equal(await description.evaluate(element => element === document.activeElement), true);
+
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => state.patches.length === 2);
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+
+  assert.equal(state.patches[1].title, "Committed title from first save");
+  assert.equal(state.patches[1].priority, "p1");
+  assert.equal(state.patches[1].description, "Live edit on reopened detail");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Committed title from first save");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").priority, "p1");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").description, "Live edit on reopened detail");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a Flow drop commits after a pending agent detail save", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
@@ -1001,10 +1038,15 @@ test("background agent subtask creation refreshes sidebar list counts", async t 
   await page.getByRole("button", { name: "Add subtask", exact: true }).click();
   await waitFor(() => typeof state.releaseSubtask === "function");
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  const childBrief = page.getByLabel("Task brief", { exact: true });
+  await childBrief.fill("Live child edit while count refreshes");
   state.releaseSubtask();
 
   await page.getByRole("link", { name: /YouTube.*3/ }).waitFor();
   assert.equal(await youtube.locator("b").textContent(), "3");
+  assert.equal(await childBrief.inputValue(), "Live child edit while count refreshes");
+  assert.equal(await childBrief.evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
 

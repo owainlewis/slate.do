@@ -2982,21 +2982,48 @@ function bindWorkspaceDetail(options = {}) {
     }
     return agentCacheChanged;
   };
-  const preserveTaskDraft = () => {
+  const taskDraftFromForm = task => {
     const form = document.querySelector("#workspace-detail-form");
-    if (!form) return;
+    if (!form) return null;
     const data = new FormData(form);
-    const draft = {
+    return {
       title: String(data.get("title") || ""),
       description: String(data.get("description") || ""),
       status: String(data.get("status") || "queued"),
-      bucketId: state.selectedTask.parentTaskId ? state.selectedTask.bucketId : String(data.get("bucketId") || ""),
+      bucketId: task.parentTaskId ? task.bucketId : String(data.get("bucketId") || ""),
       priority: String(data.get("priority") || ""),
       assigneeAgentId: String(data.get("assigneeAgentId") || ""),
       scheduledDate: String(data.get("scheduledDate") || ""),
     };
+  };
+  const preserveTaskDraft = () => {
+    const draft = taskDraftFromForm(state.selectedTask);
+    if (!draft) return;
     state.taskDetailDrafts[state.selectedTask.id] = draft;
     state.selectedTask = { ...state.selectedTask, ...draft };
+  };
+  const reconcileReopenedTaskDetail = updated => {
+    if (state.selectedTask?.id !== updated.id) return;
+    const baseline = { ...state.selectedTask };
+    const live = taskDraftFromForm(baseline);
+    const merged = { ...baseline, ...updated };
+    if (!live) {
+      state.selectedTask = merged;
+      return;
+    }
+    const form = document.querySelector("#workspace-detail-form");
+    const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
+    for (const field of fields) {
+      if (String(live[field] || "") !== String(baseline[field] || "")) {
+        merged[field] = live[field];
+        continue;
+      }
+      if (!(field in updated)) continue;
+      const control = form?.querySelector(`[name="${field}"]`);
+      if (control && "value" in control) control.value = String(updated[field] || "");
+    }
+    state.selectedTask = merged;
+    state.taskDetailDrafts[updated.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
   };
   const captureDetailFocus = () => {
     const active = document.activeElement;
@@ -3089,6 +3116,8 @@ function bindWorkspaceDetail(options = {}) {
       if (!detailResult.value) return false;
       state.agentDetailLoadState = "ready";
       state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
+      syncWorkspaceSidebarCounts();
+      syncWorkspaceListError();
       if (state.selectedTask) return true;
       const agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || "";
       const agentControlFocusID = agentTaskFocusID ? "" : document.activeElement?.id || "";
@@ -3343,6 +3372,7 @@ function bindWorkspaceDetail(options = {}) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
+        reconcileReopenedTaskDetail(updated);
         await refreshCurrentAgentSurface();
         return;
       }
