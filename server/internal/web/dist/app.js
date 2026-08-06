@@ -2964,6 +2964,20 @@ function bindWorkspaceDetail(options = {}) {
       return false;
     }
   };
+  const refreshAfterCommittedMutation = async (action, focus) => {
+    try {
+      const refreshed = await refresh();
+      if (refreshed !== false) restoreDetailFocus(focus);
+      return refreshed;
+    } catch (err) {
+      if (!boundContextIsCurrent()) return false;
+      if (handleError(err)) return false;
+      state.error = `The task was ${action}, but this view couldn’t be refreshed: ${err.message}`;
+      render();
+      restoreDetailFocus(focus);
+      return false;
+    }
+  };
   const refreshCurrentAgentSurface = async () => {
     if (!boundAgentID || !["agent-detail", "agent-work"].includes(state.view) || !boundContextIsCurrent()) return false;
     const refreshRouteVersion = routeVersion;
@@ -3160,7 +3174,7 @@ function bindWorkspaceDetail(options = {}) {
         state.selectedTask = null;
         state.selectedSubtasks = [];
         state.taskDetailDrafts = {};
-        await refresh();
+        await refreshAfterCommittedMutation("deleted");
         return;
       }
       if (parentTaskID) {
@@ -3179,7 +3193,7 @@ function bindWorkspaceDetail(options = {}) {
       state.subtaskDraft = "";
       state.subtaskPending = false;
       state.subtaskError = "";
-      await refresh();
+      await refreshAfterCommittedMutation("deleted");
     } catch (err) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         reportBackgroundMutationFailure("delete", taskTitle, err);
@@ -3234,7 +3248,7 @@ function bindWorkspaceDetail(options = {}) {
       state.subtaskDraft = "";
       state.subtaskPending = false;
       state.subtaskError = "";
-      await refresh();
+      await refreshAfterCommittedMutation("saved");
     } catch (err) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         reportBackgroundMutationFailure("save", taskTitle, err);

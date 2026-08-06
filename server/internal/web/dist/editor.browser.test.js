@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -117,8 +117,14 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       if (url.searchParams.has("parentTaskId")) return json(response, { tasks: state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId")) });
       if (state.delayNextWorkspaceTasks) {
         state.delayNextWorkspaceTasks = false;
+        const failAfterDelay = state.failNextWorkspaceTasks;
+        state.failNextWorkspaceTasks = false;
         await new Promise(resolve => { state.releaseWorkspaceTasks = resolve; });
         state.delayedWorkspaceTasksCompleted = true;
+        if (failAfterDelay) return json(response, { error: "Could not refresh tasks" }, 500);
+      } else if (state.failNextWorkspaceTasks) {
+        state.failNextWorkspaceTasks = false;
+        return json(response, { error: "Could not refresh tasks" }, 500);
       }
       let tasks = url.searchParams.get("topLevel") === "true" ? [...state.tasks] : [...state.tasks, ...state.subtasks];
       const listID = url.searchParams.get("bucketId");
@@ -715,6 +721,57 @@ test("failed agent mutations report errors after detail has been closed", async 
   state.releaseDelete();
   await page.getByRole("alert").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
   assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("post-save refresh failures report that the task was already saved", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Committed before refresh failed");
+  state.failNextWorkspaceTasks = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+
+  await page.getByRole("alert").filter({ hasText: "The task was saved, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
+  assert.equal(state.patches.at(-1).title, "Committed before refresh failed");
+  assert.equal(await page.getByText(/Couldn’t save/).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("post-delete refresh failures report that the task was already deleted", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for", exact: true }).click();
+  state.failNextWorkspaceTasks = true;
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete task", exact: true }).click();
+
+  await page.getByRole("alert").filter({ hasText: "The task was deleted, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
+  assert.equal(state.tasks.some(task => task.id === "task-inbox"), false);
+  assert.equal(await page.getByText(/Couldn’t delete/).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed post-save refresh failure cannot render into a newer route", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Committed before navigation");
+  state.delayNextWorkspaceTasks = true;
+  state.failNextWorkspaceTasks = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+
+  await page.getByRole("link", { name: /Inbox/ }).click();
+  await page.getByRole("heading", { name: "Inbox", exact: true }).waitFor();
+  state.releaseWorkspaceTasks();
+  await waitFor(() => state.delayedWorkspaceTasksCompleted);
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/inbox");
+  assert.equal(await page.getByRole("heading", { name: "Inbox", exact: true }).isVisible(), true);
+  assert.equal(await page.getByRole("alert").count(), 0);
+  assert.equal(state.patches.at(-1).title, "Committed before navigation");
   assert.deepEqual(pageErrors, []);
 });
 
