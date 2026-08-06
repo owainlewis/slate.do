@@ -78,10 +78,33 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       state.agents.splice(index, 1);
       return json(response, { ok: true });
     }
+    const agentWorkMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/work$/);
+    if (agentWorkMatch && request.method === "GET") {
+      const items = [...state.tasks, ...state.subtasks]
+        .filter(item => item.assigneeAgentId === agentWorkMatch[1])
+        .map(item => ({ ...item, boardName: "Workspace", bucketName: item.listName, updatedAt: "2026-08-05T12:00:00Z" }));
+      const page = Number(url.searchParams.get("page") || 1);
+      return json(response, { items, total: items.length, page, pageSize: 50, hasPrevious: page > 1, hasNext: false });
+    }
     const agentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)$/);
     if (agentMatch && request.method === "GET") {
       const agent = state.agents.find(item => item.id === agentMatch[1]);
-      return agent ? json(response, { agent, work: { ready: [], working: [], review: [], recentlyCompleted: [], totals: agent.workCounts || {} } }) : json(response, { error: "agent not found" }, 404);
+      if (!agent) return json(response, { error: "agent not found" }, 404);
+      const assigned = [...state.tasks, ...state.subtasks]
+        .filter(item => item.assigneeAgentId === agent.id)
+        .map(item => ({ ...item, boardName: "Workspace", bucketName: item.listName, updatedAt: "2026-08-05T12:00:00Z" }));
+      return json(response, { agent, work: {
+        ready: assigned.filter(item => item.status === "queued"),
+        working: assigned.filter(item => item.status === "working"),
+        review: assigned.filter(item => item.status === "needs_review"),
+        recentlyCompleted: assigned.filter(item => item.done || item.status === "done"),
+        totals: {
+          ready: assigned.filter(item => item.status === "queued").length,
+          working: assigned.filter(item => item.status === "working").length,
+          review: assigned.filter(item => item.status === "needs_review").length,
+          completed: assigned.filter(item => item.done || item.status === "done").length,
+        },
+      } });
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
       state.taskQueries.push(url.search);
@@ -163,7 +186,12 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         await new Promise(resolve => { state.releaseDelete = resolve; });
       }
       const index = state.tasks.findIndex(item => item.id === taskMatch[1]);
-      if (index >= 0) state.tasks.splice(index, 1);
+      if (index >= 0) {
+        state.tasks.splice(index, 1);
+        state.subtasks = state.subtasks.filter(item => item.parentTaskId !== taskMatch[1]);
+      }
+      const subtaskIndex = state.subtasks.findIndex(item => item.id === taskMatch[1]);
+      if (subtaskIndex >= 0) state.subtasks.splice(subtaskIndex, 1);
       return json(response, {});
     }
     if (taskMatch && request.method === "GET") {
@@ -420,6 +448,101 @@ test("a direct agent route can create a list on a board with capacity and assign
   await page.getByRole("button", { name: "Create item", exact: true }).click();
   await page.getByText('"Research launch examples" was assigned to Research agent.', { exact: true }).waitFor();
   assert.equal(await page.locator('a[href="/app/lists/list-created-1"] b').textContent(), "1");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("agent work uses the shared inline task detail and returns to the exact work page", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t, { width: 720, height: 900 });
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  const parent = page.getByRole("button", { name: /Publish task-first agents video/ });
+  await parent.click();
+
+  const detail = page.getByRole("region", { name: "Task detail" });
+  await detail.waitFor();
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  assert.equal(await page.locator(".detail-overlay").count(), 0);
+  assert.equal(await page.getByText("1 of 1 complete", { exact: true }).isVisible(), true);
+  assert.equal(await page.getByText("Research examples", { exact: true }).isVisible(), true);
+  assert.ok((await page.locator(".workspace-detail-main").boundingBox()).width >= 650);
+
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent task", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
+  assert.equal(await page.getByLabel("List", { exact: true }).isDisabled(), true);
+  await page.getByLabel("Title", { exact: true }).fill("Updated research examples");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByText("1 of 1 complete", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  assert.equal(await page.getByText("Updated research examples", { exact: true }).isVisible(), true);
+  assert.equal(state.patches.at(-1).id, "task-child");
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+
+  await parent.click();
+  await page.getByLabel("Priority", { exact: true }).selectOption("p2");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  assert.equal(state.patches.at(-1).id, "task-parent");
+  assert.equal(state.patches.at(-1).priority, "p2");
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.equal(await parent.evaluate(element => element === document.activeElement), true);
+
+  await parent.click();
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.equal(await parent.evaluate(element => element === document.activeElement), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed agent task save refreshes the work page without reopening detail", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  const parent = page.getByRole("button", { name: /Publish task-first agents video/ });
+  await parent.click();
+  await page.getByLabel("Title", { exact: true }).fill("Delayed agent task title");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 0);
+  state.releaseStatus();
+  await page.getByText("Delayed agent task title", { exact: true }).waitFor();
+
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: /Delayed agent task title/ }).evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed parent delete removes its assigned subtasks from agent work", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  state.delayNextDelete = true;
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete task", exact: true }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  state.releaseDelete();
+  await page.getByText("No assigned work.", { exact: true }).waitFor();
+
+  assert.equal(state.tasks.some(item => item.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(item => item.parentTaskId === "task-parent"), false);
+  assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Research examples", { exact: true }).count(), 0);
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.equal(await page.getByRole("button", { name: "Assign work", exact: true }).evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
 

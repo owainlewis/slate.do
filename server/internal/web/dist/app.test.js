@@ -193,7 +193,7 @@ test("New list is bound centrally for shared-shell and settings routes", () => {
   const settingsStart = source.indexOf("async function bindSettings()");
   const settingsEnd = source.indexOf("function bindBoardSettings()", settingsStart);
   const workspaceStart = source.indexOf("function bindWorkspace()");
-  const workspaceEnd = source.indexOf("function bindWorkspaceDetail()", workspaceStart);
+  const workspaceEnd = source.indexOf("function bindWorkspaceDetail(options = {})", workspaceStart);
 
   assert.match(source.slice(shellStart, shellEnd), /bindWorkspaceListControl\(\)/);
   assert.match(source.slice(controlStart, controlEnd), /#new-workspace-list[^\n]*createWorkspaceList/);
@@ -559,16 +559,21 @@ test("subtask detail keeps its list fixed to the parent", () => {
   assert.match(html, /Subtasks stay with their parent task\./);
 });
 
-test("legacy agent task detail does not offer subtask moves", () => {
+test("agent work renders the shared inline task detail with parent context", () => {
   vm.runInContext(`
-    state.board = { id: "board-one", name: "Work", buckets: [{ id: "list-one", name: "Product", tasks: [] }] };
-    state.boards = [{ id: "board-one", name: "Work" }];
+    state.view = "agent-work";
+    state.workspaceLists = [{ id: "list-one", boardId: "board-one", name: "Product" }];
+    state.selectedTask = { id: "parent", bucketId: "list-one", title: "Prepare launch", description: "", status: "working", priority: "p1", assigneeAgentId: "agent-one", scheduledDate: "" };
+    state.selectedSubtasks = [{ id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", status: "done", done: true }];
   `, app);
-  const html = vm.runInContext(`detailHTML({ id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" })`, app);
-  assert.match(html, /Work \/ Product/);
-  assert.match(html, />Fixed</);
-  assert.match(html, /Subtasks stay with their parent task\./);
-  assert.doesNotMatch(html, /id="open-move"|id="move-panel"|>Move…</);
+  const html = app.agentDetailHTML();
+  assert.match(html, /class="main workspace-main agent-task-main"/);
+  assert.match(html, /class="workspace-detail" aria-label="Task detail"/);
+  assert.match(html, /aria-label="Back to agent work"/);
+  assert.match(html, /1 of 1 complete/);
+  assert.match(html, /Review/);
+  assert.doesNotMatch(html, /data-detail-overlay|aria-modal="true"|id="detail-form"/);
+  vm.runInContext(`state.view = "home"; state.selectedTask = null; state.selectedSubtasks = []; state.workspaceLists = [];`, app);
 });
 
 test("list limits remain scoped to the selected board", () => {
@@ -852,6 +857,8 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
       id: "board", name: "Board",
       buckets: [{ id: "list", name: "List", tasks: [] }],
     };
+    state.workspaceLists = [{ id: "list", boardId: "board", name: "List" }];
+    state.selectedSubtasks = [];
   `, app);
   const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", done: false, scheduledDate: "", assigneeAgentId: "agent-one" };
   const taskHTML = app.taskHTML(assigned);
@@ -860,13 +867,13 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
   assert.doesNotMatch(taskHTML, />&lt;B<\/span>/);
   assert.doesNotMatch(taskHTML, /<Research Bot>/);
 
-  const detail = app.detailHTML({ ...assigned, assigneeAgentId: "agent-old" });
-  assert.match(detail, /id="detail-assignee" name="assigneeAgentId"/);
+  const detail = app.workspaceDetailHTML({ ...assigned, assigneeAgentId: "agent-old", description: "", priority: "", scheduledDate: "" });
+  assert.match(detail, /id="workspace-detail-owner" name="assigneeAgentId"/);
   assert.match(detail, /value="agent-one"/);
   assert.match(detail, /value="agent-old" selected disabled>Old Bot \(inactive\)/);
 
   vm.runInContext(`state.agents = [];`, app);
-  const unavailable = app.detailHTML({ ...assigned, assigneeAgentId: "agent-one" });
+  const unavailable = app.workspaceDetailHTML({ ...assigned, assigneeAgentId: "agent-one", description: "", priority: "", scheduledDate: "" });
   assert.match(unavailable, /value="agent-one" selected>Assigned agent unavailable/);
   assert.doesNotMatch(unavailable, /value="" selected>Unassigned/);
 
@@ -874,7 +881,7 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
   const second = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
   assert.equal(first, second);
   assert.match(app.avatarHTML({ id: "stable", displayName: "Research Bot" }, { large: true }), /avatar-large/);
-  vm.runInContext(`state.agents = []; state.boards = []; state.board = null;`, app);
+  vm.runInContext(`state.agents = []; state.boards = []; state.board = null; state.workspaceLists = []; state.selectedSubtasks = [];`, app);
 });
 
 test("account settings contain profile, preferences, and personal API access only", () => {
@@ -1058,6 +1065,33 @@ test("agent detail presents real grouped task data, bounded history, and distinc
     assert.match(app.agentDetailHTML(), new RegExp(text, "i"));
   }
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentWorkPage = null; state.agentDetailLoadState = "idle";`, app);
+});
+
+test("deleting an off-page assigned subtask reconciles agent pagination and status totals", () => {
+  vm.runInContext(`
+    state.agentDetail = {
+      agent: { id: "agent-one" },
+      work: {
+        ready: [], working: [], review: [], recentlyCompleted: [],
+        totals: { ready: 12, working: 3, review: 2, completed: 5 },
+      },
+    };
+    state.agentWorkPage = {
+      items: [{ id: "visible-task", assigneeAgentId: "agent-one", status: "queued" }],
+      page: 1, pageSize: 50, total: 51, hasPrevious: false, hasNext: true,
+    };
+  `, app);
+
+  assert.equal(app.reconcileAgentTaskCaches({
+    id: "off-page-child", parentTaskId: "parent", assigneeAgentId: "agent-one", status: "queued", done: false,
+  }, { deleted: true }), true);
+  assert.equal(vm.runInContext("state.agentWorkPage.total", app), 50);
+  assert.equal(vm.runInContext("state.agentWorkPage.hasNext", app), false);
+  assert.equal(vm.runInContext("state.agentDetail.work.totals.ready", app), 11);
+  assert.equal(vm.runInContext("state.agentWorkPage.items.length", app), 1);
+  assert.equal(vm.runInContext("state.agentDetail.work.ready.length", app), 0);
+
+  vm.runInContext(`state.agentDetail = null; state.agentWorkPage = null;`, app);
 });
 
 test("account-wide lists are immediately available for agent assignment", () => {
@@ -1601,63 +1635,50 @@ test("Flow filters cards to one selected list", () => {
 });
 
 test("detail exposes state without a type control", () => {
-  vm.runInContext(`state.board = ${JSON.stringify(board)}`, app);
-  const actionHTML = app.detailHTML(board.buckets[0].tasks[1]);
+  vm.runInContext(`
+    state.workspaceLists = [{ id: "inbox", name: "Home list" }];
+    state.selectedSubtasks = [];
+  `, app);
+  const actionHTML = app.workspaceDetailHTML({ ...board.buckets[0].tasks[1], description: "", priority: "", assigneeAgentId: "" });
 
   assert.match(actionHTML, /name="status"/);
   assert.match(actionHTML, /value="working" selected>Working/);
   assert.doesNotMatch(actionHTML, /name="kind"/);
 });
 
-test("detail presents a focused, accessible editor with clear actions", () => {
-  vm.runInContext(`state.board = ${JSON.stringify(board)}`, app);
-  const html = app.detailHTML(board.buckets[0].tasks[1]);
+test("detail presents one inline accessible editor with clear actions", () => {
+  vm.runInContext(`
+    state.view = "home";
+    state.workspaceLists = [{ id: "inbox", name: "Home list" }];
+    state.selectedSubtasks = [];
+  `, app);
+  const html = app.workspaceDetailHTML({ ...board.buckets[0].tasks[1], description: "", priority: "", assigneeAgentId: "" });
 
-  assert.match(html, /role="dialog" aria-modal="true"/);
+  assert.match(html, /class="workspace-detail" aria-label="Task detail"/);
+  assert.doesNotMatch(html, /role="dialog"|aria-modal="true"|detail-overlay/);
   assert.match(html, /class="detail-title"/);
   assert.match(html, /class="detail-description"/);
   assert.match(html, /class="detail-properties"/);
   assert.match(html, />Save changes</);
   assert.match(html, /data-close-detail>Cancel</);
-  assert.match(html, />Delete item</);
+  assert.match(html, />Delete task</);
   assert.match(html, /Home list/);
+  assert.match(html, /aria-label="Back to tasks"/);
 });
 
-test("detail offers a board, list, and position move flow", () => {
+test("detail can move a parent task between account-wide lists", () => {
   vm.runInContext(`
-    state.boards = [{ id: "board", name: "Current" }, { id: "other", name: "Other" }];
-    state.board = { id: "board", name: "Current", buckets: [{ id: "list", name: "Inbox", openCount: 1, limitCount: 20, tasks: [{ id: "task", bucketId: "list", title: "Move me", kind: "action", status: "queued", done: false }] }] };
+    state.workspaceLists = [
+      { id: "list", boardId: "board", name: "Inbox" },
+      { id: "other-list", boardId: "other", name: "Launch" },
+    ];
+    state.selectedSubtasks = [];
   `, app);
-  const task = vm.runInContext("state.board.buckets[0].tasks[0]", app);
-  const html = app.detailHTML(task);
-
-  assert.match(html, /id="open-move"[^>]*>[^<]*<span>Current \/ Inbox<\/span><b>Move…<\/b>/);
-  assert.match(html, /id="move-board"/);
-  assert.match(html, /id="move-list"/);
-  assert.match(html, /id="move-position"/);
-  assert.match(html, /id="move-item"[^>]*>Move item<\/button>/);
-
-  const fullBoard = vm.runInContext(`({ id: "full", buckets: [{ id: "full-list", name: "Full", openCount: 20, limitCount: 20, tasks: [] }] })`, app);
-  assert.match(app.moveListOptionsHTML(fullBoard, task), /value="full-list"[^>]*>Full<\/option>/);
-  assert.doesNotMatch(app.moveListOptionsHTML(fullBoard, task), /disabled|full\)/);
-  const reference = vm.runInContext(`({ ...state.board.buckets[0].tasks[0], kind: "reference" })`, app);
-  assert.doesNotMatch(app.moveListOptionsHTML(fullBoard, reference), /disabled/);
-});
-
-test("move positions treat a parent and its subtasks as one group", () => {
-  const list = vm.runInContext(`({ id: "list", tasks: [
-    { id: "other" },
-    { id: "parent", bucketId: "list" },
-    { id: "child-one", parentTaskId: "parent" },
-    { id: "child-two", parentTaskId: "parent" },
-  ] })`, app);
-  const parent = list.tasks[1];
-  const html = app.movePositionOptionsHTML(list, parent);
-
-  assert.equal((html.match(/<option/g) || []).length, 2);
-  assert.match(html, /value="0"[^>]*>1 \(top\)/);
-  assert.match(html, /value="1" selected[^>]*>2 \(bottom\)/);
-  assert.doesNotMatch(html, /value="2"/);
+  const html = app.workspaceDetailHTML({ id: "task", bucketId: "list", title: "Move me", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" });
+  assert.match(html, /id="workspace-detail-list" name="bucketId"/);
+  assert.match(html, /value="list" selected>Inbox<\/option>/);
+  assert.match(html, /value="other-list" >Launch<\/option>|value="other-list">Launch<\/option>/);
+  assert.doesNotMatch(html, /id="move-panel"|id="move-position"/);
 });
 
 test("footer reports live Working and Review counts", () => {
