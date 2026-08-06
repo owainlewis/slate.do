@@ -106,8 +106,9 @@ slate tasks list --list <list-id> --done false
 slate tasks get <task-id>
 ```
 
-Subtasks are one level deep. They are normal tasks with independent status,
-priority, planned date, and agent assignment.
+Subtasks are one level deep. They inherit and remain in their parent task's
+list, while keeping independent status, priority, planned date, and agent
+assignment. Move the parent when the whole task group belongs in another list.
 
 Board and list responses include every active task plus the 20 most recently
 updated completed tasks in each list. Task collections omit descriptions to

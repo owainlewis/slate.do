@@ -10,6 +10,8 @@ const styles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
 const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 const cliGuide = fs.readFileSync(path.join(__dirname, "cli.html"), "utf8");
 const favicon = fs.readFileSync(path.join(__dirname, "favicon.svg"), "utf8");
+const repoRoot = path.resolve(__dirname, "../../../..");
+const readRepoFile = name => fs.readFileSync(path.join(repoRoot, name), "utf8");
 const app = { console, Date, URLSearchParams, window: { addEventListener() {} } };
 vm.createContext(app);
 vm.runInContext(source, app, { filename });
@@ -74,6 +76,30 @@ test("the CLI guide covers installation, authentication, and agent workflows", (
   assert.match(cliGuide, /AGENTS\.md/);
   assert.match(cliGuide, /Poll no faster than once every five seconds/);
   assert.match(cliGuide, /Retry-After/);
+});
+
+test("public docs keep subtasks in their parent list with independent workflow fields", () => {
+  const docs = [
+    readRepoFile("README.md"),
+    readRepoFile("docs/prd.md"),
+    readRepoFile("docs/cli.md"),
+    cliGuide,
+  ];
+
+  for (const document of docs) {
+    assert.match(document, /one level/i);
+    assert.match(document, /inherit(?:s)? and remain(?:s)?[^.]*parent(?: task)?(?:'s)?\s+list/i);
+    assert.match(document, /(?:independent|own)[^.]*status/i);
+    assert.match(document, /(?:independent|own)[^.]*priority/i);
+    assert.match(document, /(?:independent|own)[^.]*planned date/i);
+    assert.match(document, /(?:independent|own)[^.]*(?:owner|agent\s+assignment)/i);
+    assert.doesNotMatch(document, /subtasks?[^.]*\b(?:own|independent) list/i);
+  }
+
+  const productDoc = readRepoFile("docs/prd.md");
+  assert.match(productDoc, /derives? `listId` from the parent/i);
+  assert.match(productDoc, /does not allow independent subtask list assignment/i);
+  assert.match(productDoc, /moving the parent[^.]*moves its subtasks/i);
 });
 
 test("early access form shows every required field and password requirements", () => {
