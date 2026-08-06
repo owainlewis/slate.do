@@ -1020,6 +1020,80 @@ func TestInboxCaptureIdempotencySurvivesInboxReplacement(t *testing.T) {
 	}
 }
 
+func TestInboxCaptureSerializesResolutionAndCreationAgainstInboxDeletion(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Concurrent capture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedInbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "First Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementInbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Replacement Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inboxID, err := store.InboxBucketID(ctx, userID); err != nil || inboxID != selectedInbox.ID {
+		t.Fatalf("selected Inbox = %q, %v; want %q", inboxID, err, selectedInbox.ID)
+	}
+
+	const idempotencyKey = "atomic-inbox-capture"
+	idempotencyLock, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idempotencyLock.Rollback(ctx)
+	if _, err := idempotencyLock.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":"+idempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+
+	type captureResult struct {
+		task Task
+		err  error
+	}
+	captured := make(chan captureResult, 1)
+	go func() {
+		task, err := store.CreateInboxTask(ctx, userID, CreateTaskInput{
+			Title:          "Atomic capture",
+			IdempotencyKey: idempotencyKey,
+		})
+		captured <- captureResult{task: task, err: err}
+	}()
+	waitForBlockedQueryContaining(t, ctx, db, "pg_advisory_xact_lock")
+
+	if err := store.DeleteBucket(ctx, userID, selectedInbox.ID); err != nil {
+		t.Fatalf("delete selected Inbox: %v", err)
+	}
+	if err := idempotencyLock.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result := <-captured
+	if result.err != nil {
+		t.Fatalf("capture racing Inbox deletion: %v", result.err)
+	}
+	if result.task.ID == "" || result.task.BucketID != replacementInbox.ID {
+		t.Fatalf("capture = %#v, want replacement Inbox %q", result.task, replacementInbox.ID)
+	}
+	if inboxID, err := store.InboxBucketID(ctx, userID); err != nil || inboxID != replacementInbox.ID {
+		t.Fatalf("remaining Inbox = %q, %v; want %q", inboxID, err, replacementInbox.ID)
+	}
+	persisted, err := store.GetTask(ctx, userID, result.task.ID)
+	if err != nil {
+		t.Fatalf("load captured task: %v", err)
+	}
+	if persisted.BucketID != replacementInbox.ID {
+		t.Fatalf("persisted capture list = %q, want %q", persisted.BucketID, replacementInbox.ID)
+	}
+}
+
 func TestTaskCreationAcceptsALegacyStoredFingerprint(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
