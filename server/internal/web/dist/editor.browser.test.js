@@ -639,6 +639,26 @@ test("a delayed off-page subtask toggle reconciles overview totals", async t => 
   assert.deepEqual(pageErrors, []);
 });
 
+test("a delayed subtask toggle refreshes the current agent work page", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Mark Research examples not complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+
+  state.releaseStatus();
+  await waitFor(() => state.subtasks.find(item => item.id === "task-child")?.status === "queued");
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/agents/agent-research/work?page=2&pageSize=50").length >= 2);
+  await page.getByRole("button", { name: /Research examples.*Ready/ }).waitFor();
+
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("workspace mutations cannot cross into retained agent context", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 

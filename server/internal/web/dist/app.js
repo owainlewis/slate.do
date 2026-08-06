@@ -3029,6 +3029,7 @@ function bindWorkspaceDetail(options = {}) {
       const updated = await api.patch(`/api/v1/tasks/${encodeURIComponent(subtask.id)}/status`, { status: subtask.done ? "queued" : "done" });
       reconcileLoadedTask(updated, { previousTask: subtask });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        await refreshCurrentAgentWorkPage();
         if (state.selectedTask?.id === parentID) {
           const focus = captureDetailFocus();
           preserveTaskDraft();
