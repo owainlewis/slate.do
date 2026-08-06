@@ -381,6 +381,21 @@ let taskDetailVersion = 0;
 let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
 const agentDetailLoadVersions = new Map();
+const taskMutationTurns = new Map();
+
+async function serializeTaskMutation(taskID, mutation) {
+  const previous = taskMutationTurns.get(taskID) || Promise.resolve();
+  let release;
+  const turn = new Promise(resolve => { release = resolve; });
+  taskMutationTurns.set(taskID, turn);
+  await previous.catch(() => {});
+  try {
+    return await mutation();
+  } finally {
+    release();
+    if (taskMutationTurns.get(taskID) === turn) taskMutationTurns.delete(taskID);
+  }
+}
 
 function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   if (err?.status !== 401 || !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return false;
@@ -714,6 +729,7 @@ async function loadMoreWorkspaceTasks() {
 
 function resetAuthenticatedState() {
   goalSaveChains.clear();
+  taskMutationTurns.clear();
   themeSaveChain = Promise.resolve();
   themeChangeVersion += 1;
   state.me = null;
@@ -2957,6 +2973,7 @@ function bindWorkspaceDetail(options = {}) {
       if (refreshed !== false) restoreDetailFocus(focus);
       return refreshed;
     } catch (err) {
+      if (!boundContextIsCurrent()) return false;
       if (handleError(err)) return false;
       state.error = `The task was updated, but this view couldn’t be refreshed: ${err.message}`;
       render();
@@ -3224,7 +3241,7 @@ function bindWorkspaceDetail(options = {}) {
         scheduledDate: form.get("scheduledDate"),
       };
       if (!parentTaskID) input.bucketId = form.get("bucketId");
-      const updated = await api.patch(`/api/v1/tasks/${taskID}/status`, input);
+      const updated = await serializeTaskMutation(taskID, () => api.patch(`/api/v1/tasks/${taskID}/status`, input));
       reconcileLoadedTask(updated, { previousTask });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);

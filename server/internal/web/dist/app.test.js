@@ -1629,6 +1629,22 @@ test("an older failed agent detail refresh cannot reject after a newer refresh",
   vm.runInContext(`state.me = null; state.agents = []; state.agentDetail = null;`, app);
 });
 
+test("an authenticated-state reset abandons old serialized task mutations", async () => {
+  let releaseOldMutation;
+  app.pendingOldTaskMutation = new Promise(resolve => { releaseOldMutation = resolve; });
+  const oldMutation = app.serializeTaskMutation("task-session-boundary", () => app.pendingOldTaskMutation);
+  assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), true);
+
+  app.resetAuthenticatedState();
+  assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), false);
+
+  const newMutation = app.serializeTaskMutation("task-session-boundary", async () => "new session saved");
+  assert.equal(await newMutation, "new session saved");
+  releaseOldMutation("old session abandoned");
+  assert.equal(await oldMutation, "old session abandoned");
+  assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), false);
+});
+
 const board = {
   buckets: [
     {

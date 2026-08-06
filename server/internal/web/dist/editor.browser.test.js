@@ -546,6 +546,31 @@ test("a delayed agent task save refreshes the work page without reopening detail
   assert.deepEqual(pageErrors, []);
 });
 
+test("concurrent saves of the same agent task commit in user order", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Older pending title");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Newest queued title");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  assert.equal(state.patches.length, 0);
+
+  state.releaseStatus();
+  await page.getByRole("button", { name: /Newest queued title/ }).waitFor();
+  await waitFor(() => state.patches.length === 2);
+
+  assert.deepEqual(state.patches.map(patch => patch.title), ["Older pending title", "Newest queued title"]);
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Newest queued title");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("an in-flight work refresh preserves edits in a newer task detail", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
@@ -772,6 +797,28 @@ test("a delayed post-save refresh failure cannot render into a newer route", asy
   assert.equal(await page.getByRole("heading", { name: "Inbox", exact: true }).isVisible(), true);
   assert.equal(await page.getByRole("alert").count(), 0);
   assert.equal(state.patches.at(-1).title, "Committed before navigation");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed subtask refresh failure cannot render into a newer route", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Committed subtask");
+  state.delayNextWorkspaceTasks = true;
+  state.failNextWorkspaceTasks = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+
+  await page.getByRole("link", { name: /Inbox/ }).click();
+  await page.getByRole("heading", { name: "Inbox", exact: true }).waitFor();
+  state.releaseWorkspaceTasks();
+  await waitFor(() => state.delayedWorkspaceTasksCompleted);
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/inbox");
+  assert.equal(await page.getByRole("alert").count(), 0);
+  assert.equal(state.subtasks.some(task => task.title === "Committed subtask"), true);
   assert.deepEqual(pageErrors, []);
 });
 
