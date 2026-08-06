@@ -154,6 +154,7 @@ const state = {
   agentAssignDraft: null,
   agentTaskFocusID: "",
   agentTaskMutationError: "",
+  agentTaskRefreshError: "",
   agentLifecycleNotice: "",
   agentLifecycleError: "",
   agentLifecyclePending: "",
@@ -423,6 +424,7 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
   state.agentTaskMutationError = "";
+  state.agentTaskRefreshError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -452,6 +454,7 @@ function prepareAgentRoute(route) {
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
   state.agentTaskMutationError = "";
+  state.agentTaskRefreshError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -798,6 +801,7 @@ function resetAuthenticatedState() {
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
   state.agentTaskMutationError = "";
+  state.agentTaskRefreshError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -1606,6 +1610,25 @@ function syncAgentTaskMutationError() {
     element.textContent = state.agentTaskMutationError;
     element.hidden = !state.agentTaskMutationError;
   });
+}
+
+function syncTaskDetailError() {
+  const element = document.querySelector(".detail-error");
+  if (element) element.textContent = state.error;
+}
+
+function clearResolvedAgentTaskRefreshError() {
+  const message = state.agentTaskRefreshError;
+  state.agentTaskRefreshError = "";
+  if (!message) return;
+  if (state.agentTaskMutationError === message) {
+    state.agentTaskMutationError = "";
+    syncAgentTaskMutationError();
+  }
+  if (state.error === message) {
+    state.error = "";
+    syncTaskDetailError();
+  }
 }
 
 function themeSwitchHTML(theme) {
@@ -3118,6 +3141,7 @@ function bindWorkspaceDetail(options = {}) {
       state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
       syncWorkspaceSidebarCounts();
       syncWorkspaceListError();
+      clearResolvedAgentTaskRefreshError();
       if (state.selectedTask) return true;
       const agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || "";
       const agentControlFocusID = agentTaskFocusID ? "" : document.activeElement?.id || "";
@@ -3128,8 +3152,12 @@ function bindWorkspaceDetail(options = {}) {
     } catch (err) {
       if (!boundContextIsCurrent() || state.view !== refreshView) return false;
       if (handleError(err)) return false;
-      state.agentTaskMutationError = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
-      if (!state.selectedTask) render();
+      state.agentTaskRefreshError = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      state.agentTaskMutationError = state.agentTaskRefreshError;
+      if (state.selectedTask) {
+        state.error = state.agentTaskMutationError;
+        syncTaskDetailError();
+      } else render();
       return false;
     }
   };
@@ -3266,6 +3294,7 @@ function bindWorkspaceDetail(options = {}) {
       : [{ ...state.selectedTask }, ...state.selectedSubtasks.filter(item => item.parentTaskId === taskID).map(item => ({ ...item }))];
     const detailVersion = taskDetailVersion;
     state.agentTaskMutationError = "";
+    state.agentTaskRefreshError = "";
     preserveTaskDraft();
     try {
       const deleted = await serializeTaskMutation(taskID, () => api.del(`/api/v1/tasks/${taskID}`));
@@ -3345,6 +3374,7 @@ function bindWorkspaceDetail(options = {}) {
     const previousTask = { ...state.selectedTask };
     const detailVersion = taskDetailVersion;
     state.agentTaskMutationError = "";
+    state.agentTaskRefreshError = "";
     preserveTaskDraft();
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     submit.disabled = true;
@@ -4444,6 +4474,7 @@ async function openAgentTask(element) {
   if (!item) return;
   state.agentTaskFocusID = item.id;
   state.agentTaskMutationError = "";
+  state.agentTaskRefreshError = "";
   const opened = await openTaskDetail(item.id, element, {
     handleError: handleAgentUnauthorized,
     onError: err => { state.agentAssignNotice = `Item couldn’t be opened: ${err.message}`; },
@@ -4475,6 +4506,7 @@ async function refreshAgentSurface(options = {}) {
     if (!detailResult.value) return false;
     state.agentDetailLoadState = "ready";
     state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
+    clearResolvedAgentTaskRefreshError();
     options.beforeTaskDetailRender?.();
     render();
     return true;
@@ -4485,6 +4517,7 @@ async function refreshAgentSurface(options = {}) {
       const message = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
       options.beforeTaskDetailRender?.();
       state.agentDetailLoadState = "ready";
+      state.agentTaskRefreshError = message;
       state.agentTaskMutationError = message;
       state.error = message;
       render();

@@ -981,6 +981,96 @@ test("a current subtask refresh failure releases workspace loading", async t => 
   assert.deepEqual(pageErrors, []);
 });
 
+test("a background agent refresh failure is visible in a newer task detail", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Parent committed before refresh failure");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  const childBrief = page.getByLabel("Task brief", { exact: true });
+  await childBrief.fill("Newer child draft during refresh failure");
+  state.failNextAgentDetail = true;
+
+  state.releaseStatus();
+  await page.locator(".detail-error").filter({ hasText: "The task was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
+
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Parent committed before refresh failure");
+  assert.equal(await childBrief.inputValue(), "Newer child draft during refresh failure");
+  assert.equal(await childBrief.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a recovered agent refresh clears only its refresh warning", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Child committed before recovery");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  state.failNextAgentDetail = true;
+  state.releaseStatus();
+
+  const warning = page.locator(".detail-error").filter({ hasText: "The task was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" });
+  await warning.waitFor();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Refresh recovery subtask");
+  state.delayNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  const parentBrief = page.getByLabel("Task brief", { exact: true });
+  await parentBrief.fill("Focused parent draft during recovery");
+  state.releaseSubtask();
+
+  await page.getByText("Refresh recovery subtask", { exact: true }).waitFor();
+  await warning.waitFor({ state: "hidden" });
+  assert.equal(await parentBrief.inputValue(), "Focused parent draft during recovery");
+  assert.equal(await parentBrief.evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  assert.equal(await page.locator("[data-agent-task-mutation-error]").isHidden(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an unresolved background mutation failure survives an unrelated successful refresh", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Parent save that will fail");
+  state.delayNextStatus = true;
+  state.failNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  const parentBrief = page.getByLabel("Task brief", { exact: true });
+  await parentBrief.fill("Newer parent draft after failed save");
+
+  state.releaseStatus();
+  const failure = page.locator(".detail-error").filter({ hasText: "Couldn’t save “Parent save that will fail”: Could not save task" });
+  await failure.waitFor();
+
+  await page.getByLabel("Subtask title", { exact: true }).fill("Unrelated successful subtask");
+  state.delayNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await parentBrief.fill("Focused newer draft during unrelated success");
+  state.releaseSubtask();
+
+  await page.getByText("Unrelated successful subtask", { exact: true }).waitFor();
+  assert.equal(await failure.isVisible(), true);
+  assert.equal(await parentBrief.inputValue(), "Focused newer draft during unrelated success");
+  assert.equal(await parentBrief.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("an agent subtask refresh failure preserves unrelated task drafts", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
