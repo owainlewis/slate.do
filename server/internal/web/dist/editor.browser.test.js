@@ -585,6 +585,33 @@ test("concurrent saves of the same agent task commit in user order", async t => 
   assert.deepEqual(pageErrors, []);
 });
 
+test("a queued subtask toggle commits after its pending child save", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Saved child before toggle");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByRole("button", { name: "Mark Research examples not complete", exact: true }).click();
+  assert.equal(state.patches.length, 0);
+
+  state.releaseStatus();
+  await page.getByRole("button", { name: "Mark Saved child before toggle complete", exact: true }).waitFor();
+  await waitFor(() => state.patches.length === 2);
+
+  assert.equal(state.patches[0].title, "Saved child before toggle");
+  assert.equal(state.patches[0].status, "done");
+  assert.equal(state.patches[1].status, "queued");
+  assert.equal(state.subtasks[0].title, "Saved child before toggle");
+  assert.equal(state.subtasks[0].done, false);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("an in-flight work refresh preserves edits in a newer task detail", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 

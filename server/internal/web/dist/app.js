@@ -3096,7 +3096,11 @@ function bindWorkspaceDetail(options = {}) {
     state.subtaskError = "";
     element.disabled = true;
     try {
-      const updated = await api.patch(`/api/v1/tasks/${encodeURIComponent(subtask.id)}/status`, { status: subtask.done ? "queued" : "done" });
+      const updated = await serializeTaskMutation(subtask.id, async ({ queued }) => {
+        const current = queued ? await api.get(`/api/v1/tasks/${encodeURIComponent(subtask.id)}`) : subtask;
+        return api.patch(`/api/v1/tasks/${encodeURIComponent(subtask.id)}/status`, { status: current.done || current.status === "done" ? "queued" : "done" });
+      });
+      if (!updated) return;
       reconcileLoadedTask(updated, { previousTask: subtask });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
         await refreshCurrentAgentSurface();
@@ -3192,7 +3196,8 @@ function bindWorkspaceDetail(options = {}) {
     state.agentTaskMutationError = "";
     preserveTaskDraft();
     try {
-      await api.del(`/api/v1/tasks/${taskID}`);
+      const deleted = await serializeTaskMutation(taskID, () => api.del(`/api/v1/tasks/${taskID}`));
+      if (!deleted) return;
       const agentCacheChanged = deletedTasks.reduce((changed, task) => reconcileLoadedTask(task, { deleted: true, deferAgentRender: true }) || changed, false);
       if (agentCacheChanged && !state.selectedTask && ["agent-detail", "agent-work"].includes(state.view)) {
         state.agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || taskID;
