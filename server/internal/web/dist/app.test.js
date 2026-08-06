@@ -2015,10 +2015,15 @@ test("dropping a parent moves its ordered subtask group through the move endpoin
   vm.runInContext(`
     savedTaskMoveRender = render;
     savedTaskMoveReload = reload;
+    savedTaskMoveRefresh = refreshAfterTaskMutation;
     savedTaskMovePost = api.post;
     render = () => {};
     reload = async () => {};
-    api.post = async (path, input) => { taskMoveRequests.push({ path, input }); return {}; };
+    refreshAfterTaskMutation = async () => {};
+    api.post = async (path, input) => {
+      taskMoveRequests.push({ path, input });
+      return { id: "parent", bucketId: "destination", status: "queued", done: false };
+    };
     state.board = { buckets: [
       { id: "source", tasks: [
         { id: "before", bucketId: "source" },
@@ -2045,9 +2050,80 @@ test("dropping a parent moves its ordered subtask group through the move endpoin
   vm.runInContext(`
     render = savedTaskMoveRender;
     reload = savedTaskMoveReload;
+    refreshAfterTaskMutation = savedTaskMoveRefresh;
     api.post = savedTaskMovePost;
     state.board = null;
   `, app);
+});
+
+test("a completed list drag reconciles a task detail opened after navigation", async () => {
+  const refreshes = [];
+  app.taskMoveRefreshes = refreshes;
+  app.location = { pathname: "/app/boards/board-one", search: "", origin: "http://localhost" };
+  app.movedListControl = { value: "source" };
+  app.document = {
+    querySelector(selector) {
+      if (selector === "#workspace-detail-form") return {
+        querySelector: field => field === '[name="bucketId"]' ? app.movedListControl : null,
+      };
+      return null;
+    },
+  };
+  vm.runInContext(`
+    savedCrossRouteMoveRender = render;
+    savedCrossRouteMoveRefresh = refreshAfterTaskMutation;
+    savedCrossRouteMovePost = api.post;
+    savedCrossRouteMoveAuthVersion = authVersion;
+    savedCrossRouteMoveRouteVersion = routeVersion;
+    render = () => {};
+    refreshAfterTaskMutation = async version => { taskMoveRefreshes.push(version); return true; };
+    authVersion = 9;
+    routeVersion = 12;
+    state.me = { id: "owner" };
+    state.workspaceLists = [
+      { id: "source", boardId: "board-one", name: "Source", openCount: 1 },
+      { id: "destination", boardId: "board-one", name: "Destination", openCount: 0 },
+    ];
+    state.board = { buckets: [
+      { id: "source", tasks: [{ id: "parent", bucketId: "source", status: "queued", done: false }] },
+      { id: "destination", tasks: [] },
+    ] };
+    state.workspaceTasks = [{ id: "parent", bucketId: "source", status: "queued", done: false }];
+    api.post = async () => {
+      await new Promise(resolve => { releaseCrossRouteMove = resolve; });
+      return { id: "parent", bucketId: "destination", status: "queued", done: false };
+    };
+  `, app);
+
+  const moving = app.dropTask("parent", "destination", 0);
+  while (typeof app.releaseCrossRouteMove !== "function") await new Promise(resolve => setImmediate(resolve));
+  app.location.pathname = "/app/agents/agent-research/work";
+  vm.runInContext(`
+    routeVersion = 13;
+    state.view = "agent-work";
+    state.selectedTask = { id: "parent", bucketId: "source", status: "queued", done: false };
+    releaseCrossRouteMove();
+  `, app);
+  await moving;
+
+  assert.equal(vm.runInContext("state.selectedTask.bucketId", app), "destination");
+  assert.equal(app.movedListControl.value, "destination");
+  assert.deepEqual(refreshes, [12]);
+
+  vm.runInContext(`
+    render = savedCrossRouteMoveRender;
+    refreshAfterTaskMutation = savedCrossRouteMoveRefresh;
+    api.post = savedCrossRouteMovePost;
+    authVersion = savedCrossRouteMoveAuthVersion;
+    routeVersion = savedCrossRouteMoveRouteVersion;
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+    state.selectedTask = null;
+  `, app);
+  delete app.location;
+  delete app.document;
 });
 
 test("adding an item is blocked while a filter is active", () => {

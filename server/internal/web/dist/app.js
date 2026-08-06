@@ -176,6 +176,7 @@ const state = {
   workspaceNextCursor: "",
   workspaceLoading: false,
   workspaceRefreshOnDetailClose: false,
+  agentRefreshOnDetailClose: "",
   workspaceFiltersOpen: false,
   theme: "",
   moveNotice: null,
@@ -473,6 +474,9 @@ function prepareAgentRoute(route) {
 async function applyRoute() {
   const version = ++routeVersion;
   const route = parseRoute(location.pathname);
+  if (state.agentRefreshOnDetailClose && state.agentRefreshOnDetailClose !== route.agentId) {
+    state.agentRefreshOnDetailClose = "";
+  }
   if (route.name !== "board" && !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) {
     taskDetailVersion += 1;
     state.selectedTask = null;
@@ -561,6 +565,7 @@ async function applyRoute() {
         render();
         return;
       }
+      state.agentRefreshOnDetailClose = "";
       state.agentDetailLoadState = "ready";
       render();
       return;
@@ -833,6 +838,7 @@ function resetAuthenticatedState() {
   state.workspaceNextCursor = "";
   state.workspaceLoading = false;
   state.workspaceRefreshOnDetailClose = false;
+  state.agentRefreshOnDetailClose = "";
   state.workspaceFiltersOpen = false;
   state.theme = "";
   state.routeError = null;
@@ -3133,9 +3139,9 @@ function bindWorkspaceDetail(options = {}) {
   const captureDetailFocus = captureTaskDetailFocus;
   const restoreDetailFocus = restoreTaskDetailFocus;
   const refreshAfterSubtaskMutation = async focus => {
+    let latestFocus = focus;
     try {
       if (boundAgentID) preserveTaskDraft();
-      let latestFocus = focus;
       const refreshed = await refresh({
         preserveTaskDetail: Boolean(boundAgentID),
         beforeTaskDetailRender: () => {
@@ -3149,9 +3155,11 @@ function bindWorkspaceDetail(options = {}) {
     } catch (err) {
       if (!boundContextIsCurrent()) return false;
       if (handleError(err)) return false;
+      latestFocus = captureDetailFocus() || latestFocus;
+      preserveTaskDraft();
       state.error = `The task was updated, but this view couldn’t be refreshed: ${err.message}`;
       render();
-      restoreDetailFocus(focus);
+      restoreDetailFocus(latestFocus);
       return false;
     }
   };
@@ -3273,7 +3281,11 @@ function bindWorkspaceDetail(options = {}) {
     });
   };
   const close = async () => {
-    const refreshWorkspace = state.workspaceRefreshOnDetailClose && parseRoute(location.pathname).name === "workspace";
+    const currentRoute = parseRoute(location.pathname);
+    const closedTaskID = state.selectedTask?.id || "";
+    const refreshWorkspace = state.workspaceRefreshOnDetailClose && currentRoute.name === "workspace";
+    const refreshAgent = state.agentRefreshOnDetailClose === currentRoute.agentId
+      && ["agent-detail", "agent-work"].includes(currentRoute.name);
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
@@ -3293,6 +3305,27 @@ function bindWorkspaceDetail(options = {}) {
         state.error = err.message;
         renderPreservingCurrentTaskDetail();
       }
+      return;
+    }
+    if (refreshAgent) {
+      state.agentRefreshOnDetailClose = "";
+      state.agentTaskFocusID = closedTaskID;
+      render();
+      let detailFocus = captureDetailFocus();
+      let agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || closedTaskID;
+      await refreshAgentSurface({
+        preserveTaskDetail: true,
+        beforeTaskDetailRender: () => {
+          if (state.selectedTask) {
+            detailFocus = captureDetailFocus() || detailFocus;
+            preserveTaskDraft();
+            return;
+          }
+          agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || agentTaskFocusID;
+          state.agentTaskFocusID = agentTaskFocusID;
+        },
+        afterTaskDetailRender: () => restoreDetailFocus(detailFocus),
+      });
       return;
     }
     render();
@@ -3714,7 +3747,10 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
       return;
     }
   } else if (["agent-detail", "agent-work"].includes(currentRoute.name)) {
-    if (state.selectedTask) return true;
+    if (state.selectedTask) {
+      state.agentRefreshOnDetailClose = currentRoute.agentId;
+      return true;
+    }
     let focus = captureTaskDetailFocus();
     return refreshAgentSurface({
       preserveTaskDetail: true,
@@ -5130,11 +5166,13 @@ function clearDropMarks() {
 
 async function dropTask(taskId, bucketId, index) {
   const sessionVersion = authVersion;
+  const userID = state.me?.id;
   const startedRouteVersion = routeVersion;
   const contextIsCurrent = () => sessionVersion === authVersion && startedRouteVersion === routeVersion;
   const task = findTask(taskId);
   const target = state.board.buckets.find(b => b.id === bucketId);
   if (!task || !target) return;
+  let previousTask = { ...task };
   const children = state.board.buckets.flatMap(list => list.tasks || []).filter(item => item.parentTaskId === taskId);
   const taskGroup = [task, ...children];
   const taskGroupIDs = new Set(taskGroup.map(item => item.id));
@@ -5146,15 +5184,24 @@ async function dropTask(taskId, bucketId, index) {
   target.tasks.splice(Math.min(index, target.tasks.length), 0, ...taskGroup);
   state.error = "";
   render();
+  let moved;
   try {
-    const moved = await serializeTaskMutation(taskId, () => api.post(`/api/v1/tasks/${taskId}/move`, { bucketId, position: index }));
+    moved = await serializeTaskMutation(taskId, async ({ queued }) => {
+      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(taskId)}`);
+      return api.post(`/api/v1/tasks/${encodeURIComponent(taskId)}/move`, { bucketId, position: index });
+    });
     if (moved === null) return;
   } catch (err) {
     if (!contextIsCurrent()) return;
     state.error = err.message;
+    await reload();
+    return false;
   }
-  if (!contextIsCurrent()) return;
-  await reload();
+  if (!moved || !sessionIsCurrent(sessionVersion, userID)) return false;
+  reconcileTaskCompletion(moved, previousTask);
+  clearTaskMutationError(taskId);
+  await refreshAfterTaskMutation(startedRouteVersion);
+  return true;
 }
 
 async function dropBucket(bucketId, index) {

@@ -1079,6 +1079,86 @@ test("a delayed Flow drop refreshes Agent Work after cross-route navigation", as
   assert.deepEqual(pageErrors, []);
 });
 
+test("a delayed Flow drop refreshes Agent Work after another detail closes", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/tasks?view=flow`);
+  state.delayNextStatus = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+  await page.getByRole("tab", { name: "Work", exact: true }).click();
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  const brief = page.getByLabel("Task brief", { exact: true });
+  await brief.fill("Live child draft while parent Flow commits");
+  const workRequests = () => state.requests.filter(request => request.startsWith("GET /api/v1/agents/agent-research/work?")).length;
+  const requestsBeforeRelease = workRequests();
+
+  state.releaseStatus();
+  await waitFor(() => state.patches.length === 1);
+  await page.waitForTimeout(50);
+  assert.equal(workRequests(), requestsBeforeRelease);
+  assert.equal(await brief.inputValue(), "Live child draft while parent Flow commits");
+  assert.equal(await brief.evaluate(element => element === document.activeElement), true);
+
+  state.delayNextAgentWork = true;
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await waitFor(() => typeof state.releaseAgentWork === "function");
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  const parentBrief = page.getByLabel("Task brief", { exact: true });
+  await parentBrief.fill("New parent draft during deferred work refresh");
+  state.releaseAgentWork();
+  await waitFor(() => workRequests() > requestsBeforeRelease);
+  await waitFor(() => state.agentWorkRefreshCompleted);
+  await page.waitForTimeout(50);
+
+  assert.equal(await parentBrief.inputValue(), "New parent draft during deferred work refresh");
+  assert.equal(await parentBrief.evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  const parent = page.getByRole("button", { name: /Publish task-first agents video.*Review/ });
+  await parent.waitFor();
+  assert.equal(await parent.evaluate(element => element === document.activeElement), true);
+
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a failed deferred Agent Work refresh preserves a newly opened detail", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/tasks?view=flow`);
+  state.delayNextStatus = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+  await page.getByRole("tab", { name: "Work", exact: true }).click();
+  await page.getByRole("button", { name: /Research examples/ }).click();
+
+  state.releaseStatus();
+  await waitFor(() => state.patches.length === 1);
+  state.delayNextAgentWork = true;
+  state.failNextAgentWork = true;
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await waitFor(() => typeof state.releaseAgentWork === "function");
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  const brief = page.getByLabel("Task brief", { exact: true });
+  await brief.fill("Live parent draft during failed deferred refresh");
+
+  state.releaseAgentWork();
+  await page.locator(".detail-error").filter({ hasText: "The task was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
+
+  assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 1);
+  assert.equal(await brief.inputValue(), "Live parent draft during failed deferred refresh");
+  assert.equal(await brief.evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  const parent = page.getByRole("button", { name: /Publish task-first agents video/ });
+  assert.equal(await parent.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a delayed workspace detail save refreshes Agent Work after navigation", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
@@ -1570,10 +1650,19 @@ test("a current subtask refresh failure releases workspace loading", async t => 
 
   await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
   await page.getByLabel("Subtask title", { exact: true }).fill("Committed before refresh error");
+  state.delayNextWorkspaceTasks = true;
   state.failNextWorkspaceTasks = true;
   await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+  await page.getByLabel("Title", { exact: true }).fill("Live title during failed refresh");
+  const brief = page.getByLabel("Task brief", { exact: true });
+  await brief.fill("Live focused brief during failed refresh");
+  state.releaseWorkspaceTasks();
 
   await page.getByRole("alert").filter({ hasText: "The task was updated, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Live title during failed refresh");
+  assert.equal(await brief.inputValue(), "Live focused brief during failed refresh");
+  assert.equal(await brief.evaluate(element => element === document.activeElement), true);
   await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
   assert.equal(await page.getByText("Loading tasks…", { exact: true }).count(), 0);
   assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).isVisible(), true);
