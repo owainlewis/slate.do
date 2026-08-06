@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextTaskCreate: false, delayNextTaskCreate: false, releaseTaskCreate: null, failNextTaskDetail: false, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -158,6 +158,14 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "POST") {
       const input = await requestJSON(request);
+      if (state.delayNextTaskCreate) {
+        state.delayNextTaskCreate = false;
+        await new Promise(resolve => { state.releaseTaskCreate = resolve; });
+      }
+      if (state.failNextTaskCreate) {
+        state.failNextTaskCreate = false;
+        return json(response, { error: "Could not create task" }, 500);
+      }
       const created = { id: `task-created-${state.created.length + 1}`, boardId: "board-one", bucketId: "list-inbox", listName: "Inbox", title: input.title, description: input.description || "", scheduledDate: "", kind: "action", done: false, status: "queued", priority: "", assigneeAgentId: "" };
       state.tasks.unshift(created);
       state.created.push(created);
@@ -249,6 +257,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       return json(response, {});
     }
     if (taskMatch && request.method === "GET") {
+      if (state.failNextTaskDetail) {
+        state.failNextTaskDetail = false;
+        return json(response, { error: "Could not load created task" }, 500);
+      }
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === taskMatch[1]);
       return task ? json(response, task) : json(response, { error: "not found" }, 404);
     }
@@ -2473,6 +2485,102 @@ test("New task captures directly into Inbox and opens a normal task editor", asy
   await page.locator(`[data-open-task="${state.created[0].id}"]`).getByText("Prepare launch brief", { exact: true }).waitFor();
   assert.equal(state.patches.at(-1).title, "Prepare launch brief");
   assert.equal(state.patches.at(-1).priority, "p0");
+});
+
+test("New task keeps a successful capture when the workspace reload fails", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.failNextWorkspaceTasks = true;
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  const recovery = page.getByRole("alert", { name: "Created task recovery" });
+  await recovery.waitFor();
+
+  assert.equal(state.created.length, 1);
+  assert.match(await recovery.textContent(), new RegExp(`Task ID ${state.created[0].id}`));
+  assert.match(await recovery.textContent(), /It couldn’t be opened:/);
+
+  await page.getByRole("button", { name: "Open created task", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "New task");
+  assert.equal(state.created.length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("New task keeps a successful capture when Inbox navigation fails", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).waitFor();
+  state.failNextLists = true;
+  await page.locator("#global-new-task").click();
+  const recovery = page.getByRole("alert", { name: "Created task recovery" });
+  await recovery.waitFor();
+
+  assert.equal(state.created.length, 1);
+  assert.match(await recovery.textContent(), new RegExp(`Task ID ${state.created[0].id}`));
+
+  await page.getByRole("button", { name: "View Inbox", exact: true }).click();
+  await page.getByRole("heading", { name: "Inbox", exact: true }).waitFor();
+  assert.equal(state.created.length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("New task keeps a successful capture when its detail fetch fails", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.failNextTaskDetail = true;
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  const recovery = page.getByRole("alert", { name: "Created task recovery" });
+  await recovery.waitFor();
+
+  assert.equal(state.created.length, 1);
+  assert.match(await recovery.textContent(), /It couldn’t be opened: Could not load created task/);
+
+  await page.getByRole("button", { name: "Open created task", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "New task");
+  assert.equal(state.created.length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("New task reports a pre-commit POST failure as a normal capture error", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.failNextTaskCreate = true;
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Could not create task" }).waitFor();
+
+  assert.equal(state.created.length, 0);
+  assert.equal(await page.getByRole("alert", { name: "Created task recovery" }).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("New task keeps route ownership when capture finishes after navigation", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.delayNextTaskCreate = true;
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await waitFor(() => typeof state.releaseTaskCreate === "function");
+
+  await page.getByRole("link", { name: "Today", exact: true }).click();
+  await page.getByRole("heading", { name: "Today", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Creating…", exact: true }).isDisabled(), true);
+
+  state.releaseTaskCreate();
+  const recovery = page.getByRole("alert", { name: "Created task recovery" });
+  await recovery.waitFor();
+
+  assert.equal(new URL(page.url()).pathname, "/app/today");
+  assert.equal(await page.getByRole("heading", { name: "Today", exact: true }).isVisible(), true);
+  assert.match(await recovery.textContent(), /You changed pages before Slate could open the task/);
+  assert.equal(await page.getByRole("button", { name: "New task", exact: true }).isDisabled(), true);
+  assert.equal(state.created.length, 1);
+
+  await page.getByRole("button", { name: "Open created task", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "New task");
+  assert.equal(state.created.length, 1);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("New task does not replace an unsaved task without confirmation", async t => {

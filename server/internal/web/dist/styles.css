@@ -994,6 +994,11 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .status-notice span { flex: 1; }
 .status-notice button { border: 0; background: transparent; color: var(--accent); font-weight: 650; }
 .status-notice #dismiss-notice { width: 24px; height: 24px; padding: 4px; color: var(--faint); }
+.new-task-recovery { flex-wrap: wrap; align-items: flex-start; }
+.new-task-recovery > div { flex: 1 1 100%; display: grid; gap: 3px; line-height: 1.4; }
+.new-task-recovery strong { color: var(--ink); }
+.new-task-recovery button { padding: 2px 0; }
+.sidebar .new-task-recovery { margin: 0 8px; }
 
 /* ---------- Login ---------- */
 .login {
