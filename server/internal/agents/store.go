@@ -505,7 +505,7 @@ func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentI
 }
 
 const workSelect = `
-	SELECT t.id::text, t.board_id::text, b.name, t.bucket_id::text, bucket.name,
+	SELECT t.id::text, COALESCE(t.parent_task_id::text, ''), t.board_id::text, b.name, t.bucket_id::text, bucket.name,
 		t.title, '', COALESCE(t.scheduled_date::text, ''), t.kind,
 		t.done, t.status, COALESCE(t.assignee_agent_id::text, ''), t.created_at, t.updated_at
 	FROM tasks t
@@ -519,7 +519,7 @@ func scanWorkItems(rows pgx.Rows) ([]WorkItem, error) {
 	for rows.Next() {
 		var item WorkItem
 		if err := rows.Scan(
-			&item.ID, &item.BoardID, &item.BoardName, &item.BucketID, &item.BucketName,
+			&item.ID, &item.ParentTaskID, &item.BoardID, &item.BoardName, &item.BucketID, &item.BucketName,
 			&item.Title, &item.Description, &item.ScheduledDate, &item.Kind,
 			&item.Done, &item.Status, &item.AssigneeAgentID, &item.CreatedAt, &item.UpdatedAt,
 		); err != nil {

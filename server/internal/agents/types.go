@@ -14,6 +14,7 @@ const (
 
 type WorkItem struct {
 	ID              string    `json:"id"`
+	ParentTaskID    string    `json:"parentTaskId,omitempty"`
 	BoardID         string    `json:"boardId"`
 	BoardName       string    `json:"boardName"`
 	BucketID        string    `json:"bucketId"`

@@ -552,13 +552,20 @@ func assertStoredUsageMatchesTasks(t *testing.T, ctx context.Context, db *databa
 
 func createFreeQuotaAccount(t *testing.T, ctx context.Context, db *database.Pool, store *Store) (string, Board, Bucket) {
 	t.Helper()
-	userID := createFreeIntegrationUser(t, ctx, db)
+	// Build the fixture with pro resource limits, then downgrade it. Other test
+	// packages apply migrations against the same database in parallel; an Inbox
+	// migration can otherwise create the free account's only board between the
+	// user insert and this explicit board creation.
+	userID := createIntegrationUser(t, ctx, db)
 	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Quota"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Tasks", LimitCount: 20})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "DELETE FROM entitlements WHERE user_id = $1", userID); err != nil {
 		t.Fatal(err)
 	}
 	return userID, board, bucket

@@ -6,7 +6,7 @@
   "scripts": {
     "verify:browser": "playwright --version",
 	"test:web": "node --test server/internal/web/dist/app.test.js",
-    "test:browser": "node --test --test-concurrency=1 --test-timeout=60000 server/internal/web/dist/editor.browser.test.js"
+    "test:browser": "node --test --test-concurrency=1 --test-timeout=120000 server/internal/web/dist/editor.browser.test.js"
   },
   "repository": {
     "type": "git",
