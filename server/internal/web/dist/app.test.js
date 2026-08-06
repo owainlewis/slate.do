@@ -2502,6 +2502,36 @@ test("a delayed board deletion from an old account cannot create data in the new
   assert.equal(vm.runInContext("state.board", app), null);
 });
 
+test("board deletion cannot discard an open task draft without confirmation", async () => {
+  const confirmations = [];
+  const deletes = [];
+  app.confirm = message => {
+    confirmations.push(message);
+    return confirmations.length === 1;
+  };
+  app.boardDeleteCalls = deletes;
+  vm.runInContext(`
+    authVersion = 55;
+    state.me = { id: "account-a" };
+    state.boards = [{ id: "board-a", name: "Other" }];
+    state.board = { id: "board-current", name: "Current", buckets: [] };
+    state.selectedTask = { id: "task-a", title: "Open draft" };
+    state.subtaskDraft = "Unsaved step";
+    api.del = async path => { boardDeleteCalls.push(path); return { ok: true }; };
+  `, app);
+
+  await app.deleteBoard("board-a");
+
+  assert.deepEqual(confirmations, [
+    'Delete "Other" and all its lists and items?',
+    "Discard unsaved task changes?",
+  ]);
+  assert.deepEqual(deletes, []);
+  assert.equal(vm.runInContext("state.selectedTask.id", app), "task-a");
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "Unsaved step");
+  app.confirm = () => true;
+});
+
 test("API responses from an old session cannot resume mutation continuations", async () => {
   let releaseOldMutation;
   let continued = false;

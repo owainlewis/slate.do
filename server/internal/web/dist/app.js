@@ -4207,6 +4207,7 @@ async function renameBoard(id, name) {
 async function deleteBoard(id) {
   const board = state.boards.find(item => item.id === id);
   if (!board || !confirm(`Delete "${board.name}" and all its lists and items?`)) return;
+  if (!confirmTaskDetailDiscard()) return;
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   await api.del(`/api/v1/boards/${id}`);
