@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -166,13 +166,13 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const statusMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/status$/);
     if (statusMatch && request.method === "PATCH") {
       const input = await requestJSON(request);
-      if (state.failNextStatus) {
-        state.failNextStatus = false;
-        return json(response, { error: "Could not save task" }, 500);
-      }
       if (state.delayNextStatus) {
         state.delayNextStatus = false;
         await new Promise(resolve => { state.releaseStatus = resolve; });
+      }
+      if (state.failNextStatus) {
+        state.failNextStatus = false;
+        return json(response, { error: "Could not save task" }, 500);
       }
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === statusMatch[1]);
       Object.assign(task, input, { done: input.status === "done" });
@@ -184,6 +184,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       if (state.delayNextDelete) {
         state.delayNextDelete = false;
         await new Promise(resolve => { state.releaseDelete = resolve; });
+      }
+      if (state.failNextDelete) {
+        state.failNextDelete = false;
+        return json(response, { error: "Could not delete task" }, 500);
       }
       const index = state.tasks.findIndex(item => item.id === taskMatch[1]);
       if (index >= 0) {
@@ -519,6 +523,38 @@ test("a delayed agent task save refreshes the work page without reopening detail
   assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
   assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 0);
   assert.equal(await page.getByRole("button", { name: /Delayed agent task title/ }).evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("failed agent mutations report errors after detail has been closed", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Unsaved agent title");
+  state.delayNextStatus = true;
+  state.failNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Newer child draft");
+  state.releaseStatus();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t save “Unsaved agent title”: Could not save task" }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Newer child draft");
+  assert.equal(await page.getByLabel("Title", { exact: true }).evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete task", exact: true }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  state.releaseDelete();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+  assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 

@@ -1094,6 +1094,31 @@ test("deleting an off-page assigned subtask reconciles agent pagination and stat
   vm.runInContext(`state.agentDetail = null; state.agentWorkPage = null;`, app);
 });
 
+test("agent cache reconciliation resolves location labels after a cross-list save", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Campaigns" }];
+    state.workspaceLists = [{ id: "list-new", boardId: "board-two", name: "Launch" }];
+    state.agentDetail = {
+      agent: { id: "agent-one" },
+      work: {
+        ready: [{ id: "task-one", boardId: "board-one", boardName: "Workspace", bucketId: "list-old", bucketName: "Inbox", assigneeAgentId: "agent-one", status: "queued" }],
+        working: [], review: [], recentlyCompleted: [], totals: { ready: 1 },
+      },
+    };
+    state.agentWorkPage = {
+      items: [{ id: "task-one", boardId: "board-one", boardName: "Workspace", bucketId: "list-old", bucketName: "Inbox", assigneeAgentId: "agent-one", status: "queued" }],
+      page: 1, pageSize: 50, total: 1, hasPrevious: false, hasNext: false,
+    };
+  `, app);
+
+  app.reconcileAgentTaskCaches({ id: "task-one", bucketId: "list-new", assigneeAgentId: "agent-one", status: "queued" });
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].bucketName", app), "Launch");
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].boardName", app), "Campaigns");
+  assert.equal(vm.runInContext("state.agentDetail.work.ready[0].bucketName", app), "Launch");
+
+  vm.runInContext(`state.boards = []; state.workspaceLists = []; state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
 test("account-wide lists are immediately available for agent assignment", () => {
   vm.runInContext(`
     state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Other" }];

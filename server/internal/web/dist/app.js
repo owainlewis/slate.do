@@ -153,6 +153,7 @@ const state = {
   agentAssignBoardID: "",
   agentAssignDraft: null,
   agentTaskFocusID: "",
+  agentTaskMutationError: "",
   agentLifecycleNotice: "",
   agentLifecycleError: "",
   agentLifecyclePending: "",
@@ -401,6 +402,7 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentTaskMutationError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -429,6 +431,7 @@ function prepareAgentRoute(route) {
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentTaskMutationError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -755,6 +758,7 @@ function resetAuthenticatedState() {
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentTaskMutationError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -2036,6 +2040,7 @@ function agentDetailBodyHTML() {
         <p>This agent cannot connect or receive new work. Its assigned task history stays available.</p>
       </section>` : ""}
     ${state.agentAssignNotice ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentAssignNotice)}</p>` : ""}
+    ${state.agentTaskMutationError ? `<p class="status-error" role="alert">${escapeHTML(state.agentTaskMutationError)}</p>` : ""}
     <section id="agent-panel-overview" class="agent-tab-panel" role="tabpanel" aria-labelledby="agent-tab-overview" tabindex="0" ${current === "overview" ? "" : "hidden"}>
       ${current === "overview" ? agentOverviewHTML(agent) : ""}
     </section>
@@ -2743,7 +2748,21 @@ function agentWorkGroupForTask(task) {
   return "ready";
 }
 
+function taskWithResolvedLocation(task) {
+  const list = state.workspaceLists.find(item => item.id === task.bucketId);
+  if (!list) return task;
+  const boardID = list.boardId || task.boardId;
+  const board = state.boards.find(item => item.id === boardID);
+  return {
+    ...task,
+    boardId: boardID,
+    boardName: board?.name || task.boardName,
+    bucketName: list.name,
+  };
+}
+
 function reconcileAgentTaskCaches(task, { deleted = false } = {}) {
+  task = taskWithResolvedLocation(task);
   const workPage = state.agentWorkPage;
   const agentID = state.agentDetail?.agent?.id;
   const pageIndex = workPage?.items?.findIndex(item => item.id === task.id) ?? -1;
@@ -2806,6 +2825,20 @@ function bindWorkspaceDetail(options = {}) {
   const boundUserID = state.me?.id;
   const boundRouteVersion = routeVersion;
   const detailSurface = document.querySelector("[data-detail-surface]");
+  const reportBackgroundMutationFailure = (action, taskTitle, err) => {
+    if (!sessionIsCurrent(boundSessionVersion, boundUserID) || boundRouteVersion !== routeVersion) return false;
+    if (handleError(err)) return true;
+    const message = `Couldn’t ${action} “${taskTitle}”: ${err.message}`;
+    const focus = state.selectedTask ? captureDetailFocus() : null;
+    if (state.selectedTask) preserveTaskDraft();
+    if (["agent-detail", "agent-work", "agent-settings"].includes(state.view)) {
+      state.agentTaskMutationError = message;
+      if (state.selectedTask) state.error = message;
+    } else state.error = message;
+    render();
+    restoreDetailFocus(focus);
+    return true;
+  };
   const reconcileLoadedTask = (task, { deleted = false, deferAgentRender = false } = {}) => {
     if (!sessionIsCurrent(boundSessionVersion, boundUserID) || boundRouteVersion !== routeVersion) return false;
     const reconcile = items => (items || []).flatMap(item => item.id !== task.id ? [item] : deleted ? [] : [{ ...item, ...task }]);
@@ -2982,11 +3015,13 @@ function bindWorkspaceDetail(options = {}) {
   document.querySelector("#delete-task")?.addEventListener("click", async () => {
     if (!confirm("Delete this task and its subtasks?")) return;
     const taskID = state.selectedTask.id;
+    const taskTitle = state.selectedTask.title;
     const parentTaskID = state.selectedTask.parentTaskId || "";
     const deletedTasks = parentTaskID
       ? [{ ...state.selectedTask }]
       : [{ ...state.selectedTask }, ...state.selectedSubtasks.filter(item => item.parentTaskId === taskID).map(item => ({ ...item }))];
     const detailVersion = taskDetailVersion;
+    state.agentTaskMutationError = "";
     preserveTaskDraft();
     try {
       await api.del(`/api/v1/tasks/${taskID}`);
@@ -3033,7 +3068,10 @@ function bindWorkspaceDetail(options = {}) {
       state.subtaskError = "";
       await refresh();
     } catch (err) {
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        reportBackgroundMutationFailure("delete", taskTitle, err);
+        return;
+      }
       if (handleError(err)) return;
       state.error = err.message;
       render();
@@ -3043,8 +3081,10 @@ function bindWorkspaceDetail(options = {}) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const taskID = state.selectedTask.id;
+    const taskTitle = String(form.get("title") || state.selectedTask.title);
     const parentTaskID = state.selectedTask.parentTaskId || "";
     const detailVersion = taskDetailVersion;
+    state.agentTaskMutationError = "";
     preserveTaskDraft();
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     submit.disabled = true;
@@ -3081,7 +3121,10 @@ function bindWorkspaceDetail(options = {}) {
       state.subtaskError = "";
       await refresh();
     } catch (err) {
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        reportBackgroundMutationFailure("save", taskTitle, err);
+        return;
+      }
       if (handleError(err)) return;
       state.error = err.message;
       render();
@@ -4118,6 +4161,7 @@ async function openAgentTask(element) {
   const item = agentWorkItems().find(work => work.id === element.dataset.openAgentTask);
   if (!item) return;
   state.agentTaskFocusID = item.id;
+  state.agentTaskMutationError = "";
   const opened = await openTaskDetail(item.id, element, {
     handleError: handleAgentUnauthorized,
     onError: err => { state.agentAssignNotice = `Item couldn’t be opened: ${err.message}`; },
