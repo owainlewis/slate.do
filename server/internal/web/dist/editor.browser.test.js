@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -93,6 +93,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     }
     const agentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)$/);
     if (agentMatch && request.method === "GET") {
+      if (state.failNextAgentDetail) {
+        state.failNextAgentDetail = false;
+        return json(response, { error: "Could not refresh assigned work" }, 500);
+      }
       const agent = state.agents.find(item => item.id === agentMatch[1]);
       if (!agent) return json(response, { error: "agent not found" }, 404);
       const assigned = [...state.tasks, ...state.subtasks]
@@ -173,6 +177,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
       const created = { ...parent, id: `task-child-${state.subtasks.length + 1}`, parentTaskId: parent.id, title: input.title, description: "", done: false, status: "queued", priority: "", assigneeAgentId: "", assigneeAgentName: "" };
       state.subtasks.push(created);
+      state.lists.find(list => list.id === created.bucketId).openCount += 1;
       return json(response, created, 201);
     }
     const statusMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/status$/);
@@ -819,6 +824,85 @@ test("a delayed subtask refresh failure cannot render into a newer route", async
   assert.equal(new URL(page.url()).pathname, "/app/inbox");
   assert.equal(await page.getByRole("alert").count(), 0);
   assert.equal(state.subtasks.some(task => task.title === "Committed subtask"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a current subtask refresh failure releases workspace loading", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Committed before refresh error");
+  state.failNextWorkspaceTasks = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+
+  await page.getByRole("alert").filter({ hasText: "The task was updated, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  assert.equal(await page.getByText("Loading tasks…", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an agent subtask refresh failure preserves unrelated task drafts", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Unsaved parent draft");
+  await page.getByLabel("Subtask title", { exact: true }).fill("Committed agent subtask");
+  state.failNextAgentDetail = true;
+  state.delayNextAgentWork = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseAgentWork === "function");
+  await page.getByLabel("Task brief", { exact: true }).fill("Unsaved focused brief");
+  state.releaseAgentWork();
+
+  await page.getByRole("alert").filter({ hasText: "The task was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
+  assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 1);
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent draft");
+  assert.equal(await page.getByLabel("Task brief", { exact: true }).inputValue(), "Unsaved focused brief");
+  assert.equal(await page.getByLabel("Task brief", { exact: true }).evaluate(element => element === document.activeElement), true);
+  assert.equal(state.subtasks.some(task => task.title === "Committed agent subtask"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an in-flight successful agent subtask refresh preserves live edits and focus", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Refresh while editing");
+  state.delayNextAgentWork = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseAgentWork === "function");
+
+  await page.getByLabel("Title", { exact: true }).fill("Typed during refresh");
+  await page.getByLabel("Task brief", { exact: true }).fill("Focused draft typed during refresh");
+  state.releaseAgentWork();
+  await waitFor(() => state.agentWorkRefreshCompleted);
+  await page.waitForTimeout(50);
+
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Typed during refresh");
+  assert.equal(await page.getByLabel("Task brief", { exact: true }).inputValue(), "Focused draft typed during refresh");
+  assert.equal(await page.getByLabel("Task brief", { exact: true }).evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("background agent subtask creation refreshes sidebar list counts", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  const youtube = page.getByRole("link", { name: /YouTube/ });
+  assert.equal(await youtube.locator("b").textContent(), "2");
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Background count update");
+  state.delayNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  state.releaseSubtask();
+
+  await page.getByRole("link", { name: /YouTube.*3/ }).waitFor();
+  assert.equal(await youtube.locator("b").textContent(), "3");
   assert.deepEqual(pageErrors, []);
 });
 

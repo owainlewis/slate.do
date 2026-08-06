@@ -380,6 +380,7 @@ let routeVersion = 0;
 let taskDetailVersion = 0;
 let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
+let workspaceListLoadVersion = 0;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
 
@@ -637,8 +638,18 @@ async function loadWorkspaceListIndex(expectedRouteVersion) {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   const expectedListVersion = workspaceListVersion;
-  const data = await api.get("/api/v1/lists");
-  if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+  const loadVersion = ++workspaceListLoadVersion;
+  const loadIsCurrent = () => loadVersion === workspaceListLoadVersion
+    && sessionIsCurrent(sessionVersion, userID)
+    && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
+  let data;
+  try {
+    data = await api.get("/api/v1/lists");
+  } catch (err) {
+    if (!loadIsCurrent()) return false;
+    throw err;
+  }
+  if (!loadIsCurrent()) return false;
   if (expectedListVersion !== workspaceListVersion) return true;
   state.workspaceLists = data.lists || [];
   return true;
@@ -687,7 +698,15 @@ function workspaceQuery(route, cursor = "") {
 async function loadWorkspace(route, expectedRouteVersion) {
   const sessionVersion = authVersion;
   state.workspaceLoading = true;
-  const taskData = await api.get(`/api/v1/tasks?${workspaceQuery(route)}`);
+  let taskData;
+  try {
+    taskData = await api.get(`/api/v1/tasks?${workspaceQuery(route)}`);
+  } catch (err) {
+    if (sessionVersion === authVersion && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion)) {
+      state.workspaceLoading = false;
+    }
+    throw err;
+  }
   if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
   state.workspaceTasks = taskData.tasks || [];
   state.workspaceNextCursor = taskData.nextCursor || "";
@@ -2969,8 +2988,17 @@ function bindWorkspaceDetail(options = {}) {
   };
   const refreshAfterSubtaskMutation = async focus => {
     try {
-      const refreshed = await refresh();
-      if (refreshed !== false) restoreDetailFocus(focus);
+      if (boundAgentID) preserveTaskDraft();
+      let latestFocus = focus;
+      const refreshed = await refresh({
+        preserveTaskDetail: Boolean(boundAgentID),
+        beforeTaskDetailRender: () => {
+          latestFocus = captureDetailFocus() || latestFocus;
+          preserveTaskDraft();
+        },
+        afterTaskDetailRender: () => restoreDetailFocus(latestFocus),
+      });
+      if (refreshed !== false) restoreDetailFocus(latestFocus);
       return refreshed;
     } catch (err) {
       if (!boundContextIsCurrent()) return false;
@@ -3000,15 +3028,21 @@ function bindWorkspaceDetail(options = {}) {
     const refreshRouteVersion = routeVersion;
     const refreshView = state.view;
     try {
-      const loaded = await loadAgentDetail(boundAgentID, {
-        includeWorkPage: refreshView === "agent-work",
-        page: workPageFromLocation(),
-        sessionVersion: boundSessionVersion,
-        userID: boundUserID,
-        expectedRouteVersion: refreshRouteVersion,
-      });
-      if (!loaded || !boundContextIsCurrent() || state.view !== refreshView) return false;
+      const [detailResult, listResult] = await Promise.allSettled([
+        loadAgentDetail(boundAgentID, {
+          includeWorkPage: refreshView === "agent-work",
+          page: workPageFromLocation(),
+          sessionVersion: boundSessionVersion,
+          userID: boundUserID,
+          expectedRouteVersion: refreshRouteVersion,
+        }),
+        loadWorkspaceListIndex(refreshRouteVersion),
+      ]);
+      if (!boundContextIsCurrent() || state.view !== refreshView) return false;
+      if (detailResult.status === "rejected") throw detailResult.reason;
+      if (!detailResult.value) return false;
       state.agentDetailLoadState = "ready";
+      state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
       if (state.selectedTask) return true;
       const agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || "";
       const agentControlFocusID = agentTaskFocusID ? "" : document.activeElement?.id || "";
@@ -3108,6 +3142,7 @@ function bindWorkspaceDetail(options = {}) {
       const created = await api.post(`/api/v1/tasks/${parentID}/subtasks`, { title, kind: "action" });
       reconcileLoadedTask(created);
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        await refreshCurrentAgentSurface();
         if (state.selectedTask?.id === parentID) {
           const focus = captureDetailFocus();
           preserveTaskDraft();
@@ -4317,7 +4352,7 @@ async function openAgentTask(element) {
   }
 }
 
-async function refreshAgentSurface() {
+async function refreshAgentSurface(options = {}) {
   const route = parseRoute(location.pathname);
   if (!["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return;
   const version = routeVersion;
@@ -4339,11 +4374,22 @@ async function refreshAgentSurface() {
     if (!detailResult.value) return false;
     state.agentDetailLoadState = "ready";
     state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
+    options.beforeTaskDetailRender?.();
     render();
     return true;
   } catch (err) {
     if (version !== routeVersion) return false;
     if (handleAgentUnauthorized(err, route)) return false;
+    if (options.preserveTaskDetail && state.selectedTask) {
+      const message = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      options.beforeTaskDetailRender?.();
+      state.agentDetailLoadState = "ready";
+      state.agentTaskMutationError = message;
+      state.error = message;
+      render();
+      options.afterTaskDetailRender?.();
+      return false;
+    }
     state.selectedTask = null;
     state.agentDetail = null;
     state.agentWorkPage = null;

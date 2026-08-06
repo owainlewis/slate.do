@@ -1645,6 +1645,66 @@ test("an authenticated-state reset abandons old serialized task mutations", asyn
   assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), false);
 });
 
+test("an older list-index response cannot overwrite a newer count", async () => {
+  let releaseOlderLists;
+  app.pendingOlderLists = new Promise(resolve => { releaseOlderLists = resolve; });
+  vm.runInContext(`
+    authVersion = 70;
+    routeVersion = 120;
+    workspaceListVersion = 0;
+    workspaceListLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.workspaceLists = [];
+    let listRequests = 0;
+    api.get = async path => {
+      if (path !== "/api/v1/lists") throw new Error("unexpected request " + path);
+      listRequests += 1;
+      return listRequests === 1
+        ? pendingOlderLists
+        : { lists: [{ id: "youtube", name: "YouTube", openCount: 3 }] };
+    };
+  `, app);
+
+  const older = app.loadWorkspaceListIndex(120);
+  const newer = app.loadWorkspaceListIndex(120);
+  assert.equal(await newer, true);
+  assert.equal(vm.runInContext("state.workspaceLists[0].openCount", app), 3);
+
+  releaseOlderLists({ lists: [{ id: "youtube", name: "YouTube", openCount: 2 }] });
+  assert.equal(await older, false);
+  assert.equal(vm.runInContext("state.workspaceLists[0].openCount", app), 3);
+  vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
+});
+
+test("an older failed list-index load cannot reject after a newer load", async () => {
+  let rejectOlderLists;
+  app.pendingFailedLists = new Promise((_, reject) => { rejectOlderLists = reject; });
+  vm.runInContext(`
+    authVersion = 80;
+    routeVersion = 130;
+    workspaceListVersion = 0;
+    workspaceListLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.workspaceLists = [];
+    let failedListRequests = 0;
+    api.get = async path => {
+      if (path !== "/api/v1/lists") throw new Error("unexpected request " + path);
+      failedListRequests += 1;
+      return failedListRequests === 1
+        ? pendingFailedLists
+        : { lists: [{ id: "youtube", name: "YouTube", openCount: 4 }] };
+    };
+  `, app);
+
+  const older = app.loadWorkspaceListIndex(130);
+  const newer = app.loadWorkspaceListIndex(130);
+  assert.equal(await newer, true);
+  rejectOlderLists(new Error("stale list refresh failed"));
+  assert.equal(await older, false);
+  assert.equal(vm.runInContext("state.workspaceLists[0].openCount", app), 4);
+  vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
+});
+
 const board = {
   buckets: [
     {
