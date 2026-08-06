@@ -766,6 +766,10 @@ async function loadWorkspace(route, expectedRouteVersion) {
     && sessionIsCurrent(sessionVersion, userID)
     && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
   state.workspaceLoading = true;
+  if (route.scope === "list" && !state.workspaceLists.some(list => list.id === route.listId)) {
+    state.workspaceLoading = false;
+    return false;
+  }
   let taskData;
   try {
     taskData = await api.get(`/api/v1/tasks?${workspaceQuery(route)}`);
@@ -782,7 +786,6 @@ async function loadWorkspace(route, expectedRouteVersion) {
   const requestedView = new URLSearchParams(location.search).get("view");
   if (route.scope !== "week" && ["list", "flow", "table"].includes(requestedView)) state.workspaceView = requestedView;
   state.workspaceLoading = false;
-  if (route.scope === "list" && !state.workspaceLists.some(list => list.id === route.listId)) return false;
   return true;
 }
 

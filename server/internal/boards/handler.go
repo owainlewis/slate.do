@@ -440,6 +440,9 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 		ScheduledTo:   strings.TrimSpace(q.Get("plannedTo")),
 		ParentTaskID:  strings.TrimSpace(q.Get("parentTaskId")),
 	}
+	if err := validateTaskFilterLocationIDs(filter); err != nil {
+		return TaskFilter{}, err
+	}
 	assignee := strings.TrimSpace(q.Get("assigneeAgentId"))
 	if assignee == "unassigned" {
 		filter.Unassigned = true
@@ -491,6 +494,16 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 		filter.Limit = limit
 	}
 	return filter, nil
+}
+
+func validateTaskFilterLocationIDs(filter TaskFilter) error {
+	if filter.BoardID != "" && !validUUID(filter.BoardID) {
+		return errors.New("boardId must be a valid ID")
+	}
+	if filter.BucketID != "" && !validUUID(filter.BucketID) {
+		return errors.New("bucketId must be a valid ID")
+	}
+	return nil
 }
 
 func parseQueryBool(name string, raw string) (*bool, error) {

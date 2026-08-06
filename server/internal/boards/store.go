@@ -1573,6 +1573,9 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 }
 
 func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilter) (TaskPage, error) {
+	if err := validateTaskFilterLocationIDs(filter); err != nil {
+		return TaskPage{}, fmt.Errorf("%w: %v", ErrInvalidData, err)
+	}
 	whereSQL := ""
 	args := []any{userID}
 	if filter.BoardID != "" {
@@ -1607,8 +1610,8 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		whereSQL += " AND t.assignee_agent_id IS NULL"
 	}
 	if filter.Query != "" {
-		args = append(args, "%"+filter.Query+"%")
-		whereSQL += fmt.Sprintf(" AND (t.title ILIKE $%d OR t.description ILIKE $%d)", len(args), len(args))
+		args = append(args, taskSearchPattern(filter.Query))
+		whereSQL += fmt.Sprintf(" AND (t.title ILIKE $%d ESCAPE E'\\\\' OR t.description ILIKE $%d ESCAPE E'\\\\')", len(args), len(args))
 	}
 	if filter.ScheduledFrom != "" {
 		args = append(args, filter.ScheduledFrom)
@@ -1705,6 +1708,11 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		}
 	}
 	return page, nil
+}
+
+func taskSearchPattern(query string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
+	return "%" + escaped + "%"
 }
 
 func (s *Store) listBuckets(ctx context.Context, userID string, boardID string) ([]Bucket, error) {

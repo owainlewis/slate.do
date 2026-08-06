@@ -8,9 +8,27 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/owainlewis/slate.do/server/internal/auth"
 	"github.com/owainlewis/slate.do/server/internal/entitlements"
 	"github.com/owainlewis/slate.do/server/internal/httpapi"
 )
+
+func TestListTasksRejectsMalformedLocationIDsBeforeStore(t *testing.T) {
+	handler := NewHandler(nil)
+	for _, query := range []string{"boardId=not-a-uuid", "bucketId=not-a-uuid"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?"+query, nil)
+
+		handler.ListTasks(recorder, request, auth.User{})
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("query %q status = %d, body = %s", query, recorder.Code, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), "must be a valid ID") {
+			t.Fatalf("query %q body = %s", query, recorder.Body.String())
+		}
+	}
+}
 
 func TestStoreCapacityTimeoutUsesStableServiceUnavailableResponse(t *testing.T) {
 	recorder := httptest.NewRecorder()

@@ -278,6 +278,56 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	assertStorageUsage(t, ctx, db, userID, 0, 0)
 }
 
+func TestTaskSearchTreatsPatternCharactersAsLiteralText(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Tasks"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := []CreateTaskInput{
+		{Title: "100% coverage"},
+		{Title: "100 percent coverage"},
+		{Title: "Plan_A"},
+		{Title: "PlanBA"},
+		{Title: `Path \ docs`},
+		{Title: "Path docs"},
+		{Title: "Metrics", Description: "Uses a 50% threshold"},
+		{Title: "Other metrics", Description: "Uses a 50 percent threshold"},
+	}
+	created := make([]Task, 0, len(inputs))
+	for _, input := range inputs {
+		task, err := store.CreateTask(ctx, userID, bucket.ID, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		created = append(created, task)
+	}
+
+	assertSearch := func(query string, want Task) {
+		t.Helper()
+		page, err := store.ListTaskPage(ctx, userID, TaskFilter{Query: query})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Tasks) != 1 || page.Tasks[0].ID != want.ID {
+			t.Fatalf("query %q tasks = %#v, want only %q", query, page.Tasks, want.ID)
+		}
+	}
+	assertSearch("100% COVERAGE", created[0])
+	assertSearch("Plan_A", created[2])
+	assertSearch(`\`, created[4])
+	assertSearch("50% threshold", created[6])
+}
+
 func TestAccountAlwaysKeepsAnInboxForUniversalCapture(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
