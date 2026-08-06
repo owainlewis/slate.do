@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -80,6 +80,11 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     }
     const agentWorkMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/work$/);
     if (agentWorkMatch && request.method === "GET") {
+      if (state.delayNextAgentWork) {
+        state.delayNextAgentWork = false;
+        await new Promise(resolve => { state.releaseAgentWork = resolve; });
+        state.agentWorkRefreshCompleted = true;
+      }
       const items = [...state.tasks, ...state.subtasks]
         .filter(item => item.assigneeAgentId === agentWorkMatch[1])
         .map(item => ({ ...item, boardName: "Workspace", bucketName: item.listName, updatedAt: "2026-08-05T12:00:00Z" }));
@@ -93,11 +98,12 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const assigned = [...state.tasks, ...state.subtasks]
         .filter(item => item.assigneeAgentId === agent.id)
         .map(item => ({ ...item, boardName: "Workspace", bucketName: item.listName, updatedAt: "2026-08-05T12:00:00Z" }));
+      const visibleAssigned = state.hideSubtasksFromAgentOverview ? assigned.filter(item => !item.parentTaskId) : assigned;
       return json(response, { agent, work: {
-        ready: assigned.filter(item => item.status === "queued"),
-        working: assigned.filter(item => item.status === "working"),
-        review: assigned.filter(item => item.status === "needs_review"),
-        recentlyCompleted: assigned.filter(item => item.done || item.status === "done"),
+        ready: visibleAssigned.filter(item => item.status === "queued"),
+        working: visibleAssigned.filter(item => item.status === "working"),
+        review: visibleAssigned.filter(item => item.status === "needs_review"),
+        recentlyCompleted: visibleAssigned.filter(item => item.done || item.status === "done"),
         totals: {
           ready: assigned.filter(item => item.status === "queued").length,
           working: assigned.filter(item => item.status === "working").length,
@@ -526,10 +532,37 @@ test("a delayed agent task save refreshes the work page without reopening detail
   assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 0);
   state.releaseStatus();
   await page.getByText("Delayed agent task title", { exact: true }).waitFor();
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/agents/agent-research/work?page=2&pageSize=50").length >= 2);
 
   assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
   assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 0);
   assert.equal(await page.getByRole("button", { name: /Delayed agent task title/ }).evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an in-flight work refresh preserves edits in a newer task detail", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Background parent save");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+
+  state.delayNextAgentWork = true;
+  state.releaseStatus();
+  await waitFor(() => typeof state.releaseAgentWork === "function");
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Newest child draft");
+  state.releaseAgentWork();
+  await waitFor(() => state.agentWorkRefreshCompleted);
+  await page.waitForTimeout(50);
+
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Newest child draft");
+  assert.equal(await page.getByLabel("Title", { exact: true }).evaluate(element => element === document.activeElement), true);
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
   assert.deepEqual(pageErrors, []);
 });
 
@@ -582,6 +615,26 @@ test("a delayed parent move reconciles descendant locations across agent tabs", 
   await waitFor(() => state.subtasks.find(item => item.id === "task-child")?.bucketId === "list-inbox");
   await page.getByRole("button", { name: /Publish task-first agents video/ }).getByText("Workspace / Inbox", { exact: true }).waitFor();
   await page.getByRole("button", { name: /Research examples/ }).getByText("Workspace / Inbox", { exact: true }).waitFor();
+
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed off-page subtask toggle reconciles overview totals", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.hideSubtasksFromAgentOverview = true;
+
+  await page.goto(`${origin}/app/agents/agent-research`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Mark Research examples not complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
+
+  state.releaseStatus();
+  await waitFor(() => state.subtasks.find(item => item.id === "task-child")?.status === "queued");
+  await page.locator(".state-group-queued header > span").getByText("1", { exact: true }).waitFor();
+  await page.locator(".state-group-done header > span").getByText("0", { exact: true }).waitFor();
 
   assert.deepEqual(pageErrors, []);
 });

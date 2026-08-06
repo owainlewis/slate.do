@@ -2963,6 +2963,34 @@ function bindWorkspaceDetail(options = {}) {
       return false;
     }
   };
+  const refreshCurrentAgentWorkPage = async () => {
+    if (!boundAgentID || state.view !== "agent-work" || !boundContextIsCurrent()) return false;
+    const refreshRouteVersion = routeVersion;
+    try {
+      const loaded = await loadAgentDetail(boundAgentID, {
+        includeWorkPage: true,
+        page: workPageFromLocation(),
+        sessionVersion: boundSessionVersion,
+        userID: boundUserID,
+        expectedRouteVersion: refreshRouteVersion,
+      });
+      if (!loaded || !boundContextIsCurrent() || state.view !== "agent-work") return false;
+      state.agentDetailLoadState = "ready";
+      if (state.selectedTask) return true;
+      const agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || "";
+      const agentControlFocusID = agentTaskFocusID ? "" : document.activeElement?.id || "";
+      if (agentTaskFocusID) state.agentTaskFocusID = agentTaskFocusID;
+      render();
+      if (agentControlFocusID) document.getElementById(agentControlFocusID)?.focus();
+      return true;
+    } catch (err) {
+      if (!boundContextIsCurrent() || state.view !== "agent-work") return false;
+      if (handleError(err)) return false;
+      state.agentTaskMutationError = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      if (!state.selectedTask) render();
+      return false;
+    }
+  };
   const close = () => {
     taskDetailVersion += 1;
     state.selectedTask = null;
@@ -2999,7 +3027,7 @@ function bindWorkspaceDetail(options = {}) {
     element.disabled = true;
     try {
       const updated = await api.patch(`/api/v1/tasks/${encodeURIComponent(subtask.id)}/status`, { status: subtask.done ? "queued" : "done" });
-      reconcileLoadedTask(updated);
+      reconcileLoadedTask(updated, { previousTask: subtask });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
         if (state.selectedTask?.id === parentID) {
           const focus = captureDetailFocus();
@@ -3101,6 +3129,7 @@ function bindWorkspaceDetail(options = {}) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.filter(item => item.id !== taskID);
         state.selectedSubtasks = state.selectedSubtasks.filter(item => item.id !== taskID);
+        await refreshCurrentAgentWorkPage();
         if (state.selectedTask?.id !== taskID) return;
         delete state.taskDetailDrafts[taskID];
         state.subtaskDraft = "";
@@ -3170,6 +3199,7 @@ function bindWorkspaceDetail(options = {}) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
+        await refreshCurrentAgentWorkPage();
         return;
       }
       if (parentTaskID) {
