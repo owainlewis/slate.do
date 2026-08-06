@@ -367,6 +367,31 @@ test("a pending table completion preserves a reopened task draft and next-save b
   assert.deepEqual(pageErrors, []);
 });
 
+test("a completion response preserves an explicit status reversion", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.delayNextCompletion = true;
+  await page.getByRole("button", { name: "Mark Publish task-first agents video complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+
+  const status = page.getByLabel("Status", { exact: true });
+  await status.selectOption("needs_review");
+  await status.selectOption("working");
+  state.releaseCompletion();
+  await waitFor(() => state.tasks.find(task => task.id === "task-parent").done === true);
+
+  assert.equal(await status.inputValue(), "working");
+  const dialogPromise = page.waitForEvent("dialog");
+  const back = page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  const dialog = await dialogPromise;
+  assert.equal(dialog.message(), "Discard unsaved task changes?");
+  await dialog.dismiss();
+  await back;
+  assert.equal(await status.inputValue(), "working");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a failed table completion preserves a reopened task draft and focus", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 

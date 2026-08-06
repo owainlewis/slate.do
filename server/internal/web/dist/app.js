@@ -4079,11 +4079,13 @@ function reconcileTaskCompletion(updated, previousTask) {
   advanceTaskDetailBaseline(reconciled.id, reconciled);
   const statusControl = globalThis.document?.querySelector?.('#workspace-detail-form [name="status"]');
   const liveStatus = live?.status || statusControl?.value || baseline.status;
-  const statusWasEdited = Boolean(statusControl) && liveStatus !== baseline.status;
+  const currentFieldEdits = taskDetailFieldEdits.get(reconciled.id);
+  const statusWasEdited = Boolean(statusControl)
+    && (liveStatus !== baseline.status || currentFieldEdits?.has("status"));
   const merged = { ...selected, ...reconciled };
   const form = globalThis.document?.querySelector?.("#workspace-detail-form");
   for (const field of ["title", "description", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
-    if (live && String(live[field] || "") !== String(baseline[field] || "")) {
+    if (live && (currentFieldEdits?.has(field) || String(live[field] || "") !== String(baseline[field] || ""))) {
       merged[field] = live[field];
       continue;
     }
