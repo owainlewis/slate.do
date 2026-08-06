@@ -92,12 +92,14 @@ func TestTaskFilterFromQueryIncludesPriority(t *testing.T) {
 }
 
 func TestTaskFilterFromQueryIncludesBoardAndList(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId=board-1&bucketId=list-1&status=done&done=true&limit=12&cursor=next-page", nil)
+	const boardID = "11111111-1111-4111-8111-111111111111"
+	const bucketID = "22222222-2222-4222-8222-222222222222"
+	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId="+boardID+"&bucketId="+bucketID+"&status=done&done=true&limit=12&cursor=next-page", nil)
 	filter, err := taskFilterFromQuery(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filter.BoardID != "board-1" || filter.BucketID != "list-1" || filter.Status != "done" || filter.Done == nil || !*filter.Done || filter.Limit != 12 || filter.Cursor != "next-page" {
+	if filter.BoardID != boardID || filter.BucketID != bucketID || filter.Status != "done" || filter.Done == nil || !*filter.Done || filter.Limit != 12 || filter.Cursor != "next-page" {
 		t.Fatalf("filter = %#v", filter)
 	}
 }
@@ -115,10 +117,19 @@ func TestTaskFilterFromQueryIncludesWorkspaceFilters(t *testing.T) {
 }
 
 func TestTaskFilterRejectsInvalidWorkspaceFilters(t *testing.T) {
-	for _, query := range []string{"assigneeAgentId=not-an-id", "parentTaskId=not-an-id", "plannedFrom=tomorrow", "plannedTo=2026-13-01", "topLevel=maybe", "inbox=maybe"} {
+	for _, query := range []string{"boardId=not-an-id", "bucketId=not-an-id", "assigneeAgentId=not-an-id", "parentTaskId=not-an-id", "plannedFrom=tomorrow", "plannedTo=2026-13-01", "topLevel=maybe", "inbox=maybe"} {
 		req := httptest.NewRequest("GET", "/api/v1/tasks?"+query, nil)
 		if _, err := taskFilterFromQuery(req); err == nil {
 			t.Fatalf("query %q was accepted", query)
+		}
+	}
+}
+
+func TestTaskPageRejectsMalformedLocationIDsBeforeDatabaseAccess(t *testing.T) {
+	store := NewStore(nil)
+	for _, filter := range []TaskFilter{{BoardID: "not-an-id"}, {BucketID: "not-an-id"}} {
+		if _, err := store.ListTaskPage(t.Context(), "user", filter); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("filter %#v error = %v, want ErrInvalidData", filter, err)
 		}
 	}
 }
