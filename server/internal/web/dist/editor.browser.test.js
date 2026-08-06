@@ -387,6 +387,53 @@ test("a failed table completion preserves a reopened task draft and focus", asyn
   assert.deepEqual(pageErrors, []);
 });
 
+test("a failed completion stays out of an unrelated open task detail", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.delayNextCompletion = true;
+  state.failNextCompletion = true;
+  await page.getByRole("button", { name: "Mark Publish task-first agents video complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for", exact: true }).click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Unrelated live task draft");
+
+  const failedResponse = page.waitForResponse(response => response.url().endsWith("/api/v1/tasks/task-parent")
+    && response.request().method() === "PATCH" && response.status() === 500);
+  state.releaseCompletion();
+  await failedResponse;
+  await page.waitForTimeout(50);
+
+  assert.equal(await page.locator(".detail-error").textContent(), "");
+  assert.equal(await title.inputValue(), "Unrelated live task draft");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  assert.equal(await page.getByRole("alert").filter({ hasText: "Could not complete task" }).isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a pending completion updates account settings counts without resetting its draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.delayNextCompletion = true;
+  await page.getByRole("button", { name: "Mark Publish task-first agents video complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+  const youtubeCount = page.locator('[data-workspace-count="list-youtube"]');
+  const displayName = page.locator("#profile-display-name");
+  assert.equal(await youtubeCount.textContent(), "2");
+  await displayName.fill("Unsaved settings draft during completion");
+
+  state.releaseCompletion();
+  await page.waitForFunction(() => document.querySelector('[data-workspace-count="list-youtube"]')?.textContent === "1");
+
+  assert.equal(await displayName.inputValue(), "Unsaved settings draft during completion");
+  assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.find(task => task.id === "task-parent").done, true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("an older completion success preserves a newer failure from another task", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
   let releaseCompletion;

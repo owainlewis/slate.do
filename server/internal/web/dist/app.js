@@ -1404,7 +1404,7 @@ function appHTML() {
       <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
       <button class="primary" id="new-task">${icon("plus")}<span>New task</span></button>
     </header>
-    ${statusErrorHTML(state.error)}
+    ${statusErrorHTML(state.error || state.taskCompletionError?.message)}
     ${statusNoticeHTML(state.moveNotice)}
     <div class="workspace-viewbar ${state.workspaceScope === "week" ? "week-only" : ""}">
       ${state.workspaceScope === "week" ? "" : `<div class="workspace-tabs" role="tablist" aria-label="Task view">
@@ -2446,6 +2446,7 @@ function agentConnectionResultHTML(result) {
 function settingsHTML() {
   const theme = currentTheme();
   const page = SETTINGS_PAGES.find(item => item.id === state.settingsPage) || SETTINGS_PAGES[0];
+  const inboxCount = state.workspaceLists.filter(list => list.isInbox).reduce((total, list) => total + Number(list.openCount || 0), 0);
   let content = "";
   if (page.id === "profile") {
     content = `
@@ -2569,13 +2570,13 @@ function settingsHTML() {
         ${globalNewTaskButtonHTML()}
         <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Workspace">
           <div class="pages task-nav-pages">
-            <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
+            <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
             <a class="nav-link" href="${TASKS_PATH}">${icon("rows")}<span>All tasks</span></a>
           </div>
           <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
           <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
           <div class="pages task-nav-pages">
-            ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b>${list.openCount || ""}</b></a>`).join("")}
+            ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b data-workspace-count="${escapeAttr(list.id)}">${list.openCount || ""}</b></a>`).join("")}
           </div>
         </section>
         <p class="settings-sidebar-title">Account settings</p>
@@ -3599,8 +3600,8 @@ async function completeTaskCompletion(task) {
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
     state.taskCompletionError = { taskID: task.id, message: err.message };
-    state.error = err.message;
-    if (state.selectedTask) {
+    if (state.selectedTask?.id === task.id) {
+      state.error = err.message;
       const draft = taskDraftFromCurrentForm(state.selectedTask);
       if (draft) {
         state.taskDetailDrafts[state.selectedTask.id] = draft;
@@ -3609,6 +3610,8 @@ async function completeTaskCompletion(task) {
       syncTaskDetailError();
       return false;
     }
+    if (state.selectedTask) return false;
+    state.error = err.message;
     render();
     return false;
   }
