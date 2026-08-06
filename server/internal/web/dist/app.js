@@ -107,6 +107,12 @@ let themeChangeVersion = 0;
 let authVersion = 0;
 let logoutRequest = null;
 let authenticationRequest = null;
+let appliedHistoryPath = "";
+let appliedHistoryPosition = null;
+let restoringHistoryPosition = false;
+
+const HISTORY_POSITION_KEY = "slateNavigationPosition";
+const TASK_DETAIL_FIELDS = ["title", "description", "status", "bucketId", "priority", "assigneeAgentId", "scheduledDate"];
 
 const state = {
   me: null,
@@ -118,6 +124,8 @@ const state = {
   selectedTask: null,
   selectedSubtasks: [],
   taskDetailDrafts: {},
+  taskDetailBaselines: {},
+  taskDetailCommitPending: "",
   taskCompletionError: null,
   subtaskDraft: "",
   subtaskPending: false,
@@ -367,27 +375,59 @@ function currentLocationPath() {
   return `${location.pathname}${location.search || ""}`;
 }
 
+function historyPosition(value) {
+  const position = Number(value?.[HISTORY_POSITION_KEY]);
+  return Number.isInteger(position) ? position : null;
+}
+
+function ensureHistoryTracking() {
+  if (appliedHistoryPath) return;
+  appliedHistoryPath = currentLocationPath();
+  appliedHistoryPosition = historyPosition(history.state);
+  if (appliedHistoryPosition === null) {
+    appliedHistoryPosition = 0;
+    history.replaceState({ ...(history.state || {}), [HISTORY_POSITION_KEY]: appliedHistoryPosition }, "", appliedHistoryPath);
+  }
+}
+
+function trackedHistoryState(position) {
+  return { ...(history.state || {}), [HISTORY_POSITION_KEY]: position };
+}
+
 function syncPath(path) {
-  if (currentPath() !== normalizePath(path)) history.replaceState({}, "", path);
+  ensureHistoryTracking();
+  if (currentPath() !== normalizePath(path)) {
+    history.replaceState(trackedHistoryState(appliedHistoryPosition), "", path);
+    appliedHistoryPath = currentLocationPath();
+  }
 }
 
 function navigate(path, options = {}) {
+  ensureHistoryTracking();
+  if (!options.skipTaskDetailGuard && !confirmTaskDetailDiscard()) return Promise.resolve(false);
   const nextRoute = parseRoute(path);
   clearSettingsCredentialsLeaving(nextRoute.name === "settings" ? nextRoute.settingsPage : "");
   clearAgentCredentialLeaving(nextRoute);
-  if (options.replace || currentLocationPath() === path) history.replaceState({}, "", path);
-  else history.pushState({}, "", path);
+  if (options.replace || currentLocationPath() === path) {
+    history.replaceState(trackedHistoryState(appliedHistoryPosition), "", path);
+  } else {
+    appliedHistoryPosition += 1;
+    history.pushState(trackedHistoryState(appliedHistoryPosition), "", path);
+  }
+  appliedHistoryPath = currentLocationPath();
   return applyRoute();
 }
 
 let routeVersion = 0;
 let taskDetailVersion = 0;
+let taskDetailEditVersion = 0;
 let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
 let workspaceListLoadVersion = 0;
 let workspaceLoadVersion = 0;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
+const taskDetailFieldEdits = new Map();
 
 async function serializeTaskMutation(taskID, mutation) {
   const sessionVersion = authVersion;
@@ -417,7 +457,7 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   taskDetailVersion += 1;
   state.selectedTask = null;
   state.selectedSubtasks = [];
-  state.taskDetailDrafts = {};
+  clearTaskDetailDraftTracking();
   state.subtaskDraft = "";
   state.subtaskPending = false;
   state.subtaskError = "";
@@ -481,7 +521,7 @@ async function applyRoute() {
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
-    state.taskDetailDrafts = {};
+    clearTaskDetailDraftTracking();
     state.subtaskDraft = "";
     state.subtaskPending = false;
     state.subtaskError = "";
@@ -627,6 +667,7 @@ function readResetToken() {
 }
 
 async function boot() {
+  ensureHistoryTracking();
   try {
     const me = await api.get("/api/v1/me");
     if (me.authenticated) beginAuthenticatedSession(me.user);
@@ -770,6 +811,7 @@ async function loadMoreWorkspaceTasks() {
 function resetAuthenticatedState() {
   goalSaveChains.clear();
   taskMutationTurns.clear();
+  taskDetailFieldEdits.clear();
   themeSaveChain = Promise.resolve();
   themeChangeVersion += 1;
   state.me = null;
@@ -781,7 +823,7 @@ function resetAuthenticatedState() {
   taskDetailVersion += 1;
   state.selectedTask = null;
   state.selectedSubtasks = [];
-  state.taskDetailDrafts = {};
+  clearTaskDetailDraftTracking();
   state.taskCompletionError = null;
   state.subtaskDraft = "";
   state.subtaskPending = false;
@@ -872,6 +914,7 @@ async function establishAuthenticatedSession(path, input) {
 
 async function logout() {
   if (logoutRequest) return logoutRequest;
+  if (!confirmTaskDetailDiscard()) return false;
   authVersion += 1;
   resetAuthenticatedState();
   state.view = "logging-out";
@@ -1041,7 +1084,6 @@ async function openTaskDetail(taskID, trigger, options = {}) {
   const detailVersion = ++taskDetailVersion;
   state.subtaskPending = false;
   if (!movingWithinTaskChain) {
-    state.taskDetailDrafts = {};
     state.subtaskDraft = "";
     state.subtaskError = "";
   }
@@ -1057,7 +1099,21 @@ async function openTaskDetail(taskID, trigger, options = {}) {
       loadAllSubtasks(taskID, isCurrent),
     ]);
     if (!isCurrent() || subtasks === null) return false;
-    state.selectedTask = { ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) };
+    const persisted = { ...summary, ...detail };
+    const retainedDraft = state.taskDetailDrafts[taskID];
+    const retainedBaseline = state.taskDetailBaselines[taskID];
+    const retainedFieldEdits = taskDetailFieldEdits.get(taskID);
+    const selected = { ...persisted };
+    if (retainedDraft) {
+      for (const field of TASK_DETAIL_FIELDS) {
+        const hasEditIntent = retainedFieldEdits?.has(field)
+          || (retainedBaseline && String(retainedDraft[field] || "") !== String(retainedBaseline[field] || ""));
+        if (hasEditIntent) selected[field] = retainedDraft[field];
+      }
+    }
+    state.taskDetailBaselines[taskID] = taskDetailSnapshot(persisted);
+    state.selectedTask = selected;
+    if (retainedDraft) state.taskDetailDrafts[taskID] = taskDetailSnapshot(selected);
     state.selectedSubtasks = subtasks;
     state.error = "";
     render();
@@ -3026,6 +3082,134 @@ function taskDraftFromCurrentForm(task) {
   };
 }
 
+function taskDetailSnapshot(task = {}) {
+  return Object.fromEntries(TASK_DETAIL_FIELDS.map(field => [field, String(task[field] || "")]));
+}
+
+function taskDetailDraftIsDirty(baseline, draft) {
+  if (!baseline || !draft) return false;
+  return TASK_DETAIL_FIELDS.some(field => String(draft[field] || "") !== String(baseline[field] || ""));
+}
+
+function advanceTaskDetailBaseline(taskID, persisted) {
+  const previous = state.taskDetailBaselines[taskID];
+  if (!previous) return;
+  state.taskDetailBaselines[taskID] = Object.fromEntries(TASK_DETAIL_FIELDS.map(field => {
+    const value = field in persisted ? persisted[field] : previous[field];
+    return [field, String(value || "")];
+  }));
+}
+
+function updateTaskDetailBaselineFields(taskID, fields) {
+  const previous = state.taskDetailBaselines[taskID];
+  if (!previous) return;
+  state.taskDetailBaselines[taskID] = {
+    ...previous,
+    ...Object.fromEntries(Object.entries(fields).map(([field, value]) => [field, String(value || "")])),
+  };
+}
+
+function reconcileRetainedTaskDetailFields(taskID, persisted, fields = TASK_DETAIL_FIELDS) {
+  const baseline = state.taskDetailBaselines[taskID];
+  const draft = state.taskDetailDrafts[taskID];
+  if (!baseline || !draft) return;
+  const edits = taskDetailFieldEdits.get(taskID);
+  for (const field of fields) {
+    if (!(field in persisted)) continue;
+    const wasDirty = String(draft[field] || "") !== String(baseline[field] || "");
+    const value = String(persisted[field] || "");
+    baseline[field] = value;
+    if (wasDirty) continue;
+    draft[field] = value;
+    edits?.delete(field);
+  }
+  if (edits?.size === 0) taskDetailFieldEdits.delete(taskID);
+}
+
+function taskDetailHasUnsavedChanges() {
+  if (state.subtaskDraft !== "") return true;
+  const drafts = { ...state.taskDetailDrafts };
+  if (state.selectedTask) {
+    const current = taskDraftFromCurrentForm(state.selectedTask);
+    if (current) drafts[state.selectedTask.id] = current;
+  }
+  return Object.entries(drafts).some(([taskID, draft]) => taskID !== state.taskDetailCommitPending
+    && taskDetailDraftIsDirty(state.taskDetailBaselines[taskID], draft));
+}
+
+function confirmTaskDetailDiscard() {
+  if (!taskDetailHasUnsavedChanges()) return true;
+  if (globalThis.confirm?.("Discard unsaved task changes?") !== true) return false;
+  const selectedTaskID = state.selectedTask?.id || "";
+  const selectedTaskBaseline = selectedTaskID && state.taskDetailBaselines[selectedTaskID]
+    ? { ...state.taskDetailBaselines[selectedTaskID] }
+    : null;
+  clearTaskDetailDraftTracking();
+  state.subtaskDraft = "";
+  state.subtaskError = "";
+  if (selectedTaskID && selectedTaskBaseline && state.selectedTask?.id === selectedTaskID) {
+    state.selectedTask = { ...state.selectedTask, ...selectedTaskBaseline };
+    state.taskDetailBaselines[selectedTaskID] = { ...selectedTaskBaseline };
+    state.taskDetailDrafts[selectedTaskID] = { ...selectedTaskBaseline };
+  } else if (state.selectedTask) {
+    taskDetailVersion += 1;
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+  }
+  return true;
+}
+
+function confirmSubtaskDraftDiscard() {
+  if (state.subtaskDraft === "") return true;
+  if (globalThis.confirm?.("Discard unsaved task changes?") !== true) return false;
+  state.subtaskDraft = "";
+  state.subtaskError = "";
+  return true;
+}
+
+function closeTaskDetailForBoardControl() {
+  if (!confirmTaskDetailDiscard()) return false;
+  taskDetailVersion += 1;
+  state.selectedTask = null;
+  state.selectedSubtasks = [];
+  clearTaskDetailDraftTracking();
+  state.subtaskDraft = "";
+  state.subtaskPending = false;
+  state.subtaskError = "";
+  return true;
+}
+
+function clearTaskDetailDraftTracking() {
+  state.taskDetailDrafts = {};
+  state.taskDetailBaselines = {};
+  state.taskDetailCommitPending = "";
+  taskDetailFieldEdits.clear();
+}
+
+function clearTaskDetailDraft(taskID) {
+  delete state.taskDetailDrafts[taskID];
+  delete state.taskDetailBaselines[taskID];
+  taskDetailFieldEdits.delete(taskID);
+  if (state.taskDetailCommitPending === taskID) state.taskDetailCommitPending = "";
+}
+
+function recordTaskDetailFieldEdit(taskID, field) {
+  if (!taskID || !TASK_DETAIL_FIELDS.includes(field)) return;
+  taskDetailEditVersion += 1;
+  const fields = taskDetailFieldEdits.get(taskID) || new Map();
+  fields.set(field, taskDetailEditVersion);
+  taskDetailFieldEdits.set(taskID, fields);
+}
+
+function clearSubmittedTaskDetailFieldEdits(taskID, submittedFields) {
+  const current = taskDetailFieldEdits.get(taskID);
+  if (!current) return;
+  for (const [field, version] of submittedFields) {
+    if (current.get(field) === version) current.delete(field);
+  }
+  if (current.size === 0) taskDetailFieldEdits.delete(taskID);
+}
+
 function preserveCurrentTaskDraft() {
   if (!state.selectedTask) return false;
   const draft = taskDraftFromCurrentForm(state.selectedTask);
@@ -3103,8 +3287,17 @@ function bindWorkspaceDetail(options = {}) {
     restoreDetailFocus(focus);
     return true;
   };
-  const reconcileLoadedTask = (task, { deleted = false, deferAgentRender = false, previousTask = null } = {}) => {
+  const reconcileLoadedTask = (task, {
+    deleted = false,
+    deferAgentRender = false,
+    previousTask = null,
+    preserveSelectedBaseline = false,
+  } = {}) => {
     if (!boundContextIsCurrent()) return false;
+    if (!deleted && state.selectedTask?.id !== task.id) reconcileRetainedTaskDetailFields(task.id, task);
+    if (!deleted && !preserveSelectedBaseline && state.selectedTask?.id === task.id) {
+      advanceTaskDetailBaseline(task.id, task);
+    }
     const reconcile = items => (items || []).flatMap(item => item.id !== task.id ? [item] : deleted ? [] : [{ ...item, ...task }]);
     state.workspaceTasks = reconcile(state.workspaceTasks);
     state.selectedSubtasks = reconcile(state.selectedSubtasks);
@@ -3122,6 +3315,7 @@ function bindWorkspaceDetail(options = {}) {
       state.selectedSubtasks = moveChildren(state.selectedSubtasks);
       if (state.selectedTask?.parentTaskId === task.id) {
         state.selectedTask = moveChildren([state.selectedTask])[0];
+        updateTaskDetailBaselineFields(state.selectedTask.id, { bucketId: location.bucketId });
       }
     }
 
@@ -3136,19 +3330,25 @@ function bindWorkspaceDetail(options = {}) {
   };
   const taskDraftFromForm = taskDraftFromCurrentForm;
   const preserveTaskDraft = preserveCurrentTaskDraft;
-  const reconcileReopenedTaskDetail = updated => {
+  const reconcileReopenedTaskDetail = (updated, submittedFieldEdits = new Map()) => {
     if (state.selectedTask?.id !== updated.id) return;
-    const baseline = { ...state.selectedTask };
-    const live = taskDraftFromForm(baseline);
-    const merged = { ...baseline, ...updated };
+    const selected = { ...state.selectedTask };
+    const baseline = { ...(state.taskDetailBaselines[updated.id] || taskDetailSnapshot(selected)) };
+    const live = taskDraftFromForm(selected) || state.taskDetailDrafts[updated.id];
+    advanceTaskDetailBaseline(updated.id, updated);
+    const merged = { ...selected, ...updated };
     if (!live) {
       state.selectedTask = merged;
       return;
     }
     const form = document.querySelector("#workspace-detail-form");
     const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
+    const currentFieldEdits = taskDetailFieldEdits.get(updated.id);
     for (const field of fields) {
-      if (String(live[field] || "") !== String(baseline[field] || "")) {
+      const currentEditVersion = currentFieldEdits?.get(field);
+      const editedAfterSubmission = currentEditVersion !== undefined
+        && currentEditVersion !== submittedFieldEdits.get(field);
+      if (editedAfterSubmission || String(live[field] || "") !== String(baseline[field] || "")) {
         merged[field] = live[field];
         continue;
       }
@@ -3307,6 +3507,7 @@ function bindWorkspaceDetail(options = {}) {
     });
   };
   const close = async () => {
+    if (!confirmTaskDetailDiscard()) return false;
     const currentRoute = parseRoute(location.pathname);
     const closedTaskID = state.selectedTask?.id || "";
     const refreshWorkspace = state.workspaceRefreshOnDetailClose && currentRoute.name === "workspace";
@@ -3315,7 +3516,7 @@ function bindWorkspaceDetail(options = {}) {
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
-    state.taskDetailDrafts = {};
+    clearTaskDetailDraftTracking();
     state.subtaskDraft = "";
     state.subtaskPending = false;
     state.subtaskError = "";
@@ -3355,19 +3556,18 @@ function bindWorkspaceDetail(options = {}) {
       return;
     }
     render();
+    return true;
   };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
   detailSurface?.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
   document.querySelector("[data-open-parent]")?.addEventListener("click", event => {
+    if (!confirmSubtaskDraftDiscard()) return;
     preserveTaskDraft();
-    state.subtaskDraft = "";
-    state.subtaskError = "";
     openTaskDetail(state.selectedTask.parentTaskId, event.currentTarget);
   });
   document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = () => {
+    if (!confirmSubtaskDraftDiscard()) return;
     preserveTaskDraft();
-    state.subtaskDraft = "";
-    state.subtaskError = "";
     openTaskDetail(element.dataset.openTask, element);
   });
   document.querySelectorAll("[data-toggle-subtask]").forEach(element => element.onclick = async () => {
@@ -3469,6 +3669,14 @@ function bindWorkspaceDetail(options = {}) {
       addSubtask();
     }
   });
+  document.querySelectorAll("#workspace-detail-form [name]").forEach(control => {
+    const preserveEditedTaskDraft = event => {
+      recordTaskDetailFieldEdit(state.selectedTask?.id, event.currentTarget.name);
+      preserveTaskDraft();
+    };
+    control.addEventListener("input", preserveEditedTaskDraft);
+    control.addEventListener("change", preserveEditedTaskDraft);
+  });
   document.querySelector("#delete-task")?.addEventListener("click", async () => {
     if (!confirm("Delete this task and its subtasks?")) return;
     const taskID = state.selectedTask.id;
@@ -3481,10 +3689,12 @@ function bindWorkspaceDetail(options = {}) {
     state.agentTaskMutationError = "";
     state.agentTaskRefreshError = "";
     preserveTaskDraft();
+    state.taskDetailCommitPending = taskID;
     try {
       const deleted = await serializeTaskMutation(taskID, () => api.del(`/api/v1/tasks/${taskID}`));
       if (!deleted) return;
       const agentCacheChanged = deletedTasks.reduce((changed, task) => reconcileLoadedTask(task, { deleted: true, deferAgentRender: true }) || changed, false);
+      for (const task of deletedTasks) clearTaskDetailDraft(task.id);
       if (agentCacheChanged && !state.selectedTask && ["agent-detail", "agent-work"].includes(state.view)) {
         state.agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || taskID;
         render();
@@ -3499,6 +3709,8 @@ function bindWorkspaceDetail(options = {}) {
           taskDetailVersion += 1;
           for (const task of deletedTasks) delete state.taskDetailDrafts[task.id];
           delete state.taskDetailDrafts[selectedTaskID];
+          for (const task of deletedTasks) delete state.taskDetailBaselines[task.id];
+          delete state.taskDetailBaselines[selectedTaskID];
           state.selectedTask = null;
           state.selectedSubtasks = [];
           state.subtaskDraft = "";
@@ -3508,8 +3720,16 @@ function bindWorkspaceDetail(options = {}) {
           render();
           return;
         }
-        if (state.selectedTask?.id !== taskID) return;
+        if (state.selectedTask?.id !== taskID) {
+          if (parentTaskID && state.selectedTask?.id === parentTaskID) {
+            const focus = captureTaskDetailFocus();
+            render();
+            restoreTaskDetailFocus(focus);
+          }
+          return;
+        }
         delete state.taskDetailDrafts[taskID];
+        delete state.taskDetailBaselines[taskID];
         state.subtaskDraft = "";
         state.subtaskPending = false;
         state.subtaskError = "";
@@ -3521,12 +3741,13 @@ function bindWorkspaceDetail(options = {}) {
         taskDetailVersion += 1;
         state.selectedTask = null;
         state.selectedSubtasks = [];
-        state.taskDetailDrafts = {};
+        clearTaskDetailDraftTracking();
         await refreshAfterCommittedMutation("deleted");
         return;
       }
       if (parentTaskID) {
         delete state.taskDetailDrafts[taskID];
+        delete state.taskDetailBaselines[taskID];
         state.subtaskDraft = "";
         state.subtaskPending = false;
         state.subtaskError = "";
@@ -3537,16 +3758,18 @@ function bindWorkspaceDetail(options = {}) {
       taskDetailVersion += 1;
       state.selectedTask = null;
       state.selectedSubtasks = [];
-      state.taskDetailDrafts = {};
+      clearTaskDetailDraftTracking();
       state.subtaskDraft = "";
       state.subtaskPending = false;
       state.subtaskError = "";
       await refreshAfterCommittedMutation("deleted");
     } catch (err) {
+      if (state.taskDetailCommitPending === taskID) state.taskDetailCommitPending = "";
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         reportBackgroundMutationFailure("delete", taskTitle, err);
         return;
       }
+      state.taskDetailCommitPending = "";
       if (handleError(err)) return;
       state.error = err.message;
       render();
@@ -3559,21 +3782,25 @@ function bindWorkspaceDetail(options = {}) {
     const taskID = state.selectedTask.id;
     const taskTitle = String(form.get("title") || state.selectedTask.title);
     const parentTaskID = state.selectedTask.parentTaskId || "";
-    const previousTask = { ...state.selectedTask };
+    const previousTask = { ...state.selectedTask, ...(state.taskDetailBaselines[taskID] || {}) };
     const detailVersion = taskDetailVersion;
     state.agentTaskMutationError = "";
     state.agentTaskRefreshError = "";
     preserveTaskDraft();
+    const submittedEditVersion = taskDetailEditVersion;
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     controls.forEach(control => { control.disabled = true; });
     submit.textContent = "Saving…";
+    const input = {
+      title: form.get("title"), description: form.get("description"), status: form.get("status"),
+      priority: form.get("priority"), assigneeAgentId: form.get("assigneeAgentId"),
+      scheduledDate: form.get("scheduledDate"),
+    };
+    if (!parentTaskID) input.bucketId = form.get("bucketId");
+    const submittedDraft = taskDetailSnapshot({ ...previousTask, ...input });
+    const submittedFieldEdits = new Map(taskDetailFieldEdits.get(taskID) || []);
+    let savePersisted = false;
     try {
-      const input = {
-        title: form.get("title"), description: form.get("description"), status: form.get("status"),
-        priority: form.get("priority"), assigneeAgentId: form.get("assigneeAgentId"),
-        scheduledDate: form.get("scheduledDate"),
-      };
-      if (!parentTaskID) input.bucketId = form.get("bucketId");
       const updated = await serializeTaskMutation(taskID, async ({ queued }) => {
         if (!queued) return api.patch(`/api/v1/tasks/${taskID}/status`, input);
         const current = await api.get(`/api/v1/tasks/${taskID}`);
@@ -3581,21 +3808,38 @@ function bindWorkspaceDetail(options = {}) {
         for (const field of ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
           if (!(field in input)) continue;
           const previousValue = String(previousTask[field] || "");
-          if (String(input[field] || "") !== previousValue) rebased[field] = input[field];
+          const inputValue = String(input[field] || "");
+          if (inputValue !== previousValue || submittedFieldEdits.has(field)) rebased[field] = input[field];
         }
         return api.patch(`/api/v1/tasks/${taskID}/status`, rebased);
       });
       if (!updated) return;
-      reconcileLoadedTask(updated, { previousTask });
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+      savePersisted = true;
+      const detailWasReopened = detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID;
+      const liveAfterSave = !detailWasReopened
+        ? taskDraftFromForm(state.selectedTask) || state.taskDetailDrafts[taskID]
+        : null;
+      const hasNewerDraft = Boolean(taskDetailEditVersion !== submittedEditVersion
+        && liveAfterSave
+        && taskDetailDraftIsDirty(submittedDraft, liveAfterSave));
+      const newerDraftFocus = hasNewerDraft ? captureDetailFocus() : null;
+      reconcileLoadedTask(updated, { previousTask, preserveSelectedBaseline: detailWasReopened || hasNewerDraft });
+      if (detailWasReopened) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
-        reconcileReopenedTaskDetail(updated);
+        reconcileReopenedTaskDetail(updated, submittedFieldEdits);
         await refreshCurrentTaskSurface();
         return;
       }
+      if (hasNewerDraft) {
+        reconcileReopenedTaskDetail(updated, submittedFieldEdits);
+        await refreshAfterTaskMutation(boundRouteVersion);
+        render();
+        restoreDetailFocus(newerDraftFocus);
+        return;
+      }
       if (parentTaskID) {
-        delete state.taskDetailDrafts[taskID];
+        clearTaskDetailDraft(taskID);
         state.subtaskDraft = "";
         state.subtaskPending = false;
         state.subtaskError = "";
@@ -3603,10 +3847,19 @@ function bindWorkspaceDetail(options = {}) {
         await refreshAfterSubtaskMutation();
         return;
       }
+      if (state.subtaskDraft !== "") {
+        state.selectedTask = { ...state.selectedTask, ...updated };
+        state.taskDetailBaselines[taskID] = taskDetailSnapshot(updated);
+        state.taskDetailDrafts[taskID] = taskDetailSnapshot(updated);
+        state.taskDetailCommitPending = "";
+        await refreshAfterTaskMutation(boundRouteVersion);
+        render();
+        return;
+      }
       taskDetailVersion += 1;
       state.selectedTask = null;
       state.selectedSubtasks = [];
-      state.taskDetailDrafts = {};
+      clearTaskDetailDraft(taskID);
       state.subtaskDraft = "";
       state.subtaskPending = false;
       state.subtaskError = "";
@@ -3616,9 +3869,12 @@ function bindWorkspaceDetail(options = {}) {
         reportBackgroundMutationFailure("save", taskTitle, err);
         return;
       }
+      state.taskDetailCommitPending = "";
       if (handleError(err)) return;
       state.error = err.message;
       render();
+    } finally {
+      if (savePersisted) clearSubmittedTaskDetailFieldEdits(taskID, submittedFieldEdits);
     }
   });
   document.querySelector("#workspace-detail-title")?.focus();
@@ -3639,19 +3895,19 @@ function bindApp() {
   });
   document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.moveNotice = null; render(); });
   document.querySelectorAll("[data-board-mode]").forEach(el => el.onclick = () => {
+    if (!closeTaskDetailForBoardControl()) return;
     state.boardMode = el.dataset.boardMode;
-    state.selectedTask = null;
     render();
   });
   document.querySelector("#flow-list-filter")?.addEventListener("change", event => {
+    if (!closeTaskDetailForBoardControl()) { render(); return; }
     state.flowListId = event.target.value;
-    state.selectedTask = null;
     render();
     document.querySelector("#flow-list-filter")?.focus();
   });
   document.querySelector("#priority-filter")?.addEventListener("change", event => {
+    if (!closeTaskDetailForBoardControl()) { render(); return; }
     state.priorityFilter = event.target.value;
-    state.selectedTask = null;
     render();
     document.querySelector("#priority-filter")?.focus();
   });
@@ -3842,6 +4098,7 @@ function reconcileTaskCompletion(updated, previousTask) {
       const draft = taskDraftFromCurrentForm(state.selectedTask) || state.taskDetailDrafts[state.selectedTask.id] || {};
       state.selectedTask = { ...moveChildren([state.selectedTask])[0], ...draft, bucketId: location.bucketId };
       state.taskDetailDrafts[state.selectedTask.id] = { ...draft, bucketId: location.bucketId };
+      updateTaskDetailBaselineFields(state.selectedTask.id, { bucketId: location.bucketId });
       const listControl = globalThis.document?.querySelector?.("#workspace-detail-list");
       if (listControl) listControl.value = location.bucketId;
       const context = globalThis.document?.querySelector?.(".detail-context span");
@@ -3854,16 +4111,23 @@ function reconcileTaskCompletion(updated, previousTask) {
     if (list) list.openCount = Math.max(0, Number(list.openCount || 0) + (reconciled.done ? -1 : 1));
   }
 
-  if (state.selectedTask?.id !== reconciled.id) return;
-  const baseline = state.selectedTask;
-  const live = taskDraftFromCurrentForm(baseline);
+  if (state.selectedTask?.id !== reconciled.id) {
+    reconcileRetainedTaskDetailFields(reconciled.id, reconciled);
+    return;
+  }
+  const selected = state.selectedTask;
+  const baseline = { ...(state.taskDetailBaselines[reconciled.id] || taskDetailSnapshot(selected)) };
+  const live = taskDraftFromCurrentForm(selected) || state.taskDetailDrafts[reconciled.id];
+  advanceTaskDetailBaseline(reconciled.id, reconciled);
   const statusControl = globalThis.document?.querySelector?.('#workspace-detail-form [name="status"]');
   const liveStatus = live?.status || statusControl?.value || baseline.status;
-  const statusWasEdited = Boolean(statusControl) && liveStatus !== baseline.status;
-  const merged = { ...baseline, ...reconciled };
+  const currentFieldEdits = taskDetailFieldEdits.get(reconciled.id);
+  const statusWasEdited = Boolean(statusControl)
+    && (liveStatus !== baseline.status || currentFieldEdits?.has("status"));
+  const merged = { ...selected, ...reconciled };
   const form = globalThis.document?.querySelector?.("#workspace-detail-form");
   for (const field of ["title", "description", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
-    if (live && String(live[field] || "") !== String(baseline[field] || "")) {
+    if (live && (currentFieldEdits?.has(field) || String(live[field] || "") !== String(baseline[field] || ""))) {
       merged[field] = live[field];
       continue;
     }
@@ -3930,6 +4194,18 @@ function bindWorkspaceListControl() {
 }
 
 async function captureInboxTask(button) {
+  if (!confirmTaskDetailDiscard()) return false;
+  if (state.selectedTask) {
+    taskDetailVersion += 1;
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    clearTaskDetailDraftTracking();
+    state.subtaskDraft = "";
+    state.subtaskPending = false;
+    state.subtaskError = "";
+    render();
+    button = document.querySelector("#global-new-task") || button;
+  }
   button.disabled = true;
   button.querySelector("span").textContent = "Creating…";
   try {
@@ -4035,10 +4311,34 @@ async function renameBoard(id, name) {
 async function deleteBoard(id) {
   const board = state.boards.find(item => item.id === id);
   if (!board || !confirm(`Delete "${board.name}" and all its lists and items?`)) return;
+  const discardedTaskID = state.selectedTask?.id || "";
+  const discardedTaskBaseline = discardedTaskID && state.taskDetailBaselines[discardedTaskID]
+    ? { ...state.taskDetailBaselines[discardedTaskID] }
+    : null;
+  const discardedTaskFocus = captureTaskDetailFocus();
+  const hadUnsavedTaskChanges = taskDetailHasUnsavedChanges();
+  if (!confirmTaskDetailDiscard()) return;
+  if (hadUnsavedTaskChanges && discardedTaskBaseline && state.selectedTask?.id === discardedTaskID) {
+    state.selectedTask = { ...state.selectedTask, ...discardedTaskBaseline };
+    state.taskDetailBaselines[discardedTaskID] = { ...discardedTaskBaseline };
+    state.taskDetailDrafts[discardedTaskID] = { ...discardedTaskBaseline };
+    render();
+    restoreTaskDetailFocus(discardedTaskFocus);
+  }
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   await api.del(`/api/v1/boards/${id}`);
   if (!sessionIsCurrent(sessionVersion, userID)) return;
+  if (state.selectedTask && state.selectedTask.boardId !== id) {
+    preserveCurrentTaskDraft();
+    state.boards = state.boards.filter(item => item.id !== id);
+    state.workspaceLists = state.workspaceLists.filter(item => item.boardId !== id);
+    state.workspaceTasks = state.workspaceTasks.filter(item => item.boardId !== id);
+    state.selectedSubtasks = state.selectedSubtasks.filter(item => item.boardId !== id);
+    if (state.board?.id === id) state.board = null;
+    renderPreservingCurrentTaskDetail();
+    return;
+  }
   state.selectedTask = null;
   state.board = null;
   if (!await loadBoards()) return;
@@ -5630,9 +5930,36 @@ function escapeAttr(value) {
   return escapeHTML(value);
 }
 
-window.addEventListener("popstate", async () => {
+window.addEventListener("beforeunload", event => {
+  if (!taskDetailHasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+window.addEventListener("popstate", async event => {
   // Sign-out is in flight; the URL it lands on is decided when it finishes.
   if (state.view === "logging-out" || state.view === "logout-error") return;
+  ensureHistoryTracking();
+  const destinationPosition = historyPosition(event.state);
+  if (restoringHistoryPosition) {
+    restoringHistoryPosition = false;
+    appliedHistoryPath = currentLocationPath();
+    appliedHistoryPosition = destinationPosition ?? appliedHistoryPosition;
+    return;
+  }
+  if (!confirmTaskDetailDiscard()) {
+    const delta = destinationPosition === null ? 0 : appliedHistoryPosition - destinationPosition;
+    if (delta && typeof history.go === "function") {
+      restoringHistoryPosition = true;
+      history.go(delta);
+    } else {
+      appliedHistoryPosition += 1;
+      history.pushState(trackedHistoryState(appliedHistoryPosition), "", appliedHistoryPath);
+    }
+    return;
+  }
+  appliedHistoryPath = currentLocationPath();
+  if (destinationPosition !== null) appliedHistoryPosition = destinationPosition;
   const nextRoute = parseRoute(location.pathname);
   clearSettingsCredentialsLeaving(nextRoute.settingsPage || "");
   clearAgentCredentialLeaving(nextRoute);

@@ -1171,6 +1171,7 @@ test("moving a parent reconciles an open child detail without losing its draft",
     state.selectedSubtasks = [];
     state.selectedTask = { id: "child", parentTaskId: "parent", bucketId: "list-old", listName: "YouTube", title: "Live child title", description: "Live child brief", status: "queued" };
     state.taskDetailDrafts = { child: { title: "Live child title", description: "Live child brief", status: "queued", bucketId: "list-old", priority: "p1", assigneeAgentId: "", scheduledDate: "" } };
+    state.taskDetailBaselines = { child: { title: "Persisted child title", description: "Persisted child brief", status: "queued", bucketId: "list-old", priority: "p1", assigneeAgentId: "", scheduledDate: "" } };
     state.agentDetail = null;
     state.agentWorkPage = null;
   `, app);
@@ -1187,6 +1188,9 @@ test("moving a parent reconciles an open child detail without losing its draft",
   assert.equal(vm.runInContext("state.selectedTask.title", app), "Live child title");
   assert.equal(vm.runInContext("state.taskDetailDrafts.child.bucketId", app), "list-new");
   assert.equal(vm.runInContext("state.taskDetailDrafts.child.description", app), "Live child brief");
+  assert.equal(vm.runInContext("state.taskDetailBaselines.child.bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.taskDetailBaselines.child.title", app), "Persisted child title");
+  assert.equal(vm.runInContext("taskDetailDraftIsDirty(state.taskDetailBaselines.child, state.taskDetailDrafts.child)", app), true);
   assert.equal(vm.runInContext("parentMoveListControl.value", app), "list-new");
   assert.equal(vm.runInContext("parentMoveContext.textContent", app), "Inbox");
   assert.equal(vm.runInContext("parentMoveRenderCount", app), 0);
@@ -1200,6 +1204,7 @@ test("moving a parent reconciles an open child detail without losing its draft",
     state.selectedSubtasks = [];
     state.selectedTask = null;
     state.taskDetailDrafts = {};
+    state.taskDetailBaselines = {};
     delete globalThis.document;
   `, app);
 });
@@ -2250,6 +2255,144 @@ test("detail presents one inline accessible editor with clear actions", () => {
   assert.match(html, /aria-label="Back to tasks"/);
 });
 
+test("task detail dirty checks compare every persisted editor field", () => {
+  const baseline = app.taskDetailSnapshot({
+    title: "Draft launch brief",
+    description: "Ship it safely",
+    status: "queued",
+    bucketId: "inbox",
+    priority: "p1",
+    assigneeAgentId: "agent-one",
+    scheduledDate: "2026-08-12",
+  });
+
+  assert.equal(app.taskDetailDraftIsDirty(baseline, { ...baseline }), false);
+  for (const field of ["title", "description", "status", "bucketId", "priority", "assigneeAgentId", "scheduledDate"]) {
+    assert.equal(app.taskDetailDraftIsDirty(baseline, { ...baseline, [field]: `${baseline[field]}-changed` }), true, field);
+  }
+  assert.equal(app.taskDetailDraftIsDirty(baseline, { ...baseline, priority: null }), true);
+  assert.match(source, /addEventListener\("beforeunload"[\s\S]*taskDetailHasUnsavedChanges\(\)[\s\S]*event\.preventDefault\(\)/);
+
+  vm.runInContext(`
+    savedTaskDetailConfirm = globalThis.confirm;
+    globalThis.confirm = () => true;
+    state.selectedTask = { id: "parent" };
+    state.subtaskDraft = "Unfinished step";
+    state.subtaskError = "Previous error";
+  `, app);
+  assert.equal(app.confirmTaskDetailDiscard(), true);
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "");
+  assert.equal(vm.runInContext("state.subtaskError", app), "");
+  vm.runInContext(`
+    globalThis.confirm = savedTaskDetailConfirm;
+    state.selectedTask = null;
+  `, app);
+});
+
+test("accepting discard restores a mounted task to its persisted baseline", () => {
+  vm.runInContext(`
+    savedMountedDiscardConfirm = globalThis.confirm;
+    globalThis.confirm = () => true;
+    state.selectedTask = { id: "task-a", title: "Discarded title", description: "Saved brief" };
+    state.taskDetailBaselines = { "task-a": taskDetailSnapshot({ ...state.selectedTask, title: "Saved title" }) };
+    state.taskDetailDrafts = { "task-a": taskDetailSnapshot(state.selectedTask) };
+  `, app);
+
+  assert.equal(app.confirmTaskDetailDiscard(), true);
+  assert.equal(vm.runInContext("state.selectedTask.title", app), "Saved title");
+  assert.equal(vm.runInContext('state.taskDetailBaselines["task-a"].title', app), "Saved title");
+  assert.equal(app.taskDetailHasUnsavedChanges(), false);
+  vm.runInContext("globalThis.confirm = savedMountedDiscardConfirm; state.selectedTask = null;", app);
+});
+
+test("committed hidden-task changes rebase only clean retained fields", () => {
+  vm.runInContext(`
+    state.selectedTask = { id: "parent" };
+    state.taskDetailBaselines = {
+      clean: taskDetailSnapshot({ id: "clean", title: "Clean title", status: "done" }),
+      dirty: taskDetailSnapshot({ id: "dirty", title: "Saved title", status: "done" }),
+    };
+    state.taskDetailDrafts = {
+      clean: taskDetailSnapshot({ id: "clean", title: "Clean title", status: "done" }),
+      dirty: taskDetailSnapshot({ id: "dirty", title: "Draft title", status: "done" }),
+    };
+    recordTaskDetailFieldEdit("clean", "status");
+    recordTaskDetailFieldEdit("dirty", "title");
+  `, app);
+
+  app.reconcileRetainedTaskDetailFields("clean", { status: "queued" }, ["status"]);
+  app.reconcileRetainedTaskDetailFields("dirty", { title: "New saved title", status: "queued" }, ["title", "status"]);
+
+  assert.equal(vm.runInContext("state.taskDetailBaselines.clean.status", app), "queued");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.clean.status", app), "queued");
+  assert.equal(vm.runInContext('taskDetailFieldEdits.has("clean")', app), false);
+  assert.equal(vm.runInContext("state.taskDetailBaselines.dirty.title", app), "New saved title");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.dirty.title", app), "Draft title");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.dirty.status", app), "queued");
+  assert.equal(vm.runInContext('taskDetailFieldEdits.get("dirty").has("title")', app), true);
+  vm.runInContext("state.selectedTask = null; clearTaskDetailDraftTracking();", app);
+});
+
+test("board controls cannot discard unsaved task changes", () => {
+  vm.runInContext(`
+    state.selectedTask = { id: "task-a", title: "Saved title" };
+    state.taskDetailBaselines = { "task-a": taskDetailSnapshot(state.selectedTask) };
+    state.taskDetailDrafts = { "task-a": { ...taskDetailSnapshot(state.selectedTask), title: "Edited title" } };
+    state.subtaskDraft = "Unfinished step";
+    boardControlConfirmCalls = 0;
+    savedBoardControlConfirm = globalThis.confirm;
+    globalThis.confirm = () => { boardControlConfirmCalls += 1; return false; };
+  `, app);
+
+  assert.equal(app.closeTaskDetailForBoardControl(), false);
+  assert.equal(vm.runInContext("state.selectedTask.id", app), "task-a");
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "Unfinished step");
+  assert.equal(vm.runInContext("boardControlConfirmCalls", app), 1);
+
+  vm.runInContext("globalThis.confirm = () => true;", app);
+  assert.equal(app.closeTaskDetailForBoardControl(), true);
+  assert.equal(vm.runInContext("state.selectedTask", app), null);
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.taskDetailDrafts)", app)), {});
+  vm.runInContext("globalThis.confirm = savedBoardControlConfirm;", app);
+});
+
+test("board controls invalidate a task detail load already in flight", async () => {
+  let releaseDetail;
+  app.pendingBoardControlDetail = new Promise(resolve => { releaseDetail = resolve; });
+  app.releaseBoardControlDetail = releaseDetail;
+  vm.runInContext(`
+    savedBoardControlAPIGet = api.get;
+    savedBoardControlConfirm = globalThis.confirm;
+    state.me = { id: "owner" };
+    state.selectedTask = { id: "task-a", title: "First task" };
+    state.selectedSubtasks = [{ id: "subtask-a" }];
+    state.subtaskPending = true;
+    api.get = async path => {
+      if (path === "/api/v1/tasks/task-b") {
+        await pendingBoardControlDetail;
+        return { id: "task-b", title: "Second task" };
+      }
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
+      throw new Error("unexpected request for " + path);
+    };
+    globalThis.confirm = () => true;
+  `, app);
+
+  const opening = app.openTaskDetail("task-b");
+  assert.equal(app.closeTaskDetailForBoardControl(), true);
+  app.releaseBoardControlDetail();
+
+  assert.equal(await opening, false);
+  assert.equal(vm.runInContext("state.selectedTask", app), null);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.selectedSubtasks)", app)), []);
+  assert.equal(vm.runInContext("state.subtaskPending", app), false);
+  vm.runInContext(`
+    api.get = savedBoardControlAPIGet;
+    globalThis.confirm = savedBoardControlConfirm;
+  `, app);
+});
+
 test("detail can move a parent task between account-wide lists", () => {
   vm.runInContext(`
     state.boards = [{ id: "board", name: "Home" }, { id: "other", name: "Campaigns" }];
@@ -2461,6 +2604,81 @@ test("a delayed board deletion from an old account cannot create data in the new
   assert.equal(vm.runInContext("state.me.id", app), "account-b");
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.boards)", app)), []);
   assert.equal(vm.runInContext("state.board", app), null);
+});
+
+test("board deletion cannot discard an open task draft without confirmation", async () => {
+  const confirmations = [];
+  const deletes = [];
+  app.confirm = message => {
+    confirmations.push(message);
+    return confirmations.length === 1;
+  };
+  app.boardDeleteCalls = deletes;
+  vm.runInContext(`
+    authVersion = 55;
+    state.me = { id: "account-a" };
+    state.boards = [{ id: "board-a", name: "Other" }];
+    state.board = { id: "board-current", name: "Current", buckets: [] };
+    state.selectedTask = { id: "task-a", title: "Open draft" };
+    state.subtaskDraft = "Unsaved step";
+    api.del = async path => { boardDeleteCalls.push(path); return { ok: true }; };
+  `, app);
+
+  await app.deleteBoard("board-a");
+
+  assert.deepEqual(confirmations, [
+    'Delete "Other" and all its lists and items?',
+    "Discard unsaved task changes?",
+  ]);
+  assert.deepEqual(deletes, []);
+  assert.equal(vm.runInContext("state.selectedTask.id", app), "task-a");
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "Unsaved step");
+  app.confirm = () => true;
+});
+
+test("unrelated board deletion preserves edits made while its request is pending", async () => {
+  let releaseDelete;
+  app.pendingBoardDelete = new Promise(resolve => { releaseDelete = resolve; });
+  app.releasePendingBoardDelete = releaseDelete;
+  app.renderBeforePendingBoardDelete = app.render;
+  app.confirm = () => true;
+  vm.runInContext(`
+    authVersion = 56;
+    state.me = { id: "account-a" };
+    state.view = "app";
+    state.boards = [{ id: "board-current", name: "Current" }, { id: "board-other", name: "Other" }];
+    state.board = { id: "board-current", name: "Current", buckets: [] };
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+    state.selectedTask = { id: "task-a", boardId: "board-current", title: "Discarded edit" };
+    state.selectedSubtasks = [];
+    state.taskDetailBaselines = { "task-a": taskDetailSnapshot({ ...state.selectedTask, title: "Saved task" }) };
+    state.taskDetailDrafts = { "task-a": taskDetailSnapshot(state.selectedTask) };
+    state.subtaskDraft = "";
+    api.del = async path => {
+      if (path !== "/api/v1/boards/board-other") throw new Error("unexpected delete for " + path);
+      await pendingBoardDelete;
+      return { ok: true };
+    };
+    render = () => {};
+  `, app);
+
+  const deletion = app.deleteBoard("board-other");
+  assert.equal(vm.runInContext("state.selectedTask.title", app), "Saved task");
+  assert.equal(vm.runInContext('state.taskDetailBaselines["task-a"].title', app), "Saved task");
+  vm.runInContext(`
+    state.taskDetailDrafts["task-a"] = { ...state.taskDetailBaselines["task-a"], title: "Late edit" };
+    recordTaskDetailFieldEdit("task-a", "title");
+  `, app);
+  app.releasePendingBoardDelete();
+  await deletion;
+
+  assert.equal(vm.runInContext("state.selectedTask.id", app), "task-a");
+  assert.equal(vm.runInContext('state.taskDetailDrafts["task-a"].title', app), "Late edit");
+  assert.equal(app.taskDetailHasUnsavedChanges(), true);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.boards.map(board => board.id))", app)), ["board-current"]);
+  assert.equal(vm.runInContext("state.board.id", app), "board-current");
+  vm.runInContext("render = renderBeforePendingBoardDelete;", app);
 });
 
 test("API responses from an old session cannot resume mutation continuations", async () => {
