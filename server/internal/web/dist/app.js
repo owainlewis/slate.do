@@ -130,6 +130,7 @@ const state = {
   taskCompletionError: null,
   subtaskDraft: "",
   subtaskCreateAttempt: null,
+  newTaskCreateAttempt: null,
   subtaskPending: false,
   subtaskError: "",
   settings: false,
@@ -893,6 +894,7 @@ function resetAuthenticatedState() {
   state.theme = "";
   state.newTaskRecovery = null;
   state.newTaskCapturePending = false;
+  state.newTaskCreateAttempt = null;
   state.routeError = null;
 }
 
@@ -4269,12 +4271,17 @@ async function captureInboxTask(button) {
     button = document.querySelector("#global-new-task") || button;
   }
   const context = beginNewTaskOperation();
+  const idempotencyKey = newTaskCreateIdempotencyKey();
   state.newTaskCapturePending = true;
   state.error = "";
   render();
   let task;
   try {
-    task = await api.post("/api/v1/tasks", { title: "New task", description: "", kind: "action" });
+    task = await api.post(
+      "/api/v1/tasks",
+      { title: "New task", description: "", kind: "action" },
+      { headers: { "Idempotency-Key": idempotencyKey } },
+    );
   } catch (err) {
     if (!newTaskOperationIsCurrent(context)) return false;
     state.newTaskCapturePending = false;
@@ -4282,6 +4289,7 @@ async function captureInboxTask(button) {
     render();
     return false;
   }
+  if (state.newTaskCreateAttempt?.key === idempotencyKey) state.newTaskCreateAttempt = null;
   if (!newTaskOperationIsCurrent(context)) return false;
   state.newTaskCapturePending = false;
   state.newTaskRecovery = {
@@ -5112,6 +5120,13 @@ function subtaskCreateIdempotencyKey(parentID, title) {
   if (previous?.parentID === parentID && previous.title === title) return previous.key;
   const key = newIdempotencyKey();
   state.subtaskCreateAttempt = { parentID, title, key };
+  return key;
+}
+
+function newTaskCreateIdempotencyKey() {
+  if (state.newTaskCreateAttempt?.key) return state.newTaskCreateAttempt.key;
+  const key = newIdempotencyKey();
+  state.newTaskCreateAttempt = { key };
   return key;
 }
 

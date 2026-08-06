@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextTaskCreate: false, delayNextTaskCreate: false, releaseTaskCreate: null, failNextTaskDetail: false, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], taskIdempotency: new Map(), taskRequestKeys: [], commitNextTaskThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextTaskCreate: false, delayNextTaskCreate: false, releaseTaskCreate: null, failNextTaskDetail: false, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -158,6 +158,8 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "POST") {
       const input = await requestJSON(request);
+      const idempotencyKey = request.headers["idempotency-key"] || "";
+      state.taskRequestKeys.push(idempotencyKey);
       if (state.delayNextTaskCreate) {
         state.delayNextTaskCreate = false;
         await new Promise(resolve => { state.releaseTaskCreate = resolve; });
@@ -166,10 +168,17 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         state.failNextTaskCreate = false;
         return json(response, { error: "Could not create task" }, 500);
       }
+      const existing = idempotencyKey && state.taskIdempotency.get(idempotencyKey);
+      if (existing) return json(response, existing, 201);
       const created = { id: `task-created-${state.created.length + 1}`, boardId: "board-one", bucketId: "list-inbox", listName: "Inbox", title: input.title, description: input.description || "", scheduledDate: "", kind: "action", done: false, status: "queued", priority: "", assigneeAgentId: "" };
       state.tasks.unshift(created);
       state.created.push(created);
+      if (idempotencyKey) state.taskIdempotency.set(idempotencyKey, created);
       state.lists.find(list => list.id === "list-inbox").openCount += 1;
+      if (state.commitNextTaskThenFail) {
+        state.commitNextTaskThenFail = false;
+        return json(response, { error: "Response lost after commit" }, 500);
+      }
       return json(response, created, 201);
     }
     const bucketTaskMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)\/tasks$/);
@@ -2563,7 +2572,36 @@ test("New task reports a pre-commit POST failure as a normal capture error", asy
   await page.getByRole("alert").filter({ hasText: "Could not create task" }).waitFor();
 
   assert.equal(state.created.length, 0);
+  assert.equal(state.taskRequestKeys.length, 1);
+  assert.notEqual(state.taskRequestKeys[0], "");
   assert.equal(await page.getByRole("alert", { name: "Created task recovery" }).count(), 0);
+
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+  assert.equal(state.created.length, 1);
+  assert.equal(state.taskRequestKeys.length, 2);
+  assert.equal(state.taskRequestKeys[1], state.taskRequestKeys[0]);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a lost New task response retries with one idempotency key and no duplicate", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.commitNextTaskThenFail = true;
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Response lost after commit" }).waitFor();
+
+  assert.equal(state.created.length, 1);
+  assert.equal(state.taskRequestKeys.length, 1);
+  assert.notEqual(state.taskRequestKeys[0], "");
+
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+
+  assert.equal(state.created.length, 1);
+  assert.equal(state.taskRequestKeys.length, 2);
+  assert.equal(state.taskRequestKeys[1], state.taskRequestKeys[0]);
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "New task");
   assert.deepEqual(pageErrors, []);
 });
 
