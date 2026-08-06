@@ -1635,9 +1635,14 @@ async function refreshCurrentWorkspaceListMetadata() {
     && Boolean(globalThis.document?.querySelector?.(".settings-page"));
   const workspaceMounted = state.view === "app" && Boolean(globalThis.document?.querySelector?.(".task-shell"));
   const agentsMounted = state.view === currentRoute.name && Boolean(globalThis.document?.querySelector?.(".agents-shell"));
+  const agentSettingsMounted = state.view === "agent-settings"
+    && state.agentDetailLoadState === "ready"
+    && state.agentDetail?.agent?.id === currentRoute.agentId
+    && Boolean(globalThis.document?.querySelector?.(".agents-shell"));
   const routeNeedsCompletion = (currentRoute.name === "settings" && !settingsMounted)
     || (currentRoute.name === "workspace" && !workspaceMounted)
-    || (["agents", "agent-new"].includes(currentRoute.name) && !agentsMounted);
+    || (["agents", "agent-new"].includes(currentRoute.name) && !agentsMounted)
+    || (currentRoute.name === "agent-settings" && !agentSettingsMounted);
   if (routeNeedsCompletion) {
     await applyRoute();
     const completedRoute = parseRoute(location.pathname);
@@ -1649,6 +1654,12 @@ async function refreshCurrentWorkspaceListMetadata() {
     if (completedRoute.name === "workspace") return state.view === "app" && Boolean(globalThis.document?.querySelector?.(".task-shell"));
     if (["agents", "agent-new"].includes(completedRoute.name)) {
       return state.view === completedRoute.name && Boolean(globalThis.document?.querySelector?.(".agents-shell"));
+    }
+    if (completedRoute.name === "agent-settings") {
+      return state.view === "agent-settings"
+        && state.agentDetailLoadState === "ready"
+        && state.agentDetail?.agent?.id === completedRoute.agentId
+        && Boolean(globalThis.document?.querySelector?.(".agents-shell"));
     }
     return false;
   }
@@ -3283,7 +3294,7 @@ function bindWorkspaceDetail(options = {}) {
       return mounted ? refreshAfterTaskMutation(boundRouteVersion) : refreshCurrentWorkspaceListMetadata();
     }
     if (boundAgentID && currentRoute.agentId === boundAgentID) return refreshCurrentAgentSurface();
-    if (["settings", "agents", "agent-new"].includes(currentRoute.name)) return refreshCurrentWorkspaceListMetadata();
+    if (["settings", "agents", "agent-new", "agent-settings"].includes(currentRoute.name)) return refreshCurrentWorkspaceListMetadata();
     if (!["agent-detail", "agent-work"].includes(currentRoute.name)) return true;
     let focus = captureDetailFocus();
     return refreshAgentSurface({
@@ -3777,7 +3788,7 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
       },
       afterTaskDetailRender: () => restoreTaskDetailFocus(focus),
     });
-  } else if (["settings", "agents", "agent-new"].includes(currentRoute.name)) {
+  } else if (["settings", "agents", "agent-new", "agent-settings"].includes(currentRoute.name)) {
     return refreshCurrentWorkspaceListMetadata();
   } else if (state.selectedTask || startedRouteVersion !== routeVersion) {
     return true;

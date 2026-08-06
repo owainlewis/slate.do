@@ -1967,6 +1967,86 @@ test("background agent mutations refresh counts without resetting settings draft
   assert.deepEqual(pageErrors, []);
 });
 
+test("a background parent move refreshes counts without resetting agent settings", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  const now = new Date();
+  const offset = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+  const tuesday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1);
+  const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  state.tasks[0].scheduledDate = formatDate(monday);
+
+  await page.goto(`${origin}/app/week`);
+  state.delayNextCompletion = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator(`.workspace-week [data-calendar-date="${formatDate(tuesday)}"]`));
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  const purpose = page.locator("#agent-settings-purpose");
+  await purpose.fill("Unsaved purpose while parent moves");
+  assert.equal(await page.locator('[data-workspace-count="list-youtube"]').textContent(), "2");
+  assert.equal(await page.locator('[data-workspace-count="inbox"]').textContent(), "1");
+
+  Object.assign(state.tasks[0], { bucketId: "list-inbox", listName: "Inbox" });
+  state.subtasks.filter(task => task.parentTaskId === "task-parent").forEach(task => Object.assign(task, { bucketId: "list-inbox", listName: "Inbox" }));
+  state.lists.find(list => list.id === "list-youtube").openCount = 1;
+  state.lists.find(list => list.id === "list-inbox").openCount = 2;
+  state.releaseCompletion();
+
+  await page.waitForFunction(() => document.querySelector('[data-workspace-count="list-youtube"]')?.textContent === "1"
+    && document.querySelector('[data-workspace-count="inbox"]')?.textContent === "2");
+  assert.equal(await purpose.inputValue(), "Unsaved purpose while parent moves");
+  assert.equal(await purpose.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a background parent move completes agent settings whose list load it supersedes", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  const now = new Date();
+  const offset = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+  const tuesday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1);
+  const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  state.tasks[0].scheduledDate = formatDate(monday);
+
+  await page.goto(`${origin}/app/week`);
+  state.delayNextCompletion = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator(`.workspace-week [data-calendar-date="${formatDate(tuesday)}"]`));
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+
+  let releaseLists;
+  let listRequests = 0;
+  await page.route("**/api/v1/lists", async route => {
+    listRequests += 1;
+    if (listRequests === 1) await new Promise(resolve => { releaseLists = resolve; });
+    await route.continue();
+  });
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  await waitFor(() => typeof releaseLists === "function");
+
+  Object.assign(state.tasks[0], { bucketId: "list-inbox", listName: "Inbox" });
+  state.subtasks.filter(task => task.parentTaskId === "task-parent").forEach(task => Object.assign(task, { bucketId: "list-inbox", listName: "Inbox" }));
+  state.lists.find(list => list.id === "list-youtube").openCount = 1;
+  state.lists.find(list => list.id === "list-inbox").openCount = 2;
+  state.releaseCompletion();
+
+  await waitFor(() => listRequests >= 2);
+  await page.locator("#agent-settings-purpose").waitFor();
+  const purpose = page.locator("#agent-settings-purpose");
+  await purpose.fill("Draft after agent settings recovery");
+  releaseLists();
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research/settings");
+  assert.equal(await page.locator('[data-workspace-count="list-youtube"]').textContent(), "1");
+  assert.equal(await page.locator('[data-workspace-count="inbox"]').textContent(), "2");
+  assert.equal(await purpose.inputValue(), "Draft after agent settings recovery");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a background mutation completes an agent settings route whose list load it supersedes", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
