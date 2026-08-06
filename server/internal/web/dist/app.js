@@ -380,6 +380,7 @@ let routeVersion = 0;
 let taskDetailVersion = 0;
 let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
+const agentDetailLoadVersions = new Map();
 
 function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   if (err?.status !== 401 || !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return false;
@@ -4728,12 +4729,24 @@ async function loadAgentDetail(agentID, options = {}) {
   const sessionVersion = options.sessionVersion ?? authVersion;
   const userID = options.userID ?? state.me?.id;
   const expectedRouteVersion = options.expectedRouteVersion;
+  const loadVersion = (agentDetailLoadVersions.get(agentID) || 0) + 1;
+  agentDetailLoadVersions.set(agentID, loadVersion);
+  const loadIsCurrent = () => agentDetailLoadVersions.get(agentID) === loadVersion
+    && sessionIsCurrent(sessionVersion, userID)
+    && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
   const requests = [api.get(`/api/v1/agents/${encodeURIComponent(agentID)}`)];
   if (options.includeWorkPage) {
     requests.push(api.get(`/api/v1/agents/${encodeURIComponent(agentID)}/work?page=${options.page || 1}&pageSize=50`));
   }
-  const [detail, workPage] = await Promise.all(requests);
-  if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+  let detail;
+  let workPage;
+  try {
+    [detail, workPage] = await Promise.all(requests);
+  } catch (err) {
+    if (!loadIsCurrent()) return false;
+    throw err;
+  }
+  if (!loadIsCurrent()) return false;
   state.agentDetail = detail;
   state.agentWorkPage = options.includeWorkPage ? workPage : null;
   const index = state.agents.findIndex(agent => agent.id === detail.agent.id);

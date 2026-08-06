@@ -1533,6 +1533,102 @@ test("agent detail responses cannot cross routes or accounts", async () => {
   vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
 
+test("an older agent detail refresh cannot overwrite a newer refresh", async () => {
+  let releaseOlderDetail;
+  let releaseOlderWork;
+  app.pendingOlderAgentDetail = new Promise(resolve => { releaseOlderDetail = resolve; });
+  app.pendingOlderAgentWork = new Promise(resolve => { releaseOlderWork = resolve; });
+  vm.runInContext(`
+    authVersion = 50;
+    routeVersion = 100;
+    state.me = { id: "owner" };
+    state.agents = [];
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+    let agentDetailRequests = 0;
+    let agentWorkRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/agents/agent-race") {
+        agentDetailRequests += 1;
+        return agentDetailRequests === 1
+          ? pendingOlderAgentDetail
+          : { agent: { id: "agent-race", displayName: "Newest" }, work: { ready: [] } };
+      }
+      if (path === "/api/v1/agents/agent-race/work?page=2&pageSize=50") {
+        agentWorkRequests += 1;
+        return agentWorkRequests === 1
+          ? pendingOlderAgentWork
+          : { items: [{ id: "newest-task" }], total: 1, page: 2, pageSize: 50 };
+      }
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+
+  const older = app.loadAgentDetail("agent-race", {
+    includeWorkPage: true,
+    page: 2,
+    sessionVersion: 50,
+    userID: "owner",
+    expectedRouteVersion: 100,
+  });
+  const newer = app.loadAgentDetail("agent-race", {
+    includeWorkPage: true,
+    page: 2,
+    sessionVersion: 50,
+    userID: "owner",
+    expectedRouteVersion: 100,
+  });
+
+  assert.equal(await newer, true);
+  assert.equal(vm.runInContext("state.agentDetail.agent.displayName", app), "Newest");
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].id", app), "newest-task");
+
+  releaseOlderDetail({ agent: { id: "agent-race", displayName: "Older" }, work: { ready: [] } });
+  releaseOlderWork({ items: [{ id: "older-task" }], total: 1, page: 2, pageSize: 50 });
+  assert.equal(await older, false);
+  assert.equal(vm.runInContext("state.agentDetail.agent.displayName", app), "Newest");
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].id", app), "newest-task");
+  vm.runInContext(`state.me = null; state.agents = []; state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
+test("an older failed agent detail refresh cannot reject after a newer refresh", async () => {
+  let rejectOlderDetail;
+  app.pendingFailedAgentDetail = new Promise((_, reject) => { rejectOlderDetail = reject; });
+  vm.runInContext(`
+    authVersion = 60;
+    routeVersion = 110;
+    state.me = { id: "owner" };
+    state.agents = [];
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+    let failedAgentDetailRequests = 0;
+    api.get = async path => {
+      if (path !== "/api/v1/agents/agent-failure-race") throw new Error("unexpected request " + path);
+      failedAgentDetailRequests += 1;
+      return failedAgentDetailRequests === 1
+        ? pendingFailedAgentDetail
+        : { agent: { id: "agent-failure-race", displayName: "Newest" }, work: { ready: [] } };
+    };
+  `, app);
+
+  const older = app.loadAgentDetail("agent-failure-race", {
+    sessionVersion: 60,
+    userID: "owner",
+    expectedRouteVersion: 110,
+  });
+  const newer = app.loadAgentDetail("agent-failure-race", {
+    sessionVersion: 60,
+    userID: "owner",
+    expectedRouteVersion: 110,
+  });
+
+  assert.equal(await newer, true);
+  rejectOlderDetail(new Error("stale refresh failed"));
+  assert.equal(await older, false);
+  assert.equal(vm.runInContext("state.agentDetail.agent.displayName", app), "Newest");
+  vm.runInContext(`state.me = null; state.agents = []; state.agentDetail = null;`, app);
+});
+
 const board = {
   buckets: [
     {
