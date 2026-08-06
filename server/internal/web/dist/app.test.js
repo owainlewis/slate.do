@@ -1629,6 +1629,44 @@ test("an older failed agent detail refresh cannot reject after a newer refresh",
   vm.runInContext(`state.me = null; state.agents = []; state.agentDetail = null;`, app);
 });
 
+test("a queued completion toggle inverts the latest committed task state", async () => {
+  let releasePendingSave;
+  app.pendingCompletionSave = new Promise(resolve => { releasePendingSave = resolve; });
+  vm.runInContext(`
+    authVersion = 89;
+    savedCompletionGet = api.get;
+    savedCompletionPatch = api.patch;
+    completionRequests = [];
+    api.get = async path => {
+      completionRequests.push({ method: "GET", path });
+      return { id: "task-completion-race", done: true };
+    };
+    api.patch = async (path, input) => {
+      completionRequests.push({ method: "PATCH", path, input });
+      return { id: "task-completion-race", done: input.done };
+    };
+  `, app);
+  const pendingSave = app.serializeTaskMutation("task-completion-race", () => app.pendingCompletionSave);
+  await new Promise(resolve => setImmediate(resolve));
+
+  const queuedToggle = app.toggleTaskCompletion({ id: "task-completion-race", done: false });
+  releasePendingSave({ id: "task-completion-race", done: true });
+  await pendingSave;
+  const result = await queuedToggle;
+
+  assert.equal(result.done, false);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(completionRequests)", app)), [
+    { method: "GET", path: "/api/v1/tasks/task-completion-race" },
+    { method: "PATCH", path: "/api/v1/tasks/task-completion-race", input: { done: false } },
+  ]);
+  vm.runInContext(`
+    api.get = savedCompletionGet;
+    api.patch = savedCompletionPatch;
+    taskMutationTurns.clear();
+  `, app);
+  delete app.pendingCompletionSave;
+});
+
 test("an authenticated-state reset abandons old serialized task mutations", async () => {
   let releaseOldMutation;
   app.pendingOldTaskMutation = new Promise(resolve => { releaseOldMutation = resolve; });

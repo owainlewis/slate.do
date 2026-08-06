@@ -1307,6 +1307,38 @@ test("a parent cascade closes a child detail opened during deletion", async t =>
   assert.deepEqual(pageErrors, []);
 });
 
+test("a parent cascade closes a descendant created while deletion is pending", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete task", exact: true }).click();
+
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Created during parent deletion");
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await page.getByText("Created during parent deletion", { exact: true }).waitFor();
+  await page.locator(".workspace-subtask-open").filter({ hasText: "Created during parent deletion" }).click();
+  await page.waitForFunction(() => document.querySelector("#workspace-detail-title")?.value === "Created during parent deletion");
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Created during parent deletion");
+
+  state.releaseStatus();
+  await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
+  await page.getByText("No assigned work.", { exact: true }).waitFor();
+
+  assert.equal(state.tasks.some(item => item.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(item => item.parentTaskId === "task-parent"), false);
+  assert.equal(await page.getByRole("button", { name: "Assign work", exact: true }).evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("direct settings keeps account-wide lists and a delayed creation through navigation", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 

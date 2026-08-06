@@ -3308,10 +3308,12 @@ function bindWorkspaceDetail(options = {}) {
         state.workspaceTasks = state.workspaceTasks.filter(item => item.id !== taskID);
         state.selectedSubtasks = state.selectedSubtasks.filter(item => item.id !== taskID);
         await refreshCurrentAgentSurface();
-        const selectedTaskWasDeleted = deletedTasks.some(task => task.id === state.selectedTask?.id);
+        const selectedTaskID = state.selectedTask?.id || "";
+        const selectedTaskWasDeleted = selectedTaskID === taskID || state.selectedTask?.parentTaskId === taskID;
         if (selectedTaskWasDeleted) {
           taskDetailVersion += 1;
           for (const task of deletedTasks) delete state.taskDetailDrafts[task.id];
+          delete state.taskDetailDrafts[selectedTaskID];
           state.selectedTask = null;
           state.selectedSubtasks = [];
           state.subtaskDraft = "";
@@ -3527,13 +3529,18 @@ function bindApp() {
   document.querySelectorAll("[data-toggle-done]").forEach(el => el.onclick = async event => {
     event.stopPropagation();
     const task = findTask(el.dataset.toggleDone);
-    await runMutation(
-      () => serializeTaskMutation(task.id, () => api.patch(`/api/v1/tasks/${task.id}`, { done: !task.done })),
-      reload,
-    );
+    if (!task) return;
+    await runMutation(() => toggleTaskCompletion(task), reload);
   });
   bindDrag();
   bindWorkspaceDetail();
+}
+
+function toggleTaskCompletion(task) {
+  return serializeTaskMutation(task.id, async ({ queued }) => {
+    const current = queued ? await api.get(`/api/v1/tasks/${encodeURIComponent(task.id)}`) : task;
+    return api.patch(`/api/v1/tasks/${encodeURIComponent(task.id)}`, { done: !current.done });
+  });
 }
 
 function bindAppShell() {
