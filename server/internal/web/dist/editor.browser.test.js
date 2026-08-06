@@ -1323,6 +1323,40 @@ test("a background mutation completes an agent settings route whose list load it
   assert.deepEqual(pageErrors, []);
 });
 
+test("a failed background refresh completes an agent overview route whose list load it supersedes", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Saved while overview loads");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+
+  let releaseLists;
+  let listRequests = 0;
+  await page.route("**/api/v1/lists", async route => {
+    listRequests += 1;
+    if (listRequests === 1) await new Promise(resolve => { releaseLists = resolve; });
+    await route.continue();
+  });
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await waitFor(() => typeof releaseLists === "function");
+  state.failNextAgentDetail = true;
+  state.releaseStatus();
+
+  await waitFor(() => listRequests >= 2);
+  await page.getByRole("heading", { name: "Agent couldn’t be loaded.", exact: true }).waitFor();
+  releaseLists();
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research");
+  assert.equal(await page.getByText("Loading agent…", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Could not refresh assigned work", { exact: true }).isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a background task failure does not reset an agent settings draft", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 

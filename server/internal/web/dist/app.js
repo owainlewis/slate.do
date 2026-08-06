@@ -1504,11 +1504,16 @@ function taskDetailBackLabel() {
 }
 
 function workspaceListLabel(list) {
-  const name = list.isInbox ? "Inbox" : list.name;
   const boardIDs = new Set(state.workspaceLists.map(item => item.boardId).filter(Boolean));
-  if (boardIDs.size < 2) return name;
-  const board = state.boards.find(item => item.id === list.boardId);
-  return board?.name ? `${board.name} / ${name}` : name;
+  const labelFor = item => {
+    const name = item.isInbox ? "Inbox" : item.name;
+    if (boardIDs.size < 2) return name;
+    const board = state.boards.find(candidate => candidate.id === item.boardId);
+    return board?.name ? `${board.name} / ${name}` : name;
+  };
+  const label = labelFor(list);
+  const duplicate = state.workspaceLists.some(item => item.id !== list.id && labelFor(item) === label);
+  return duplicate ? `${label} (${list.id})` : label;
 }
 
 function workspaceDetailHTML(task) {
@@ -3150,6 +3155,7 @@ function bindWorkspaceDetail(options = {}) {
         return false;
       }
     }
+    const routeWasLoading = state.agentDetailLoadState === "loading";
     try {
       const [detailResult, listResult] = await Promise.allSettled([
         loadAgentDetail(boundAgentID, {
@@ -3179,6 +3185,13 @@ function bindWorkspaceDetail(options = {}) {
     } catch (err) {
       if (!boundContextIsCurrent() || state.view !== refreshView) return false;
       if (handleError(err)) return false;
+      if (routeWasLoading && state.agentDetailLoadState === "loading") {
+        state.agentDetail = null;
+        state.agentDetailLoadState = err.status === 404 ? "not-found" : err.status === 401 || err.status === 403 ? "unauthorized" : "error";
+        state.agentDetailError = err.message;
+        render();
+        return false;
+      }
       state.agentTaskRefreshError = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
       state.agentTaskMutationError = state.agentTaskRefreshError;
       if (state.selectedTask) {

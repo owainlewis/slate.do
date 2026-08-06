@@ -1213,6 +1213,36 @@ test("account-wide lists are immediately available for agent assignment", () => 
   `, app);
 });
 
+test("task list options disambiguate duplicate board and list names", () => {
+  vm.runInContext(`
+    state.boards = [
+      { id: "board-one", name: "Content" },
+      { id: "board-two", name: "Content" },
+    ];
+    state.workspaceLists = [
+      { id: "list-one", boardId: "board-one", name: "YouTube" },
+      { id: "list-two", boardId: "board-two", name: "YouTube" },
+      { id: "list-three", boardId: "board-two", name: "LinkedIn" },
+    ];
+  `, app);
+
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[0]", app)), "Content / YouTube (list-one)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[1]", app)), "Content / YouTube (list-two)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[2]", app)), "Content / LinkedIn");
+
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Content" }];
+    state.workspaceLists = [
+      { id: "list-one", boardId: "board-one", name: "YouTube" },
+      { id: "list-two", boardId: "board-one", name: "YouTube" },
+    ];
+  `, app);
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[0]", app)), "YouTube (list-one)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[1]", app)), "YouTube (list-two)");
+
+  vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
+});
+
 test("new-agent route has inline limits and one-time CLI connection instructions", () => {
   vm.runInContext(`
     state.me = { id: "owner", theme: "light" };
