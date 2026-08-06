@@ -2833,6 +2833,28 @@ test("a shell rerender during save cannot lose a newer task edit", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("a queued save preserves an explicit reversion", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  const originalTitle = await page.getByLabel("Title", { exact: true }).inputValue();
+  await page.getByLabel("Title", { exact: true }).fill("Temporary queued title");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("button", { name: "Light", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill(originalTitle);
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  state.releaseStatus();
+
+  await waitFor(() => state.patches.length === 2);
+  assert.equal(state.patches[0].title, "Temporary queued title");
+  assert.equal(state.patches[1].title, originalTitle);
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, originalTitle);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("background task updates advance the persisted dirty baseline", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 

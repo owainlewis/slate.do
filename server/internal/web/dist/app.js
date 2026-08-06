@@ -427,6 +427,7 @@ let workspaceListLoadVersion = 0;
 let workspaceLoadVersion = 0;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
+const taskDetailFieldEdits = new Map();
 
 async function serializeTaskMutation(taskID, mutation) {
   const sessionVersion = authVersion;
@@ -810,6 +811,7 @@ async function loadMoreWorkspaceTasks() {
 function resetAuthenticatedState() {
   goalSaveChains.clear();
   taskMutationTurns.clear();
+  taskDetailFieldEdits.clear();
   themeSaveChain = Promise.resolve();
   themeChangeVersion += 1;
   state.me = null;
@@ -3140,6 +3142,24 @@ function clearTaskDetailDraftTracking() {
   state.taskDetailDrafts = {};
   state.taskDetailBaselines = {};
   state.taskDetailCommitPending = "";
+  taskDetailFieldEdits.clear();
+}
+
+function recordTaskDetailFieldEdit(taskID, field) {
+  if (!taskID || !TASK_DETAIL_FIELDS.includes(field)) return;
+  taskDetailEditVersion += 1;
+  const fields = taskDetailFieldEdits.get(taskID) || new Map();
+  fields.set(field, taskDetailEditVersion);
+  taskDetailFieldEdits.set(taskID, fields);
+}
+
+function clearSubmittedTaskDetailFieldEdits(taskID, submittedFields) {
+  const current = taskDetailFieldEdits.get(taskID);
+  if (!current) return;
+  for (const [field, version] of submittedFields) {
+    if (current.get(field) === version) current.delete(field);
+  }
+  if (current.size === 0) taskDetailFieldEdits.delete(taskID);
 }
 
 function preserveCurrentTaskDraft() {
@@ -3597,8 +3617,8 @@ function bindWorkspaceDetail(options = {}) {
     }
   });
   document.querySelectorAll("#workspace-detail-form [name]").forEach(control => {
-    const preserveEditedTaskDraft = () => {
-      taskDetailEditVersion += 1;
+    const preserveEditedTaskDraft = event => {
+      recordTaskDetailFieldEdit(state.selectedTask?.id, event.currentTarget.name);
       preserveTaskDraft();
     };
     control.addEventListener("input", preserveEditedTaskDraft);
@@ -3709,14 +3729,16 @@ function bindWorkspaceDetail(options = {}) {
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     controls.forEach(control => { control.disabled = true; });
     submit.textContent = "Saving…";
+    const input = {
+      title: form.get("title"), description: form.get("description"), status: form.get("status"),
+      priority: form.get("priority"), assigneeAgentId: form.get("assigneeAgentId"),
+      scheduledDate: form.get("scheduledDate"),
+    };
+    if (!parentTaskID) input.bucketId = form.get("bucketId");
+    const submittedDraft = taskDetailSnapshot({ ...previousTask, ...input });
+    const submittedFieldEdits = new Map(taskDetailFieldEdits.get(taskID) || []);
+    let savePersisted = false;
     try {
-      const input = {
-        title: form.get("title"), description: form.get("description"), status: form.get("status"),
-        priority: form.get("priority"), assigneeAgentId: form.get("assigneeAgentId"),
-        scheduledDate: form.get("scheduledDate"),
-      };
-      if (!parentTaskID) input.bucketId = form.get("bucketId");
-      const submittedDraft = taskDetailSnapshot({ ...previousTask, ...input });
       const updated = await serializeTaskMutation(taskID, async ({ queued }) => {
         if (!queued) return api.patch(`/api/v1/tasks/${taskID}/status`, input);
         const current = await api.get(`/api/v1/tasks/${taskID}`);
@@ -3724,11 +3746,13 @@ function bindWorkspaceDetail(options = {}) {
         for (const field of ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
           if (!(field in input)) continue;
           const previousValue = String(previousTask[field] || "");
-          if (String(input[field] || "") !== previousValue) rebased[field] = input[field];
+          const inputValue = String(input[field] || "");
+          if (inputValue !== previousValue || submittedFieldEdits.has(field)) rebased[field] = input[field];
         }
         return api.patch(`/api/v1/tasks/${taskID}/status`, rebased);
       });
       if (!updated) return;
+      savePersisted = true;
       const detailWasReopened = detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID;
       const liveAfterSave = !detailWasReopened
         ? taskDraftFromForm(state.selectedTask) || state.taskDetailDrafts[taskID]
@@ -3788,6 +3812,8 @@ function bindWorkspaceDetail(options = {}) {
       if (handleError(err)) return;
       state.error = err.message;
       render();
+    } finally {
+      if (savePersisted) clearSubmittedTaskDetailFieldEdits(taskID, submittedFieldEdits);
     }
   });
   document.querySelector("#workspace-detail-title")?.focus();
