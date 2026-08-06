@@ -125,17 +125,6 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
       state.taskQueries.push(url.search);
       if (url.searchParams.has("parentTaskId")) return json(response, { tasks: state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId")) });
-      if (state.delayNextWorkspaceTasks) {
-        state.delayNextWorkspaceTasks = false;
-        const failAfterDelay = state.failNextWorkspaceTasks;
-        state.failNextWorkspaceTasks = false;
-        await new Promise(resolve => { state.releaseWorkspaceTasks = resolve; });
-        state.delayedWorkspaceTasksCompleted = true;
-        if (failAfterDelay) return json(response, { error: "Could not refresh tasks" }, 500);
-      } else if (state.failNextWorkspaceTasks) {
-        state.failNextWorkspaceTasks = false;
-        return json(response, { error: "Could not refresh tasks" }, 500);
-      }
       let tasks = url.searchParams.get("topLevel") === "true" ? [...state.tasks] : [...state.tasks, ...state.subtasks];
       const listID = url.searchParams.get("bucketId");
       const query = url.searchParams.get("q")?.toLowerCase();
@@ -148,6 +137,18 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       if (status) tasks = tasks.filter(item => item.status === status);
       if (plannedFrom) tasks = tasks.filter(item => item.scheduledDate >= plannedFrom);
       if (plannedTo) tasks = tasks.filter(item => item.scheduledDate <= plannedTo);
+      tasks = tasks.map(item => ({ ...item }));
+      if (state.delayNextWorkspaceTasks) {
+        state.delayNextWorkspaceTasks = false;
+        const failAfterDelay = state.failNextWorkspaceTasks;
+        state.failNextWorkspaceTasks = false;
+        await new Promise(resolve => { state.releaseWorkspaceTasks = resolve; });
+        state.delayedWorkspaceTasksCompleted = true;
+        if (failAfterDelay) return json(response, { error: "Could not refresh tasks" }, 500);
+      } else if (state.failNextWorkspaceTasks) {
+        state.failNextWorkspaceTasks = false;
+        return json(response, { error: "Could not refresh tasks" }, 500);
+      }
       return json(response, { tasks });
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "POST") {
@@ -261,6 +262,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
   const pageErrors = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   t.after(async () => {
+    server.closeAllConnections?.();
     await browser.close();
     await new Promise(resolve => server.close(resolve));
   });
@@ -431,6 +433,27 @@ test("a pending completion updates account settings counts without resetting its
   assert.equal(await displayName.inputValue(), "Unsaved settings draft during completion");
   assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
   assert.equal(state.tasks.find(task => task.id === "task-parent").done, true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("closing another task after completion refreshes Review membership", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.tasks.forEach(task => Object.assign(task, { status: "needs_review", done: false }));
+  await page.getByRole("link", { name: "Review", exact: true }).click();
+  await page.getByRole("heading", { name: "Review", exact: true, level: 1 }).waitFor();
+  state.delayNextCompletion = true;
+  await page.getByRole("button", { name: "Mark Publish task-first agents video complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for", exact: true }).click();
+
+  state.releaseCompletion();
+  await waitFor(() => state.tasks.find(task => task.id === "task-parent").done);
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('[data-open-task="task-parent"]'));
+
+  assert.equal(await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Open task: Write the doc my boss asked for", exact: true }).count(), 1);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -824,6 +847,105 @@ test("a Flow drop commits after a pending agent detail save", async t => {
   assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Saved before Flow drop");
   assert.equal(state.tasks.find(task => task.id === "task-parent").priority, "p1");
   assert.equal(state.tasks.find(task => task.id === "task-parent").status, "needs_review");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed Flow drop reconciles the same task opened after agent navigation", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/tasks?view=flow`);
+  state.delayNextStatus = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  const brief = page.getByLabel("Task brief", { exact: true });
+  await brief.fill("Live detail edit while Flow commits");
+
+  state.releaseStatus();
+  await page.waitForFunction(() => document.querySelector('#workspace-detail-form [name="status"]')?.value === "needs_review");
+  assert.equal(await brief.inputValue(), "Live detail edit while Flow commits");
+  assert.equal(await brief.evaluate(element => element === document.activeElement), true);
+
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => state.patches.length === 2);
+  assert.equal(state.patches[0].status, "needs_review");
+  assert.equal(state.patches[1].status, "needs_review");
+  assert.equal(state.patches[1].description, "Live detail edit while Flow commits");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").status, "needs_review");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed Flow drop refreshes a newly selected Review overview", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/tasks?view=flow`);
+  state.delayNextStatus = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  const reviewLoaded = page.waitForResponse(response => response.request().method() === "GET"
+    && response.url().includes("/api/v1/tasks?") && response.url().includes("status=needs_review"));
+  await page.getByRole("link", { name: "Review", exact: true }).click();
+  await reviewLoaded;
+  await page.getByRole("heading", { name: "Review", exact: true, level: 1 }).waitFor();
+  assert.equal(await page.locator('[data-task="task-parent"]').count(), 0);
+
+  const reviewRefreshed = page.waitForResponse(response => response.request().method() === "GET"
+    && response.url().includes("/api/v1/tasks?") && response.url().includes("status=needs_review"));
+  state.releaseStatus();
+  await reviewRefreshed;
+  await waitFor(() => state.patches.length === 1);
+  await page.locator('[data-task="task-parent"]').waitFor();
+
+  assert.equal(await page.locator('[data-task="task-parent"]').count(), 1, JSON.stringify({ requests: state.requests.slice(-12), taskQueries: state.taskQueries }));
+  assert.equal(state.tasks.find(task => task.id === "task-parent").status, "needs_review");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a committed Flow drop reports a current workspace refresh failure", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.locator('[data-task="task-parent"]').waitFor();
+  state.failNextWorkspaceTasks = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
+
+  await page.getByRole("alert").filter({ hasText: "The task was updated, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
+
+  assert.equal(state.tasks.find(task => task.id === "task-parent").status, "needs_review");
+  assert.equal(await page.getByText(/Couldn’t save/).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an older post-drop refresh failure stays out of a newer workspace route", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/tasks?view=flow`);
+  state.delayNextStatus = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  state.delayNextWorkspaceTasks = true;
+  state.failNextWorkspaceTasks = true;
+  state.releaseStatus();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+
+  const reviewLoaded = page.waitForResponse(response => response.request().method() === "GET"
+    && response.url().includes("/api/v1/tasks?") && response.url().includes("status=needs_review"));
+  await page.getByRole("link", { name: "Review", exact: true }).click();
+  await reviewLoaded;
+  await page.locator('[data-task="task-parent"]').waitFor();
+
+  state.releaseWorkspaceTasks();
+  await waitFor(() => state.delayedWorkspaceTasksCompleted);
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/review");
+  assert.equal(await page.getByRole("alert").count(), 0);
+  assert.equal(await page.locator('[data-task="task-parent"]').count(), 1);
   assert.deepEqual(pageErrors, []);
 });
 

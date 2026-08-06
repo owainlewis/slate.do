@@ -1862,6 +1862,41 @@ test("an older failed list-index load cannot reject after a newer load", async (
   vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
 });
 
+test("an older workspace response cannot overwrite a newer same-route load", async () => {
+  let releaseOlderTasks;
+  app.pendingOlderTasks = new Promise(resolve => { releaseOlderTasks = resolve; });
+  app.location = { pathname: "/app/review", search: "" };
+  vm.runInContext(`
+    savedWorkspaceGet = api.get;
+    authVersion = 81;
+    routeVersion = 140;
+    workspaceLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+    let workspaceRequests = 0;
+    api.get = async path => {
+      if (!path.startsWith("/api/v1/tasks?")) throw new Error("unexpected request " + path);
+      workspaceRequests += 1;
+      return workspaceRequests === 1
+        ? pendingOlderTasks
+        : { tasks: [{ id: "task", title: "Current task", status: "needs_review" }] };
+    };
+  `, app);
+
+  const older = app.loadWorkspace({ name: "workspace", scope: "review" }, 140);
+  const newer = app.loadWorkspace({ name: "workspace", scope: "review" }, 140);
+  assert.equal(await newer, true);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].title", app), "Current task");
+
+  releaseOlderTasks({ tasks: [] });
+  assert.equal(await older, null);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].title", app), "Current task");
+  vm.runInContext(`api.get = savedWorkspaceGet; state.me = null; state.workspaceLists = []; state.workspaceTasks = [];`, app);
+  delete app.location;
+  delete app.pendingOlderTasks;
+});
+
 const board = {
   buckets: [
     {

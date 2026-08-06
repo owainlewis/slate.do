@@ -175,6 +175,7 @@ const state = {
   workspaceView: "table",
   workspaceNextCursor: "",
   workspaceLoading: false,
+  workspaceRefreshOnDetailClose: false,
   workspaceFiltersOpen: false,
   theme: "",
   moveNotice: null,
@@ -383,6 +384,7 @@ let taskDetailVersion = 0;
 let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
 let workspaceListLoadVersion = 0;
+let workspaceLoadVersion = 0;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
 
@@ -482,6 +484,7 @@ async function applyRoute() {
   }
   state.error = "";
   state.taskCompletionError = null;
+  state.workspaceRefreshOnDetailClose = false;
   state.workspaceListError = "";
   state.settingsNotice = "";
   state.settingsPending = "";
@@ -569,6 +572,7 @@ async function applyRoute() {
       if (!state.board && state.boards[0]?.id && !await loadBoard(state.boards[0].id, authVersion, version)) return;
       const workspaceLoaded = await loadWorkspace(route, version);
       if (routeVersion !== version) return;
+      if (workspaceLoaded === null) return;
       if (!workspaceLoaded) return showRoute("not-found");
       return showRoute("app");
     }
@@ -705,17 +709,21 @@ function workspaceQuery(route, cursor = "") {
 
 async function loadWorkspace(route, expectedRouteVersion) {
   const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const loadVersion = ++workspaceLoadVersion;
+  const loadIsCurrent = () => loadVersion === workspaceLoadVersion
+    && sessionIsCurrent(sessionVersion, userID)
+    && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
   state.workspaceLoading = true;
   let taskData;
   try {
     taskData = await api.get(`/api/v1/tasks?${workspaceQuery(route)}`);
   } catch (err) {
-    if (sessionVersion === authVersion && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion)) {
-      state.workspaceLoading = false;
-    }
+    if (!loadIsCurrent()) return null;
+    state.workspaceLoading = false;
     throw err;
   }
-  if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+  if (!loadIsCurrent()) return null;
   state.workspaceTasks = taskData.tasks || [];
   state.workspaceNextCursor = taskData.nextCursor || "";
   state.workspaceScope = route.scope || "all";
@@ -824,6 +832,7 @@ function resetAuthenticatedState() {
   state.workspaceView = "table";
   state.workspaceNextCursor = "";
   state.workspaceLoading = false;
+  state.workspaceRefreshOnDetailClose = false;
   state.workspaceFiltersOpen = false;
   state.theme = "";
   state.routeError = null;
@@ -3202,7 +3211,8 @@ function bindWorkspaceDetail(options = {}) {
       return false;
     }
   };
-  const close = () => {
+  const close = async () => {
+    const refreshWorkspace = state.workspaceRefreshOnDetailClose && parseRoute(location.pathname).name === "workspace";
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
@@ -3210,6 +3220,20 @@ function bindWorkspaceDetail(options = {}) {
     state.subtaskDraft = "";
     state.subtaskPending = false;
     state.subtaskError = "";
+    if (refreshWorkspace) {
+      state.workspaceRefreshOnDetailClose = false;
+      state.workspaceLoading = true;
+      render();
+      try {
+        await reload();
+      } catch (err) {
+        if (handleError(err)) return;
+        state.workspaceLoading = false;
+        state.error = err.message;
+        render();
+      }
+      return;
+    }
     render();
   };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
@@ -3584,19 +3608,9 @@ async function completeTaskCompletion(task) {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   const startedRouteVersion = routeVersion;
+  let updated;
   try {
-    const updated = await toggleTaskCompletion(task);
-    if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
-    const ownedError = state.taskCompletionError?.taskID === task.id ? state.taskCompletionError.message : "";
-    if (ownedError) state.taskCompletionError = null;
-    if (ownedError && state.error === ownedError) {
-      state.error = "";
-      if (state.selectedTask) syncTaskDetailError();
-    }
-    syncWorkspaceSidebarCounts();
-    if (state.selectedTask || startedRouteVersion !== routeVersion) return true;
-    await reload();
-    return true;
+    updated = await toggleTaskCompletion(task);
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
     state.taskCompletionError = { taskID: task.id, message: err.message };
@@ -3612,6 +3626,41 @@ async function completeTaskCompletion(task) {
     }
     if (state.selectedTask) return false;
     state.error = err.message;
+    render();
+    return false;
+  }
+  if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
+  clearTaskMutationError(task.id);
+  syncWorkspaceSidebarCounts();
+  await refreshAfterTaskMutation(startedRouteVersion);
+  return true;
+}
+
+function clearTaskMutationError(taskID) {
+  const ownedError = state.taskCompletionError?.taskID === taskID ? state.taskCompletionError.message : "";
+  if (ownedError) state.taskCompletionError = null;
+  if (ownedError && state.error === ownedError) {
+    state.error = "";
+    if (state.selectedTask) syncTaskDetailError();
+  }
+}
+
+async function refreshAfterTaskMutation(startedRouteVersion) {
+  if (parseRoute(location.pathname).name === "workspace") {
+    if (state.selectedTask) {
+      state.workspaceRefreshOnDetailClose = true;
+      return;
+    }
+  } else if (state.selectedTask || startedRouteVersion !== routeVersion) {
+    return true;
+  }
+  const refreshRouteVersion = routeVersion;
+  try {
+    return await reload();
+  } catch (err) {
+    if (refreshRouteVersion !== routeVersion) return false;
+    state.workspaceLoading = false;
+    state.error = `The task was updated, but this view couldn’t be refreshed: ${err.message}`;
     render();
     return false;
   }
@@ -4833,10 +4882,35 @@ function bindDrag() {
 }
 
 async function updateTaskStatus(id, status) {
-  await runMutation(
-    () => serializeTaskMutation(id, () => api.patch(`/api/v1/tasks/${id}/status`, { status })),
-    reload,
-  );
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const startedRouteVersion = routeVersion;
+  let previousTask = findTask(id);
+  let updated;
+  try {
+    updated = await serializeTaskMutation(id, async ({ queued }) => {
+      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(id)}`);
+      return api.patch(`/api/v1/tasks/${encodeURIComponent(id)}/status`, { status });
+    });
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+    state.taskCompletionError = { taskID: id, message: err.message };
+    if (state.selectedTask?.id === id) {
+      state.error = err.message;
+      syncTaskDetailError();
+      return false;
+    }
+    if (state.selectedTask) return false;
+    state.error = err.message;
+    render();
+    return false;
+  }
+  if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
+  reconcileTaskCompletion(updated, previousTask);
+  clearTaskMutationError(id);
+  syncWorkspaceSidebarCounts();
+  await refreshAfterTaskMutation(startedRouteVersion);
+  return true;
 }
 
 async function runMutation(request, refresh) {
@@ -5170,6 +5244,7 @@ async function reload() {
       loadWorkspace(route, expectedRouteVersion),
     ]);
     if (!listsLoaded || !workspaceLoaded || expectedRouteVersion !== routeVersion) return false;
+    state.workspaceRefreshOnDetailClose = false;
   } else {
     if (!await loadBoards(state.board?.id, expectedRouteVersion) || expectedRouteVersion !== routeVersion) return false;
   }
