@@ -64,6 +64,7 @@
 .workspace-check { width: 17px; height: 17px; display: grid; place-items: center; border: 1.5px solid var(--faint); border-radius: 50%; color: var(--card); }
 .workspace-check.done { border-color: var(--accent); background: var(--accent); }
 .workspace-check .icon { width: 12px; height: 12px; }
+.workspace-completion-toggle { padding: 0; background: transparent; cursor: pointer; }
 .workspace-task-copy { min-width: 0; display: grid; gap: 3px; }
 .workspace-task-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .workspace-task-copy small, .workspace-owner, .workspace-list-row time { color: var(--faint); font-size: 12px; }

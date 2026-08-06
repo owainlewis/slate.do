@@ -523,8 +523,8 @@ test("the task table exposes native headers, cells, and keyboard-operable rows",
     assert.match(html, new RegExp(`<th scope="col">${heading}<\\/th>`));
   }
   assert.match(html, /<tr class="workspace-table-row" data-task-row>/);
+  assert.match(html, /<button type="button" class="workspace-check workspace-completion-toggle " data-toggle-done="task-one" aria-pressed="false" aria-label="Mark Accessible task complete"><\/button>/);
   assert.match(html, /<button type="button" class="workspace-table-open" data-open-task="task-one" aria-label="Open task: Accessible task"><strong>Accessible task<\/strong><\/button>/);
-  assert.match(html, /<span class="sr-only">Open<\/span>/);
   assert.doesNotMatch(html, /<section class="workspace-table"|<tr[^>]*tabindex=/);
   vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
@@ -1665,6 +1665,85 @@ test("a queued completion toggle inverts the latest committed task state", async
     taskMutationTurns.clear();
   `, app);
   delete app.pendingCompletionSave;
+});
+
+test("a completed toggle reconciles a reopened detail before its next save", async () => {
+  let releaseCompletion;
+  app.pendingCompletionResponse = new Promise(resolve => { releaseCompletion = resolve; });
+  app.reopenedStatusControl = { value: "queued" };
+  app.document = { querySelector: () => app.reopenedStatusControl };
+  vm.runInContext(`
+    authVersion = 90;
+    savedReopenedCompletionPatch = api.patch;
+    state.selectedTask = null;
+    state.workspaceTasks = [{ id: "task-reopened-completion", status: "queued", done: false }];
+    state.selectedSubtasks = [];
+    state.taskDetailDrafts = {};
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+    state.board = null;
+    api.patch = async () => pendingCompletionResponse;
+  `, app);
+
+  const completion = app.toggleTaskCompletion({ id: "task-reopened-completion", status: "queued", done: false });
+  await new Promise(resolve => setImmediate(resolve));
+  vm.runInContext(`
+    state.selectedTask = { id: "task-reopened-completion", title: "Reopened task", status: "queued", done: false };
+  `, app);
+  releaseCompletion({ id: "task-reopened-completion", title: "Reopened task", status: "done", done: true });
+  await completion;
+
+  assert.equal(vm.runInContext("state.selectedTask.status", app), "done");
+  assert.equal(vm.runInContext("state.selectedTask.done", app), true);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].status", app), "done");
+  assert.equal(app.reopenedStatusControl.value, "done");
+  vm.runInContext(`
+    api.patch = savedReopenedCompletionPatch;
+    state.selectedTask = null;
+    state.workspaceTasks = [];
+    taskMutationTurns.clear();
+  `, app);
+  delete app.pendingCompletionResponse;
+  delete app.reopenedStatusControl;
+  delete app.document;
+});
+
+test("an old-session completion response cannot reconcile into a new account", async () => {
+  let releaseOldCompletion;
+  app.pendingOldCompletion = new Promise(resolve => { releaseOldCompletion = resolve; });
+  vm.runInContext(`
+    authVersion = 91;
+    savedOldSessionCompletionPatch = api.patch;
+    state.me = { id: "old-owner" };
+    state.workspaceTasks = [{ id: "shared-task-id", title: "Old account task", status: "queued", done: false }];
+    state.selectedSubtasks = [];
+    state.selectedTask = null;
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+    state.board = null;
+    api.patch = async () => pendingOldCompletion;
+  `, app);
+
+  const oldCompletion = app.toggleTaskCompletion({ id: "shared-task-id", title: "Old account task", status: "queued", done: false });
+  await new Promise(resolve => setImmediate(resolve));
+  vm.runInContext(`authVersion += 1;`, app);
+  app.resetAuthenticatedState();
+  vm.runInContext(`
+    state.me = { id: "new-owner" };
+    state.workspaceTasks = [{ id: "shared-task-id", title: "New account task", status: "queued", done: false }];
+  `, app);
+  releaseOldCompletion({ id: "shared-task-id", title: "Old account task", status: "done", done: true });
+  await oldCompletion;
+
+  assert.equal(vm.runInContext("state.workspaceTasks[0].title", app), "New account task");
+  assert.equal(vm.runInContext("state.workspaceTasks[0].done", app), false);
+  vm.runInContext(`
+    api.patch = savedOldSessionCompletionPatch;
+    state.me = null;
+    state.workspaceTasks = [];
+    taskMutationTurns.clear();
+  `, app);
+  delete app.pendingOldCompletion;
 });
 
 test("an authenticated-state reset abandons old serialized task mutations", async () => {

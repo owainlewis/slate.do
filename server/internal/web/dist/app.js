@@ -118,6 +118,7 @@ const state = {
   selectedTask: null,
   selectedSubtasks: [],
   taskDetailDrafts: {},
+  taskCompletionError: null,
   subtaskDraft: "",
   subtaskPending: false,
   subtaskError: "",
@@ -480,6 +481,7 @@ async function applyRoute() {
     state.subtaskError = "";
   }
   state.error = "";
+  state.taskCompletionError = null;
   state.workspaceListError = "";
   state.settingsNotice = "";
   state.settingsPending = "";
@@ -767,6 +769,7 @@ function resetAuthenticatedState() {
   state.selectedTask = null;
   state.selectedSubtasks = [];
   state.taskDetailDrafts = {};
+  state.taskCompletionError = null;
   state.subtaskDraft = "";
   state.subtaskPending = false;
   state.subtaskError = "";
@@ -1476,7 +1479,7 @@ function workspaceTableHTML(tasks) {
   return `<table class="workspace-table" aria-label="Tasks">
     <colgroup><col class="workspace-table-check"><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
     <thead><tr class="workspace-table-head"><th scope="col"><span class="sr-only">Completion</span></th><th scope="col">Task</th><th scope="col">List</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
-    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><span class="workspace-check ${task.done ? "done" : ""}" aria-hidden="true">${task.done ? icon("check") : ""}</span><span class="sr-only">${task.done ? "Complete" : "Open"}</span></td><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Subtask of ${escapeHTML(task.parentTaskTitle || "parent task")}</small>` : ""}</button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="7"><div class="workspace-empty">No tasks match these filters.</div></td></tr>`}</tbody>
+    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><button type="button" class="workspace-check workspace-completion-toggle ${task.done ? "done" : ""}" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="Mark ${escapeAttr(task.title)} ${task.done ? "not complete" : "complete"}">${task.done ? icon("check") : ""}</button></td><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Subtask of ${escapeHTML(task.parentTaskTitle || "parent task")}</small>` : ""}</button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="7"><div class="workspace-empty">No tasks match these filters.</div></td></tr>`}</tbody>
   </table>`;
 }
 
@@ -2785,6 +2788,7 @@ function bindWorkspace() {
     if (event.target.closest("button, a")) return;
     row.querySelector("[data-open-task]")?.click();
   }));
+  bindTaskCompletionToggles();
   const viewTabs = [...document.querySelectorAll("[data-workspace-view]")];
   const activateView = async element => {
     const view = element.dataset.workspaceView;
@@ -2936,6 +2940,21 @@ function reconcileAgentTaskCaches(task, { deleted = false, previousTask = null }
   return changed;
 }
 
+function taskDraftFromCurrentForm(task) {
+  const form = globalThis.document?.querySelector?.("#workspace-detail-form");
+  if (!form || typeof FormData === "undefined") return null;
+  const data = new FormData(form);
+  return {
+    title: String(data.get("title") || ""),
+    description: String(data.get("description") || ""),
+    status: String(data.get("status") || "queued"),
+    bucketId: task.parentTaskId ? task.bucketId : String(data.get("bucketId") || ""),
+    priority: String(data.get("priority") || ""),
+    assigneeAgentId: String(data.get("assigneeAgentId") || ""),
+    scheduledDate: String(data.get("scheduledDate") || ""),
+  };
+}
+
 function bindWorkspaceDetail(options = {}) {
   if (!state.selectedTask) return;
   const refresh = options.refresh || reload;
@@ -3005,20 +3024,7 @@ function bindWorkspaceDetail(options = {}) {
     }
     return agentCacheChanged;
   };
-  const taskDraftFromForm = task => {
-    const form = document.querySelector("#workspace-detail-form");
-    if (!form) return null;
-    const data = new FormData(form);
-    return {
-      title: String(data.get("title") || ""),
-      description: String(data.get("description") || ""),
-      status: String(data.get("status") || "queued"),
-      bucketId: task.parentTaskId ? task.bucketId : String(data.get("bucketId") || ""),
-      priority: String(data.get("priority") || ""),
-      assigneeAgentId: String(data.get("assigneeAgentId") || ""),
-      scheduledDate: String(data.get("scheduledDate") || ""),
-    };
-  };
+  const taskDraftFromForm = taskDraftFromCurrentForm;
   const preserveTaskDraft = () => {
     const draft = taskDraftFromForm(state.selectedTask);
     if (!draft) return;
@@ -3547,21 +3553,95 @@ function bindApp() {
   });
   document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => openTaskDetail(el.dataset.openTask, el));
   document.querySelectorAll("[data-load-completed]").forEach(el => el.onclick = () => loadCompletedHistory(el.dataset.loadCompleted, el));
-  document.querySelectorAll("[data-toggle-done]").forEach(el => el.onclick = async event => {
-    event.stopPropagation();
-    const task = findTask(el.dataset.toggleDone);
-    if (!task) return;
-    await runMutation(() => toggleTaskCompletion(task), reload);
-  });
+  bindTaskCompletionToggles();
   bindDrag();
   bindWorkspaceDetail();
 }
 
+function bindTaskCompletionToggles() {
+  document.querySelectorAll("[data-toggle-done]").forEach(element => element.onclick = async event => {
+    event.stopPropagation();
+    const task = findTask(element.dataset.toggleDone);
+    if (task) await completeTaskCompletion(task);
+  });
+}
+
+async function completeTaskCompletion(task) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const startedRouteVersion = routeVersion;
+  try {
+    const updated = await toggleTaskCompletion(task);
+    if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
+    const ownedError = state.taskCompletionError?.taskID === task.id ? state.taskCompletionError.message : "";
+    if (ownedError) state.taskCompletionError = null;
+    if (ownedError && state.error === ownedError) {
+      state.error = "";
+      if (state.selectedTask) syncTaskDetailError();
+    }
+    syncWorkspaceSidebarCounts();
+    if (state.selectedTask || startedRouteVersion !== routeVersion) return true;
+    await reload();
+    return true;
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+    state.taskCompletionError = { taskID: task.id, message: err.message };
+    state.error = err.message;
+    if (state.selectedTask) {
+      const draft = taskDraftFromCurrentForm(state.selectedTask);
+      if (draft) {
+        state.taskDetailDrafts[state.selectedTask.id] = draft;
+        state.selectedTask = { ...state.selectedTask, ...draft };
+      }
+      syncTaskDetailError();
+      return false;
+    }
+    render();
+    return false;
+  }
+}
+
 function toggleTaskCompletion(task) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
   return serializeTaskMutation(task.id, async ({ queued }) => {
     const current = queued ? await api.get(`/api/v1/tasks/${encodeURIComponent(task.id)}`) : task;
-    return api.patch(`/api/v1/tasks/${encodeURIComponent(task.id)}`, { done: !current.done });
+    const updated = await api.patch(`/api/v1/tasks/${encodeURIComponent(task.id)}`, { done: !current.done });
+    if (sessionIsCurrent(sessionVersion, userID)) reconcileTaskCompletion(updated, current);
+    return updated;
   });
+}
+
+function reconcileTaskCompletion(updated, previousTask) {
+  const status = updated.status || (updated.done ? "done" : "queued");
+  const reconciled = { ...updated, status, done: status === "done" };
+  const merge = items => (items || []).map(item => item.id === reconciled.id ? { ...item, ...reconciled } : item);
+  state.workspaceTasks = merge(state.workspaceTasks);
+  state.selectedSubtasks = merge(state.selectedSubtasks);
+  for (const list of state.board?.buckets || []) list.tasks = merge(list.tasks);
+  reconcileAgentTaskCaches(reconciled, { previousTask });
+
+  if (Boolean(previousTask.done) !== reconciled.done) {
+    const list = state.workspaceLists.find(item => item.id === (reconciled.bucketId || previousTask.bucketId));
+    if (list) list.openCount = Math.max(0, Number(list.openCount || 0) + (reconciled.done ? -1 : 1));
+  }
+
+  if (state.selectedTask?.id !== reconciled.id) return;
+  const baseline = state.selectedTask;
+  const live = taskDraftFromCurrentForm(baseline);
+  const statusControl = globalThis.document?.querySelector?.('#workspace-detail-form [name="status"]');
+  const liveStatus = live?.status || statusControl?.value || baseline.status;
+  const statusWasEdited = Boolean(statusControl) && liveStatus !== baseline.status;
+  const merged = { ...baseline, ...reconciled };
+  for (const field of ["title", "description", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
+    if (live && String(live[field] || "") !== String(baseline[field] || "")) merged[field] = live[field];
+  }
+  merged.status = statusWasEdited ? liveStatus : status;
+  merged.done = merged.status === "done";
+  state.selectedTask = merged;
+  if (statusControl && !statusWasEdited) statusControl.value = status;
+  const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
+  state.taskDetailDrafts[reconciled.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
 }
 
 function bindAppShell() {

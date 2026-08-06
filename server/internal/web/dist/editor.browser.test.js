@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -232,6 +232,23 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === taskMatch[1]);
       return task ? json(response, task) : json(response, { error: "not found" }, 404);
     }
+    if (taskMatch && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      if (state.delayNextCompletion) {
+        state.delayNextCompletion = false;
+        await new Promise(resolve => { state.releaseCompletion = resolve; });
+      }
+      if (state.failNextCompletion) {
+        state.failNextCompletion = false;
+        return json(response, { error: "Could not complete task" }, 500);
+      }
+      const task = [...state.tasks, ...state.subtasks].find(item => item.id === taskMatch[1]);
+      if (!task) return json(response, { error: "not found" }, 404);
+      Object.assign(task, input);
+      if ("done" in input) task.status = input.done ? "done" : "queued";
+      state.patches.push({ id: task.id, ...input });
+      return json(response, task);
+    }
     if (url.pathname === "/styles.css") return file(response, "styles.css", "text/css");
     if (url.pathname === "/app.js") return file(response, "app.js", "text/javascript");
     if (isAppShell(url.pathname)) return html(response);
@@ -289,6 +306,112 @@ test("the task workspace supports lists, flow, table, and filters", async t => {
   await page.getByRole("heading", { name: "YouTube", exact: true }).waitFor();
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
   assert.equal(await page.locator('[data-open-task="task-inbox"]').count(), 0);
+});
+
+test("a pending table completion preserves a reopened task draft and next-save baseline", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.delayNextCompletion = true;
+  await page.getByRole("button", { name: "Mark Publish task-first agents video complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+
+  const title = page.getByLabel("Title", { exact: true });
+  const brief = page.getByLabel("Task brief", { exact: true });
+  await title.fill("Live title during completion");
+  await brief.fill("Live brief during completion");
+  await page.getByLabel("List", { exact: true }).selectOption("list-inbox");
+  await page.getByLabel("Priority", { exact: true }).selectOption("p2");
+  await page.getByLabel("Owner", { exact: true }).selectOption("");
+  await page.getByLabel("Planned", { exact: true }).fill("2026-08-20");
+  await brief.focus();
+
+  state.releaseCompletion();
+  await page.waitForFunction(() => document.querySelector('#workspace-detail-form [name="status"]')?.value === "done");
+
+  assert.equal(await title.inputValue(), "Live title during completion");
+  assert.equal(await brief.inputValue(), "Live brief during completion");
+  assert.equal(await page.getByLabel("List", { exact: true }).inputValue(), "list-inbox");
+  assert.equal(await page.getByLabel("Priority", { exact: true }).inputValue(), "p2");
+  assert.equal(await page.getByLabel("Owner", { exact: true }).inputValue(), "");
+  assert.equal(await page.getByLabel("Planned", { exact: true }).inputValue(), "2026-08-20");
+  assert.equal(await brief.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.find(task => task.id === "task-parent").done, true);
+
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => state.patches.length === 2);
+  assert.deepEqual(state.patches[1], {
+    id: "task-parent",
+    title: "Live title during completion",
+    description: "Live brief during completion",
+    status: "done",
+    priority: "p2",
+    assigneeAgentId: "",
+    scheduledDate: "2026-08-20",
+    bucketId: "list-inbox",
+  });
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a failed table completion preserves a reopened task draft and focus", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.delayNextCompletion = true;
+  state.failNextCompletion = true;
+  await page.getByRole("button", { name: "Mark Publish task-first agents video complete", exact: true }).click();
+  await waitFor(() => typeof state.releaseCompletion === "function");
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+
+  const title = page.getByLabel("Title", { exact: true });
+  const brief = page.getByLabel("Task brief", { exact: true });
+  await title.fill("Live title during failed completion");
+  await brief.fill("Live brief during failed completion");
+  await page.getByLabel("List", { exact: true }).selectOption("list-inbox");
+  await page.getByLabel("Priority", { exact: true }).selectOption("p2");
+  await page.getByLabel("Owner", { exact: true }).selectOption("");
+  await page.getByLabel("Planned", { exact: true }).fill("2026-08-21");
+  await brief.focus();
+
+  state.releaseCompletion();
+  await page.locator(".detail-error").filter({ hasText: "Could not complete task" }).waitFor();
+
+  assert.equal(await title.inputValue(), "Live title during failed completion");
+  assert.equal(await brief.inputValue(), "Live brief during failed completion");
+  assert.equal(await page.getByLabel("Status", { exact: true }).inputValue(), "working");
+  assert.equal(await page.getByLabel("List", { exact: true }).inputValue(), "list-inbox");
+  assert.equal(await page.getByLabel("Priority", { exact: true }).inputValue(), "p2");
+  assert.equal(await page.getByLabel("Owner", { exact: true }).inputValue(), "");
+  assert.equal(await page.getByLabel("Planned", { exact: true }).inputValue(), "2026-08-21");
+  assert.equal(await brief.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.find(task => task.id === "task-parent").done, false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an older completion success preserves a newer failure from another task", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  let releaseCompletion;
+  await page.route("**/api/v1/tasks/task-parent", async route => {
+    if (route.request().method() === "PATCH") await new Promise(resolve => { releaseCompletion = resolve; });
+    await route.continue();
+  });
+
+  await page.getByRole("button", { name: "Mark Publish task-first agents video complete", exact: true }).click();
+  await waitFor(() => typeof releaseCompletion === "function");
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for", exact: true }).click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Newer task failure remains owned");
+  state.failNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  const failure = page.locator(".detail-error").filter({ hasText: "Could not save task" });
+  await failure.waitFor();
+
+  releaseCompletion();
+  await waitFor(() => state.tasks.find(task => task.id === "task-parent").done);
+  assert.equal(await failure.isVisible(), true);
+  assert.equal(await title.inputValue(), "Newer task failure remains owned");
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  assert.equal(await page.getByRole("alert").filter({ hasText: "Could not save task" }).isVisible(), true);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("global scopes surface matching subtasks with parent context", async t => {
