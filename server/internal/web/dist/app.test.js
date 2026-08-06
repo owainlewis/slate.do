@@ -1693,17 +1693,19 @@ test("detail presents one inline accessible editor with clear actions", () => {
 
 test("detail can move a parent task between account-wide lists", () => {
   vm.runInContext(`
+    state.boards = [{ id: "board", name: "Home" }, { id: "other", name: "Campaigns" }];
     state.workspaceLists = [
-      { id: "list", boardId: "board", name: "Inbox" },
-      { id: "other-list", boardId: "other", name: "Launch" },
+      { id: "list", boardId: "board", name: "Inbox", isInbox: true },
+      { id: "other-list", boardId: "other", name: "Inbox", isInbox: true },
     ];
     state.selectedSubtasks = [];
   `, app);
   const html = app.workspaceDetailHTML({ id: "task", bucketId: "list", title: "Move me", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" });
   assert.match(html, /id="workspace-detail-list" name="bucketId"/);
-  assert.match(html, /value="list" selected>Inbox<\/option>/);
-  assert.match(html, /value="other-list" >Launch<\/option>|value="other-list">Launch<\/option>/);
+  assert.match(html, /value="list" selected>Home \/ Inbox<\/option>/);
+  assert.match(html, /value="other-list" >Campaigns \/ Inbox<\/option>|value="other-list">Campaigns \/ Inbox<\/option>/);
   assert.doesNotMatch(html, /id="move-panel"|id="move-position"/);
+  vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
 });
 
 test("footer reports live Working and Review counts", () => {

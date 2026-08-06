@@ -1457,6 +1457,14 @@ function taskDetailBackLabel() {
   return ["agent-detail", "agent-work", "agent-settings"].includes(state.view) ? "Back to agent work" : "Back to tasks";
 }
 
+function workspaceListLabel(list) {
+  const name = list.isInbox ? "Inbox" : list.name;
+  const boardIDs = new Set(state.workspaceLists.map(item => item.boardId).filter(Boolean));
+  if (boardIDs.size < 2) return name;
+  const board = state.boards.find(item => item.id === list.boardId);
+  return board?.name ? `${board.name} / ${name}` : name;
+}
+
 function workspaceDetailHTML(task) {
   const list = state.workspaceLists.find(item => item.id === task.bucketId);
   const completed = state.selectedSubtasks.filter(item => item.done).length;
@@ -1484,7 +1492,7 @@ function workspaceDetailHTML(task) {
           ${task.parentTaskId ? `<div class="workspace-parent-context"><span>Part of a larger task</span>${subtaskSection}</div>` : ""}
           <div class="detail-properties">
             <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
-            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(item.isInbox ? "Inbox" : item.name)}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Subtasks stay with their parent task.</small>` : ""}</div>
+            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Subtasks stay with their parent task.</small>` : ""}</div>
             <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
             <div class="field"><label for="workspace-detail-owner">Owner</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
             <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
@@ -2824,15 +2832,21 @@ function bindWorkspaceDetail(options = {}) {
   const boundSessionVersion = authVersion;
   const boundUserID = state.me?.id;
   const boundRouteVersion = routeVersion;
-  const boundAgentID = state.agentDetail?.agent?.id || "";
+  const boundRoute = parseRoute(location.pathname);
+  const boundAgentID = ["agent-detail", "agent-work", "agent-settings"].includes(boundRoute.name)
+    ? state.agentDetail?.agent?.id || ""
+    : "";
   const detailSurface = document.querySelector("[data-detail-surface]");
-  const reportBackgroundMutationFailure = (action, taskTitle, err) => {
+  const boundContextIsCurrent = () => {
     if (!sessionIsCurrent(boundSessionVersion, boundUserID)) return false;
     const currentRoute = parseRoute(location.pathname);
     const sameAgentContext = boundAgentID
       && ["agent-detail", "agent-work", "agent-settings"].includes(currentRoute.name)
       && currentRoute.agentId === boundAgentID;
-    if (boundRouteVersion !== routeVersion && !sameAgentContext) return false;
+    return boundRouteVersion === routeVersion || sameAgentContext;
+  };
+  const reportBackgroundMutationFailure = (action, taskTitle, err) => {
+    if (!boundContextIsCurrent()) return false;
     if (handleError(err)) return true;
     const message = `Couldn’t ${action} “${taskTitle}”: ${err.message}`;
     const focus = state.selectedTask ? captureDetailFocus() : null;
@@ -2846,7 +2860,7 @@ function bindWorkspaceDetail(options = {}) {
     return true;
   };
   const reconcileLoadedTask = (task, { deleted = false, deferAgentRender = false } = {}) => {
-    if (!sessionIsCurrent(boundSessionVersion, boundUserID) || boundRouteVersion !== routeVersion) return false;
+    if (!boundContextIsCurrent()) return false;
     const reconcile = items => (items || []).flatMap(item => item.id !== task.id ? [item] : deleted ? [] : [{ ...item, ...task }]);
     state.workspaceTasks = reconcile(state.workspaceTasks);
     state.selectedSubtasks = reconcile(state.selectedSubtasks);

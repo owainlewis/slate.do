@@ -526,6 +526,63 @@ test("a delayed agent task save refreshes the work page without reopening detail
   assert.deepEqual(pageErrors, []);
 });
 
+test("successful agent mutations reconcile after same-agent navigation", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Reconciled across agent tabs");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
+  state.releaseStatus();
+  await page.getByRole("button", { name: /Reconciled across agent tabs/ }).waitFor();
+
+  await page.getByRole("button", { name: /Reconciled across agent tabs/ }).click();
+  state.delayNextDelete = true;
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete task", exact: true }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("tab", { name: "Work", exact: true }).click();
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  state.releaseDelete();
+  await page.getByText("No assigned work.", { exact: true }).waitFor();
+
+  assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research/work");
+  assert.equal(state.tasks.some(item => item.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(item => item.parentTaskId === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("workspace mutations cannot cross into retained agent context", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research`);
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  await page.getByRole("link", { name: "All tasks", exact: true }).click();
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByLabel("Title", { exact: true }).fill("Workspace-origin failure");
+  state.delayNextStatus = true;
+  state.failNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  state.releaseStatus();
+  await waitFor(() => state.failNextStatus === false);
+
+  assert.equal(await page.getByRole("alert").count(), 0);
+  assert.equal(await page.getByText("Workspace-origin failure", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("failed agent mutations report errors after detail has been closed", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
