@@ -2833,6 +2833,33 @@ test("a shell rerender during save cannot lose a newer task edit", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("a save response preserves an explicit unsaved reversion", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  const originalTitle = await page.getByLabel("Title", { exact: true }).inputValue();
+  await page.getByLabel("Title", { exact: true }).fill("Submitted title before reversion");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("button", { name: "Light", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill(originalTitle);
+  state.releaseStatus();
+  await waitFor(() => state.patches.length === 1);
+
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Submitted title before reversion");
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), originalTitle);
+  const dialogPromise = page.waitForEvent("dialog");
+  const back = page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  const dialog = await dialogPromise;
+  assert.equal(dialog.message(), "Discard unsaved task changes?");
+  await dialog.dismiss();
+  await back;
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), originalTitle);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a queued save preserves an explicit reversion", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
@@ -2852,6 +2879,38 @@ test("a queued save preserves an explicit reversion", async t => {
   assert.equal(state.patches[0].title, "Temporary queued title");
   assert.equal(state.patches[1].title, originalTitle);
   assert.equal(state.tasks.find(task => task.id === "task-parent").title, originalTitle);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("saving a parent retains an unsaved child draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent task", exact: true }).waitFor();
+  await page.getByLabel("Title", { exact: true }).fill("Retained child draft");
+  await page.getByRole("button", { name: "Back to parent task", exact: true }).click();
+  await page.getByText("Subtasks", { exact: true }).waitFor();
+  await page.getByLabel("Title", { exact: true }).fill("Saved parent while child is dirty");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+
+  const navigationDialog = page.waitForEvent("dialog");
+  const leaveWorkspace = page.getByRole("link", { name: /All agents/ }).click();
+  const dialog = await navigationDialog;
+  assert.equal(dialog.message(), "Discard unsaved task changes?");
+  await dialog.dismiss();
+  await leaveWorkspace;
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+
+  Object.assign(state.subtasks.find(task => task.id === "task-child"), { status: "working", done: false });
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent task", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Retained child draft");
+  assert.equal(await page.getByLabel("Status", { exact: true }).inputValue(), "working");
+  assert.equal(state.subtasks.find(task => task.id === "task-child").title, "Research examples");
   assert.deepEqual(pageErrors, []);
 });
 

@@ -1084,7 +1084,6 @@ async function openTaskDetail(taskID, trigger, options = {}) {
   const detailVersion = ++taskDetailVersion;
   state.subtaskPending = false;
   if (!movingWithinTaskChain) {
-    clearTaskDetailDraftTracking();
     state.subtaskDraft = "";
     state.subtaskError = "";
   }
@@ -1101,8 +1100,20 @@ async function openTaskDetail(taskID, trigger, options = {}) {
     ]);
     if (!isCurrent() || subtasks === null) return false;
     const persisted = { ...summary, ...detail };
+    const retainedDraft = state.taskDetailDrafts[taskID];
+    const retainedBaseline = state.taskDetailBaselines[taskID];
+    const retainedFieldEdits = taskDetailFieldEdits.get(taskID);
+    const selected = { ...persisted };
+    if (retainedDraft) {
+      for (const field of TASK_DETAIL_FIELDS) {
+        const hasEditIntent = retainedFieldEdits?.has(field)
+          || (retainedBaseline && String(retainedDraft[field] || "") !== String(retainedBaseline[field] || ""));
+        if (hasEditIntent) selected[field] = retainedDraft[field];
+      }
+    }
     state.taskDetailBaselines[taskID] = taskDetailSnapshot(persisted);
-    state.selectedTask = { ...persisted, ...(state.taskDetailDrafts[taskID] || {}) };
+    state.selectedTask = selected;
+    if (retainedDraft) state.taskDetailDrafts[taskID] = taskDetailSnapshot(selected);
     state.taskDetailCommitPending = "";
     state.selectedSubtasks = subtasks;
     state.error = "";
@@ -3100,11 +3111,12 @@ function updateTaskDetailBaselineFields(taskID, fields) {
 }
 
 function taskDetailHasUnsavedChanges() {
-  if (!state.selectedTask) return false;
   if (state.subtaskDraft !== "") return true;
   const drafts = { ...state.taskDetailDrafts };
-  const current = taskDraftFromCurrentForm(state.selectedTask);
-  if (current) drafts[state.selectedTask.id] = current;
+  if (state.selectedTask) {
+    const current = taskDraftFromCurrentForm(state.selectedTask);
+    if (current) drafts[state.selectedTask.id] = current;
+  }
   return Object.entries(drafts).some(([taskID, draft]) => taskID !== state.taskDetailCommitPending
     && taskDetailDraftIsDirty(state.taskDetailBaselines[taskID], draft));
 }
@@ -3143,6 +3155,13 @@ function clearTaskDetailDraftTracking() {
   state.taskDetailBaselines = {};
   state.taskDetailCommitPending = "";
   taskDetailFieldEdits.clear();
+}
+
+function clearTaskDetailDraft(taskID) {
+  delete state.taskDetailDrafts[taskID];
+  delete state.taskDetailBaselines[taskID];
+  taskDetailFieldEdits.delete(taskID);
+  if (state.taskDetailCommitPending === taskID) state.taskDetailCommitPending = "";
 }
 
 function recordTaskDetailFieldEdit(taskID, field) {
@@ -3281,7 +3300,7 @@ function bindWorkspaceDetail(options = {}) {
   };
   const taskDraftFromForm = taskDraftFromCurrentForm;
   const preserveTaskDraft = preserveCurrentTaskDraft;
-  const reconcileReopenedTaskDetail = updated => {
+  const reconcileReopenedTaskDetail = (updated, submittedFieldEdits = new Map()) => {
     if (state.selectedTask?.id !== updated.id) return;
     const selected = { ...state.selectedTask };
     const baseline = { ...(state.taskDetailBaselines[updated.id] || taskDetailSnapshot(selected)) };
@@ -3294,8 +3313,12 @@ function bindWorkspaceDetail(options = {}) {
     }
     const form = document.querySelector("#workspace-detail-form");
     const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
+    const currentFieldEdits = taskDetailFieldEdits.get(updated.id);
     for (const field of fields) {
-      if (String(live[field] || "") !== String(baseline[field] || "")) {
+      const currentEditVersion = currentFieldEdits?.get(field);
+      const editedAfterSubmission = currentEditVersion !== undefined
+        && currentEditVersion !== submittedFieldEdits.get(field);
+      if (editedAfterSubmission || String(live[field] || "") !== String(baseline[field] || "")) {
         merged[field] = live[field];
         continue;
       }
@@ -3765,20 +3788,19 @@ function bindWorkspaceDetail(options = {}) {
       if (detailWasReopened) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
-        reconcileReopenedTaskDetail(updated);
+        reconcileReopenedTaskDetail(updated, submittedFieldEdits);
         await refreshCurrentTaskSurface();
         return;
       }
       if (hasNewerDraft) {
-        reconcileReopenedTaskDetail(updated);
+        reconcileReopenedTaskDetail(updated, submittedFieldEdits);
         await refreshAfterTaskMutation(boundRouteVersion);
         render();
         restoreDetailFocus(newerDraftFocus);
         return;
       }
       if (parentTaskID) {
-        delete state.taskDetailDrafts[taskID];
-        delete state.taskDetailBaselines[taskID];
+        clearTaskDetailDraft(taskID);
         state.subtaskDraft = "";
         state.subtaskPending = false;
         state.subtaskError = "";
@@ -3798,7 +3820,7 @@ function bindWorkspaceDetail(options = {}) {
       taskDetailVersion += 1;
       state.selectedTask = null;
       state.selectedSubtasks = [];
-      clearTaskDetailDraftTracking();
+      clearTaskDetailDraft(taskID);
       state.subtaskDraft = "";
       state.subtaskPending = false;
       state.subtaskError = "";
@@ -4245,7 +4267,20 @@ async function renameBoard(id, name) {
 async function deleteBoard(id) {
   const board = state.boards.find(item => item.id === id);
   if (!board || !confirm(`Delete "${board.name}" and all its lists and items?`)) return;
+  const discardedTaskID = state.selectedTask?.id || "";
+  const discardedTaskBaseline = discardedTaskID && state.taskDetailBaselines[discardedTaskID]
+    ? { ...state.taskDetailBaselines[discardedTaskID] }
+    : null;
+  const discardedTaskFocus = captureTaskDetailFocus();
+  const hadUnsavedTaskChanges = taskDetailHasUnsavedChanges();
   if (!confirmTaskDetailDiscard()) return;
+  if (hadUnsavedTaskChanges && discardedTaskBaseline && state.selectedTask?.id === discardedTaskID) {
+    state.selectedTask = { ...state.selectedTask, ...discardedTaskBaseline };
+    state.taskDetailBaselines[discardedTaskID] = { ...discardedTaskBaseline };
+    state.taskDetailDrafts[discardedTaskID] = { ...discardedTaskBaseline };
+    render();
+    restoreTaskDetailFocus(discardedTaskFocus);
+  }
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   await api.del(`/api/v1/boards/${id}`);

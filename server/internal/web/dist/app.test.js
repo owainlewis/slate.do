@@ -2606,10 +2606,10 @@ test("unrelated board deletion preserves edits made while its request is pending
     state.board = { id: "board-current", name: "Current", buckets: [] };
     state.workspaceLists = [];
     state.workspaceTasks = [];
-    state.selectedTask = { id: "task-a", boardId: "board-current", title: "Open task" };
+    state.selectedTask = { id: "task-a", boardId: "board-current", title: "Discarded edit" };
     state.selectedSubtasks = [];
-    state.taskDetailDrafts = {};
-    state.taskDetailBaselines = { "task-a": taskDetailSnapshot(state.selectedTask) };
+    state.taskDetailBaselines = { "task-a": taskDetailSnapshot({ ...state.selectedTask, title: "Saved task" }) };
+    state.taskDetailDrafts = { "task-a": taskDetailSnapshot(state.selectedTask) };
     state.subtaskDraft = "";
     api.del = async path => {
       if (path !== "/api/v1/boards/board-other") throw new Error("unexpected delete for " + path);
@@ -2620,12 +2620,18 @@ test("unrelated board deletion preserves edits made while its request is pending
   `, app);
 
   const deletion = app.deleteBoard("board-other");
-  vm.runInContext('state.subtaskDraft = "Late edit";', app);
+  assert.equal(vm.runInContext("state.selectedTask.title", app), "Saved task");
+  assert.equal(vm.runInContext('state.taskDetailBaselines["task-a"].title', app), "Saved task");
+  vm.runInContext(`
+    state.taskDetailDrafts["task-a"] = { ...state.taskDetailBaselines["task-a"], title: "Late edit" };
+    recordTaskDetailFieldEdit("task-a", "title");
+  `, app);
   app.releasePendingBoardDelete();
   await deletion;
 
   assert.equal(vm.runInContext("state.selectedTask.id", app), "task-a");
-  assert.equal(vm.runInContext("state.subtaskDraft", app), "Late edit");
+  assert.equal(vm.runInContext('state.taskDetailDrafts["task-a"].title', app), "Late edit");
+  assert.equal(app.taskDetailHasUnsavedChanges(), true);
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.boards.map(board => board.id))", app)), ["board-current"]);
   assert.equal(vm.runInContext("state.board.id", app), "board-current");
   vm.runInContext("render = renderBeforePendingBoardDelete;", app);
