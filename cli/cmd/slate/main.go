@@ -103,8 +103,8 @@ Run "slate help <topic>" for every command and flag.
 	"boards": `Usage:
   slate boards list
   slate boards get <board-id>
-  slate boards create --name <name> [--background-kind <kind>] [--background-value <value>] [--max-tasks-per-list <n>]
-  slate boards update <board-id> [--name <name>] [--background-kind <kind>] [--background-value <value>] [--max-tasks-per-list <n>] [--sort-order <n>]
+  slate boards create --name <name> [--background-kind <kind>] [--background-value <value>]
+  slate boards update <board-id> [--name <name>] [--background-kind <kind>] [--background-value <value>] [--sort-order <n>]
   slate boards delete <board-id>
 
 "get" returns every active item and the 20 most recently updated completed
@@ -142,6 +142,8 @@ Completed pages default to 20 items and return nextCursor for --cursor.
 `,
 }
 
+const legacyMaxTasksPerListUsage = "legacy board metadata; does not limit tasks"
+
 func authCmd(c client, args []string) error {
 	if wantsHelp(args) {
 		return printHelp("auth")
@@ -176,7 +178,7 @@ func boardsCmd(c client, args []string) error {
 		name := fs.String("name", "", "board name")
 		backgroundKind := fs.String("background-kind", "", "background kind")
 		backgroundValue := fs.String("background-value", "", "background value")
-		maxTasks := fs.Int("max-tasks-per-list", 0, "Max active items per list")
+		maxTasks := fs.Int("max-tasks-per-list", 0, legacyMaxTasksPerListUsage)
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -194,7 +196,7 @@ func boardsCmd(c client, args []string) error {
 		name := fs.String("name", "", "board name")
 		backgroundKind := fs.String("background-kind", "", "background kind")
 		backgroundValue := fs.String("background-value", "", "background value")
-		maxTasks := fs.Int("max-tasks-per-list", 0, "Max active items per list")
+		maxTasks := fs.Int("max-tasks-per-list", 0, legacyMaxTasksPerListUsage)
 		sortOrder := fs.Int("sort-order", 0, "sort order")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err

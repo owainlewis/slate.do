@@ -282,7 +282,8 @@ test("New list reports exhausted capacity without sending a request", async () =
 test("the product no longer promises hard item limits", () => {
 	const landing = app.landingHTML();
 	assert.match(landing, /Lists for clear thinking/);
-	assert.doesNotMatch(landing, /Every list caps|list is full/i);
+	assert.match(landing, /clear thinking bucket for related work/);
+	assert.doesNotMatch(landing, /hard cap|Every list caps|list is full/i);
 });
 
 test("Today and Week keep their planned-date scope when other filters are applied", () => {

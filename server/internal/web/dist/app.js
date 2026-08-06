@@ -1392,12 +1392,12 @@ function landingHTML() {
             <button class="tour-tab" type="button" data-tour="week" role="tab" aria-selected="false">Week</button>
           </div>
           <div class="tour-frame" data-reveal>
-            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: three goal-led lists of work, each with a hard cap on open items">
+            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: three goal-led thinking buckets for related work">
             <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Flow view: work moving through Ready, Working, Review, and Done">
             <img class="tour-img" data-tour-img="week" src="/app-week.jpg" alt="Slate Week view: tasks laid out across the days of the week">
           </div>
           <p class="preview-caption" data-reveal>
-            <span class="tour-caption on" data-tour-caption="lists">A few lists, each with a hard cap on open work.</span>
+            <span class="tour-caption on" data-tour-caption="lists">A few lists, each a clear thinking bucket for related work.</span>
             <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same four states.</span>
             <span class="tour-caption" data-tour-caption="week">See the week before you're already in it.</span>
           </p>
