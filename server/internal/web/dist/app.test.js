@@ -146,6 +146,45 @@ test("shared-shell routes load one account-wide list index and discard stale res
   delete app.pendingListIndex;
 });
 
+test("workspace reloads refresh list metadata and tasks under one route guard", async () => {
+  app.location = { pathname: "/app/tasks", search: "" };
+  vm.runInContext(`
+    savedReloadListIndex = loadWorkspaceListIndex;
+    savedReloadWorkspace = loadWorkspace;
+    savedReloadRender = render;
+    routeVersion = 45;
+    reloadCalls = [];
+    loadWorkspaceListIndex = async version => {
+      reloadCalls.push({ kind: "lists", version });
+      state.workspaceLists = [{ id: "inbox", openCount: 2 }];
+      return true;
+    };
+    loadWorkspace = async (route, version) => {
+      reloadCalls.push({ kind: "tasks", version, scope: route.scope });
+      state.workspaceTasks = [{ id: "task" }];
+      return true;
+    };
+    render = () => { reloadCalls.push({ kind: "render" }); };
+  `, app);
+
+  assert.equal(await app.reload(), true);
+  assert.deepEqual(JSON.parse(vm.runInContext(`JSON.stringify(reloadCalls)`, app)), [
+    { kind: "lists", version: 45 },
+    { kind: "tasks", version: 45, scope: "all" },
+    { kind: "render" },
+  ]);
+  assert.equal(vm.runInContext(`state.workspaceLists[0].openCount`, app), 2);
+
+  vm.runInContext(`
+    loadWorkspaceListIndex = savedReloadListIndex;
+    loadWorkspace = savedReloadWorkspace;
+    render = savedReloadRender;
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+  `, app);
+  delete app.location;
+});
+
 test("New list is bound centrally for shared-shell and settings routes", () => {
   const shellStart = source.indexOf("function bindAppShell()");
   const shellEnd = source.indexOf("async function captureInboxTask", shellStart);

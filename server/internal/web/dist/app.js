@@ -4856,12 +4856,18 @@ async function createAPIToken(name, expectedRouteVersion) {
 
 async function reload() {
   const route = parseRoute(location.pathname);
+  const expectedRouteVersion = routeVersion;
   if (route.name === "workspace") {
-    await loadWorkspace(route);
+    const [listsLoaded, workspaceLoaded] = await Promise.all([
+      loadWorkspaceListIndex(expectedRouteVersion),
+      loadWorkspace(route, expectedRouteVersion),
+    ]);
+    if (!listsLoaded || !workspaceLoaded || expectedRouteVersion !== routeVersion) return false;
   } else {
-    await loadBoards(state.board.id);
+    if (!await loadBoards(state.board?.id, expectedRouteVersion) || expectedRouteVersion !== routeVersion) return false;
   }
   render();
+  return true;
 }
 
 function findTask(id) {

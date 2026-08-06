@@ -110,6 +110,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const created = { id: `task-created-${state.created.length + 1}`, boardId: "board-one", bucketId: "list-inbox", listName: "Inbox", title: input.title, description: input.description || "", scheduledDate: "", kind: "action", done: false, status: "queued", priority: "", assigneeAgentId: "" };
       state.tasks.unshift(created);
       state.created.push(created);
+      state.lists.find(list => list.id === "list-inbox").openCount += 1;
       return json(response, created, 201);
     }
     const subtaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/subtasks$/);
@@ -441,6 +442,7 @@ test("New task captures directly into Inbox and opens a normal task editor", asy
   assert.equal(await title.inputValue(), "New task");
   assert.equal(state.created.length, 1);
   assert.equal(state.created[0].bucketId, "list-inbox");
+  assert.equal(await page.locator('a[href="/app/inbox"] b').textContent(), "2");
 
   await title.fill("Prepare launch brief");
   await page.getByLabel("Priority", { exact: true }).selectOption("p0");
