@@ -2272,6 +2272,21 @@ test("task detail dirty checks compare every persisted editor field", () => {
   }
   assert.equal(app.taskDetailDraftIsDirty(baseline, { ...baseline, priority: null }), true);
   assert.match(source, /addEventListener\("beforeunload"[\s\S]*taskDetailHasUnsavedChanges\(\)[\s\S]*event\.preventDefault\(\)/);
+
+  vm.runInContext(`
+    savedTaskDetailConfirm = globalThis.confirm;
+    globalThis.confirm = () => true;
+    state.selectedTask = { id: "parent" };
+    state.subtaskDraft = "Unfinished step";
+    state.subtaskError = "Previous error";
+  `, app);
+  assert.equal(app.confirmTaskDetailDiscard(), true);
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "");
+  assert.equal(vm.runInContext("state.subtaskError", app), "");
+  vm.runInContext(`
+    globalThis.confirm = savedTaskDetailConfirm;
+    state.selectedTask = null;
+  `, app);
 });
 
 test("detail can move a parent task between account-wide lists", () => {

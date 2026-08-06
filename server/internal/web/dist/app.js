@@ -3114,6 +3114,8 @@ function confirmTaskDetailDiscard() {
   if (!taskDetailHasUnsavedChanges()) return true;
   if (globalThis.confirm?.("Discard unsaved task changes?") !== true) return false;
   clearTaskDetailDraftTracking();
+  state.subtaskDraft = "";
+  state.subtaskError = "";
   return true;
 }
 
