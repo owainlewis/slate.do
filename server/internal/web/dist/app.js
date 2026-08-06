@@ -3124,9 +3124,22 @@ function taskDetailHasUnsavedChanges() {
 function confirmTaskDetailDiscard() {
   if (!taskDetailHasUnsavedChanges()) return true;
   if (globalThis.confirm?.("Discard unsaved task changes?") !== true) return false;
+  const selectedTaskID = state.selectedTask?.id || "";
+  const selectedTaskBaseline = selectedTaskID && state.taskDetailBaselines[selectedTaskID]
+    ? { ...state.taskDetailBaselines[selectedTaskID] }
+    : null;
   clearTaskDetailDraftTracking();
   state.subtaskDraft = "";
   state.subtaskError = "";
+  if (selectedTaskID && selectedTaskBaseline && state.selectedTask?.id === selectedTaskID) {
+    state.selectedTask = { ...state.selectedTask, ...selectedTaskBaseline };
+    state.taskDetailBaselines[selectedTaskID] = { ...selectedTaskBaseline };
+    state.taskDetailDrafts[selectedTaskID] = { ...selectedTaskBaseline };
+  } else if (state.selectedTask) {
+    taskDetailVersion += 1;
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+  }
   return true;
 }
 

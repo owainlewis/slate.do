@@ -2289,6 +2289,22 @@ test("task detail dirty checks compare every persisted editor field", () => {
   `, app);
 });
 
+test("accepting discard restores a mounted task to its persisted baseline", () => {
+  vm.runInContext(`
+    savedMountedDiscardConfirm = globalThis.confirm;
+    globalThis.confirm = () => true;
+    state.selectedTask = { id: "task-a", title: "Discarded title", description: "Saved brief" };
+    state.taskDetailBaselines = { "task-a": taskDetailSnapshot({ ...state.selectedTask, title: "Saved title" }) };
+    state.taskDetailDrafts = { "task-a": taskDetailSnapshot(state.selectedTask) };
+  `, app);
+
+  assert.equal(app.confirmTaskDetailDiscard(), true);
+  assert.equal(vm.runInContext("state.selectedTask.title", app), "Saved title");
+  assert.equal(vm.runInContext('state.taskDetailBaselines["task-a"].title', app), "Saved title");
+  assert.equal(app.taskDetailHasUnsavedChanges(), false);
+  vm.runInContext("globalThis.confirm = savedMountedDiscardConfirm; state.selectedTask = null;", app);
+});
+
 test("board controls cannot discard unsaved task changes", () => {
   vm.runInContext(`
     state.selectedTask = { id: "task-a", title: "Saved title" };
