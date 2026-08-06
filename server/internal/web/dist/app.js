@@ -420,6 +420,7 @@ function navigate(path, options = {}) {
 
 let routeVersion = 0;
 let taskDetailVersion = 0;
+let taskDetailEditVersion = 0;
 let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
 let workspaceListLoadVersion = 0;
@@ -3078,16 +3079,12 @@ function taskDetailDraftIsDirty(baseline, draft) {
   return TASK_DETAIL_FIELDS.some(field => String(draft[field] || "") !== String(baseline[field] || ""));
 }
 
-function advanceTaskDetailBaseline(taskID, persisted, draft) {
+function advanceTaskDetailBaseline(taskID, persisted) {
   const previous = state.taskDetailBaselines[taskID];
   if (!previous) return;
-  const next = taskDetailSnapshot(persisted);
-  const live = draft || state.taskDetailDrafts[taskID];
   state.taskDetailBaselines[taskID] = Object.fromEntries(TASK_DETAIL_FIELDS.map(field => {
-    const liveValue = String(live?.[field] || "");
-    const previousValue = String(previous[field] || "");
-    const nextValue = String(next[field] || "");
-    return [field, !live || liveValue === previousValue || liveValue === nextValue ? nextValue : previousValue];
+    const value = field in persisted ? persisted[field] : previous[field];
+    return [field, String(value || "")];
   }));
 }
 
@@ -3210,10 +3207,15 @@ function bindWorkspaceDetail(options = {}) {
     restoreDetailFocus(focus);
     return true;
   };
-  const reconcileLoadedTask = (task, { deleted = false, deferAgentRender = false, previousTask = null } = {}) => {
+  const reconcileLoadedTask = (task, {
+    deleted = false,
+    deferAgentRender = false,
+    previousTask = null,
+    preserveSelectedBaseline = false,
+  } = {}) => {
     if (!boundContextIsCurrent()) return false;
-    if (!deleted && state.selectedTask?.id === task.id) {
-      advanceTaskDetailBaseline(task.id, task, taskDraftFromCurrentForm(state.selectedTask));
+    if (!deleted && !preserveSelectedBaseline && state.selectedTask?.id === task.id) {
+      advanceTaskDetailBaseline(task.id, task);
     }
     const reconcile = items => (items || []).flatMap(item => item.id !== task.id ? [item] : deleted ? [] : [{ ...item, ...task }]);
     state.workspaceTasks = reconcile(state.workspaceTasks);
@@ -3249,10 +3251,11 @@ function bindWorkspaceDetail(options = {}) {
   const preserveTaskDraft = preserveCurrentTaskDraft;
   const reconcileReopenedTaskDetail = updated => {
     if (state.selectedTask?.id !== updated.id) return;
-    const baseline = { ...state.selectedTask };
-    const live = taskDraftFromForm(baseline);
-    advanceTaskDetailBaseline(updated.id, updated, live);
-    const merged = { ...baseline, ...updated };
+    const selected = { ...state.selectedTask };
+    const baseline = { ...(state.taskDetailBaselines[updated.id] || taskDetailSnapshot(selected)) };
+    const live = taskDraftFromForm(selected) || state.taskDetailDrafts[updated.id];
+    advanceTaskDetailBaseline(updated.id, updated);
+    const merged = { ...selected, ...updated };
     if (!live) {
       state.selectedTask = merged;
       return;
@@ -3581,6 +3584,14 @@ function bindWorkspaceDetail(options = {}) {
       addSubtask();
     }
   });
+  document.querySelectorAll("#workspace-detail-form [name]").forEach(control => {
+    const preserveEditedTaskDraft = () => {
+      taskDetailEditVersion += 1;
+      preserveTaskDraft();
+    };
+    control.addEventListener("input", preserveEditedTaskDraft);
+    control.addEventListener("change", preserveEditedTaskDraft);
+  });
   document.querySelector("#delete-task")?.addEventListener("click", async () => {
     if (!confirm("Delete this task and its subtasks?")) return;
     const taskID = state.selectedTask.id;
@@ -3677,12 +3688,12 @@ function bindWorkspaceDetail(options = {}) {
     const taskID = state.selectedTask.id;
     const taskTitle = String(form.get("title") || state.selectedTask.title);
     const parentTaskID = state.selectedTask.parentTaskId || "";
-    const previousTask = { ...state.selectedTask };
+    const previousTask = { ...state.selectedTask, ...(state.taskDetailBaselines[taskID] || {}) };
     const detailVersion = taskDetailVersion;
     state.agentTaskMutationError = "";
     state.agentTaskRefreshError = "";
     preserveTaskDraft();
-    state.taskDetailCommitPending = taskID;
+    const submittedEditVersion = taskDetailEditVersion;
     const submit = event.currentTarget.querySelector('button[type="submit"]');
     controls.forEach(control => { control.disabled = true; });
     submit.textContent = "Saving…";
@@ -3693,6 +3704,7 @@ function bindWorkspaceDetail(options = {}) {
         scheduledDate: form.get("scheduledDate"),
       };
       if (!parentTaskID) input.bucketId = form.get("bucketId");
+      const submittedDraft = taskDetailSnapshot({ ...previousTask, ...input });
       const updated = await serializeTaskMutation(taskID, async ({ queued }) => {
         if (!queued) return api.patch(`/api/v1/tasks/${taskID}/status`, input);
         const current = await api.get(`/api/v1/tasks/${taskID}`);
@@ -3705,12 +3717,27 @@ function bindWorkspaceDetail(options = {}) {
         return api.patch(`/api/v1/tasks/${taskID}/status`, rebased);
       });
       if (!updated) return;
-      reconcileLoadedTask(updated, { previousTask });
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+      const detailWasReopened = detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID;
+      const liveAfterSave = !detailWasReopened
+        ? taskDraftFromForm(state.selectedTask) || state.taskDetailDrafts[taskID]
+        : null;
+      const hasNewerDraft = Boolean(taskDetailEditVersion !== submittedEditVersion
+        && liveAfterSave
+        && taskDetailDraftIsDirty(submittedDraft, liveAfterSave));
+      const newerDraftFocus = hasNewerDraft ? captureDetailFocus() : null;
+      reconcileLoadedTask(updated, { previousTask, preserveSelectedBaseline: detailWasReopened || hasNewerDraft });
+      if (detailWasReopened) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         reconcileReopenedTaskDetail(updated);
         await refreshCurrentTaskSurface();
+        return;
+      }
+      if (hasNewerDraft) {
+        reconcileReopenedTaskDetail(updated);
+        await refreshAfterTaskMutation(boundRouteVersion);
+        render();
+        restoreDetailFocus(newerDraftFocus);
         return;
       }
       if (parentTaskID) {
@@ -3986,13 +4013,14 @@ function reconcileTaskCompletion(updated, previousTask) {
   }
 
   if (state.selectedTask?.id !== reconciled.id) return;
-  const baseline = state.selectedTask;
-  const live = taskDraftFromCurrentForm(baseline);
-  advanceTaskDetailBaseline(reconciled.id, reconciled, live);
+  const selected = state.selectedTask;
+  const baseline = { ...(state.taskDetailBaselines[reconciled.id] || taskDetailSnapshot(selected)) };
+  const live = taskDraftFromCurrentForm(selected) || state.taskDetailDrafts[reconciled.id];
+  advanceTaskDetailBaseline(reconciled.id, reconciled);
   const statusControl = globalThis.document?.querySelector?.('#workspace-detail-form [name="status"]');
   const liveStatus = live?.status || statusControl?.value || baseline.status;
   const statusWasEdited = Boolean(statusControl) && liveStatus !== baseline.status;
-  const merged = { ...baseline, ...reconciled };
+  const merged = { ...selected, ...reconciled };
   const form = globalThis.document?.querySelector?.("#workspace-detail-form");
   for (const field of ["title", "description", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
     if (live && String(live[field] || "") !== String(baseline[field] || "")) {

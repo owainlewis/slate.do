@@ -457,6 +457,7 @@ test("a pending list move updates account settings counts without resetting its 
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
 
@@ -493,6 +494,7 @@ test("a pending list move completes account settings while its first list load i
     if (listRequests === 1) await new Promise(resolve => { releaseLists = resolve; });
     await route.continue();
   });
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await waitFor(() => typeof releaseLists === "function");
   state.releaseStatus();
@@ -893,6 +895,7 @@ test("a delayed agent task save refreshes the work page without reopening detail
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
   assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 0);
@@ -940,6 +943,7 @@ test("a delayed reassignment refreshes the newly assigned agent work page", asyn
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Writing agent", exact: true }).click();
   await page.getByRole("tab", { name: "Work", exact: true }).click();
@@ -965,6 +969,7 @@ test("concurrent saves of the same agent task commit in user order", async t => 
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
   await page.getByLabel("Title", { exact: true }).fill("Newest queued title");
@@ -998,6 +1003,7 @@ test("a completed save reconciles untouched fields in a reopened task detail", a
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
   const description = page.getByLabel("Task brief", { exact: true });
@@ -1035,6 +1041,7 @@ test("a Flow drop commits after a pending agent detail save", async t => {
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("link", { name: "All tasks", exact: true }).click();
   await page.getByRole("tab", { name: "Flow", exact: true }).click();
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
@@ -1197,6 +1204,7 @@ test("a delayed workspace detail save refreshes Agent Work after navigation", as
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
   await page.getByRole("tab", { name: "Work", exact: true }).click();
@@ -1218,6 +1226,7 @@ test("a failed workspace-save Agent Work refresh preserves a task opened while i
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
   await page.getByRole("tab", { name: "Work", exact: true }).click();
@@ -1375,6 +1384,7 @@ test("a queued Flow drop cannot refresh over a newer agent settings draft", asyn
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("link", { name: "All tasks", exact: true }).click();
   await page.getByRole("tab", { name: "Flow", exact: true }).click();
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
@@ -1406,6 +1416,7 @@ test("a queued subtask toggle commits after its pending child save", async t => 
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
   await page.getByRole("button", { name: "Mark Research examples not complete", exact: true }).click();
@@ -1432,6 +1443,7 @@ test("an in-flight work refresh preserves edits in a newer task detail", async t
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
 
   state.delayNextAgentWork = true;
@@ -1458,6 +1470,7 @@ test("successful agent mutations reconcile after same-agent navigation", async t
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
@@ -1490,6 +1503,7 @@ test("a delayed parent move reconciles descendant locations across agent tabs", 
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
@@ -1605,6 +1619,7 @@ test("workspace mutations cannot cross into retained agent context", async t => 
   state.failNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
   await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
@@ -1627,6 +1642,7 @@ test("failed agent mutations report errors after detail has been closed", async 
   state.failNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Research examples/ }).click();
   await page.getByLabel("Title", { exact: true }).fill("Newer child draft");
@@ -1757,6 +1773,7 @@ test("a background agent refresh failure is visible in a newer task detail", asy
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Research examples/ }).click();
   const childBrief = page.getByLabel("Task brief", { exact: true });
@@ -1781,6 +1798,7 @@ test("a recovered agent refresh clears only its refresh warning", async t => {
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
   state.failNextAgentDetail = true;
@@ -1815,6 +1833,7 @@ test("an unresolved background mutation failure survives an unrelated successful
   state.failNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
   const parentBrief = page.getByLabel("Task brief", { exact: true });
@@ -2068,6 +2087,7 @@ test("a background mutation completes an agent settings route whose list load it
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
 
   let releaseLists;
@@ -2103,6 +2123,7 @@ test("a background mutation completes the agent directory whose list load it sup
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
 
   let releaseLists;
@@ -2135,6 +2156,7 @@ test("a background mutation completes All tasks whose list load it supersedes", 
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
 
   let releaseLists;
@@ -2168,6 +2190,7 @@ test("a failed background refresh completes an agent overview route whose list l
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
 
   let releaseLists;
@@ -2203,6 +2226,7 @@ test("a background task failure does not reset an agent settings draft", async t
   state.failNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("tab", { name: "Settings", exact: true }).click();
   const settingsName = page.locator("#agent-settings-name");
@@ -2228,6 +2252,7 @@ test("a background list-refresh failure is visible without resetting agent setti
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
   await page.getByLabel("Subtask title", { exact: true }).fill("Later successful list refresh");
@@ -2644,6 +2669,7 @@ test("a delayed save cannot close or overwrite a newer task surface", async t =>
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
   await page.locator('[data-open-task="task-inbox"]').click();
   await page.getByLabel("Title", { exact: true }).fill("Draft on the newer surface");
@@ -2671,6 +2697,7 @@ test("a delayed workspace save refreshes the overview after detail closes", asyn
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
   assert.equal(await page.getByText("Saved after detail closed", { exact: true }).count(), 0);
   state.releaseStatus();
@@ -2688,6 +2715,7 @@ test("a post-save workspace refresh preserves a task opened while it loads", asy
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
 
   state.delayNextWorkspaceTasks = true;
@@ -2713,6 +2741,7 @@ test("a failed post-save workspace refresh preserves a task opened while it load
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
+  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
 
   state.delayNextWorkspaceTasks = true;
@@ -2753,6 +2782,106 @@ test("a failed save preserves every unsaved task field", async t => {
   await dialog.dismiss();
   await back;
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved title after failure");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("shell rerenders preserve live task edits and their dirty state", async t => {
+  const { page, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  const brief = page.getByLabel("Task brief", { exact: true });
+  await title.fill("Live title through theme render");
+  await brief.fill("Live brief through theme render");
+  await page.getByRole("button", { name: "Light", exact: true }).click();
+
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Live title through theme render");
+  assert.equal(await page.getByLabel("Task brief", { exact: true }).inputValue(), "Live brief through theme render");
+  const dialogPromise = page.waitForEvent("dialog");
+  const back = page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  const dialog = await dialogPromise;
+  await dialog.dismiss();
+  await back;
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Live title through theme render");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a shell rerender during save cannot lose a newer task edit", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByLabel("Title", { exact: true }).fill("Submitted title before rerender");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  await page.getByRole("button", { name: "Light", exact: true }).click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Newer title after rerender");
+  await title.focus();
+  state.releaseStatus();
+  await waitFor(() => state.patches.length === 1);
+
+  assert.equal(await page.getByRole("region", { name: "Task detail" }).isVisible(), true);
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Newer title after rerender");
+  assert.equal(await page.getByLabel("Title", { exact: true }).evaluate(element => element === document.activeElement), true);
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => state.patches.length === 2);
+  assert.equal(state.patches[0].title, "Submitted title before rerender");
+  assert.equal(state.patches[1].title, "Newer title after rerender");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Newer title after rerender");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("background task updates advance the persisted dirty baseline", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  const originalTitle = await page.getByLabel("Title", { exact: true }).inputValue();
+  await page.getByLabel("Title", { exact: true }).fill("Persisted background title");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByLabel("Title", { exact: true }).fill("Local title during background save");
+  state.releaseStatus();
+  await waitFor(() => state.patches.length === 1);
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Local title during background save");
+
+  await page.getByLabel("Title", { exact: true }).fill(originalTitle);
+  const dialogPromise = page.waitForEvent("dialog");
+  const back = page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  const dialog = await dialogPromise;
+  await dialog.dismiss();
+  await back;
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), originalTitle);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a pending failed save cannot be left without confirmation", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Pending save draft");
+  state.delayNextStatus = true;
+  state.failNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+
+  const dialogPromise = page.waitForEvent("dialog");
+  const back = page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  const dialog = await dialogPromise;
+  await dialog.dismiss();
+  await back;
+  assert.equal(await title.inputValue(), "Pending save draft");
+
+  state.releaseStatus();
+  await page.getByText("Could not save task", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Pending save draft");
   assert.deepEqual(pageErrors, []);
 });
 
