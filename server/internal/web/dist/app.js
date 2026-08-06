@@ -385,13 +385,16 @@ const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
 
 async function serializeTaskMutation(taskID, mutation) {
+  const sessionVersion = authVersion;
+  const queued = taskMutationTurns.has(taskID);
   const previous = taskMutationTurns.get(taskID) || Promise.resolve();
   let release;
   const turn = new Promise(resolve => { release = resolve; });
   taskMutationTurns.set(taskID, turn);
   await previous.catch(() => {});
   try {
-    return await mutation();
+    if (sessionVersion !== authVersion) return null;
+    return await mutation({ queued });
   } finally {
     release();
     if (taskMutationTurns.get(taskID) === turn) taskMutationTurns.delete(taskID);
@@ -3276,7 +3279,18 @@ function bindWorkspaceDetail(options = {}) {
         scheduledDate: form.get("scheduledDate"),
       };
       if (!parentTaskID) input.bucketId = form.get("bucketId");
-      const updated = await serializeTaskMutation(taskID, () => api.patch(`/api/v1/tasks/${taskID}/status`, input));
+      const updated = await serializeTaskMutation(taskID, async ({ queued }) => {
+        if (!queued) return api.patch(`/api/v1/tasks/${taskID}/status`, input);
+        const current = await api.get(`/api/v1/tasks/${taskID}`);
+        const rebased = { status: current.status };
+        for (const field of ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
+          if (!(field in input)) continue;
+          const previousValue = String(previousTask[field] || "");
+          if (String(input[field] || "") !== previousValue) rebased[field] = input[field];
+        }
+        return api.patch(`/api/v1/tasks/${taskID}/status`, rebased);
+      });
+      if (!updated) return;
       reconcileLoadedTask(updated, { previousTask });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);

@@ -557,6 +557,8 @@ test("concurrent saves of the same agent task commit in user order", async t => 
   await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
   await page.getByLabel("Title", { exact: true }).fill("Older pending title");
+  await page.getByLabel("Status", { exact: true }).selectOption("needs_review");
+  await page.getByLabel("Priority", { exact: true }).selectOption("p1");
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -571,8 +573,15 @@ test("concurrent saves of the same agent task commit in user order", async t => 
   await page.getByRole("button", { name: /Newest queued title/ }).waitFor();
   await waitFor(() => state.patches.length === 2);
 
-  assert.deepEqual(state.patches.map(patch => patch.title), ["Older pending title", "Newest queued title"]);
+  assert.equal(state.patches[0].title, "Older pending title");
+  assert.equal(state.patches[0].status, "needs_review");
+  assert.equal(state.patches[0].priority, "p1");
+  assert.equal(state.patches[1].title, "Newest queued title");
+  assert.equal(state.patches[1].status, "needs_review");
+  assert.equal("priority" in state.patches[1], false);
   assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Newest queued title");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").status, "needs_review");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").priority, "p1");
   assert.deepEqual(pageErrors, []);
 });
 
