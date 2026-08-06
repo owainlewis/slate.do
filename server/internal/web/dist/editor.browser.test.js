@@ -28,7 +28,7 @@ function workspaceFixture() {
   ];
   const subtasks = [{
     id: "task-child", boardId: "board-one", bucketId: "list-youtube", listName: "YouTube",
-    parentTaskId: "task-parent", title: "Research examples", description: "", scheduledDate: "", kind: "action",
+    parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", title: "Research examples", description: "", scheduledDate: "", kind: "action",
     done: true, status: "done", priority: "p1", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent",
   }];
   const agents = [
@@ -80,13 +80,18 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         await new Promise(resolve => { state.releaseWorkspaceTasks = resolve; });
         state.delayedWorkspaceTasksCompleted = true;
       }
-      let tasks = [...state.tasks];
+      let tasks = url.searchParams.get("topLevel") === "true" ? [...state.tasks] : [...state.tasks, ...state.subtasks];
       const listID = url.searchParams.get("bucketId");
       const query = url.searchParams.get("q")?.toLowerCase();
       const status = url.searchParams.get("status");
+      const plannedFrom = url.searchParams.get("plannedFrom");
+      const plannedTo = url.searchParams.get("plannedTo");
       if (listID) tasks = tasks.filter(item => item.bucketId === listID);
+      if (url.searchParams.get("inbox") === "true") tasks = tasks.filter(item => state.lists.find(list => list.id === item.bucketId)?.isInbox);
       if (query) tasks = tasks.filter(item => `${item.title} ${item.description}`.toLowerCase().includes(query));
       if (status) tasks = tasks.filter(item => item.status === status);
+      if (plannedFrom) tasks = tasks.filter(item => item.scheduledDate >= plannedFrom);
+      if (plannedTo) tasks = tasks.filter(item => item.scheduledDate <= plannedTo);
       return json(response, { tasks });
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "POST") {
@@ -199,6 +204,41 @@ test("the task workspace supports lists, flow, table, and filters", async t => {
   await page.getByRole("heading", { name: "YouTube", exact: true }).waitFor();
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
   assert.equal(await page.locator('[data-open-task="task-inbox"]').count(), 0);
+});
+
+test("global scopes surface matching subtasks with parent context", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  assert.equal(await page.getByRole("button", { name: "Open task: Research examples", exact: true }).count(), 1);
+  assert.equal(await page.getByText("Subtask of Publish task-first agents video", { exact: true }).count(), 1);
+  await page.getByRole("button", { name: "Open task: Research examples", exact: true }).click();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
+  await page.getByRole("button", { name: "Back to parent task", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("#workspace-detail-title")?.value === "Publish task-first agents video");
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
+
+  const now = new Date();
+  const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("-");
+  Object.assign(state.subtasks[0], { scheduledDate: today, status: "needs_review", done: false });
+
+  await page.goto(`${origin}/app/review`);
+  await page.getByRole("heading", { name: "Review", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Open task: Research examples", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).count(), 0);
+
+  await page.goto(`${origin}/app/today`);
+  await page.getByRole("heading", { name: "Today", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Open task: Research examples", exact: true }).count(), 1);
+
+  await page.goto(`${origin}/app/week`);
+  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
+  assert.equal(await page.getByText("Research examples", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("Subtask of Publish task-first agents video · YouTube", { exact: true }).count(), 1);
+
+  await page.goto(`${origin}/app/lists/list-youtube`);
+  await page.getByRole("heading", { name: "YouTube", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Open task: Research examples", exact: true }).count(), 0);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("task view tabs and table rows work from the keyboard and accessibility tree", async t => {

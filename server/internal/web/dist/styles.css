@@ -77,7 +77,8 @@
 .workspace-table-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .workspace-table-row td, .workspace-table-row time { overflow: hidden; color: var(--soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-table-row strong { display: block; color: var(--ink); }
-.workspace-table-open { width: 100%; padding: 8px 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.workspace-table-open { width: 100%; padding: 8px 0; display: grid; gap: 3px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.workspace-table-open small { color: var(--faint); font-size: 11px; font-weight: 500; }
 .workspace-table-open:focus-visible { outline: 0; }
 .workspace-flow { min-width: 980px; display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 11px; }
 .workspace-flow-column { min-height: 440px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }

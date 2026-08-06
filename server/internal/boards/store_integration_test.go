@@ -203,6 +203,12 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	if child.ParentTaskID != parent.ID || child.BucketID != content.ID {
 		t.Fatalf("subtask = %#v", child)
 	}
+	childDate := "2026-08-13"
+	childStatus := StatusNeedsReview
+	child, err = store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{ScheduledDate: &childDate, Status: &childStatus})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.CreateSubtask(ctx, userID, child.ID, CreateTaskInput{Title: "Nested"}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("nested subtask error = %v, want ErrInvalidData", err)
 	}
@@ -214,6 +220,46 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	children, err := store.ListTaskPage(ctx, userID, TaskFilter{ParentTaskID: parent.ID})
 	if err != nil || len(children.Tasks) != 1 || children.Tasks[0].ID != child.ID {
 		t.Fatalf("children = %#v, %v", children, err)
+	}
+	globalSearch, err := store.ListTaskPage(ctx, userID, TaskFilter{Query: "Research examples"})
+	if err != nil || len(globalSearch.Tasks) != 1 || globalSearch.Tasks[0].ID != child.ID || globalSearch.Tasks[0].ParentTaskTitle != parent.Title {
+		t.Fatalf("global subtask search = %#v, %v", globalSearch, err)
+	}
+	otherUserID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", otherUserID) })
+	otherBoard, err := store.CreateBoard(ctx, otherUserID, CreateBoardInput{Name: "Private workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherList, err := store.CreateBucket(ctx, otherUserID, otherBoard.ID, CreateBucketInput{Name: "Private list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignParent, err := store.CreateTask(ctx, otherUserID, otherList.ID, CreateTaskInput{Title: "Secret parent title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET parent_task_id = $2 WHERE id = $1", child.ID, foreignParent.ID); err != nil {
+		t.Fatal(err)
+	}
+	malformedCrossAccount, err := store.ListTaskPage(ctx, userID, TaskFilter{Query: "Research examples"})
+	if err != nil || len(malformedCrossAccount.Tasks) != 1 || malformedCrossAccount.Tasks[0].ParentTaskTitle != "" {
+		t.Fatalf("cross-account parent title = %#v, %v", malformedCrossAccount, err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET parent_task_id = $2 WHERE id = $1", child.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	plannedSubtasks, err := store.ListTaskPage(ctx, userID, TaskFilter{ScheduledFrom: childDate, ScheduledTo: childDate})
+	if err != nil || len(plannedSubtasks.Tasks) != 1 || plannedSubtasks.Tasks[0].ID != child.ID {
+		t.Fatalf("planned subtasks = %#v, %v", plannedSubtasks, err)
+	}
+	reviewSubtasks, err := store.ListTaskPage(ctx, userID, TaskFilter{Status: StatusNeedsReview})
+	if err != nil || len(reviewSubtasks.Tasks) != 1 || reviewSubtasks.Tasks[0].ID != child.ID {
+		t.Fatalf("review subtasks = %#v, %v", reviewSubtasks, err)
+	}
+	topLevelPlanned, err := store.ListTaskPage(ctx, userID, TaskFilter{TopLevelOnly: true, ScheduledFrom: childDate, ScheduledTo: childDate})
+	if err != nil || len(topLevelPlanned.Tasks) != 0 {
+		t.Fatalf("top-level planned tasks = %#v, %v", topLevelPlanned, err)
 	}
 	lists, err := store.ListAllBuckets(ctx, userID)
 	if err != nil {
