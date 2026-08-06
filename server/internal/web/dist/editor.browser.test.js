@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, delayNextDelete: false, releaseDelete: null, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -45,13 +45,24 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     state.requests.push(`${request.method} ${url.pathname}${url.search}`);
     if (url.pathname === "/api/v1/me") return json(response, {
       authenticated: true,
-      user: { id: "owner", email: "owner@example.com", displayName: "Owain", theme: "dark", entitlement: { plan: "pro", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20, agents: 5 } } },
+      user: { id: "owner", email: "owner@example.com", displayName: "Owain", theme: "dark", entitlement: { plan: "pro", limits: { boards: 5, listsPerBoard: 2, activeItemsPerList: 20, agents: 5 } } },
     });
-    if (url.pathname === "/api/v1/boards" && request.method === "GET") return json(response, { boards: [{ id: "board-one", name: "Workspace" }] });
-    if (url.pathname === "/api/v1/boards/board-one" && request.method === "GET") return json(response, { id: "board-one", name: "Workspace", buckets: state.lists });
-    if (url.pathname === "/api/v1/boards/board-one/buckets" && request.method === "POST") {
+    if (url.pathname === "/api/v1/boards" && request.method === "GET") return json(response, { boards: [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Other" }] });
+    const boardMatch = url.pathname.match(/^\/api\/v1\/boards\/(board-one|board-two)$/);
+    if (boardMatch && request.method === "GET") {
+      const boardID = boardMatch[1];
+      const name = boardID === "board-one" ? "Workspace" : "Other";
+      return json(response, { id: boardID, name, buckets: state.lists.filter(list => list.boardId === boardID) });
+    }
+    const createListMatch = url.pathname.match(/^\/api\/v1\/boards\/(board-one|board-two)\/buckets$/);
+    if (createListMatch && request.method === "POST") {
       const input = await requestJSON(request);
-      const created = { id: `list-created-${state.createdLists.length + 1}`, boardId: "board-one", boardName: "Workspace", name: input.name, goal: "", isInbox: false, openCount: 0 };
+      if (state.delayNextList) {
+        state.delayNextList = false;
+        await new Promise(resolve => { state.releaseList = resolve; });
+      }
+      const boardID = createListMatch[1];
+      const created = { id: `list-created-${state.createdLists.length + 1}`, boardId: boardID, boardName: boardID === "board-one" ? "Workspace" : "Other", name: input.name, goal: "", isInbox: false, openCount: 0 };
       state.lists.push(created);
       state.createdLists.push(created);
       return json(response, created, 201);
@@ -372,24 +383,52 @@ test("an older same-view response cannot steal focus from the latest panel", asy
   assert.deepEqual(pageErrors, []);
 });
 
-test("a new list is available for agent assignment without refreshing", async t => {
-  const { page, state, pageErrors } = await startWorkspace(t);
+test("a direct agent route can create a list on a board with capacity and assign it without refreshing", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research`);
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  await page.getByRole("link", { name: /YouTube/ }).waitFor();
 
   page.once("dialog", dialog => dialog.accept("Launch plan"));
   await page.getByRole("button", { name: "New list", exact: true }).click();
   await waitFor(() => state.createdLists.length === 1);
+  assert.equal(state.createdLists[0].boardId, "board-two");
+  assert.ok(state.requests.includes("POST /api/v1/boards/board-two/buckets"));
   await page.getByText("Launch plan", { exact: true }).waitFor();
 
-  await page.getByRole("link", { name: "All agents", exact: true }).click();
-  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
-  await page.locator('[data-agent-link="agent-research"]').click();
-  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
   await page.getByRole("button", { name: "Assign work", exact: true }).click();
 
+  await page.getByLabel("Board", { exact: true }).selectOption("board-two");
   const list = page.getByLabel("List", { exact: true });
   await list.selectOption(state.createdLists[0].id);
   assert.equal(await list.inputValue(), state.createdLists[0].id);
   assert.equal(await list.locator("option", { hasText: "Launch plan" }).count(), 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("direct settings keeps account-wide lists and a delayed creation through navigation", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/settings/profile`);
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+  await page.getByRole("link", { name: /YouTube/ }).waitFor();
+
+  state.delayNextList = true;
+  page.once("dialog", dialog => dialog.accept("Settings plan"));
+  await page.getByRole("button", { name: "New list", exact: true }).click();
+  await waitFor(() => typeof state.releaseList === "function");
+  await page.getByRole("link", { name: "Preferences", exact: true }).click();
+  await page.getByRole("heading", { name: "Preferences", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isDisabled(), true);
+
+  state.releaseList();
+  await waitFor(() => state.createdLists.length === 1);
+  const createdLink = page.getByRole("link", { name: /Settings plan/ });
+  await createdLink.waitFor();
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isEnabled(), true);
+  await createdLink.click();
+  await page.getByRole("heading", { name: "Settings plan", exact: true }).waitFor();
   assert.deepEqual(pageErrors, []);
 });
 

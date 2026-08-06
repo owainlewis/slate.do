@@ -121,6 +121,125 @@ test("sidebar makes tasks, lists, and agents the primary control plane", () => {
   vm.runInContext(`state.workspaceLists = [];`, app);
 });
 
+test("shared-shell routes load one account-wide list index and discard stale responses", async () => {
+  let resolveListIndex;
+  app.pendingListIndex = new Promise(resolve => { resolveListIndex = resolve; });
+  vm.runInContext(`
+    savedListIndexGet = api.get;
+    authVersion = 7;
+    routeVersion = 41;
+    state.me = { id: "owner" };
+    state.workspaceLists = [{ id: "current", boardId: "board-one", name: "Current" }];
+    api.get = async path => {
+      if (path !== "/api/v1/lists") throw new Error("unexpected path " + path);
+      return pendingListIndex;
+    };
+  `, app);
+
+  const loading = app.loadWorkspaceListIndex(41);
+  vm.runInContext(`routeVersion = 42;`, app);
+  resolveListIndex({ lists: [{ id: "stale", boardId: "board-one", name: "Stale" }] });
+
+  assert.equal(await loading, false);
+  assert.equal(vm.runInContext(`state.workspaceLists[0].id`, app), "current");
+  vm.runInContext(`api.get = savedListIndexGet; state.me = null; state.workspaceLists = [];`, app);
+  delete app.pendingListIndex;
+});
+
+test("New list is bound centrally for shared-shell and settings routes", () => {
+  const shellStart = source.indexOf("function bindAppShell()");
+  const shellEnd = source.indexOf("async function captureInboxTask", shellStart);
+  const controlStart = source.indexOf("function bindWorkspaceListControl()");
+  const controlEnd = source.indexOf("async function captureInboxTask", controlStart);
+  const settingsStart = source.indexOf("async function bindSettings()");
+  const settingsEnd = source.indexOf("function bindBoardSettings()", settingsStart);
+  const workspaceStart = source.indexOf("function bindWorkspace()");
+  const workspaceEnd = source.indexOf("function bindWorkspaceDetail()", workspaceStart);
+
+  assert.match(source.slice(shellStart, shellEnd), /bindWorkspaceListControl\(\)/);
+  assert.match(source.slice(controlStart, controlEnd), /#new-workspace-list[^\n]*createWorkspaceList/);
+  assert.match(source.slice(settingsStart, settingsEnd), /bindWorkspaceListControl\(\)/);
+  assert.doesNotMatch(source.slice(workspaceStart, workspaceEnd), /#new-workspace-list/);
+});
+
+test("New list chooses a board with capacity and updates account-wide state immediately", async () => {
+  vm.runInContext(`
+    savedWorkspaceListRender = render;
+    savedWorkspaceListPrompt = globalThis.prompt;
+    savedWorkspaceListPost = api.post;
+    render = () => {};
+    globalThis.prompt = () => " Launch plan ";
+    workspaceListPosts = [];
+    api.post = async (path, input) => {
+      workspaceListPosts.push({ path, input });
+      return { id: "list-created", name: input.name };
+    };
+    authVersion = 8;
+    routeVersion = 51;
+    state.me = { id: "owner" };
+    state.maxListsPerBoard = 2;
+    state.boards = [{ id: "board-full", name: "Full" }, { id: "board-open", name: "Open" }];
+    state.board = { id: "board-full", name: "Full", buckets: [] };
+    state.workspaceLists = [
+      { id: "full-one", boardId: "board-full", name: "One" },
+      { id: "full-two", boardId: "board-full", name: "Two" },
+      { id: "open-one", boardId: "board-open", name: "Existing" },
+    ];
+    state.workspaceListError = "";
+    state.workspaceListPending = false;
+  `, app);
+
+  assert.equal(await app.createWorkspaceList(), true);
+  const posts = JSON.parse(vm.runInContext(`JSON.stringify(workspaceListPosts)`, app));
+  assert.deepEqual(posts, [{ path: "/api/v1/boards/board-open/buckets", input: { name: "Launch plan" } }]);
+  assert.equal(vm.runInContext(`state.workspaceLists.find(list => list.id === "list-created").boardId`, app), "board-open");
+  assert.equal(vm.runInContext(`assignmentListsForBoard("board-open").some(list => list.id === "list-created")`, app), true);
+  assert.equal(vm.runInContext(`state.workspaceListPending`, app), false);
+
+  vm.runInContext(`
+    render = savedWorkspaceListRender;
+    globalThis.prompt = savedWorkspaceListPrompt;
+    api.post = savedWorkspaceListPost;
+    state.me = null;
+    state.boards = [];
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+});
+
+test("New list reports exhausted capacity without sending a request", async () => {
+  vm.runInContext(`
+    savedNoCapacityRender = render;
+    savedNoCapacityPrompt = globalThis.prompt;
+    savedNoCapacityPost = api.post;
+    render = () => {};
+    globalThis.prompt = () => "Blocked";
+    noCapacityPosts = 0;
+    api.post = async () => { noCapacityPosts += 1; throw new Error("must not post"); };
+    authVersion = 9;
+    routeVersion = 61;
+    state.me = { id: "owner" };
+    state.maxListsPerBoard = 1;
+    state.boards = [{ id: "board-full", name: "Full" }];
+    state.workspaceLists = [{ id: "only-list", boardId: "board-full", name: "Only" }];
+    state.workspaceListError = "";
+    state.workspaceListPending = false;
+  `, app);
+
+  assert.equal(await app.createWorkspaceList(), false);
+  assert.equal(vm.runInContext(`noCapacityPosts`, app), 0);
+  assert.equal(vm.runInContext(`state.workspaceListError`, app), "Every board has reached the list limit for your plan.");
+
+  vm.runInContext(`
+    render = savedNoCapacityRender;
+    globalThis.prompt = savedNoCapacityPrompt;
+    api.post = savedNoCapacityPost;
+    state.me = null;
+    state.boards = [];
+    state.workspaceLists = [];
+  `, app);
+});
+
 test("the product no longer promises hard item limits", () => {
 	const landing = app.landingHTML();
 	assert.match(landing, /Lists for clear thinking/);
@@ -902,7 +1021,7 @@ test("agent detail presents real grouped task data, bounded history, and distinc
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentWorkPage = null; state.agentDetailLoadState = "idle";`, app);
 });
 
-test("a newly refreshed list is immediately available for agent assignment", () => {
+test("account-wide lists are immediately available for agent assignment", () => {
   vm.runInContext(`
     state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Other" }];
     state.board = { id: "board-one", name: "Workspace", buckets: [{ id: "list-old", boardId: "board-one", name: "Old" }] };
@@ -920,21 +1039,8 @@ test("a newly refreshed list is immediately available for agent assignment", () 
   assert.match(refreshed, /value="list-new"[^>]*>Launch plan<\/option>/);
 
   vm.runInContext(`state.agentAssignBoardID = "board-two";`, app);
-  const failedSwitch = app.assignWorkHTML();
-  assert.match(failedSwitch, /No available lists/);
-  assert.doesNotMatch(failedSwitch, /Stale other-board list/);
-
-  const loadedBoard = {
-    id: "board-two",
-    name: "Other",
-    buckets: [{ id: "list-current", name: "Current other-board list" }],
-  };
-  app.synchronizeWorkspaceListsForBoard(loadedBoard);
-  app.loadedAssignmentBoard = loadedBoard;
-  vm.runInContext(`state.board = loadedAssignmentBoard;`, app);
   const switched = app.assignWorkHTML();
-  assert.match(switched, /value="list-current"[^>]*>Current other-board list<\/option>/);
-  assert.doesNotMatch(switched, /Stale other-board list/);
+  assert.match(switched, /value="list-stale"[^>]*>Stale other-board list<\/option>/);
 
   vm.runInContext(`
     state.boards = [];
@@ -944,7 +1050,6 @@ test("a newly refreshed list is immediately available for agent assignment", () 
     state.agentAssignBoardID = "";
     state.agentAssignDraft = null;
   `, app);
-  delete app.loadedAssignmentBoard;
 });
 
 test("new-agent route has inline limits and one-time CLI connection instructions", () => {
@@ -2267,6 +2372,7 @@ test("failed board-settings and token loads render route-owned errors at the req
   vm.runInContext(`
     api.get = async path => {
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/api-tokens") throw new Error("Tokens could not be loaded");
       throw new Error("unexpected request: " + path);
     };
@@ -2334,6 +2440,7 @@ test("a stale board-list response cannot overwrite newer route navigation", asyn
     api.get = async path => {
       if (path === "/api/v1/boards" && ++boardListRequests === 1) return oldBoardListResponse;
       if (path === "/api/v1/boards") return { boards: [{ id: "board_2" }] };
+      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
       throw new Error("unexpected request: " + path);
     };
@@ -2434,6 +2541,7 @@ test("a stale settings token response cannot overwrite newer settings data", asy
     let tokenRequests = 0;
     api.get = async path => {
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
       if (path === "/api/v1/api-tokens" && ++tokenRequests === 1) return oldTokensResponse;
       if (path === "/api/v1/api-tokens") return { tokens: [{ id: "new" }] };
@@ -2463,6 +2571,7 @@ test("a stale agent response cannot overwrite newer route data", async () => {
     let agentRequests = 0;
     api.get = async path => {
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
+      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/agents" && ++agentRequests === 1) return oldAgentsResponse;
       if (path === "/api/v1/agents") return { agents: [{ id: "new" }] };
       if (path.startsWith("/api/v1/boards/")) {

@@ -164,6 +164,8 @@ const state = {
   priorityFilter: "",
   weekStart: "",
   workspaceLists: [],
+  workspaceListError: "",
+  workspaceListPending: false,
   workspaceTasks: [],
   workspaceScope: "all",
   workspaceListID: "",
@@ -376,6 +378,7 @@ function navigate(path, options = {}) {
 let routeVersion = 0;
 let taskDetailVersion = 0;
 let workspaceViewActivationVersion = 0;
+let workspaceListVersion = 0;
 
 function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   if (err?.status !== 401 || !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return false;
@@ -451,6 +454,7 @@ async function applyRoute() {
     state.subtaskError = "";
   }
   state.error = "";
+  state.workspaceListError = "";
   state.settingsNotice = "";
   state.settingsPending = "";
   state.routeError = null;
@@ -476,7 +480,11 @@ async function applyRoute() {
   }
   if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) prepareAgentRoute(route);
   try {
-    if (!await loadBoardList(version)) return;
+    const [boardsLoaded, listsLoaded] = await Promise.all([
+      loadBoardList(version),
+      loadWorkspaceListIndex(version),
+    ]);
+    if (!boardsLoaded || !listsLoaded) return;
     if (routeVersion !== version) return;
     if (route.name === "agents" || route.name === "agent-new") {
       state.settings = false;
@@ -606,6 +614,17 @@ async function loadBoardList(expectedRouteVersion) {
   return true;
 }
 
+async function loadWorkspaceListIndex(expectedRouteVersion) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const expectedListVersion = workspaceListVersion;
+  const data = await api.get("/api/v1/lists");
+  if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+  if (expectedListVersion !== workspaceListVersion) return true;
+  state.workspaceLists = data.lists || [];
+  return true;
+}
+
 async function loadBoards(selectId, expectedRouteVersion) {
   const sessionVersion = authVersion;
   if (!await loadBoardList(expectedRouteVersion)) return false;
@@ -649,12 +668,8 @@ function workspaceQuery(route, cursor = "") {
 async function loadWorkspace(route, expectedRouteVersion) {
   const sessionVersion = authVersion;
   state.workspaceLoading = true;
-  const [listData, taskData] = await Promise.all([
-    api.get("/api/v1/lists"),
-    api.get(`/api/v1/tasks?${workspaceQuery(route)}`),
-  ]);
+  const taskData = await api.get(`/api/v1/tasks?${workspaceQuery(route)}`);
   if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
-  state.workspaceLists = listData.lists || [];
   state.workspaceTasks = taskData.tasks || [];
   state.workspaceNextCursor = taskData.nextCursor || "";
   state.workspaceScope = route.scope || "all";
@@ -751,6 +766,8 @@ function resetAuthenticatedState() {
   state.priorityFilter = "";
   state.weekStart = "";
   state.workspaceLists = [];
+  state.workspaceListError = "";
+  state.workspaceListPending = false;
   state.workspaceTasks = [];
   state.workspaceScope = "all";
   state.workspaceListID = "";
@@ -846,6 +863,66 @@ function synchronizeWorkspaceListsForBoard(board) {
     : state.workspaceLists.slice(0, firstBoardListIndex).filter(list => list.boardId !== board.id).length;
   retained.splice(insertionIndex, 0, ...lists);
   state.workspaceLists = retained;
+}
+
+function workspaceListCount(boardID) {
+  return state.workspaceLists.filter(list => list.boardId === boardID).length;
+}
+
+function boardWithWorkspaceListCapacity() {
+  const limit = Number(state.maxListsPerBoard);
+  if (!Number.isFinite(limit) || limit < 1) return null;
+  return state.boards.find(board => workspaceListCount(board.id) < limit) || null;
+}
+
+async function createWorkspaceList() {
+  if (state.workspaceListPending) return false;
+  const name = prompt("List name")?.trim();
+  if (!name) return false;
+  const board = boardWithWorkspaceListCapacity();
+  if (!board) {
+    state.workspaceListError = state.boards.length
+      ? "Every board has reached the list limit for your plan."
+      : "Create a board before adding a list.";
+    render();
+    return false;
+  }
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  state.workspaceListPending = true;
+  state.workspaceListError = "";
+  render();
+  try {
+    const created = await api.post(`/api/v1/boards/${board.id}/buckets`, { name });
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    const list = {
+      ...created,
+      boardId: created.boardId || board.id,
+      boardName: created.boardName || board.name || "",
+      name: created.name || name,
+      isInbox: Boolean(created.isInbox),
+      openCount: Number(created.openCount || 0),
+    };
+    workspaceListVersion += 1;
+    state.workspaceLists = [...state.workspaceLists.filter(item => item.id !== list.id), list];
+    if (state.board?.id === board.id) {
+      state.board = {
+        ...state.board,
+        buckets: [...(state.board.buckets || []).filter(item => item.id !== list.id), list],
+      };
+      synchronizeWorkspaceListsForBoard(state.board);
+    }
+    state.workspaceListPending = false;
+    state.workspaceListError = "";
+    render();
+    return true;
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    state.workspaceListPending = false;
+    state.workspaceListError = err.message;
+    render();
+    return false;
+  }
 }
 
 async function loadCompletedHistory(listID, trigger) {
@@ -1431,7 +1508,8 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
           </div>
         </section>
         <section class="nav-sec workspace-nav">
-          <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list">${icon("plus")}</button></div>
+          <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
+          ${state.workspaceListError ? `<p class="status-error sidebar-list-error" role="alert">${escapeHTML(state.workspaceListError)}</p>` : ""}
           <div class="pages task-nav-pages">
             ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link ${route.name === "workspace" && state.workspaceScope === "list" && state.workspaceListID === list.id ? "on" : ""}" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b>${list.openCount || ""}</b></a>`).join("")}
           </div>
@@ -2245,7 +2323,7 @@ function assignWorkHTML() {
 }
 
 function assignmentListsForBoard(boardID) {
-  if (!boardID || state.board?.id !== boardID) return [];
+  if (!boardID) return [];
   return state.workspaceLists.filter(list => list.boardId === boardID);
 }
 
@@ -2439,6 +2517,17 @@ function settingsHTML() {
       <aside class="sidebar settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         ${globalNewTaskButtonHTML()}
+        <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Workspace">
+          <div class="pages task-nav-pages">
+            <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
+            <a class="nav-link" href="${TASKS_PATH}">${icon("rows")}<span>All tasks</span></a>
+          </div>
+          <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
+          ${state.workspaceListError ? `<p class="status-error sidebar-list-error" role="alert">${escapeHTML(state.workspaceListError)}</p>` : ""}
+          <div class="pages task-nav-pages">
+            ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b>${list.openCount || ""}</b></a>`).join("")}
+          </div>
+        </section>
         <p class="settings-sidebar-title">Account settings</p>
         <nav class="settings-nav" aria-label="Settings">
           ${SETTINGS_PAGES.map(item => `<a class="page-row icon-label settings-nav-link ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" ${item.id === page.id ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${item.label}</span></a>`).join("")}
@@ -2698,11 +2787,6 @@ function bindWorkspace() {
     navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
   });
   document.querySelector("#new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
-  document.querySelector("#new-workspace-list")?.addEventListener("click", async () => {
-    const name = prompt("List name");
-    if (!name?.trim() || !state.boards[0]) return;
-    await runMutation(() => api.post(`/api/v1/boards/${state.boards[0].id}/buckets`, { name: name.trim() }), reload);
-  });
   document.querySelector("#workspace-load-more")?.addEventListener("click", loadMoreWorkspaceTasks);
   bindDrag();
   bindWorkspaceDetail();
@@ -3057,6 +3141,7 @@ function bindAppShell() {
   };
   bindThemeControls();
   bindGlobalNewTask();
+  bindWorkspaceListControl();
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
   document.querySelectorAll("[data-board-settings]").forEach(el => el.onclick = () => navigate(boardSettingsPath(el.dataset.boardSettings)));
   document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
@@ -3083,6 +3168,10 @@ function bindAppShell() {
     else render();
   };
   return sidebar;
+}
+
+function bindWorkspaceListControl() {
+  document.querySelector("#new-workspace-list")?.addEventListener("click", createWorkspaceList);
 }
 
 async function captureInboxTask(button) {
@@ -3480,6 +3569,7 @@ function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submit
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   bindGlobalNewTask();
+  bindWorkspaceListControl();
   document.querySelectorAll(".settings-nav-link").forEach(el => el.onclick = event => {
     event.preventDefault();
     navigate(el.getAttribute("href"));
