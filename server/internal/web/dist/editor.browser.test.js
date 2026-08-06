@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -67,7 +67,13 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       state.createdLists.push(created);
       return json(response, created, 201);
     }
-    if (url.pathname === "/api/v1/lists" && request.method === "GET") return json(response, { lists: state.lists });
+    if (url.pathname === "/api/v1/lists" && request.method === "GET") {
+      if (state.failNextLists) {
+        state.failNextLists = false;
+        return json(response, { error: "Could not refresh lists" }, 500);
+      }
+      return json(response, { lists: state.lists });
+    }
     if (url.pathname === "/api/v1/agents" && request.method === "GET") return json(response, { agents: state.agents, maxAgents: 5 });
     const permanentAgentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/permanent$/);
     if (permanentAgentMatch && request.method === "DELETE") {
@@ -1023,6 +1029,69 @@ test("background agent mutations refresh counts without resetting settings draft
 
   assert.equal(await settingsName.inputValue(), "Unsaved settings name");
   assert.equal(await settingsPurpose.inputValue(), "Unsaved focused purpose");
+  assert.equal(await settingsPurpose.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a background task failure does not reset an agent settings draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Task save that will fail");
+  state.delayNextStatus = true;
+  state.failNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  const settingsName = page.locator("#agent-settings-name");
+  const settingsPurpose = page.locator("#agent-settings-purpose");
+  await settingsName.fill("Unsaved agent name");
+  await settingsPurpose.fill("Unsaved purpose during task failure");
+
+  state.releaseStatus();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t save “Task save that will fail”: Could not save task" }).waitFor();
+
+  assert.equal(await settingsName.inputValue(), "Unsaved agent name");
+  assert.equal(await settingsPurpose.inputValue(), "Unsaved purpose during task failure");
+  assert.equal(await settingsPurpose.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a background list-refresh failure is visible without resetting agent settings", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Task saved before list refresh fails");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Later successful list refresh");
+  state.delayNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  const settingsPurpose = page.locator("#agent-settings-purpose");
+  await settingsPurpose.fill("Unsaved purpose during list refresh");
+  state.failNextLists = true;
+
+  state.releaseStatus();
+  await page.getByRole("alert").filter({ hasText: "Could not refresh lists" }).waitFor();
+
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Task saved before list refresh fails");
+  assert.equal(await settingsPurpose.inputValue(), "Unsaved purpose during list refresh");
+  assert.equal(await settingsPurpose.evaluate(element => element === document.activeElement), true);
+
+  state.releaseSubtask();
+  await page.locator("[data-workspace-list-error]").waitFor({ state: "hidden" });
+
+  assert.equal(state.subtasks.some(task => task.title === "Later successful list refresh"), true);
+  assert.equal(await settingsPurpose.inputValue(), "Unsaved purpose during list refresh");
   assert.equal(await settingsPurpose.evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });

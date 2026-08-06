@@ -1566,7 +1566,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
         </section>
         <section class="nav-sec workspace-nav">
           <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
-          ${state.workspaceListError ? `<p class="status-error sidebar-list-error" role="alert">${escapeHTML(state.workspaceListError)}</p>` : ""}
+          <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
           <div class="pages task-nav-pages">
             ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link ${route.name === "workspace" && state.workspaceScope === "list" && state.workspaceListID === list.id ? "on" : ""}" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b data-workspace-count="${escapeAttr(list.id)}">${list.openCount || ""}</b></a>`).join("")}
           </div>
@@ -1591,6 +1591,20 @@ function syncWorkspaceSidebarCounts() {
   document.querySelectorAll("[data-workspace-count]").forEach(element => {
     const count = counts.get(element.dataset.workspaceCount) || 0;
     element.textContent = count || "";
+  });
+}
+
+function syncWorkspaceListError() {
+  document.querySelectorAll("[data-workspace-list-error]").forEach(element => {
+    element.textContent = state.workspaceListError;
+    element.hidden = !state.workspaceListError;
+  });
+}
+
+function syncAgentTaskMutationError() {
+  document.querySelectorAll("[data-agent-task-mutation-error]").forEach(element => {
+    element.textContent = state.agentTaskMutationError;
+    element.hidden = !state.agentTaskMutationError;
   });
 }
 
@@ -2096,7 +2110,7 @@ function agentDetailBodyHTML() {
         <p>This agent cannot connect or receive new work. Its assigned task history stays available.</p>
       </section>` : ""}
     ${state.agentAssignNotice ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentAssignNotice)}</p>` : ""}
-    ${state.agentTaskMutationError ? `<p class="status-error" role="alert">${escapeHTML(state.agentTaskMutationError)}</p>` : ""}
+    <p class="status-error" role="alert" data-agent-task-mutation-error ${state.agentTaskMutationError ? "" : "hidden"}>${escapeHTML(state.agentTaskMutationError)}</p>
     <section id="agent-panel-overview" class="agent-tab-panel" role="tabpanel" aria-labelledby="agent-tab-overview" tabindex="0" ${current === "overview" ? "" : "hidden"}>
       ${current === "overview" ? agentOverviewHTML(agent) : ""}
     </section>
@@ -2528,7 +2542,7 @@ function settingsHTML() {
             <a class="nav-link" href="${TASKS_PATH}">${icon("rows")}<span>All tasks</span></a>
           </div>
           <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
-          ${state.workspaceListError ? `<p class="status-error sidebar-list-error" role="alert">${escapeHTML(state.workspaceListError)}</p>` : ""}
+          <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
           <div class="pages task-nav-pages">
             ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b>${list.openCount || ""}</b></a>`).join("")}
           </div>
@@ -2929,6 +2943,10 @@ function bindWorkspaceDetail(options = {}) {
       state.agentTaskMutationError = message;
       if (state.selectedTask) state.error = message;
     } else state.error = message;
+    if (state.view === "agent-settings" && !state.selectedTask) {
+      syncAgentTaskMutationError();
+      return true;
+    }
     render();
     restoreDetailFocus(focus);
     return true;
@@ -3045,11 +3063,13 @@ function bindWorkspaceDetail(options = {}) {
         if (!loaded || !boundContextIsCurrent() || state.view !== refreshView) return false;
         state.workspaceListError = "";
         syncWorkspaceSidebarCounts();
+        syncWorkspaceListError();
         return true;
       } catch (err) {
         if (!boundContextIsCurrent() || state.view !== refreshView) return false;
         if (handleError(err)) return false;
         state.workspaceListError = err.message;
+        syncWorkspaceListError();
         return false;
       }
     }
