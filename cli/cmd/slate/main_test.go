@@ -53,6 +53,15 @@ func TestHelpDocumentsEveryResource(t *testing.T) {
 	}
 }
 
+func TestBoardsHelpDoesNotAdvertiseLegacyTaskLimits(t *testing.T) {
+	if strings.Contains(helpText["boards"], "--max-tasks-per-list") {
+		t.Fatal("normal board help advertises legacy per-list task metadata")
+	}
+	if strings.Contains(strings.ToLower(legacyMaxTasksPerListUsage), "max active") || !strings.Contains(legacyMaxTasksPerListUsage, "does not limit tasks") {
+		t.Fatalf("legacy flag help is misleading: %q", legacyMaxTasksPerListUsage)
+	}
+}
+
 func TestTasksPullNeedsNoOwner(t *testing.T) {
 	var requestedPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
