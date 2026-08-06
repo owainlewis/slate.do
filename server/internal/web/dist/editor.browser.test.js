@@ -1498,6 +1498,54 @@ test("a delayed parent move reconciles descendant locations across agent tabs", 
   assert.deepEqual(pageErrors, []);
 });
 
+test("a parent list move preserves and keeps locked a saving child detail", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  const now = new Date();
+  const offset = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+  const tuesday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1);
+  const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  state.tasks[0].scheduledDate = formatDate(monday);
+  await page.goto(`${origin}/app/week`);
+  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
+  state.delayNextCompletion = true;
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator(`.workspace-week [data-calendar-date="${formatDate(tuesday)}"]`));
+  await waitFor(() => typeof state.releaseCompletion === "function");
+
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "Research agent", exact: true }).click();
+  await page.getByRole("tab", { name: "Work", exact: true }).click();
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  const title = page.getByLabel("Title", { exact: true });
+  const brief = page.getByLabel("Task brief", { exact: true });
+  await title.fill("Saving child title");
+  await brief.fill("Saving child brief");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  const back = page.getByRole("button", { name: "Back to agent work", exact: true });
+  await back.focus();
+
+  Object.assign(state.tasks[0], { bucketId: "list-inbox", listName: "Inbox" });
+  state.subtasks.filter(task => task.parentTaskId === "task-parent").forEach(task => Object.assign(task, { bucketId: "list-inbox", listName: "Inbox" }));
+  state.releaseCompletion();
+  await page.waitForFunction(() => document.querySelector("#workspace-detail-list")?.value === "list-inbox");
+
+  assert.equal(await page.locator(".detail-context span").first().textContent(), "Inbox");
+  assert.equal(await title.inputValue(), "Saving child title");
+  assert.equal(await brief.inputValue(), "Saving child brief");
+  assert.equal(await back.evaluate(element => element === document.activeElement), true);
+  for (const label of ["Title", "Task brief", "Status", "List", "Priority", "Owner", "Planned"]) {
+    assert.equal(await page.getByLabel(label, { exact: true }).isDisabled(), true, `${label} should stay disabled`);
+  }
+
+  state.releaseStatus();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+  assert.equal(state.subtasks.find(task => task.id === "task-child").bucketId, "list-inbox");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a delayed off-page subtask toggle reconciles overview totals", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
   state.hideSubtasksFromAgentOverview = true;

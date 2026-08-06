@@ -1150,6 +1150,60 @@ test("moving a parent reconciles cached descendant locations", () => {
   vm.runInContext(`state.boards = []; state.workspaceLists = []; state.agentDetail = null; state.agentWorkPage = null;`, app);
 });
 
+test("moving a parent reconciles an open child detail without losing its draft", () => {
+  vm.runInContext(`
+    savedParentMoveRender = render;
+    parentMoveRenderCount = 0;
+    render = () => { parentMoveRenderCount += 1; };
+    parentMoveListControl = { value: "list-old" };
+    parentMoveContext = { textContent: "YouTube" };
+    globalThis.document = { querySelector: selector => selector === "#workspace-detail-list" ? parentMoveListControl : selector === ".detail-context span" ? parentMoveContext : null };
+    state.boards = [{ id: "board-one", name: "Workspace" }];
+    state.workspaceLists = [
+      { id: "list-old", boardId: "board-one", name: "YouTube" },
+      { id: "list-new", boardId: "board-one", name: "Inbox" },
+    ];
+    state.board = { id: "board-one", buckets: [
+      { id: "list-old", tasks: [{ id: "parent", bucketId: "list-old", status: "working" }] },
+      { id: "list-new", tasks: [] },
+    ] };
+    state.workspaceTasks = [{ id: "child", parentTaskId: "parent", bucketId: "list-old", listName: "YouTube", title: "Child" }];
+    state.selectedSubtasks = [];
+    state.selectedTask = { id: "child", parentTaskId: "parent", bucketId: "list-old", listName: "YouTube", title: "Live child title", description: "Live child brief", status: "queued" };
+    state.taskDetailDrafts = { child: { title: "Live child title", description: "Live child brief", status: "queued", bucketId: "list-old", priority: "p1", assigneeAgentId: "", scheduledDate: "" } };
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+  `, app);
+
+  app.reconcileTaskCompletion(
+    { id: "parent", bucketId: "list-new", status: "working", done: false },
+    { id: "parent", bucketId: "list-old", status: "working", done: false },
+  );
+
+  assert.equal(vm.runInContext("state.workspaceTasks[0].bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.workspaceTasks[0].listName", app), "Inbox");
+  assert.equal(vm.runInContext("state.selectedTask.bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.selectedTask.listName", app), "Inbox");
+  assert.equal(vm.runInContext("state.selectedTask.title", app), "Live child title");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.child.bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.child.description", app), "Live child brief");
+  assert.equal(vm.runInContext("parentMoveListControl.value", app), "list-new");
+  assert.equal(vm.runInContext("parentMoveContext.textContent", app), "Inbox");
+  assert.equal(vm.runInContext("parentMoveRenderCount", app), 0);
+
+  vm.runInContext(`
+    render = savedParentMoveRender;
+    state.boards = [];
+    state.workspaceLists = [];
+    state.board = null;
+    state.workspaceTasks = [];
+    state.selectedSubtasks = [];
+    state.selectedTask = null;
+    state.taskDetailDrafts = {};
+    delete globalThis.document;
+  `, app);
+});
+
 test("off-page agent mutations reconcile bounded overview totals", () => {
   vm.runInContext(`
     state.agentDetail = {

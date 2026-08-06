@@ -2990,16 +2990,16 @@ function reconcileAgentTaskCaches(task, { deleted = false, previousTask = null }
 
 function taskDraftFromCurrentForm(task) {
   const form = globalThis.document?.querySelector?.("#workspace-detail-form");
-  if (!form || typeof FormData === "undefined") return null;
-  const data = new FormData(form);
+  if (!form) return null;
+  const value = name => String((form.querySelector?.(`[name="${name}"]`) || form.elements?.namedItem?.(name))?.value || "");
   return {
-    title: String(data.get("title") || ""),
-    description: String(data.get("description") || ""),
-    status: String(data.get("status") || "queued"),
-    bucketId: task.parentTaskId ? task.bucketId : String(data.get("bucketId") || ""),
-    priority: String(data.get("priority") || ""),
-    assigneeAgentId: String(data.get("assigneeAgentId") || ""),
-    scheduledDate: String(data.get("scheduledDate") || ""),
+    title: value("title"),
+    description: value("description"),
+    status: value("status") || "queued",
+    bucketId: task.parentTaskId ? task.bucketId : value("bucketId"),
+    priority: value("priority"),
+    assigneeAgentId: value("assigneeAgentId"),
+    scheduledDate: value("scheduledDate"),
   };
 }
 
@@ -3797,6 +3797,30 @@ function reconcileTaskCompletion(updated, previousTask) {
   state.selectedSubtasks = merge(state.selectedSubtasks);
   for (const list of state.board?.buckets || []) list.tasks = merge(list.tasks);
   reconcileAgentTaskCaches(reconciled, { previousTask });
+
+  const movedParent = !reconciled.parentTaskId && previousTask && previousTask.bucketId !== reconciled.bucketId;
+  if (movedParent) {
+    const location = taskWithResolvedLocation(reconciled);
+    const moveChildren = items => (items || []).map(item => item.parentTaskId === reconciled.id ? {
+      ...item,
+      boardId: location.boardId,
+      boardName: location.boardName,
+      bucketId: location.bucketId,
+      bucketName: location.bucketName,
+      listName: location.bucketName,
+    } : item);
+    state.workspaceTasks = moveChildren(state.workspaceTasks);
+    state.selectedSubtasks = moveChildren(state.selectedSubtasks);
+    if (state.selectedTask?.parentTaskId === reconciled.id) {
+      const draft = taskDraftFromCurrentForm(state.selectedTask) || state.taskDetailDrafts[state.selectedTask.id] || {};
+      state.selectedTask = { ...moveChildren([state.selectedTask])[0], ...draft, bucketId: location.bucketId };
+      state.taskDetailDrafts[state.selectedTask.id] = { ...draft, bucketId: location.bucketId };
+      const listControl = globalThis.document?.querySelector?.("#workspace-detail-list");
+      if (listControl) listControl.value = location.bucketId;
+      const context = globalThis.document?.querySelector?.(".detail-context span");
+      if (context) context.textContent = location.bucketName || "Inbox";
+    }
+  }
 
   if (Boolean(previousTask.done) !== reconciled.done) {
     const list = state.workspaceLists.find(item => item.id === (reconciled.bucketId || previousTask.bucketId));
