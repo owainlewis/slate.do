@@ -4212,6 +4212,16 @@ async function deleteBoard(id) {
   const userID = state.me?.id;
   await api.del(`/api/v1/boards/${id}`);
   if (!sessionIsCurrent(sessionVersion, userID)) return;
+  if (state.selectedTask && state.selectedTask.boardId !== id) {
+    preserveCurrentTaskDraft();
+    state.boards = state.boards.filter(item => item.id !== id);
+    state.workspaceLists = state.workspaceLists.filter(item => item.boardId !== id);
+    state.workspaceTasks = state.workspaceTasks.filter(item => item.boardId !== id);
+    state.selectedSubtasks = state.selectedSubtasks.filter(item => item.boardId !== id);
+    if (state.board?.id === id) state.board = null;
+    renderPreservingCurrentTaskDetail();
+    return;
+  }
   state.selectedTask = null;
   state.board = null;
   if (!await loadBoards()) return;

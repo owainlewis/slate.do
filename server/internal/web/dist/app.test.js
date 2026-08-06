@@ -2532,6 +2532,45 @@ test("board deletion cannot discard an open task draft without confirmation", as
   app.confirm = () => true;
 });
 
+test("unrelated board deletion preserves edits made while its request is pending", async () => {
+  let releaseDelete;
+  app.pendingBoardDelete = new Promise(resolve => { releaseDelete = resolve; });
+  app.releasePendingBoardDelete = releaseDelete;
+  app.renderBeforePendingBoardDelete = app.render;
+  app.confirm = () => true;
+  vm.runInContext(`
+    authVersion = 56;
+    state.me = { id: "account-a" };
+    state.view = "app";
+    state.boards = [{ id: "board-current", name: "Current" }, { id: "board-other", name: "Other" }];
+    state.board = { id: "board-current", name: "Current", buckets: [] };
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+    state.selectedTask = { id: "task-a", boardId: "board-current", title: "Open task" };
+    state.selectedSubtasks = [];
+    state.taskDetailDrafts = {};
+    state.taskDetailBaselines = { "task-a": taskDetailSnapshot(state.selectedTask) };
+    state.subtaskDraft = "";
+    api.del = async path => {
+      if (path !== "/api/v1/boards/board-other") throw new Error("unexpected delete for " + path);
+      await pendingBoardDelete;
+      return { ok: true };
+    };
+    render = () => {};
+  `, app);
+
+  const deletion = app.deleteBoard("board-other");
+  vm.runInContext('state.subtaskDraft = "Late edit";', app);
+  app.releasePendingBoardDelete();
+  await deletion;
+
+  assert.equal(vm.runInContext("state.selectedTask.id", app), "task-a");
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "Late edit");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.boards.map(board => board.id))", app)), ["board-current"]);
+  assert.equal(vm.runInContext("state.board.id", app), "board-current");
+  vm.runInContext("render = renderBeforePendingBoardDelete;", app);
+});
+
 test("API responses from an old session cannot resume mutation continuations", async () => {
   let releaseOldMutation;
   let continued = false;
