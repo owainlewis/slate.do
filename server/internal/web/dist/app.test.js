@@ -2289,6 +2289,66 @@ test("task detail dirty checks compare every persisted editor field", () => {
   `, app);
 });
 
+test("board controls cannot discard unsaved task changes", () => {
+  vm.runInContext(`
+    state.selectedTask = { id: "task-a", title: "Saved title" };
+    state.taskDetailBaselines = { "task-a": taskDetailSnapshot(state.selectedTask) };
+    state.taskDetailDrafts = { "task-a": { ...taskDetailSnapshot(state.selectedTask), title: "Edited title" } };
+    state.subtaskDraft = "Unfinished step";
+    boardControlConfirmCalls = 0;
+    savedBoardControlConfirm = globalThis.confirm;
+    globalThis.confirm = () => { boardControlConfirmCalls += 1; return false; };
+  `, app);
+
+  assert.equal(app.closeTaskDetailForBoardControl(), false);
+  assert.equal(vm.runInContext("state.selectedTask.id", app), "task-a");
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "Unfinished step");
+  assert.equal(vm.runInContext("boardControlConfirmCalls", app), 1);
+
+  vm.runInContext("globalThis.confirm = () => true;", app);
+  assert.equal(app.closeTaskDetailForBoardControl(), true);
+  assert.equal(vm.runInContext("state.selectedTask", app), null);
+  assert.equal(vm.runInContext("state.subtaskDraft", app), "");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.taskDetailDrafts)", app)), {});
+  vm.runInContext("globalThis.confirm = savedBoardControlConfirm;", app);
+});
+
+test("board controls invalidate a task detail load already in flight", async () => {
+  let releaseDetail;
+  app.pendingBoardControlDetail = new Promise(resolve => { releaseDetail = resolve; });
+  app.releaseBoardControlDetail = releaseDetail;
+  vm.runInContext(`
+    savedBoardControlAPIGet = api.get;
+    savedBoardControlConfirm = globalThis.confirm;
+    state.me = { id: "owner" };
+    state.selectedTask = { id: "task-a", title: "First task" };
+    state.selectedSubtasks = [{ id: "subtask-a" }];
+    state.subtaskPending = true;
+    api.get = async path => {
+      if (path === "/api/v1/tasks/task-b") {
+        await pendingBoardControlDetail;
+        return { id: "task-b", title: "Second task" };
+      }
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
+      throw new Error("unexpected request for " + path);
+    };
+    globalThis.confirm = () => true;
+  `, app);
+
+  const opening = app.openTaskDetail("task-b");
+  assert.equal(app.closeTaskDetailForBoardControl(), true);
+  app.releaseBoardControlDetail();
+
+  assert.equal(await opening, false);
+  assert.equal(vm.runInContext("state.selectedTask", app), null);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.selectedSubtasks)", app)), []);
+  assert.equal(vm.runInContext("state.subtaskPending", app), false);
+  vm.runInContext(`
+    api.get = savedBoardControlAPIGet;
+    globalThis.confirm = savedBoardControlConfirm;
+  `, app);
+});
+
 test("detail can move a parent task between account-wide lists", () => {
   vm.runInContext(`
     state.boards = [{ id: "board", name: "Home" }, { id: "other", name: "Campaigns" }];

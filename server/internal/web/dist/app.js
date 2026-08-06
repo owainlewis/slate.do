@@ -3124,6 +3124,18 @@ function confirmSubtaskDraftDiscard() {
   return true;
 }
 
+function closeTaskDetailForBoardControl() {
+  if (!confirmTaskDetailDiscard()) return false;
+  taskDetailVersion += 1;
+  state.selectedTask = null;
+  state.selectedSubtasks = [];
+  clearTaskDetailDraftTracking();
+  state.subtaskDraft = "";
+  state.subtaskPending = false;
+  state.subtaskError = "";
+  return true;
+}
+
 function clearTaskDetailDraftTracking() {
   state.taskDetailDrafts = {};
   state.taskDetailBaselines = {};
@@ -3796,19 +3808,19 @@ function bindApp() {
   });
   document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.moveNotice = null; render(); });
   document.querySelectorAll("[data-board-mode]").forEach(el => el.onclick = () => {
+    if (!closeTaskDetailForBoardControl()) return;
     state.boardMode = el.dataset.boardMode;
-    state.selectedTask = null;
     render();
   });
   document.querySelector("#flow-list-filter")?.addEventListener("change", event => {
+    if (!closeTaskDetailForBoardControl()) { render(); return; }
     state.flowListId = event.target.value;
-    state.selectedTask = null;
     render();
     document.querySelector("#flow-list-filter")?.focus();
   });
   document.querySelector("#priority-filter")?.addEventListener("change", event => {
+    if (!closeTaskDetailForBoardControl()) { render(); return; }
     state.priorityFilter = event.target.value;
-    state.selectedTask = null;
     render();
     document.querySelector("#priority-filter")?.focus();
   });
