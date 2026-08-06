@@ -1557,7 +1557,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
         <section class="nav-sec workspace-nav">
           <h3>Workspace</h3>
           <div class="pages task-nav-pages">
-            <a class="nav-link ${workspaceOn("inbox") ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b>${inboxCount || ""}</b></a>
+            <a class="nav-link ${workspaceOn("inbox") ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
             <a class="nav-link ${workspaceOn("today") ? "on" : ""}" href="${TODAY_PATH}">${icon("sun")}<span>Today</span></a>
             <a class="nav-link ${workspaceOn("week") ? "on" : ""}" href="${WEEK_PATH}">${icon("calendar")}<span>Week</span></a>
             <a class="nav-link ${workspaceOn("review") ? "on" : ""}" href="${REVIEW_PATH}">${icon("check")}<span>Review</span></a>
@@ -1568,7 +1568,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
           <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
           ${state.workspaceListError ? `<p class="status-error sidebar-list-error" role="alert">${escapeHTML(state.workspaceListError)}</p>` : ""}
           <div class="pages task-nav-pages">
-            ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link ${route.name === "workspace" && state.workspaceScope === "list" && state.workspaceListID === list.id ? "on" : ""}" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b>${list.openCount || ""}</b></a>`).join("")}
+            ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link ${route.name === "workspace" && state.workspaceScope === "list" && state.workspaceListID === list.id ? "on" : ""}" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b data-workspace-count="${escapeAttr(list.id)}">${list.openCount || ""}</b></a>`).join("")}
           </div>
         </section>
         <section class="nav-sec nav-collaborators">
@@ -1583,6 +1583,15 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
         </section>
       </div>
     </aside>`;
+}
+
+function syncWorkspaceSidebarCounts() {
+  const counts = new Map(state.workspaceLists.filter(list => !list.isInbox).map(list => [list.id, Number(list.openCount || 0)]));
+  counts.set("inbox", state.workspaceLists.filter(list => list.isInbox).reduce((total, list) => total + Number(list.openCount || 0), 0));
+  document.querySelectorAll("[data-workspace-count]").forEach(element => {
+    const count = counts.get(element.dataset.workspaceCount) || 0;
+    element.textContent = count || "";
+  });
 }
 
 function themeSwitchHTML(theme) {
@@ -3027,9 +3036,23 @@ function bindWorkspaceDetail(options = {}) {
     }
   };
   const refreshCurrentAgentSurface = async () => {
-    if (!boundAgentID || !["agent-detail", "agent-work"].includes(state.view) || !boundContextIsCurrent()) return false;
+    if (!boundAgentID || !["agent-detail", "agent-work", "agent-settings"].includes(state.view) || !boundContextIsCurrent()) return false;
     const refreshRouteVersion = routeVersion;
     const refreshView = state.view;
+    if (refreshView === "agent-settings") {
+      try {
+        const loaded = await loadWorkspaceListIndex(refreshRouteVersion);
+        if (!loaded || !boundContextIsCurrent() || state.view !== refreshView) return false;
+        state.workspaceListError = "";
+        syncWorkspaceSidebarCounts();
+        return true;
+      } catch (err) {
+        if (!boundContextIsCurrent() || state.view !== refreshView) return false;
+        if (handleError(err)) return false;
+        state.workspaceListError = err.message;
+        return false;
+      }
+    }
     try {
       const [detailResult, listResult] = await Promise.allSettled([
         loadAgentDetail(boundAgentID, {

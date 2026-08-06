@@ -115,7 +115,7 @@ test("sidebar makes tasks, lists, and agents the primary control plane", () => {
 
   const html = app.appHTML();
   for (const label of ["Inbox", "Today", "Week", "Review", "All tasks", "Lists", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
-  assert.match(html, /href="\/app\/lists\/youtube"[^>]*>[\s\S]*?YouTube[\s\S]*?<b>18<\/b>/);
+  assert.match(html, /href="\/app\/lists\/youtube"[^>]*>[\s\S]*?YouTube[\s\S]*?<b data-workspace-count="youtube">18<\/b>/);
   assert.match(html, /id="new-workspace-list"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
   vm.runInContext(`state.workspaceLists = [];`, app);

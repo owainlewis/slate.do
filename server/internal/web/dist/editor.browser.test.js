@@ -942,6 +942,31 @@ test("background agent subtask creation refreshes sidebar list counts", async t 
   assert.deepEqual(pageErrors, []);
 });
 
+test("background agent mutations refresh counts without resetting settings drafts", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Subtask title", { exact: true }).fill("Settings count update");
+  state.delayNextSubtask = true;
+  await page.getByRole("button", { name: "Add subtask", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  const settingsName = page.locator("#agent-settings-name");
+  const settingsPurpose = page.locator("#agent-settings-purpose");
+  await settingsName.fill("Unsaved settings name");
+  await settingsPurpose.fill("Unsaved focused purpose");
+
+  state.releaseSubtask();
+  await page.getByRole("link", { name: /YouTube.*3/ }).waitFor();
+
+  assert.equal(await settingsName.inputValue(), "Unsaved settings name");
+  assert.equal(await settingsPurpose.inputValue(), "Unsaved focused purpose");
+  assert.equal(await settingsPurpose.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("failed subtask mutations remain visible across same-agent navigation", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
