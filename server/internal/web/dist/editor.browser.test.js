@@ -113,6 +113,17 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       state.lists.find(list => list.id === "list-inbox").openCount += 1;
       return json(response, created, 201);
     }
+    const bucketTaskMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)\/tasks$/);
+    if (bucketTaskMatch && request.method === "POST") {
+      const input = await requestJSON(request);
+      const list = state.lists.find(item => item.id === bucketTaskMatch[1]);
+      if (!list) return json(response, { error: "list not found" }, 404);
+      const created = { id: `task-created-${state.created.length + 1}`, boardId: list.boardId, bucketId: list.id, listName: list.name, title: input.title, description: input.description || "", scheduledDate: input.scheduledDate || "", kind: "action", done: false, status: "queued", priority: "", assigneeAgentId: input.assigneeAgentId || "" };
+      state.tasks.unshift(created);
+      state.created.push(created);
+      list.openCount += 1;
+      return json(response, created, 201);
+    }
     const subtaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/subtasks$/);
     if (subtaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
@@ -405,6 +416,10 @@ test("a direct agent route can create a list on a board with capacity and assign
   await list.selectOption(state.createdLists[0].id);
   assert.equal(await list.inputValue(), state.createdLists[0].id);
   assert.equal(await list.locator("option", { hasText: "Launch plan" }).count(), 1);
+  await page.getByLabel("Title", { exact: true }).fill("Research launch examples");
+  await page.getByRole("button", { name: "Create item", exact: true }).click();
+  await page.getByText('"Research launch examples" was assigned to Research agent.', { exact: true }).waitFor();
+  assert.equal(await page.locator('a[href="/app/lists/list-created-1"] b').textContent(), "1");
   assert.deepEqual(pageErrors, []);
 });
 

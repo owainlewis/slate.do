@@ -4355,16 +4355,24 @@ async function refreshAgentSurface() {
   const route = parseRoute(location.pathname);
   if (!["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return;
   const version = routeVersion;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
   try {
-    const loaded = await loadAgentDetail(route.agentId, {
-      includeWorkPage: route.name === "agent-work",
-      page: workPageFromLocation(),
-      sessionVersion: authVersion,
-      userID: state.me?.id,
-      expectedRouteVersion: version,
-    });
-    if (!loaded || version !== routeVersion) return false;
+    const [detailResult, listResult] = await Promise.allSettled([
+      loadAgentDetail(route.agentId, {
+        includeWorkPage: route.name === "agent-work",
+        page: workPageFromLocation(),
+        sessionVersion,
+        userID,
+        expectedRouteVersion: version,
+      }),
+      loadWorkspaceListIndex(version),
+    ]);
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return false;
+    if (detailResult.status === "rejected") throw detailResult.reason;
+    if (!detailResult.value) return false;
     state.agentDetailLoadState = "ready";
+    state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
     render();
     return true;
   } catch (err) {
