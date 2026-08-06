@@ -610,9 +610,11 @@ test("a delayed parent move reconciles descendant locations across agent tabs", 
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
+  const detailRequestsBeforeRelease = state.requests.filter(request => request === "GET /api/v1/agents/agent-research").length;
 
   state.releaseStatus();
   await waitFor(() => state.subtasks.find(item => item.id === "task-child")?.bucketId === "list-inbox");
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/agents/agent-research").length > detailRequestsBeforeRelease);
   await page.getByRole("button", { name: /Publish task-first agents video/ }).getByText("Workspace / Inbox", { exact: true }).waitFor();
   await page.getByRole("button", { name: /Research examples/ }).getByText("Workspace / Inbox", { exact: true }).waitFor();
 
@@ -768,6 +770,29 @@ test("a delayed parent delete removes its assigned subtasks from agent work", as
   assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).count(), 0);
   assert.equal(await page.getByText("Research examples", { exact: true }).count(), 0);
   assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.equal(await page.getByRole("button", { name: "Assign work", exact: true }).evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a parent cascade closes a child detail opened during deletion", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  state.delayNextDelete = true;
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete task", exact: true }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  await page.getByRole("button", { name: /Research examples/ }).click();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
+
+  state.releaseDelete();
+  await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
+  await page.getByText("No assigned work.", { exact: true }).waitFor();
+
+  assert.equal(state.tasks.some(item => item.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(item => item.parentTaskId === "task-parent"), false);
   assert.equal(await page.getByRole("button", { name: "Assign work", exact: true }).evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });

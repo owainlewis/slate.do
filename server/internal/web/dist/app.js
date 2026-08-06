@@ -2963,18 +2963,19 @@ function bindWorkspaceDetail(options = {}) {
       return false;
     }
   };
-  const refreshCurrentAgentWorkPage = async () => {
-    if (!boundAgentID || state.view !== "agent-work" || !boundContextIsCurrent()) return false;
+  const refreshCurrentAgentSurface = async () => {
+    if (!boundAgentID || !["agent-detail", "agent-work"].includes(state.view) || !boundContextIsCurrent()) return false;
     const refreshRouteVersion = routeVersion;
+    const refreshView = state.view;
     try {
       const loaded = await loadAgentDetail(boundAgentID, {
-        includeWorkPage: true,
+        includeWorkPage: refreshView === "agent-work",
         page: workPageFromLocation(),
         sessionVersion: boundSessionVersion,
         userID: boundUserID,
         expectedRouteVersion: refreshRouteVersion,
       });
-      if (!loaded || !boundContextIsCurrent() || state.view !== "agent-work") return false;
+      if (!loaded || !boundContextIsCurrent() || state.view !== refreshView) return false;
       state.agentDetailLoadState = "ready";
       if (state.selectedTask) return true;
       const agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || "";
@@ -2984,7 +2985,7 @@ function bindWorkspaceDetail(options = {}) {
       if (agentControlFocusID) document.getElementById(agentControlFocusID)?.focus();
       return true;
     } catch (err) {
-      if (!boundContextIsCurrent() || state.view !== "agent-work") return false;
+      if (!boundContextIsCurrent() || state.view !== refreshView) return false;
       if (handleError(err)) return false;
       state.agentTaskMutationError = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
       if (!state.selectedTask) render();
@@ -3029,7 +3030,7 @@ function bindWorkspaceDetail(options = {}) {
       const updated = await api.patch(`/api/v1/tasks/${encodeURIComponent(subtask.id)}/status`, { status: subtask.done ? "queued" : "done" });
       reconcileLoadedTask(updated, { previousTask: subtask });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
-        await refreshCurrentAgentWorkPage();
+        await refreshCurrentAgentSurface();
         if (state.selectedTask?.id === parentID) {
           const focus = captureDetailFocus();
           preserveTaskDraft();
@@ -3130,7 +3131,20 @@ function bindWorkspaceDetail(options = {}) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.filter(item => item.id !== taskID);
         state.selectedSubtasks = state.selectedSubtasks.filter(item => item.id !== taskID);
-        await refreshCurrentAgentWorkPage();
+        await refreshCurrentAgentSurface();
+        const selectedTaskWasDeleted = deletedTasks.some(task => task.id === state.selectedTask?.id);
+        if (selectedTaskWasDeleted) {
+          taskDetailVersion += 1;
+          for (const task of deletedTasks) delete state.taskDetailDrafts[task.id];
+          state.selectedTask = null;
+          state.selectedSubtasks = [];
+          state.subtaskDraft = "";
+          state.subtaskPending = false;
+          state.subtaskError = "";
+          state.agentTaskFocusID = taskID;
+          render();
+          return;
+        }
         if (state.selectedTask?.id !== taskID) return;
         delete state.taskDetailDrafts[taskID];
         state.subtaskDraft = "";
@@ -3200,7 +3214,7 @@ function bindWorkspaceDetail(options = {}) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
-        await refreshCurrentAgentWorkPage();
+        await refreshCurrentAgentSurface();
         return;
       }
       if (parentTaskID) {
