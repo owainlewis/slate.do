@@ -2970,6 +2970,45 @@ function taskDraftFromCurrentForm(task) {
   };
 }
 
+function preserveCurrentTaskDraft() {
+  if (!state.selectedTask) return false;
+  const draft = taskDraftFromCurrentForm(state.selectedTask);
+  if (!draft) return false;
+  state.taskDetailDrafts[state.selectedTask.id] = draft;
+  state.selectedTask = { ...state.selectedTask, ...draft };
+  return true;
+}
+
+function captureTaskDetailFocus() {
+  const documentRef = globalThis.document;
+  if (!documentRef) return null;
+  const active = documentRef.activeElement;
+  if (!active || !documentRef.querySelector("[data-detail-surface]")?.contains(active)) return null;
+  return {
+    id: active.id,
+    ariaLabel: active.getAttribute("aria-label"),
+    openTask: active.dataset?.openTask,
+    toggleSubtask: active.dataset?.toggleSubtask,
+  };
+}
+
+function restoreTaskDetailFocus(focus) {
+  const documentRef = globalThis.document;
+  if (!focus || !documentRef) return;
+  const element = focus.id ? documentRef.getElementById(focus.id)
+    : focus.openTask ? documentRef.querySelector(`[data-open-task="${focus.openTask}"]`)
+      : focus.toggleSubtask ? documentRef.querySelector(`[data-toggle-subtask="${focus.toggleSubtask}"]`)
+        : focus.ariaLabel ? [...documentRef.querySelectorAll("[aria-label]")].find(item => item.getAttribute("aria-label") === focus.ariaLabel) : null;
+  element?.focus();
+}
+
+function renderPreservingCurrentTaskDetail() {
+  const focus = captureTaskDetailFocus();
+  preserveCurrentTaskDraft();
+  render();
+  restoreTaskDetailFocus(focus);
+}
+
 function bindWorkspaceDetail(options = {}) {
   if (!state.selectedTask) return;
   const refresh = options.refresh || reload;
@@ -3040,12 +3079,7 @@ function bindWorkspaceDetail(options = {}) {
     return agentCacheChanged;
   };
   const taskDraftFromForm = taskDraftFromCurrentForm;
-  const preserveTaskDraft = () => {
-    const draft = taskDraftFromForm(state.selectedTask);
-    if (!draft) return;
-    state.taskDetailDrafts[state.selectedTask.id] = draft;
-    state.selectedTask = { ...state.selectedTask, ...draft };
-  };
+  const preserveTaskDraft = preserveCurrentTaskDraft;
   const reconcileReopenedTaskDetail = updated => {
     if (state.selectedTask?.id !== updated.id) return;
     const baseline = { ...state.selectedTask };
@@ -3069,24 +3103,8 @@ function bindWorkspaceDetail(options = {}) {
     state.selectedTask = merged;
     state.taskDetailDrafts[updated.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
   };
-  const captureDetailFocus = () => {
-    const active = document.activeElement;
-    if (!active || !document.querySelector("[data-detail-surface]")?.contains(active)) return null;
-    return {
-      id: active.id,
-      ariaLabel: active.getAttribute("aria-label"),
-      openTask: active.dataset?.openTask,
-      toggleSubtask: active.dataset?.toggleSubtask,
-    };
-  };
-  const restoreDetailFocus = focus => {
-    if (!focus) return;
-    const element = focus.id ? document.getElementById(focus.id)
-      : focus.openTask ? document.querySelector(`[data-open-task="${focus.openTask}"]`)
-        : focus.toggleSubtask ? document.querySelector(`[data-toggle-subtask="${focus.toggleSubtask}"]`)
-          : focus.ariaLabel ? [...document.querySelectorAll("[aria-label]")].find(item => item.getAttribute("aria-label") === focus.ariaLabel) : null;
-    element?.focus();
-  };
+  const captureDetailFocus = captureTaskDetailFocus;
+  const restoreDetailFocus = restoreTaskDetailFocus;
   const refreshAfterSubtaskMutation = async focus => {
     try {
       if (boundAgentID) preserveTaskDraft();
@@ -3211,6 +3229,21 @@ function bindWorkspaceDetail(options = {}) {
       return false;
     }
   };
+  const refreshCurrentTaskSurface = async () => {
+    const currentRoute = parseRoute(location.pathname);
+    if (currentRoute.name === "workspace") return refreshAfterTaskMutation(boundRouteVersion);
+    if (boundAgentID && currentRoute.agentId === boundAgentID) return refreshCurrentAgentSurface();
+    if (!["agent-detail", "agent-work"].includes(currentRoute.name)) return true;
+    let focus = captureDetailFocus();
+    return refreshAgentSurface({
+      preserveTaskDetail: true,
+      beforeTaskDetailRender: () => {
+        focus = captureDetailFocus() || focus;
+        preserveTaskDraft();
+      },
+      afterTaskDetailRender: () => restoreDetailFocus(focus),
+    });
+  };
   const close = async () => {
     const refreshWorkspace = state.workspaceRefreshOnDetailClose && parseRoute(location.pathname).name === "workspace";
     taskDetailVersion += 1;
@@ -3230,7 +3263,7 @@ function bindWorkspaceDetail(options = {}) {
         if (handleError(err)) return;
         state.workspaceLoading = false;
         state.error = err.message;
-        render();
+        renderPreservingCurrentTaskDetail();
       }
       return;
     }
@@ -3268,7 +3301,7 @@ function bindWorkspaceDetail(options = {}) {
       if (!updated) return;
       reconcileLoadedTask(updated, { previousTask: subtask });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
-        await refreshCurrentAgentSurface();
+        await refreshCurrentTaskSurface();
         if (state.selectedTask?.id === parentID) {
           const focus = captureDetailFocus();
           preserveTaskDraft();
@@ -3314,7 +3347,7 @@ function bindWorkspaceDetail(options = {}) {
       const created = await api.post(`/api/v1/tasks/${parentID}/subtasks`, { title, kind: "action" });
       reconcileLoadedTask(created);
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
-        await refreshCurrentAgentSurface();
+        await refreshCurrentTaskSurface();
         if (state.selectedTask?.id === parentID) {
           const focus = captureDetailFocus();
           preserveTaskDraft();
@@ -3372,7 +3405,7 @@ function bindWorkspaceDetail(options = {}) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         state.workspaceTasks = state.workspaceTasks.filter(item => item.id !== taskID);
         state.selectedSubtasks = state.selectedSubtasks.filter(item => item.id !== taskID);
-        await refreshCurrentAgentSurface();
+        await refreshCurrentTaskSurface();
         const selectedTaskID = state.selectedTask?.id || "";
         const selectedTaskWasDeleted = selectedTaskID === taskID || state.selectedTask?.parentTaskId === taskID;
         if (selectedTaskWasDeleted) {
@@ -3470,7 +3503,7 @@ function bindWorkspaceDetail(options = {}) {
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
         reconcileReopenedTaskDetail(updated);
-        await refreshCurrentAgentSurface();
+        await refreshCurrentTaskSurface();
         return;
       }
       if (parentTaskID) {
@@ -3646,11 +3679,23 @@ function clearTaskMutationError(taskID) {
 }
 
 async function refreshAfterTaskMutation(startedRouteVersion) {
-  if (parseRoute(location.pathname).name === "workspace") {
+  const currentRoute = parseRoute(location.pathname);
+  if (currentRoute.name === "workspace") {
     if (state.selectedTask) {
       state.workspaceRefreshOnDetailClose = true;
       return;
     }
+  } else if (["agent-detail", "agent-work"].includes(currentRoute.name)) {
+    if (state.selectedTask) return true;
+    let focus = captureTaskDetailFocus();
+    return refreshAgentSurface({
+      preserveTaskDetail: true,
+      beforeTaskDetailRender: () => {
+        focus = captureTaskDetailFocus() || focus;
+        preserveCurrentTaskDraft();
+      },
+      afterTaskDetailRender: () => restoreTaskDetailFocus(focus),
+    });
   } else if (state.selectedTask || startedRouteVersion !== routeVersion) {
     return true;
   }
@@ -3661,7 +3706,7 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
     if (refreshRouteVersion !== routeVersion) return false;
     state.workspaceLoading = false;
     state.error = `The task was updated, but this view couldn’t be refreshed: ${err.message}`;
-    render();
+    renderPreservingCurrentTaskDetail();
     return false;
   }
 }
@@ -4682,6 +4727,7 @@ async function refreshAgentSurface(options = {}) {
     clearResolvedAgentTaskRefreshError();
     options.beforeTaskDetailRender?.();
     render();
+    options.afterTaskDetailRender?.();
     return true;
   } catch (err) {
     if (version !== routeVersion) return false;
@@ -5248,7 +5294,7 @@ async function reload() {
   } else {
     if (!await loadBoards(state.board?.id, expectedRouteVersion) || expectedRouteVersion !== routeVersion) return false;
   }
-  render();
+  renderPreservingCurrentTaskDetail();
   return true;
 }
 
