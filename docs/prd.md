@@ -55,7 +55,9 @@ Boards remain an internal compatibility container for existing data and API clie
 
 ### Subtask
 
-A subtask is a real task with its own status, priority, planned date, list, and owner. A task can contain subtasks, but a subtask cannot contain another subtask.
+A subtask is a real task that inherits and remains in its parent task's list while keeping independent status, priority, planned date, and owner. A task can contain subtasks, but a subtask cannot contain another subtask.
+
+In the API, clients create a subtask under `parentTaskId`; Slate derives `listId` from the parent and does not allow independent subtask list assignment. Moving the parent to another list moves its subtasks with it.
 
 The parent detail view shows completed progress and a compact subtask list. Deleting a parent deletes its subtasks.
 

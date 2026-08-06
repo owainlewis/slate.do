@@ -62,6 +62,21 @@ func TestBoardsHelpDoesNotAdvertiseLegacyTaskLimits(t *testing.T) {
 	}
 }
 
+func TestTasksHelpDocumentsSubtaskListOwnership(t *testing.T) {
+	help := helpText["tasks"]
+	for _, want := range []string{
+		"Subtasks are one level deep",
+		"inherit and remain in the parent task's list",
+		"independent status, priority, planned date, and agent assignment",
+		"--list update flag moves top-level tasks only",
+		"Move the parent",
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("task help does not document %q", want)
+		}
+	}
+}
+
 func TestTasksPullNeedsNoOwner(t *testing.T) {
 	var requestedPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

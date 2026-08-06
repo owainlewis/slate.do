@@ -8,7 +8,7 @@ Slate captures work as tasks, organises it into lists, and shows the same work a
 
 The task is the core unit. New tasks enter Inbox, lists provide thinking buckets, and every task can move through Ready, Working, Review, and Done. Lists do not impose hard item limits.
 
-Tasks can have one level of real subtasks for shared human and agent work. Agents execute assigned tasks through the CLI rather than embedded AI actions.
+Tasks can have one level of real subtasks for shared human and agent work. Subtasks inherit and remain in their parent task's list, while keeping independent status, priority, planned date, and owner. Agents execute assigned tasks through the CLI rather than embedded AI actions.
 
 ## Docs
 
@@ -24,7 +24,7 @@ Slate now has an admin-only MVP:
 - Postgres persistence.
 - Admin sign in with a seeded admin.
 - Inbox, account-wide tasks, goal-led Lists, List, Flow and Table views, filters, planned dates, Week and Today views, and theme.
-- One level of subtasks with independent owner and workflow state.
+- One level of subtasks that stay in the parent list with independent owner, status, priority, and planned date.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.

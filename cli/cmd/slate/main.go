@@ -139,6 +139,10 @@ agent can successfully claim a queued task.
 Reuse --idempotency-key when retrying task creation after an uncertain result.
 Task collections omit descriptions. Use "tasks get" for complete task detail.
 Completed pages default to 20 items and return nextCursor for --cursor.
+Subtasks are one level deep. They inherit and remain in the parent task's list,
+while keeping independent status, priority, planned date, and agent assignment.
+The --list update flag moves top-level tasks only. Move the parent when the whole
+task group belongs in another list.
 `,
 }
 
