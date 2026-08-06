@@ -3108,16 +3108,37 @@ function bindWorkspaceDetail(options = {}) {
     const refreshRouteVersion = routeVersion;
     const refreshView = state.view;
     if (refreshView === "agent-settings") {
+      const routeWasLoading = state.agentDetailLoadState === "loading";
       try {
-        const loaded = await loadWorkspaceListIndex(refreshRouteVersion);
-        if (!loaded || !boundContextIsCurrent() || state.view !== refreshView) return false;
-        state.workspaceListError = "";
+        const [detailResult, listResult] = await Promise.allSettled([
+          routeWasLoading ? loadAgentDetail(boundAgentID, {
+            sessionVersion: boundSessionVersion,
+            userID: boundUserID,
+            expectedRouteVersion: refreshRouteVersion,
+          }) : Promise.resolve(true),
+          loadWorkspaceListIndex(refreshRouteVersion),
+        ]);
+        if (!boundContextIsCurrent() || state.view !== refreshView) return false;
+        if (detailResult.status === "rejected") throw detailResult.reason;
+        if (!detailResult.value) return false;
+        if (listResult.status === "fulfilled" && !listResult.value) return false;
+        const completeRouteLoad = routeWasLoading && state.agentDetailLoadState === "loading";
+        if (completeRouteLoad) state.agentDetailLoadState = "ready";
+        state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
         syncWorkspaceSidebarCounts();
         syncWorkspaceListError();
+        if (completeRouteLoad) render();
         return true;
       } catch (err) {
         if (!boundContextIsCurrent() || state.view !== refreshView) return false;
         if (handleError(err)) return false;
+        if (routeWasLoading && state.agentDetailLoadState === "loading") {
+          state.agentDetail = null;
+          state.agentDetailLoadState = err.status === 404 ? "not-found" : err.status === 401 || err.status === 403 ? "unauthorized" : "error";
+          state.agentDetailError = err.message;
+          render();
+          return false;
+        }
         state.workspaceListError = err.message;
         syncWorkspaceListError();
         return false;

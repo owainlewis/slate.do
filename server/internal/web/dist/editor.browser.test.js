@@ -1165,6 +1165,41 @@ test("background agent mutations refresh counts without resetting settings draft
   assert.deepEqual(pageErrors, []);
 });
 
+test("a background mutation completes an agent settings route whose list load it supersedes", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Saved while settings loads");
+  state.delayNextStatus = true;
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => typeof state.releaseStatus === "function");
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+
+  let releaseLists;
+  let listRequests = 0;
+  await page.route("**/api/v1/lists", async route => {
+    listRequests += 1;
+    if (listRequests === 1) await new Promise(resolve => { releaseLists = resolve; });
+    await route.continue();
+  });
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  await waitFor(() => typeof releaseLists === "function");
+  state.releaseStatus();
+
+  await waitFor(() => listRequests >= 2);
+  await page.locator("#agent-settings-purpose").waitFor();
+  const purpose = page.locator("#agent-settings-purpose");
+  await purpose.fill("Draft after background route recovery");
+  releaseLists();
+  await page.waitForTimeout(50);
+
+  assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research/settings");
+  assert.equal(await page.getByRole("heading", { name: "Research agent", exact: true }).isVisible(), true);
+  assert.equal(await purpose.inputValue(), "Draft after background route recovery");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a background task failure does not reset an agent settings draft", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
