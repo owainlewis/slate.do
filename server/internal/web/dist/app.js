@@ -190,6 +190,8 @@ const state = {
   workspaceFiltersOpen: false,
   theme: "",
   moveNotice: null,
+  newTaskRecovery: null,
+  newTaskCapturePending: false,
   routeError: null,
 };
 
@@ -427,6 +429,7 @@ let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
 let workspaceListLoadVersion = 0;
 let workspaceLoadVersion = 0;
+let newTaskCaptureVersion = 0;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
 const taskDetailFieldEdits = new Map();
@@ -885,6 +888,8 @@ function resetAuthenticatedState() {
   state.agentRefreshOnDetailClose = "";
   state.workspaceFiltersOpen = false;
   state.theme = "";
+  state.newTaskRecovery = null;
+  state.newTaskCapturePending = false;
   state.routeError = null;
 }
 
@@ -1229,6 +1234,7 @@ function notFoundHTML() {
         <h1>Not found.</h1>
         <p>That page does not exist${state.me ? ", or the board is no longer available to you" : ""}.</p>
         <button class="primary" id="not-found-continue" type="button">${state.me ? "Open app" : "Go to slate.do"}</button>
+        ${newTaskRecoveryNoticeHTML()}
       </div>
     </section>`;
 }
@@ -1236,6 +1242,7 @@ function notFoundHTML() {
 function bindNotFound() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#not-found-continue").onclick = state.me ? openApp : goHome;
+  bindNewTaskRecoveryActions();
 }
 
 function routeErrorHTML() {
@@ -1259,6 +1266,7 @@ function routeErrorHTML() {
         <h1>Couldn’t load ${target}.</h1>
         <p class="error" role="alert">${escapeHTML(state.error || "Something went wrong. Try again.")}</p>
         <button class="primary" id="route-error-retry" type="button">Try again</button>
+        ${newTaskRecoveryNoticeHTML()}
       </div>
     </section>`;
 }
@@ -1266,6 +1274,27 @@ function routeErrorHTML() {
 function bindRouteError() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   document.querySelector("#route-error-retry").onclick = applyRoute;
+  bindNewTaskRecoveryActions();
+}
+
+function newTaskRecoveryNoticeHTML() {
+  const recovery = state.newTaskRecovery;
+  if (!recovery) return "";
+  return `
+    <section class="status-notice new-task-recovery" role="alert" aria-label="Created task recovery">
+      <div><strong>Task created.</strong><span>Slate saved ${escapeHTML(recovery.task.title)} in Inbox. Task ID ${escapeHTML(recovery.task.id)}. It couldn’t be opened: ${escapeHTML(recovery.message)}</span></div>
+      <button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open created task"}</button>
+      <button id="view-created-task-inbox" type="button" ${recovery.pending ? "disabled" : ""}>View Inbox</button>
+    </section>`;
+}
+
+function newTaskCaptureBlocked() {
+  return state.newTaskCapturePending || Boolean(state.newTaskRecovery);
+}
+
+function bindNewTaskRecoveryActions() {
+  document.querySelector("#retry-created-task")?.addEventListener("click", () => recoverCreatedTask(true));
+  document.querySelector("#view-created-task-inbox")?.addEventListener("click", () => recoverCreatedTask(false));
 }
 
 function logoutStatusHTML() {
@@ -1373,6 +1402,7 @@ function landingHTML() {
           ${signedIn ? `<button class="nav-action" id="landing-open">Open app</button>` : `<button class="nav-action" id="landing-login">Log in</button>`}
         </div>
       </nav>
+      ${newTaskRecoveryNoticeHTML()}
       <main class="landing-main">
         <section class="landing-hero">
           <div class="hero-copy">
@@ -1475,7 +1505,7 @@ function appHTML() {
   const overview = `
     <header class="workspace-topbar">
       <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
-      <button class="primary" id="new-task">${icon("plus")}<span>New task</span></button>
+      <button class="primary" id="new-task" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New task"}</span></button>
     </header>
     ${statusErrorHTML(state.error || state.taskCompletionError?.message)}
     ${statusNoticeHTML(state.moveNotice)}
@@ -1639,6 +1669,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
       </div>
       <div class="sidebar-content" id="sidebar-content">
         ${showNewTask ? globalNewTaskButtonHTML() : ""}
+        ${newTaskRecoveryNoticeHTML()}
         <section class="nav-sec workspace-nav">
           <h3>Workspace</h3>
           <div class="pages task-nav-pages">
@@ -1771,7 +1802,7 @@ function themeSwitchHTML(theme) {
 }
 
 function globalNewTaskButtonHTML() {
-  return `<button class="primary sidebar-new-task" id="global-new-task" type="button">${icon("plus")}<span>New task</span></button>`;
+  return `<button class="primary sidebar-new-task" id="global-new-task" type="button" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New task"}</span></button>`;
 }
 
 function boardRowHTML(board) {
@@ -2691,6 +2722,7 @@ function settingsHTML() {
       <aside class="sidebar settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         ${globalNewTaskButtonHTML()}
+        ${newTaskRecoveryNoticeHTML()}
         <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Workspace">
           <div class="pages task-nav-pages">
             <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
@@ -2734,6 +2766,7 @@ function boardSettingsHTML() {
       <aside class="sidebar settings-sidebar board-settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         ${globalNewTaskButtonHTML()}
+        ${newTaskRecoveryNoticeHTML()}
         <p class="settings-sidebar-title">Board settings</p>
         <div class="board-settings-context">
           ${icon("rows")}
@@ -2874,6 +2907,7 @@ function bindEarlyAccess() {
 
 function bindLanding() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindNewTaskRecoveryActions();
   document.querySelector("#landing-login")?.addEventListener("click", showLogin);
   document.querySelector("#hero-login")?.addEventListener("click", showLogin);
   document.querySelector("#landing-open")?.addEventListener("click", openApp);
@@ -4182,6 +4216,7 @@ function bindAppShell() {
     sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
   };
   bindThemeControls();
+  bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   bindWorkspaceListControl();
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
@@ -4217,6 +4252,7 @@ function bindWorkspaceListControl() {
 }
 
 async function captureInboxTask(button) {
+  if (newTaskCaptureBlocked()) return false;
   if (!confirmTaskDetailDiscard()) return false;
   if (state.selectedTask) {
     taskDetailVersion += 1;
@@ -4229,16 +4265,132 @@ async function captureInboxTask(button) {
     render();
     button = document.querySelector("#global-new-task") || button;
   }
-  button.disabled = true;
-  button.querySelector("span").textContent = "Creating…";
+  const context = beginNewTaskOperation();
+  state.newTaskCapturePending = true;
+  state.error = "";
+  render();
+  let task;
   try {
-    const task = await api.post("/api/v1/tasks", { title: "New task", description: "", kind: "action" });
-    if (parseRoute(location.pathname).name === "workspace") await reload();
-    else await navigate(INBOX_PATH);
-    await openTaskDetail(task.id, button);
+    task = await api.post("/api/v1/tasks", { title: "New task", description: "", kind: "action" });
   } catch (err) {
+    if (!newTaskOperationIsCurrent(context)) return false;
+    state.newTaskCapturePending = false;
     state.error = err.message;
     render();
+    return false;
+  }
+  if (!newTaskOperationIsCurrent(context)) return false;
+  state.newTaskCapturePending = false;
+  state.newTaskRecovery = {
+    task,
+    message: "Slate saved the task, but it has not been opened yet.",
+    pending: false,
+  };
+  if (!newTaskOperationOwnsRoute(context)) {
+    state.newTaskRecovery.message = "You changed pages before Slate could open the task.";
+    render();
+    return true;
+  }
+  try {
+    await revealCreatedTask(task, null, false, context);
+    if (!newTaskOperationIsCurrent(context) || state.newTaskRecovery?.task.id !== task.id) return false;
+    state.newTaskRecovery = null;
+    state.newTaskCapturePending = false;
+    render();
+    return true;
+  } catch (err) {
+    if (!newTaskOperationIsCurrent(context)) return false;
+    showNewTaskRecovery(task, err);
+    return false;
+  }
+}
+
+function beginNewTaskOperation() {
+  return {
+    version: ++newTaskCaptureVersion,
+    sessionVersion: authVersion,
+    userID: state.me?.id,
+    routeVersion,
+  };
+}
+
+function newTaskOperationIsCurrent(context) {
+  return context.version === newTaskCaptureVersion
+    && sessionIsCurrent(context.sessionVersion, context.userID);
+}
+
+function newTaskOperationOwnsRoute(context) {
+  return newTaskOperationIsCurrent(context) && context.routeVersion === routeVersion;
+}
+
+function requireCurrentNewTaskRoute(context) {
+  if (!newTaskOperationIsCurrent(context)) throw new Error("The signed-in session changed.");
+  if (context.routeVersion !== routeVersion) throw new Error("You changed pages before Slate could open the task.");
+}
+
+async function revealCreatedTask(task, trigger, forceInbox = false, context) {
+  requireCurrentNewTaskRoute(context);
+  if (forceInbox || parseRoute(location.pathname).name !== "workspace") {
+    const navigation = navigate(INBOX_PATH, { skipTaskDetailGuard: true });
+    context.routeVersion = routeVersion;
+    await navigation;
+    requireCurrentNewTaskRoute(context);
+    if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
+      throw new Error(state.error || "Inbox could not be loaded.");
+    }
+  } else {
+    const loaded = await reload();
+    requireCurrentNewTaskRoute(context);
+    if (!loaded) throw new Error(state.error || "Tasks could not be refreshed.");
+  }
+  let detailError;
+  const opened = await openTaskDetail(task.id, trigger, { onError: err => { detailError = err; } });
+  requireCurrentNewTaskRoute(context);
+  if (!opened) throw detailError || new Error("The created task could not be loaded.");
+}
+
+function showNewTaskRecovery(task, err) {
+  if (!state.me) return;
+  state.newTaskCapturePending = false;
+  state.error = "";
+  state.newTaskRecovery = {
+    task,
+    message: err?.message || "The created task could not be opened.",
+    pending: false,
+  };
+  render();
+}
+
+async function recoverCreatedTask(openTask) {
+  const recovery = state.newTaskRecovery;
+  if (!recovery || recovery.pending || state.newTaskCapturePending) return false;
+  const task = recovery.task;
+  const context = beginNewTaskOperation();
+  state.newTaskCapturePending = true;
+  state.newTaskRecovery = { ...recovery, pending: true };
+  render();
+  try {
+    if (openTask) {
+      await revealCreatedTask(task, null, true, context);
+    } else {
+      const navigation = navigate(INBOX_PATH, { skipTaskDetailGuard: true });
+      context.routeVersion = routeVersion;
+      await navigation;
+      requireCurrentNewTaskRoute(context);
+      if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
+        throw new Error(state.error || "Inbox could not be loaded.");
+      }
+    }
+    if (!newTaskOperationIsCurrent(context) || state.newTaskRecovery?.task.id !== task.id) return false;
+    state.newTaskRecovery = null;
+    state.newTaskCapturePending = false;
+    state.error = "";
+    render();
+    return true;
+  } catch (err) {
+    if (!newTaskOperationIsCurrent(context)) return false;
+    showNewTaskRecovery(task, err);
+    return false;
   }
 }
 
@@ -4381,6 +4533,7 @@ async function deleteBoard(id) {
 
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   bindWorkspaceListControl();
   document.querySelectorAll(".settings-nav-link").forEach(el => el.onclick = event => {
@@ -4524,6 +4677,7 @@ async function bindSettings() {
 
 function bindBoardSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   document.querySelector("#back-to-board").onclick = () => navigate(APP_PATH);
   document.querySelector("#account-settings-link").onclick = event => {
