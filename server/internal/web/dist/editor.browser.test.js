@@ -3123,6 +3123,38 @@ test("a delayed delete cannot close a newer surface and disappears from the over
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 0);
 });
 
+test("a child delete settling on its parent clears the deleted draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent task", exact: true }).waitFor();
+  await page.getByLabel("Title", { exact: true }).fill("Draft for child being deleted");
+  state.delayNextDelete = true;
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete task", exact: true }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  await page.getByRole("button", { name: "Back to parent task", exact: true }).click();
+  await page.getByText("Subtasks", { exact: true }).waitFor();
+  const deleteResponse = page.waitForResponse(response => response.request().method() === "DELETE"
+    && new URL(response.url()).pathname === "/api/v1/tasks/task-child");
+  state.releaseDelete();
+  assert.equal((await deleteResponse).ok(), true);
+  await page.getByText("Research examples", { exact: true }).waitFor({ state: "detached" });
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
+
+  let dialogs = 0;
+  page.on("dialog", async dialog => {
+    dialogs += 1;
+    await dialog.accept();
+  });
+  await page.getByRole("button", { name: "Back to tasks", exact: true }).click();
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  assert.equal(dialogs, 0);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a delayed delete closes the same task when it has been reopened", async t => {
   const { page, state } = await startWorkspace(t);
 

@@ -1114,7 +1114,6 @@ async function openTaskDetail(taskID, trigger, options = {}) {
     state.taskDetailBaselines[taskID] = taskDetailSnapshot(persisted);
     state.selectedTask = selected;
     if (retainedDraft) state.taskDetailDrafts[taskID] = taskDetailSnapshot(selected);
-    state.taskDetailCommitPending = "";
     state.selectedSubtasks = subtasks;
     state.error = "";
     render();
@@ -3110,6 +3109,23 @@ function updateTaskDetailBaselineFields(taskID, fields) {
   };
 }
 
+function reconcileRetainedTaskDetailFields(taskID, persisted, fields = TASK_DETAIL_FIELDS) {
+  const baseline = state.taskDetailBaselines[taskID];
+  const draft = state.taskDetailDrafts[taskID];
+  if (!baseline || !draft) return;
+  const edits = taskDetailFieldEdits.get(taskID);
+  for (const field of fields) {
+    if (!(field in persisted)) continue;
+    const wasDirty = String(draft[field] || "") !== String(baseline[field] || "");
+    const value = String(persisted[field] || "");
+    baseline[field] = value;
+    if (wasDirty) continue;
+    draft[field] = value;
+    edits?.delete(field);
+  }
+  if (edits?.size === 0) taskDetailFieldEdits.delete(taskID);
+}
+
 function taskDetailHasUnsavedChanges() {
   if (state.subtaskDraft !== "") return true;
   const drafts = { ...state.taskDetailDrafts };
@@ -3278,6 +3294,7 @@ function bindWorkspaceDetail(options = {}) {
     preserveSelectedBaseline = false,
   } = {}) => {
     if (!boundContextIsCurrent()) return false;
+    if (!deleted && state.selectedTask?.id !== task.id) reconcileRetainedTaskDetailFields(task.id, task);
     if (!deleted && !preserveSelectedBaseline && state.selectedTask?.id === task.id) {
       advanceTaskDetailBaseline(task.id, task);
     }
@@ -3677,6 +3694,7 @@ function bindWorkspaceDetail(options = {}) {
       const deleted = await serializeTaskMutation(taskID, () => api.del(`/api/v1/tasks/${taskID}`));
       if (!deleted) return;
       const agentCacheChanged = deletedTasks.reduce((changed, task) => reconcileLoadedTask(task, { deleted: true, deferAgentRender: true }) || changed, false);
+      for (const task of deletedTasks) clearTaskDetailDraft(task.id);
       if (agentCacheChanged && !state.selectedTask && ["agent-detail", "agent-work"].includes(state.view)) {
         state.agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || taskID;
         render();
@@ -3702,7 +3720,14 @@ function bindWorkspaceDetail(options = {}) {
           render();
           return;
         }
-        if (state.selectedTask?.id !== taskID) return;
+        if (state.selectedTask?.id !== taskID) {
+          if (parentTaskID && state.selectedTask?.id === parentTaskID) {
+            const focus = captureTaskDetailFocus();
+            render();
+            restoreTaskDetailFocus(focus);
+          }
+          return;
+        }
         delete state.taskDetailDrafts[taskID];
         delete state.taskDetailBaselines[taskID];
         state.subtaskDraft = "";
@@ -3739,6 +3764,7 @@ function bindWorkspaceDetail(options = {}) {
       state.subtaskError = "";
       await refreshAfterCommittedMutation("deleted");
     } catch (err) {
+      if (state.taskDetailCommitPending === taskID) state.taskDetailCommitPending = "";
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
         reportBackgroundMutationFailure("delete", taskTitle, err);
         return;
@@ -4085,7 +4111,10 @@ function reconcileTaskCompletion(updated, previousTask) {
     if (list) list.openCount = Math.max(0, Number(list.openCount || 0) + (reconciled.done ? -1 : 1));
   }
 
-  if (state.selectedTask?.id !== reconciled.id) return;
+  if (state.selectedTask?.id !== reconciled.id) {
+    reconcileRetainedTaskDetailFields(reconciled.id, reconciled);
+    return;
+  }
   const selected = state.selectedTask;
   const baseline = { ...(state.taskDetailBaselines[reconciled.id] || taskDetailSnapshot(selected)) };
   const live = taskDraftFromCurrentForm(selected) || state.taskDetailDrafts[reconciled.id];

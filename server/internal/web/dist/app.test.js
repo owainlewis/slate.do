@@ -2305,6 +2305,34 @@ test("accepting discard restores a mounted task to its persisted baseline", () =
   vm.runInContext("globalThis.confirm = savedMountedDiscardConfirm; state.selectedTask = null;", app);
 });
 
+test("committed hidden-task changes rebase only clean retained fields", () => {
+  vm.runInContext(`
+    state.selectedTask = { id: "parent" };
+    state.taskDetailBaselines = {
+      clean: taskDetailSnapshot({ id: "clean", title: "Clean title", status: "done" }),
+      dirty: taskDetailSnapshot({ id: "dirty", title: "Saved title", status: "done" }),
+    };
+    state.taskDetailDrafts = {
+      clean: taskDetailSnapshot({ id: "clean", title: "Clean title", status: "done" }),
+      dirty: taskDetailSnapshot({ id: "dirty", title: "Draft title", status: "done" }),
+    };
+    recordTaskDetailFieldEdit("clean", "status");
+    recordTaskDetailFieldEdit("dirty", "title");
+  `, app);
+
+  app.reconcileRetainedTaskDetailFields("clean", { status: "queued" }, ["status"]);
+  app.reconcileRetainedTaskDetailFields("dirty", { title: "New saved title", status: "queued" }, ["title", "status"]);
+
+  assert.equal(vm.runInContext("state.taskDetailBaselines.clean.status", app), "queued");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.clean.status", app), "queued");
+  assert.equal(vm.runInContext('taskDetailFieldEdits.has("clean")', app), false);
+  assert.equal(vm.runInContext("state.taskDetailBaselines.dirty.title", app), "New saved title");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.dirty.title", app), "Draft title");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.dirty.status", app), "queued");
+  assert.equal(vm.runInContext('taskDetailFieldEdits.get("dirty").has("title")', app), true);
+  vm.runInContext("state.selectedTask = null; clearTaskDetailDraftTracking();", app);
+});
+
 test("board controls cannot discard unsaved task changes", () => {
   vm.runInContext(`
     state.selectedTask = { id: "task-a", title: "Saved title" };
