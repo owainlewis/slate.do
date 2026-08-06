@@ -1619,11 +1619,13 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, ''),
-			l.name, b.name, COALESCE(a.name, '')
+			l.name, b.name, COALESCE(a.name, ''), COALESCE(parent.title, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		JOIN buckets l ON l.id = t.bucket_id
 		LEFT JOIN agents a ON a.id = t.assignee_agent_id
+		LEFT JOIN tasks parent ON parent.id = t.parent_task_id
+			AND parent.board_id = t.board_id AND parent.bucket_id = t.bucket_id
 		WHERE b.user_id = $1` + whereSQL + `
 		ORDER BY ` + orderSQL + `
 		LIMIT $` + fmt.Sprint(len(args))
@@ -1909,7 +1911,7 @@ func scanTask(row rowScanner) (Task, error) {
 
 func scanTaskSummary(row rowScanner) (Task, error) {
 	var task Task
-	destinations := append(taskScanDestinations(&task), &task.BucketName, &task.BoardName, &task.AssigneeAgentName)
+	destinations := append(taskScanDestinations(&task), &task.BucketName, &task.BoardName, &task.AssigneeAgentName, &task.ParentTaskTitle)
 	err := row.Scan(destinations...)
 	return task, err
 }

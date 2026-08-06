@@ -622,7 +622,8 @@ async function loadBoards(selectId, expectedRouteVersion) {
 
 function workspaceQuery(route, cursor = "") {
   const current = new URLSearchParams(location.search);
-  const query = new URLSearchParams({ limit: "200", topLevel: "true" });
+  const query = new URLSearchParams({ limit: "200" });
+  if (["inbox", "list"].includes(route.scope)) query.set("topLevel", "true");
   if (route.scope === "list" && route.listId) query.set("bucketId", route.listId);
   if (route.scope === "inbox") query.set("inbox", "true");
   if (route.scope === "review") query.set("status", "needs_review");
@@ -1332,23 +1333,31 @@ function workspaceTaskOwner(task) {
   return task.assigneeAgentName || state.agents.find(agent => agent.id === task.assigneeAgentId)?.displayName || state.me?.displayName || "You";
 }
 
+function workspaceTaskContext(task, includeOwner = false) {
+  const context = [];
+  if (task.parentTaskId) context.push(`Subtask of ${task.parentTaskTitle || "parent task"}`);
+  context.push(task.listName || "Inbox");
+  if (includeOwner) context.push(workspaceTaskOwner(task));
+  return context.join(" · ");
+}
+
 function workspaceListHTML(tasks) {
   if (!tasks.length) return `<div class="workspace-empty">Nothing here yet.</div>`;
-  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}"><span class="workspace-check ${task.done ? "done" : ""}">${task.done ? icon("check") : ""}</span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.listName || "Inbox")}</small></span>${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
+  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}"><span class="workspace-check ${task.done ? "done" : ""}">${task.done ? icon("check") : ""}</span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></span>${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
 }
 
 function workspaceTableHTML(tasks) {
   return `<table class="workspace-table" aria-label="Tasks">
     <colgroup><col class="workspace-table-check"><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
     <thead><tr class="workspace-table-head"><th scope="col"><span class="sr-only">Completion</span></th><th scope="col">Task</th><th scope="col">List</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
-    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><span class="workspace-check ${task.done ? "done" : ""}" aria-hidden="true">${task.done ? icon("check") : ""}</span><span class="sr-only">${task.done ? "Complete" : "Open"}</span></td><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong></button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="7"><div class="workspace-empty">No tasks match these filters.</div></td></tr>`}</tbody>
+    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><span class="workspace-check ${task.done ? "done" : ""}" aria-hidden="true">${task.done ? icon("check") : ""}</span><span class="sr-only">${task.done ? "Complete" : "Open"}</span></td><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Subtask of ${escapeHTML(task.parentTaskTitle || "parent task")}</small>` : ""}</button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="7"><div class="workspace-empty">No tasks match these filters.</div></td></tr>`}</tbody>
   </table>`;
 }
 
 function workspaceFlowHTML(tasks) {
   return `<section class="workspace-flow">${FLOW_STATES.map(flowState => {
     const items = tasks.filter(task => task.status === flowState.value);
-    return `<section class="workspace-flow-column" data-flow-status="${flowState.value}"><header><h2>${flowState.label}</h2><span>${items.length}</span></header><div>${items.length ? items.map(task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.listName || "Inbox")} · ${escapeHTML(workspaceTaskOwner(task))}</small></button></article>`).join("") : `<p>Drag tasks here</p>`}</div></section>`;
+    return `<section class="workspace-flow-column" data-flow-status="${flowState.value}"><header><h2>${flowState.label}</h2><span>${items.length}</span></header><div>${items.length ? items.map(task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task, true))}</small></button></article>`).join("") : `<p>Drag tasks here</p>`}</div></section>`;
   }).join("")}</section>`;
 }
 
@@ -1357,7 +1366,7 @@ function workspaceWeekHTML(tasks) {
   return `<section class="workspace-week" aria-label="Week calendar">${Array.from({ length: 7 }, (_, index) => addDays(start, index)).map(day => {
     const key = dateKey(day);
     const items = tasks.filter(task => task.scheduledDate === key);
-    return `<section><header><span>${day.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${day.getDate()}</b></header>${items.map(task => `<button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.listName || "Inbox")}</small></button>`).join("") || `<p>Nothing planned</p>`}</section>`;
+    return `<section><header><span>${day.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${day.getDate()}</b></header>${items.map(task => `<button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></button>`).join("") || `<p>Nothing planned</p>`}</section>`;
   }).join("")}</section>`;
 }
 

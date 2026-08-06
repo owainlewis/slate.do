@@ -174,6 +174,19 @@ test("Review owns its status scope without showing a conflicting status filter",
   delete app.location;
 });
 
+test("global scopes include subtasks while Inbox and individual lists remain parent rollups", () => {
+  app.location = { search: "" };
+  for (const scope of ["all", "today", "week", "review"]) {
+    assert.equal(app.workspaceQuery({ scope }).has("topLevel"), false, `${scope} should include subtasks`);
+  }
+  assert.equal(app.workspaceQuery({ scope: "inbox" }).get("topLevel"), "true");
+  assert.equal(app.workspaceQuery({ scope: "list", listId: "youtube" }).get("topLevel"), "true");
+  const paged = app.workspaceQuery({ scope: "all" }, "next-page");
+  assert.equal(paged.get("cursor"), "next-page");
+  assert.equal(paged.has("topLevel"), false);
+  delete app.location;
+});
+
 test("default board creation stays incomplete when either default list fails", async () => {
   vm.runInContext(`
     state.me = { id: "owner", theme: "light" };
@@ -356,6 +369,24 @@ test("the task table exposes native headers, cells, and keyboard-operable rows",
   assert.match(html, /<span class="sr-only">Open<\/span>/);
   assert.doesNotMatch(html, /<section class="workspace-table"|<tr[^>]*tabindex=/);
   vm.runInContext(`state.me = null; state.agents = [];`, app);
+});
+
+test("every global task view identifies subtasks with parent context", () => {
+  vm.runInContext(`state.me = { id: "owner", displayName: "Owain" }; state.agents = [];`, app);
+  const planned = app.dateKey(app.startOfWeek(new Date()));
+  const subtask = {
+    id: "child", parentTaskId: "parent", parentTaskTitle: "Parent & plan", title: "Research", listName: "Product",
+    status: "needs_review", priority: "", scheduledDate: planned, done: false, assigneeAgentId: "",
+  };
+  for (const html of [
+    app.workspaceListHTML([subtask]),
+    app.workspaceTableHTML([subtask]),
+    app.workspaceFlowHTML([subtask]),
+    app.workspaceWeekHTML([subtask]),
+  ]) {
+    assert.match(html, /Subtask of Parent &amp; plan/);
+  }
+  vm.runInContext(`state.me = null;`, app);
 });
 
 test("subtask detail keeps its list fixed to the parent", () => {

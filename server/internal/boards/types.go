@@ -58,6 +58,7 @@ type Task struct {
 	AssigneeAgentID   string    `json:"assigneeAgentId,omitempty"`
 	AssigneeAgentName string    `json:"assigneeAgentName,omitempty"`
 	ParentTaskID      string    `json:"parentTaskId,omitempty"`
+	ParentTaskTitle   string    `json:"parentTaskTitle,omitempty"`
 	BucketName        string    `json:"listName,omitempty"`
 	BoardName         string    `json:"boardName,omitempty"`
 	SortOrder         int       `json:"sortOrder"`
