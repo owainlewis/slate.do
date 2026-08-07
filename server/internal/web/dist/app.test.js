@@ -757,7 +757,7 @@ test("new-agent route has inline limits and one-time CLI connection instructions
   vm.runInContext(`state.me = null; state.view = "home"; state.agentCreationResult = null; state.agentsLoadState = "idle";`, app);
 });
 
-test("agent settings separate identity, credential, and archive lifecycle without persistent secrets", () => {
+test("agent settings make delete the default while preserving archive and restore choices", () => {
   vm.runInContext(`
     state.me = { id: "owner", theme: "light" };
     state.view = "agent-settings";
@@ -778,7 +778,16 @@ test("agent settings separate identity, credential, and archive lifecycle withou
   assert.match(settings, /id="rotate-agent-credential"/);
   assert.match(settings, /id="revoke-agent-credential"/);
   assert.match(settings, /id="archive-agent"/);
-  assert.doesNotMatch(settings, />Delete</);
+  assert.match(settings, /id="delete-agent"/);
+  assert.match(settings, />Archive agent</);
+  assert.match(settings, />Delete agent</);
+
+  vm.runInContext(`state.agentLifecycleConfirm = "delete";`, app);
+  const confirmation = app.agentDetailHTML();
+  assert.match(confirmation, /Delete this agent permanently\?/);
+  assert.match(confirmation, /Assigned tasks will remain but become unassigned/);
+  assert.match(confirmation, /This cannot be undone/);
+  vm.runInContext(`state.agentLifecycleConfirm = "";`, app);
 
   vm.runInContext(`
     state.agentCredentialResult = { ownerID: "owner", agentID: "agent-one", token: "slate_agent_once_only" };
@@ -804,10 +813,66 @@ test("agent settings separate identity, credential, and archive lifecycle withou
   `, app);
   const archived = app.agentDetailHTML();
   assert.match(archived, /id="restore-agent"/);
+  assert.match(archived, /id="delete-agent"/);
+  assert.doesNotMatch(archived, /id="archive-agent"/);
   assert.doesNotMatch(archived, /id="rotate-agent-credential"/);
 
   assert.deepEqual(JSON.parse(JSON.stringify(app.parseRoute("/app/agents/agent-one/settings"))), { name: "agent-settings", agentId: "agent-one" });
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentCredentialResult = null;`, app);
+});
+
+test("deleting an agent calls DELETE, removes it from the cache, and returns to the directory", async () => {
+  vm.runInContext(`
+    savedAgentDeleteRender = render;
+    savedAgentDeleteDocument = globalThis.document;
+    savedAgentDeleteLocation = globalThis.location;
+    savedAgentDeleteNavigate = navigate;
+    savedAgentDeleteRequest = api.del;
+    render = () => {};
+    document = { querySelector() { return null; } };
+    location = { pathname: "/app/agents/agent-one/settings", search: "" };
+    deleteAgentRequests = [];
+    deleteAgentNavigation = "";
+    navigate = async path => { deleteAgentNavigation = path; };
+    api.del = async path => { deleteAgentRequests.push(path); };
+    authVersion = 4;
+    routeVersion = 9;
+    state.me = { id: "owner" };
+    state.view = "agent-settings";
+    state.activeAgents = 2;
+    state.agents = [
+      { id: "agent-one", displayName: "Builder" },
+      { id: "agent-two", displayName: "Research" },
+    ];
+    state.agentDetail = {
+      agent: state.agents[0],
+      work: { ready: [], working: [], review: [], recentlyCompleted: [], totals: {} },
+    };
+    state.agentLifecycleConfirm = "delete";
+    state.agentLifecyclePending = "";
+    state.agentArchiveConflict = null;
+  `, app);
+
+  await app.runAgentLifecycleMutation();
+
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(deleteAgentRequests)", app)), ["/api/v1/agents/agent-one"]);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.agents.map(agent => agent.id))", app)), ["agent-two"]);
+  assert.equal(vm.runInContext("state.activeAgents", app), 1);
+  assert.equal(vm.runInContext("state.agentDetail", app), null);
+  assert.equal(vm.runInContext("deleteAgentNavigation", app), "/app/agents");
+
+  vm.runInContext(`
+    render = savedAgentDeleteRender;
+    globalThis.document = savedAgentDeleteDocument;
+    globalThis.location = savedAgentDeleteLocation;
+    navigate = savedAgentDeleteNavigate;
+    api.del = savedAgentDeleteRequest;
+    state.me = null;
+    state.view = "home";
+    state.agents = [];
+    state.activeAgents = 0;
+    state.agentDetail = null;
+  `, app);
 });
 
 test("credential copy failure leaves the token selected for manual copy", async () => {
