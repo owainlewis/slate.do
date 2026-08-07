@@ -66,6 +66,24 @@ func TestDetailAndWorkStayOwnerScopedGroupedAndBounded(t *testing.T) {
 	// Deliberately create an invalid cross-owner assignment. Every detail query
 	// must still exclude it through the board owner join.
 	insertAssignedTask(t, ctx, db, foreignBoard, foreignBucket, agent.ID, "Foreign task", "working", false, time.Now().Add(3*time.Hour))
+	var parentID, childID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO tasks (board_id, bucket_id, title, kind, status, done)
+		VALUES ($1, $2, 'Parent task', 'action', 'queued', false)
+		RETURNING id::text
+	`, ownerBoard, ownerBucket).Scan(&parentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `
+		INSERT INTO tasks (
+			board_id, bucket_id, parent_task_id, title, kind, done, status,
+			assignee_agent_id, sort_order, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, 'Assigned child', 'action', false, 'queued', $4, 0, $5, $5)
+		RETURNING id::text
+	`, ownerBoard, ownerBucket, parentID, agent.ID, time.Now().Add(4*time.Hour)).Scan(&childID); err != nil {
+		t.Fatal(err)
+	}
 
 	store := NewStore(db, authStore)
 	detail, err := store.GetDetail(ctx, owner.ID, agent.ID)
@@ -75,7 +93,7 @@ func TestDetailAndWorkStayOwnerScopedGroupedAndBounded(t *testing.T) {
 	if detail.Agent.ID != agent.ID || detail.Agent.DisplayName != "Builder" {
 		t.Fatalf("agent = %#v", detail.Agent)
 	}
-	if detail.Work.Totals != (WorkTotals{Ready: 55, Working: 1, Review: 1, Completed: 25}) {
+	if detail.Work.Totals != (WorkTotals{Ready: 56, Working: 1, Review: 1, Completed: 25}) {
 		t.Fatalf("totals = %#v", detail.Work.Totals)
 	}
 	if got := len(detail.Work.Ready) + len(detail.Work.Working) + len(detail.Work.Review); got != InitialOpenLimit {
@@ -83,6 +101,9 @@ func TestDetailAndWorkStayOwnerScopedGroupedAndBounded(t *testing.T) {
 	}
 	if len(detail.Work.Working) != 1 || len(detail.Work.Review) != 1 || len(detail.Work.Ready) != 48 {
 		t.Fatalf("initial groups = ready %d, working %d, review %d", len(detail.Work.Ready), len(detail.Work.Working), len(detail.Work.Review))
+	}
+	if detail.Work.Ready[0].ID != childID || detail.Work.Ready[0].ParentTaskID != parentID {
+		t.Fatalf("assigned child = %#v, want parent %s", detail.Work.Ready[0], parentID)
 	}
 	if len(detail.Work.RecentlyCompleted) != InitialCompletedLimit || detail.Work.RecentlyCompleted[0].Title != "Completed 24" {
 		t.Fatalf("recent completed = %d, first %#v", len(detail.Work.RecentlyCompleted), detail.Work.RecentlyCompleted[0])
@@ -96,7 +117,7 @@ func TestDetailAndWorkStayOwnerScopedGroupedAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Total != 82 || len(first.Items) != 10 || !first.HasNext || first.HasPrevious {
+	if first.Total != 83 || len(first.Items) != 10 || !first.HasNext || first.HasPrevious {
 		t.Fatalf("first page = %#v", first)
 	}
 	if len(second.Items) != 10 || !second.HasNext || !second.HasPrevious || first.Items[9].ID == second.Items[0].ID {
@@ -106,6 +127,16 @@ func TestDetailAndWorkStayOwnerScopedGroupedAndBounded(t *testing.T) {
 		if item.Title == "Foreign task" {
 			t.Fatal("cross-owner task leaked into work page")
 		}
+	}
+	var workPageChild *WorkItem
+	for index := range first.Items {
+		if first.Items[index].ID == childID {
+			workPageChild = &first.Items[index]
+			break
+		}
+	}
+	if workPageChild == nil || workPageChild.ParentTaskID != parentID {
+		t.Fatalf("work page child = %#v, want parent %s", workPageChild, parentID)
 	}
 
 	if _, err := store.GetDetail(ctx, owner.ID, foreignAgent.ID); !errors.Is(err, auth.ErrAgentNotFound) {
@@ -382,6 +413,75 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	restored, err := store.RestoreAgent(ctx, owner.ID, agent.ID)
 	if err != nil || restored.ArchivedAt != nil || restored.Credential == nil || restored.Credential.RevokedAt == nil {
 		t.Fatalf("restored identity = %#v, error = %v", restored, err)
+	}
+}
+
+func TestDeleteAgentRequiresArchiveAndRemovesOwnedIdentity(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run agent deletion integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	authStore := auth.NewPGStore(db)
+	store := NewStore(db, authStore)
+	stamp := time.Now().UnixNano()
+	owner, err := authStore.CreateAdmin(ctx, fmt.Sprintf("agent-delete-owner-%d@slate.test", stamp), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherOwner, err := authStore.CreateAdmin(ctx, fmt.Sprintf("agent-delete-other-%d@slate.test", stamp), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1 OR id = $2", owner.ID, otherOwner.ID)
+	})
+	agent, err := authStore.CreateAgent(ctx, owner.ID, "Delete candidate", "Historical work", lifecycleHash("delete-candidate"), "delete-candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignAgent, err := authStore.CreateAgent(ctx, otherOwner.ID, "Other owner agent", "", lifecycleHash("other-owner-agent"), "other-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	boardID, bucketID := insertBoardAndBucket(t, ctx, db, owner.ID, "Deletion board")
+	taskID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Historical assignment", "done", true)
+
+	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); !errors.Is(err, ErrDeleteRequiresArchive) {
+		t.Fatalf("active delete error = %v", err)
+	}
+	assertLifecycleTask(t, ctx, db, taskID, agent.ID, "done", true)
+	if err := store.DeleteAgent(ctx, owner.ID, foreignAgent.ID); !errors.Is(err, auth.ErrAgentNotFound) {
+		t.Fatalf("cross-owner delete error = %v", err)
+	}
+	if _, err := store.ArchiveAgent(ctx, owner.ID, agent.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var agents, credentials int
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM agents WHERE id = $1", agent.ID).Scan(&agents); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM agent_credentials WHERE agent_id = $1", agent.ID).Scan(&credentials); err != nil {
+		t.Fatal(err)
+	}
+	if agents != 0 || credentials != 0 {
+		t.Fatalf("deleted rows = agents %d, credentials %d", agents, credentials)
+	}
+	assertLifecycleTask(t, ctx, db, taskID, "", "done", true)
+	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); !errors.Is(err, auth.ErrAgentNotFound) {
+		t.Fatalf("repeated delete error = %v", err)
 	}
 }
 

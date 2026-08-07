@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	ErrArchiveConflict     = errors.New("agent has open assigned work")
-	ErrIdempotencyConflict = errors.New("idempotency key belongs to another agent")
-	ErrRestoreLimit        = errors.New("active agent limit reached")
-	ErrRestoreNameTaken    = errors.New("active agent name already exists")
+	ErrArchiveConflict       = errors.New("agent has open assigned work")
+	ErrDeleteRequiresArchive = errors.New("agent must be archived before deletion")
+	ErrIdempotencyConflict   = errors.New("idempotency key belongs to another agent")
+	ErrRestoreLimit          = errors.New("active agent limit reached")
+	ErrRestoreNameTaken      = errors.New("active agent name already exists")
 )
 
 type ArchiveConflictError struct {
@@ -412,6 +413,42 @@ func (s *Store) RestoreAgent(ctx context.Context, userID string, agentID string)
 	return s.agents.GetAgent(ctx, activeUserID, agentID)
 }
 
+func (s *Store) DeleteAgent(ctx context.Context, userID string, agentID string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var archived bool
+	err = tx.QueryRow(ctx, `
+		SELECT archived_at IS NOT NULL
+		FROM agents
+		WHERE owner_user_id = $1 AND id::text = $2
+		FOR UPDATE
+	`, userID, agentID).Scan(&archived)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.ErrAgentNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !archived {
+		return ErrDeleteRequiresArchive
+	}
+	result, err := tx.Exec(ctx, `
+		DELETE FROM agents
+		WHERE owner_user_id = $1 AND id::text = $2 AND archived_at IS NOT NULL
+	`, userID, agentID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return auth.ErrAgentNotFound
+	}
+	return tx.Commit(ctx)
+}
+
 func constraintViolation(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.ConstraintName == constraint
@@ -468,7 +505,7 @@ func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentI
 }
 
 const workSelect = `
-	SELECT t.id::text, t.board_id::text, b.name, t.bucket_id::text, bucket.name,
+	SELECT t.id::text, COALESCE(t.parent_task_id::text, ''), t.board_id::text, b.name, t.bucket_id::text, bucket.name,
 		t.title, '', COALESCE(t.scheduled_date::text, ''), t.kind,
 		t.done, t.status, COALESCE(t.assignee_agent_id::text, ''), t.created_at, t.updated_at
 	FROM tasks t
@@ -482,7 +519,7 @@ func scanWorkItems(rows pgx.Rows) ([]WorkItem, error) {
 	for rows.Next() {
 		var item WorkItem
 		if err := rows.Scan(
-			&item.ID, &item.BoardID, &item.BoardName, &item.BucketID, &item.BucketName,
+			&item.ID, &item.ParentTaskID, &item.BoardID, &item.BoardName, &item.BucketID, &item.BucketName,
 			&item.Title, &item.Description, &item.ScheduledDate, &item.Kind,
 			&item.Done, &item.Status, &item.AssigneeAgentID, &item.CreatedAt, &item.UpdatedAt,
 		); err != nil {

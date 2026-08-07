@@ -32,6 +32,7 @@ type fakeStore struct {
 	archiveErr    error
 	restoreAgent  auth.AgentUser
 	restoreErr    error
+	deleteErr     error
 	lastUserID    string
 	lastAgentID   string
 	lastName      string
@@ -79,6 +80,11 @@ func (s *fakeStore) RestoreAgent(_ context.Context, userID, agentID string) (aut
 	return s.restoreAgent, s.restoreErr
 }
 
+func (s *fakeStore) DeleteAgent(_ context.Context, userID, agentID string) error {
+	s.lastUserID, s.lastAgentID = userID, agentID
+	return s.deleteErr
+}
+
 func TestGetDetailMapsOwnedAgentResponses(t *testing.T) {
 	store := &fakeStore{detail: Detail{Agent: auth.AgentUser{ID: "agent-1", DisplayName: "Builder"}}}
 	handler := NewHandler(store)
@@ -115,7 +121,11 @@ func TestGetDetailMapsOwnedAgentResponses(t *testing.T) {
 }
 
 func TestListWorkValidatesAndBoundsPagination(t *testing.T) {
-	store := &fakeStore{work: WorkPage{Page: 2, PageSize: 25}}
+	store := &fakeStore{work: WorkPage{
+		Items:    []WorkItem{{ID: "child-1", ParentTaskID: "parent-1"}},
+		Page:     2,
+		PageSize: 25,
+	}}
 	handler := NewHandler(store)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-1/work?page=2&pageSize=25", nil)
 	request.SetPathValue("id", "agent-1")
@@ -125,6 +135,9 @@ func TestListWorkValidatesAndBoundsPagination(t *testing.T) {
 
 	if response.Code != http.StatusOK || store.workPage != 2 || store.workPageSize != 25 {
 		t.Fatalf("response = %d %q, page = %d/%d", response.Code, response.Body.String(), store.workPage, store.workPageSize)
+	}
+	if !strings.Contains(response.Body.String(), `"parentTaskId":"parent-1"`) {
+		t.Fatalf("response does not expose parent task context: %s", response.Body.String())
 	}
 
 	for _, target := range []string{
@@ -207,6 +220,17 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 	response = lifecycleRequest(t, handler.Restore, user, http.MethodPost, `{}`)
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "agent_limit_reached") {
 		t.Fatalf("restore limit = %d %q", response.Code, response.Body.String())
+	}
+
+	store.deleteErr = ErrDeleteRequiresArchive
+	response = lifecycleRequest(t, handler.Delete, user, http.MethodDelete, "")
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "agent_not_archived") {
+		t.Fatalf("active delete = %d %q", response.Code, response.Body.String())
+	}
+	store.deleteErr = nil
+	response = lifecycleRequest(t, handler.Delete, user, http.MethodDelete, "")
+	if response.Code != http.StatusOK || store.lastUserID != user.ID || store.lastAgentID != "agent-1" {
+		t.Fatalf("archived delete = %d %q, owner = %q/%q", response.Code, response.Body.String(), store.lastUserID, store.lastAgentID)
 	}
 
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/agent-1", strings.NewReader(`{"displayName":"Builder","purpose":""}`))

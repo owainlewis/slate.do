@@ -50,7 +50,11 @@ func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
 		_, err := store.CreateTask(ctx, userID, loaded.Buckets[0].ID, CreateTaskInput{Title: fmt.Sprintf("Task %d", index), OverrideLimit: true})
 		return err
 	})
-	assertConcurrentResults(t, taskResults, defaultMaxTasksPerList, ErrActiveItemLimit)
+	for index, err := range taskResults {
+		if err != nil {
+			t.Fatalf("concurrent task %d: %v", index, err)
+		}
+	}
 }
 
 func TestFreeAccountUsesCatalogBoardAndListLimits(t *testing.T) {
@@ -162,7 +166,311 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
 	}
 }
 
-func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T) {
+func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "YouTube", Goal: "Plan useful videos"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedInboxID, err := store.InboxBucketID(ctx, userID)
+	if err != nil || resolvedInboxID != inbox.ID {
+		t.Fatalf("resolved inbox = %q, %v; want %q", resolvedInboxID, err, inbox.ID)
+	}
+
+	parent, err := store.CreateTask(ctx, userID, content.ID, CreateTaskInput{
+		Title: "Publish task-first agents video", Description: "Explain the control plane", ScheduledDate: "2026-08-12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Research examples"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.ParentTaskID != parent.ID || child.BucketID != content.ID {
+		t.Fatalf("subtask = %#v", child)
+	}
+	childDate := "2026-08-13"
+	childStatus := StatusNeedsReview
+	child, err = store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{ScheduledDate: &childDate, Status: &childStatus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSubtask(ctx, userID, child.ID, CreateTaskInput{Title: "Nested"}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("nested subtask error = %v, want ErrInvalidData", err)
+	}
+
+	topLevel, err := store.ListTaskPage(ctx, userID, TaskFilter{TopLevelOnly: true, Query: "task-first"})
+	if err != nil || len(topLevel.Tasks) != 1 || topLevel.Tasks[0].ID != parent.ID {
+		t.Fatalf("top-level search = %#v, %v", topLevel, err)
+	}
+	children, err := store.ListTaskPage(ctx, userID, TaskFilter{ParentTaskID: parent.ID})
+	if err != nil || len(children.Tasks) != 1 || children.Tasks[0].ID != child.ID {
+		t.Fatalf("children = %#v, %v", children, err)
+	}
+	globalSearch, err := store.ListTaskPage(ctx, userID, TaskFilter{Query: "Research examples"})
+	if err != nil || len(globalSearch.Tasks) != 1 || globalSearch.Tasks[0].ID != child.ID || globalSearch.Tasks[0].ParentTaskTitle != parent.Title {
+		t.Fatalf("global subtask search = %#v, %v", globalSearch, err)
+	}
+	otherUserID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", otherUserID) })
+	otherBoard, err := store.CreateBoard(ctx, otherUserID, CreateBoardInput{Name: "Private workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherList, err := store.CreateBucket(ctx, otherUserID, otherBoard.ID, CreateBucketInput{Name: "Private list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignParent, err := store.CreateTask(ctx, otherUserID, otherList.ID, CreateTaskInput{Title: "Secret parent title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET parent_task_id = $2 WHERE id = $1", child.ID, foreignParent.ID); err != nil {
+		t.Fatal(err)
+	}
+	malformedCrossAccount, err := store.ListTaskPage(ctx, userID, TaskFilter{Query: "Research examples"})
+	if err != nil || len(malformedCrossAccount.Tasks) != 1 || malformedCrossAccount.Tasks[0].ParentTaskTitle != "" {
+		t.Fatalf("cross-account parent title = %#v, %v", malformedCrossAccount, err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET parent_task_id = $2 WHERE id = $1", child.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	plannedSubtasks, err := store.ListTaskPage(ctx, userID, TaskFilter{ScheduledFrom: childDate, ScheduledTo: childDate})
+	if err != nil || len(plannedSubtasks.Tasks) != 1 || plannedSubtasks.Tasks[0].ID != child.ID {
+		t.Fatalf("planned subtasks = %#v, %v", plannedSubtasks, err)
+	}
+	reviewSubtasks, err := store.ListTaskPage(ctx, userID, TaskFilter{Status: StatusNeedsReview})
+	if err != nil || len(reviewSubtasks.Tasks) != 1 || reviewSubtasks.Tasks[0].ID != child.ID {
+		t.Fatalf("review subtasks = %#v, %v", reviewSubtasks, err)
+	}
+	topLevelPlanned, err := store.ListTaskPage(ctx, userID, TaskFilter{TopLevelOnly: true, ScheduledFrom: childDate, ScheduledTo: childDate})
+	if err != nil || len(topLevelPlanned.Tasks) != 0 {
+		t.Fatalf("top-level planned tasks = %#v, %v", topLevelPlanned, err)
+	}
+	lists, err := store.ListAllBuckets(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lists) != 2 || lists[0].BoardName != board.Name || lists[1].BoardName != board.Name {
+		t.Fatalf("workspace lists = %#v", lists)
+	}
+
+	if err := store.DeleteTask(ctx, userID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetTask(ctx, userID, child.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("child after parent deletion error = %v, want ErrNotFound", err)
+	}
+	assertStorageUsage(t, ctx, db, userID, 0, 0)
+}
+
+func TestAccountAlwaysKeepsAnInboxForUniversalCapture(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	firstBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInbox, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	falseValue := false
+	if _, err := store.UpdateBucket(ctx, userID, firstInbox.ID, UpdateBucketInput{IsInbox: &falseValue}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("remove final Inbox marker error = %v, want ErrInvalidData", err)
+	}
+	if err := store.DeleteBucket(ctx, userID, firstInbox.ID); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("delete final Inbox error = %v, want ErrInvalidData", err)
+	}
+	if err := store.DeleteBoard(ctx, userID, firstBoard.ID); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("delete board containing final Inbox error = %v, want ErrInvalidData", err)
+	}
+
+	secondBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInbox, err := store.CreateBucket(ctx, userID, secondBoard.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteBucket(ctx, userID, firstInbox.ID); err != nil {
+		t.Fatalf("delete Inbox with replacement: %v", err)
+	}
+	resolved, err := store.InboxBucketID(ctx, userID)
+	if err != nil || resolved != secondInbox.ID {
+		t.Fatalf("replacement Inbox = %q, %v; want %q", resolved, err, secondInbox.ID)
+	}
+	if _, err := store.CreateTask(ctx, userID, resolved, CreateTaskInput{Title: "Captured after replacement"}); err != nil {
+		t.Fatalf("capture after Inbox replacement: %v", err)
+	}
+}
+
+func TestEnsureInboxBucketIDRepairsEveryEmptyAccountState(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+
+	t.Run("no boards", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+		inboxID, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inbox, err := store.GetBucket(ctx, userID, inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		boards, err := store.ListBoards(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(boards) != 1 || inbox.BoardID != boards[0].ID || !inbox.IsInbox || inbox.Name != "Inbox" {
+			t.Fatalf("boards = %#v, inbox = %#v", boards, inbox)
+		}
+		if _, err := store.CreateTask(ctx, userID, inboxID, CreateTaskInput{Title: "First captured task"}); err != nil {
+			t.Fatalf("capture after repair: %v", err)
+		}
+	})
+
+	t.Run("board without lists", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		inboxID, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inbox, err := store.GetBucket(ctx, userID, inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lists, err := store.ListAllBuckets(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(lists) != 1 || inbox.BoardID != board.ID || !inbox.IsInbox {
+			t.Fatalf("lists = %#v, inbox = %#v", lists, inbox)
+		}
+	})
+
+	t.Run("existing list without Inbox", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ideas"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		inboxID, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		promoted, err := store.GetBucket(ctx, userID, inboxID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lists, err := store.ListAllBuckets(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inboxID != list.ID || len(lists) != 1 || !promoted.IsInbox {
+			t.Fatalf("promoted = %#v, lists = %#v", promoted, lists)
+		}
+	})
+
+	t.Run("existing Inbox is stable", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Capture", IsInbox: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		first, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := store.EnsureInboxBucketID(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lists, err := store.ListAllBuckets(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first != inbox.ID || second != inbox.ID || len(lists) != 1 {
+			t.Fatalf("first = %q, second = %q, lists = %#v", first, second, lists)
+		}
+	})
+
+	t.Run("concurrent first capture creates one Inbox", func(t *testing.T) {
+		userID := createIntegrationUser(t, ctx, db)
+		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+		var mu sync.Mutex
+		var inboxIDs []string
+		results := runConcurrently(8, func(_ int) error {
+			inboxID, err := store.EnsureInboxBucketID(ctx, userID)
+			if err == nil {
+				mu.Lock()
+				inboxIDs = append(inboxIDs, inboxID)
+				mu.Unlock()
+			}
+			return err
+		})
+		assertConcurrentResults(t, results, len(results), nil)
+		boards, err := store.ListBoards(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lists, err := store.ListAllBuckets(ctx, userID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(boards) != 1 || len(lists) != 1 || len(inboxIDs) != len(results) {
+			t.Fatalf("boards = %#v, lists = %#v, inbox IDs = %#v", boards, lists, inboxIDs)
+		}
+		for _, inboxID := range inboxIDs {
+			if inboxID != lists[0].ID {
+				t.Fatalf("inbox ID = %q, want %q", inboxID, lists[0].ID)
+			}
+		}
+	})
+}
+
+func TestLegacyActiveItemConfigurationDoesNotBlockCreateRetryOrMove(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -188,15 +496,15 @@ func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "First"})
+	_, err = store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "First"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Working limit"}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("configured max active items error = %v, want ErrLimitFull", err)
+	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Past configured limit"}); err != nil {
+		t.Fatalf("create past configured limit: %v", err)
 	}
 	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Override 2", OverrideLimit: true}); err != nil {
-		t.Fatalf("override lower working limit: %v", err)
+		t.Fatalf("deprecated override remains compatible: %v", err)
 	}
 	hardMaximum := defaultMaxTasksPerList
 	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &hardMaximum}); err != nil {
@@ -216,25 +524,18 @@ func TestProHardActiveItemMaximumCoversCreateRetryMoveAndCompletion(t *testing.T
 	if err != nil || retry.ID != twentieth.ID {
 		t.Fatalf("idempotent retry = %#v, %v", retry, err)
 	}
-	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Twenty first", OverrideLimit: true}); !errors.Is(err, ErrActiveItemLimit) {
-		t.Fatalf("twenty-first create error = %v, want ErrActiveItemLimit", err)
+	if _, err := store.CreateTask(ctx, userID, target.ID, CreateTaskInput{Title: "Twenty first", OverrideLimit: true}); err != nil {
+		t.Fatalf("twenty-first create: %v", err)
 	}
 	moving, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Move me"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpdateTask(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); !errors.Is(err, ErrActiveItemLimit) {
-		t.Fatalf("API move into full list error = %v, want ErrActiveItemLimit", err)
-	}
-	if _, err := store.UpdateTaskForHuman(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); !errors.Is(err, ErrActiveItemLimit) {
-		t.Fatalf("human move into full list error = %v, want ErrActiveItemLimit", err)
-	}
-	done := true
-	if _, err := store.UpdateTask(ctx, userID, first.ID, UpdateTaskInput{Done: &done}); err != nil {
-		t.Fatal(err)
+	if _, err := store.UpdateTask(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); err != nil {
+		t.Fatalf("API move into populated list: %v", err)
 	}
 	if _, err := store.UpdateTask(ctx, userID, moving.ID, UpdateTaskInput{BucketID: &target.ID}); err != nil {
-		t.Fatalf("move after completion freed capacity: %v", err)
+		t.Fatalf("repeated same-list move: %v", err)
 	}
 }
 
@@ -272,6 +573,14 @@ func TestMoveTaskAcrossBoardsPreservesMetadataAndOrdersBothLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstChild, err := store.CreateSubtask(ctx, userID, moving.ID, CreateTaskInput{Title: "First child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondChild, err := store.CreateSubtask(ctx, userID, moving.ID, CreateTaskInput{Title: "Second child"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	after, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "After"})
 	if err != nil {
 		t.Fatal(err)
@@ -297,14 +606,14 @@ func TestMoveTaskAcrossBoardsPreservesMetadataAndOrdersBothLists(t *testing.T) {
 		t.Fatalf("moved metadata = %#v, want metadata from %#v", moved, moving)
 	}
 	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
-	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, last.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, firstChild.ID, secondChild.ID, last.ID})
 
 	invalidPosition := 4
 	if _, err := store.MoveTask(ctx, userID, moving.ID, MoveTaskInput{BucketID: source.ID, Position: &invalidPosition}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("invalid position error = %v, want ErrInvalidData", err)
 	}
 	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
-	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, last.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, firstChild.ID, secondChild.ID, last.ID})
 }
 
 func assertTaskOrder(t *testing.T, store *Store, ctx context.Context, userID string, bucketID string, want []string) {
@@ -409,7 +718,7 @@ func assertConcurrentResults(t *testing.T, results []error, wantSuccess int, wan
 	}
 }
 
-func TestBoardMaxTasksPerListAppliesToAllBuckets(t *testing.T) {
+func TestBoardMaxTasksPerListIsLegacyMetadataOnly(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -439,18 +748,18 @@ func TestBoardMaxTasksPerListAppliesToAllBuckets(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "too many", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("first list error = %v, want ErrLimitFull", err)
+	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "third", Kind: KindAction}); err != nil {
+		t.Fatalf("third task in first list: %v", err)
 	}
-	if _, err := store.CreateTask(ctx, userID, second.ID, CreateTaskInput{Title: "too many", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("second list error = %v, want ErrLimitFull", err)
+	if _, err := store.CreateTask(ctx, userID, second.ID, CreateTaskInput{Title: "third", Kind: KindAction}); err != nil {
+		t.Fatalf("third task in second list: %v", err)
 	}
 
 	next := 3
 	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &next}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "now allowed", Kind: KindAction}); err != nil {
+	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "still allowed", Kind: KindAction}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -646,6 +955,577 @@ func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 	}
 }
 
+func TestInboxCaptureIdempotencySurvivesInboxReplacement(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Capture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "First Inbox", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Replacement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Captured once", IdempotencyKey: "stable-inbox-capture"}
+	first, err := store.CreateInboxTask(ctx, userID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.BucketID != firstInbox.ID {
+		t.Fatalf("first capture list = %q, want %q", first.BucketID, firstInbox.ID)
+	}
+
+	trueValue, falseValue := true, false
+	if _, err := store.UpdateBucket(ctx, userID, replacement.ID, UpdateBucketInput{IsInbox: &trueValue}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateBucket(ctx, userID, firstInbox.ID, UpdateBucketInput{IsInbox: &falseValue}); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.CreateInboxTask(ctx, userID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != first.ID || retry.BucketID != firstInbox.ID {
+		t.Fatalf("retry = %#v, want original %#v", retry, first)
+	}
+	changed := input
+	changed.Title = "Different capture"
+	if _, err := store.CreateInboxTask(ctx, userID, changed); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("changed retry error = %v, want ErrIdempotencyKey", err)
+	}
+
+	second, err := store.CreateInboxTask(ctx, userID, CreateTaskInput{Title: "Captured after replacement", IdempotencyKey: "replacement-capture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.BucketID != replacement.ID {
+		t.Fatalf("new capture list = %q, want replacement %q", second.BucketID, replacement.ID)
+	}
+	if err := store.DeleteBucket(ctx, userID, firstInbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateInboxTask(ctx, userID, input); !errors.Is(err, ErrIdempotencyGone) {
+		t.Fatalf("retry after original Inbox deletion error = %v, want ErrIdempotencyGone", err)
+	}
+}
+
+func TestTaskCreationAcceptsALegacyStoredFingerprint(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Legacy retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{
+		Title:          "Legacy retry",
+		Description:    "Context",
+		ScheduledDate:  "2026-08-12",
+		Kind:           KindAction,
+		IdempotencyKey: "legacy-client-request",
+	}
+	original, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{
+		Title:         input.Title,
+		Description:   input.Description,
+		ScheduledDate: input.ScheduledDate,
+		Kind:          input.Kind,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyFingerprint, err := topLevelTaskCreateFingerprint(
+		bucket.ID,
+		input.Title,
+		input.Description,
+		input.ScheduledDate,
+		input.Kind,
+		input.AssigneeAgentID,
+		input.OverrideLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, input.IdempotencyKey, legacyFingerprint, original.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != original.ID {
+		t.Fatalf("legacy retry task = %q, want original %q", retry.ID, original.ID)
+	}
+}
+
+func TestTaskCreationAcceptsTheImmediatePredeploymentFingerprint(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Rolling deployment retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Retry during rollout", IdempotencyKey: "rolling-deployment-request"}
+	original, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: input.Title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousFingerprint, err := parentAwareTaskCreateFingerprint(
+		bucket.ID,
+		input.Title,
+		input.Description,
+		"",
+		KindAction,
+		input.AssigneeAgentID,
+		"",
+		input.OverrideLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, input.IdempotencyKey, previousFingerprint, original.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != original.ID {
+		t.Fatalf("rolling deployment retry task = %q, want original %q", retry.ID, original.ID)
+	}
+}
+
+func TestTopLevelTaskFingerprintKeepsLegacyShape(t *testing.T) {
+	const bucketID = "00000000-0000-0000-0000-000000000001"
+	const legacyFingerprint = "455c2f24afe83518bf7e89324993aec306c701c81cc6b21db9340888e7d5df05"
+
+	fingerprint, err := taskCreateFingerprint(bucketID, "Legacy retry", "Context", "2026-08-12", KindAction, "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint != legacyFingerprint {
+		t.Fatalf("top-level fingerprint = %q, want legacy %q", fingerprint, legacyFingerprint)
+	}
+	subtaskFingerprint, err := taskCreateFingerprint(bucketID, "Legacy retry", "Context", "2026-08-12", KindAction, "", "00000000-0000-0000-0000-000000000002", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subtaskFingerprint == legacyFingerprint {
+		t.Fatal("subtask fingerprint must include its parent task")
+	}
+}
+
+func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Subtask retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Ship release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Write notes", IdempotencyKey: "subtask-request"}
+	first, err := store.CreateSubtask(ctx, userID, parent.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.CreateSubtask(ctx, userID, parent.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != first.ID {
+		t.Fatalf("subtask retry created %q, want original %q", retry.ID, first.ID)
+	}
+
+	changed := input
+	changed.Title = "Write different notes"
+	if _, err := store.CreateSubtask(ctx, userID, parent.ID, changed); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("changed subtask retry error = %v, want ErrIdempotencyKey", err)
+	}
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, input); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("top-level reuse of subtask key error = %v, want ErrIdempotencyKey", err)
+	}
+	otherParent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Publish announcement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSubtask(ctx, userID, otherParent.ID, input); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("different-parent reuse of subtask key error = %v, want ErrIdempotencyKey", err)
+	}
+}
+
+func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	firstBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstList, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondList, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Working"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdList, err := store.CreateBucket(ctx, userID, secondBoard.ID, CreateBucketInput{Name: "Review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, firstList.ID, CreateTaskInput{Title: "Ship release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Human review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{BucketID: &secondList.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("direct subtask update error = %v, want ErrInvalidData", err)
+	}
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: firstList.ID, Position: &position}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("same-list subtask move error = %v, want ErrInvalidData", err)
+	}
+	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: secondList.ID, Position: &position}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("direct subtask move error = %v, want ErrInvalidData", err)
+	}
+
+	// Rows written before this invariant may already be split. Both human move
+	// paths may repair them, but only by returning to the locked parent list.
+	if _, err := db.Exec(ctx, `
+		UPDATE tasks
+		SET board_id = $2, bucket_id = $3, updated_at = now()
+		WHERE id = $1
+	`, child.ID, secondBoard.ID, thirdList.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{BucketID: &secondList.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("legacy subtask update outside parent list error = %v, want ErrInvalidData", err)
+	}
+	if _, err := store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{BucketID: &firstList.ID}); err != nil {
+		t.Fatalf("repair legacy subtask with update: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE tasks
+		SET board_id = $2, bucket_id = $3, updated_at = now()
+		WHERE id = $1
+	`, child.ID, secondBoard.ID, thirdList.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: secondList.ID, Position: &position}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("legacy subtask move outside parent list error = %v, want ErrInvalidData", err)
+	}
+	repairPosition := 1
+	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: firstList.ID, Position: &repairPosition}); err != nil {
+		t.Fatalf("repair legacy subtask with move: %v", err)
+	}
+
+	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &secondList.ID}); err != nil {
+		t.Fatal(err)
+	}
+	childAfterUpdate, err := store.GetTask(ctx, userID, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childAfterUpdate.BucketID != secondList.ID || childAfterUpdate.BoardID != firstBoard.ID {
+		t.Fatalf("child after parent update = %#v", childAfterUpdate)
+	}
+
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: thirdList.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
+	childAfterMove, err := store.GetTask(ctx, userID, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childAfterMove.BucketID != thirdList.ID || childAfterMove.BoardID != secondBoard.ID {
+		t.Fatalf("child after parent move = %#v", childAfterMove)
+	}
+}
+
+func TestUpdateTaskMovesParentAndChildrenAsOrderedGroup(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Grouped moves"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Before"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstChild, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "First child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondChild, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Second child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "After"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationFirst, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Destination first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationLast, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Destination last"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requestedPosition := 1
+	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID, SortOrder: &requestedPosition}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("combined list and position update error = %v, want ErrInvalidData", err)
+	}
+	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, parent.ID, firstChild.ID, secondChild.ID, after.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{destinationFirst.ID, destinationLast.ID})
+
+	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{parent.ID, firstChild.ID, secondChild.ID, destinationFirst.ID, destinationLast.ID})
+}
+
+func TestTaskMovesPreserveUnrelatedTaskTimestamps(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "History"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceHistory, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Old source completion"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Child"}); err != nil {
+		t.Fatal(err)
+	}
+	destinationHistory, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Old destination completion"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := true
+	for _, taskID := range []string{sourceHistory.ID, destinationHistory.ID} {
+		if _, err := store.UpdateTaskForHuman(ctx, userID, taskID, UpdateTaskInput{Done: &done}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const oldTimestamp = "2020-01-02T03:04:05Z"
+	if _, err := db.Exec(ctx, "UPDATE tasks SET updated_at = $1::timestamptz WHERE id = ANY($2::uuid[])", oldTimestamp, []string{sourceHistory.ID, destinationHistory.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID}); err != nil {
+		t.Fatal(err)
+	}
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: source.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
+	for _, taskID := range []string{sourceHistory.ID, destinationHistory.ID} {
+		task, err := store.GetTask(ctx, userID, taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.UpdatedAt.UTC().Format(time.RFC3339) != oldTimestamp {
+			t.Fatalf("unrelated task %s updated at %s, want %s", taskID, task.UpdatedAt.UTC().Format(time.RFC3339), oldTimestamp)
+		}
+	}
+}
+
+func TestSubtaskCreationRacingParentMoveNeverSplitsLists(t *testing.T) {
+	for _, mutation := range []string{"update", "move"} {
+		t.Run(mutation, func(t *testing.T) {
+			db := openIntegrationDB(t)
+			ctx := context.Background()
+			store := NewStore(db)
+			userID := createIntegrationUser(t, ctx, db)
+			t.Cleanup(func() {
+				_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+			})
+
+			board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "Parent"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			parentLock, err := db.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parentLock.Rollback(ctx)
+			if _, err := lockedTask(ctx, parentLock, userID, parent.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			moveResult := make(chan error, 1)
+			go func() {
+				if mutation == "update" {
+					_, err := store.UpdateTaskForHuman(ctx, userID, parent.ID, UpdateTaskInput{BucketID: &destination.ID})
+					moveResult <- err
+					return
+				}
+				position := 0
+				_, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position})
+				moveResult <- err
+			}()
+			waitForBlockedQueryContaining(t, ctx, db, "FOR UPDATE OF t")
+
+			createResult := make(chan error, 1)
+			go func() {
+				_, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Racing child"})
+				createResult <- err
+			}()
+			waitForBlockedQueryContaining(t, ctx, db, "FROM users u")
+
+			if err := parentLock.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-moveResult; err != nil {
+				t.Fatalf("parent move: %v", err)
+			}
+			if err := <-createResult; !errors.Is(err, ErrInvalidData) {
+				t.Fatalf("racing subtask creation error = %v, want ErrInvalidData", err)
+			}
+
+			var splitChildren int
+			if err := db.QueryRow(ctx, `
+				SELECT count(*)
+				FROM tasks child
+				JOIN tasks parent ON parent.id = child.parent_task_id
+				WHERE child.parent_task_id = $1
+				  AND (child.board_id <> parent.board_id OR child.bucket_id <> parent.bucket_id)
+			`, parent.ID).Scan(&splitChildren); err != nil {
+				t.Fatal(err)
+			}
+			if splitChildren != 0 {
+				t.Fatalf("split children = %d, want 0", splitChildren)
+			}
+
+			child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Current child"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if child.BucketID != destination.ID {
+				t.Fatalf("child list = %q, want %q", child.BucketID, destination.ID)
+			}
+		})
+	}
+}
+
 func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -663,14 +1543,23 @@ func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []bool{true, false} {
-		updated, err := store.UpdateBucket(ctx, userID, bucket.ID, UpdateBucketInput{IsInbox: &value})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if updated.IsInbox != value {
-			t.Fatalf("isInbox = %v, want %v", updated.IsInbox, value)
-		}
+	value := true
+	updated, err := store.UpdateBucket(ctx, userID, bucket.ID, UpdateBucketInput{IsInbox: &value})
+	if err != nil || !updated.IsInbox {
+		t.Fatalf("set Inbox = %#v, %v", updated, err)
+	}
+	replacement, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Replacement", IsInbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value = false
+	updated, err = store.UpdateBucket(ctx, userID, bucket.ID, UpdateBucketInput{IsInbox: &value})
+	if err != nil || updated.IsInbox {
+		t.Fatalf("clear Inbox with replacement = %#v, %v", updated, err)
+	}
+	resolved, err := store.InboxBucketID(ctx, userID)
+	if err != nil || resolved != replacement.ID {
+		t.Fatalf("resolved Inbox = %q, %v; want %q", resolved, err, replacement.ID)
 	}
 }
 
@@ -693,7 +1582,7 @@ func TestCreateBoardEnforcesDefaultBoardLimit(t *testing.T) {
 	}
 }
 
-func TestUnifiedListItemsAndActionLimits(t *testing.T) {
+func TestUnifiedListItemsAndActions(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -738,8 +1627,8 @@ func TestUnifiedListItemsAndActionLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Second action", Kind: KindAction}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("second action error = %v, want ErrLimitFull", err)
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Second action", Kind: KindAction}); err != nil {
+		t.Fatalf("second action: %v", err)
 	}
 	updatedTitle := "Record the camera comparison"
 	unchangedKind := KindAction
@@ -755,14 +1644,11 @@ func TestUnifiedListItemsAndActionLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopenAction := false
-	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("reopen action in full list error = %v, want ErrLimitFull", err)
+	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); err != nil {
+		t.Fatalf("reopen action: %v", err)
 	}
 	if err := store.DeleteTask(ctx, userID, replacement.ID); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); err != nil {
-		t.Fatalf("reopen action with capacity: %v", err)
 	}
 	claimed, err := store.ClaimTask(ctx, userID, reference.ID)
 	if err != nil {
@@ -775,14 +1661,14 @@ func TestUnifiedListItemsAndActionLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(actions) != 3 {
-		t.Fatalf("actions = %#v, want all three list items", actions)
+	if len(actions) != 4 {
+		t.Fatalf("actions = %#v, want all four list items", actions)
 	}
 	loaded, err := store.GetBoard(ctx, userID, board.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Buckets[0].Goal != "Publish one strong video each week" || loaded.Buckets[0].OpenCount != 2 {
+	if loaded.Buckets[0].Goal != "Publish one strong video each week" || loaded.Buckets[0].OpenCount != 3 {
 		t.Fatalf("loaded bucket = %#v", loaded.Buckets[0])
 	}
 }
@@ -913,16 +1799,16 @@ func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
 		t.Fatal(err)
 	}
 	queued := StatusQueued
-	reopenedTitle := "Should not persist"
-	if _, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Title: &reopenedTitle, BucketID: &bucket.ID, Status: &queued}); !errors.Is(err, ErrLimitFull) {
-		t.Fatalf("reopen into full list error = %v, want ErrLimitFull", err)
+	reopenedTitle := "Reopened at home"
+	if _, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Title: &reopenedTitle, BucketID: &bucket.ID, Status: &queued}); err != nil {
+		t.Fatalf("reopen into populated list: %v", err)
 	}
 	loaded, err := store.GetTask(ctx, userID, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Title != movedTitle || loaded.BucketID != target.ID || loaded.Status != StatusDone {
-		t.Fatalf("failed atomic update persisted partially: %#v", loaded)
+	if loaded.Title != reopenedTitle || loaded.BucketID != bucket.ID || loaded.Status != StatusQueued {
+		t.Fatalf("reopened task = %#v", loaded)
 	}
 }
 
@@ -999,4 +1885,28 @@ func waitForBlockedBoardUpdates(t *testing.T, ctx context.Context, db *database.
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d blocked board updates", want)
+}
+
+func waitForBlockedQueryContaining(t *testing.T, ctx context.Context, db *database.Pool, fragment string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int
+		if err := db.QueryRow(ctx, `
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND pid <> pg_backend_pid()
+			  AND state = 'active'
+			  AND wait_event_type = 'Lock'
+			  AND query LIKE '%' || $1 || '%'
+		`, fragment).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for blocked query containing %q", fragment)
 }

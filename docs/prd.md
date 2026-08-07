@@ -1,265 +1,156 @@
 # Slate PRD
 
-Status: Draft v1.
+Status: Task-first redesign.
 
 ## Summary
 
-Slate is a minimal interactive operating plan for thinking clearly and executing deliberately.
+Slate is a task management and organising system for humans and command-line agents.
 
-It is based on buckets.
+The task is the core unit. Lists help people think in buckets. Views show the same tasks in the shape needed for planning or execution. Agents are external collaborators that claim assigned work through the CLI.
 
-A bucket is a simple list with a name, a goal, and a small set of items.
+## Product principles
 
-Slate helps the user think clearly by grouping work into visible buckets and keeping each bucket small.
+- Capture work before organising it.
+- Keep one source of truth for human and agent work.
+- Make lists useful for clear thinking, not workflow enforcement.
+- Keep task metadata small and visible.
+- Let the CLI be the agent interface. Do not embed AI actions in the product.
+- Prefer one level of subtasks over deep project trees.
 
-## Product Principle
+## Core workflow
 
-Simplicity is the product.
+1. A human or integration creates a task in Inbox.
+2. The task is refined and moved into a list when its bucket is clear.
+3. The human sets priority, planned date, status, and owner when useful.
+4. A human works directly, or an assigned agent pulls and claims the task through the CLI.
+5. Work moves through Ready, Working, Review, and Done.
+6. Complex work can be split into one level of real subtasks shared between humans and agents.
 
-Slate should use the simplest thing that works. Every feature must protect clarity. If a feature makes the board feel heavier, it should be removed, delayed, or hidden.
+## Core model
 
-The app should feel calm enough to use every day.
+### Task
 
-## Product Bet
-
-Most productivity tools collect information and turn it into noise.
-
-Slate should help the user choose work.
-
-The main behavior should be:
-
-- Capture list items quickly.
-- Put items into clear buckets.
-- Limit each bucket.
-- Add dates to surface selected items in Week and Today.
-- Let a human or agent pick up any queued item.
-- Review agent work without adding ownership complexity.
-
-## Audience
-
-The first user is a solo builder or manager working with agents.
-
-Slate should also work for creators, founders, operators, and small teams who want a clear planning surface without a full project management system.
-
-## Positioning
-
-Slate is not a traditional kanban app.
-
-Slate is not a second brain.
-
-Slate is not a project management suite.
-
-Slate is a small visual surface for deciding what gets attention.
-
-It is inspired by:
-
-- TeuxDeux for simple lists.
-- Trello for visual buckets.
-- Plain to-do lists for speed and clarity.
-
-## Core Model
-
-Slate has boards.
-
-A board has buckets.
-
-A bucket has items.
-
-An item has a title and an execution state. Items stay flat inside a bucket. Separate buckets provide structure without nested lists.
+A task is any captured unit of work, including an action, idea, thought, or planned content item.
 
 Core fields:
 
 - `id`
 - `title`
 - `description`
-- `scheduledDate`
-- `boardId`
-- `bucketId`
-- `done`
+- `listId`
 - `status`
+- `priority`
+- `scheduledDate`
+- `assigneeAgentId`
+- `parentTaskId`
+- timestamps
 
-## Buckets
+### List
 
-Buckets are the main thinking tool.
+A list is a named bucket for organising tasks, such as Product, YouTube, Content, LinkedIn, Personal, or Waiting.
 
-Examples:
+Lists can have a short goal. Lists do not reject tasks based on item count. Focus comes from filters, priorities, dates, and status. Account-level storage quotas remain the capacity boundary.
 
-- High priority
-- Medium priority
-- Low priority
+Boards remain an internal compatibility container for existing data and API clients. They are not the primary navigation model.
+
+### Subtask
+
+A subtask is a real task with its own status, priority, planned date, list, and owner. A task can contain subtasks, but a subtask cannot contain another subtask.
+
+The parent detail view shows completed progress and a compact subtask list. Deleting a parent deletes its subtasks.
+
+### Agent
+
+An agent is a named external collaborator with a scoped credential. Tasks can be assigned to agents. An agent token can only read and change that agent's assigned work.
+
+Agents use the CLI to pull, claim, update, request review, and complete tasks. Slate does not offer in-product actions such as “refine with agent”.
+
+## Navigation
+
+The signed-in app opens to All tasks and keeps these destinations visible:
+
 - Inbox
-- Waiting
-- Writing
-- Product
-- Personal
+- Today
+- Week
+- Review
+- All tasks
+- User-defined lists
+- Agents
 
-The app should not force one bucket style. Users should be able to bucket by priority, project, energy, time, person, or status.
+New Task creates one task in Inbox and opens it for editing. There is no separate quick-capture product surface.
 
-Each bucket can state its goal in one sentence.
+## Views
 
-## Active item limits
+Every view reads and edits the same task records:
 
-Every list should have a visible Max active items per list setting.
+- List: compact rows for scanning and thinking.
+- Flow: Ready, Working, Review, and Done columns.
+- Table: task, list, status, priority, owner, and planned date.
+- Week: planned work grouped Monday through Sunday.
 
-Example:
+Filters cover text, status, priority, owner, and planned date range. A list route combines its list scope with the selected filters.
 
-```text
-Product 3/5
-```
-
-The limit is not decoration. It is part of the product.
-
-When the limit is full, the user should finish or move an item before creating another.
-
-The default and Pro hard maximum are 20 active items per list. A board can choose a lower working limit, but no input or override can exceed 20.
-
-## List Items
-
-An item should look like one clean, completable line in the bucket.
-
-List item display should include:
-
-- Title.
-- Planned date when set.
-
-The full task detail view should include:
-
-- Title.
-- Description.
-- Date.
-- Workflow state.
-- List.
-
-## Agents
-
-List items can optionally be assigned to a named agent identity.
-
-An account owner creates an agent identity and receives its token once. An agent's queued-task feed contains only work assigned to that identity.
-
-A valid account API token can still pull any queued task. Claiming a task changes its internal workflow status to `working`.
-
-Example CLI flow:
-
-```bash
-SLATE_API_TOKEN=...
-slate tasks pull
-```
-
-The API returns open queued tasks.
-
-Example query:
-
-```text
-account or agent token is valid
-done = false
-status = "queued"
-assignee = authenticated agent when using an agent token
-```
-
-This keeps agent collaboration simple.
-
-## Workflow Status
-
-Use a small status set:
+## Workflow status
 
 - `queued`
 - `working`
 - `needs_review`
 - `done`
 
-Do not add complex workflow states in v1.
+The labels in the interface are Ready, Working, Review, and Done. Workflow states are fixed in this version.
 
-## API Principle
+## CLI workflow
 
-The API should be boring and clear.
+Capture directly into Inbox:
 
-Core agent operations:
+```bash
+slate tasks create --title "Draft launch note"
+```
 
-- Pull queued tasks.
-- Claim or mark a task as working.
-- Update the task description with useful context or results.
-- Mark a task as needs review.
-- Mark a task as done.
+Create in a known list or under a parent:
 
-The API supports either an account token or a lightweight named agent identity with its own revocable token.
+```bash
+slate tasks create --list <list-id> --title "Research examples"
+slate tasks create --parent <task-id> --title "Human review"
+```
 
-## MVP
+An agent run:
 
-The first app version should include:
+```bash
+slate tasks pull --limit 5
+slate tasks claim <task-id>
+slate tasks get <task-id>
+slate tasks status <task-id> needs_review
+```
 
-- Boards.
-- Buckets.
-- Bucket limits.
-- Create, rename, reorder, and delete buckets.
-- Create, edit, move, complete, and delete items.
-- Item detail panel.
-- Title and description.
-- Optional planned date and Monday-to-Sunday calendar view.
-- Today view for dated items.
-- Flow view with Ready, Working, Review, and Done columns for list items.
-- Workflow status controls for human and agent coordination.
-- Local persistence or simple database persistence.
-- Global workspace API token.
-- Named agent identities, per-agent tokens, and optional assignment.
-- CLI pull for queued tasks.
+## Scope
 
-Out of scope:
+Included:
 
-- User roles.
-- Team permissions.
-- Nested items.
-- Comments.
-- Rich labels.
-- Calendar sync.
-- Automation builder.
-- Reports.
-- Notifications.
+- Account-wide task workspace.
+- Inbox capture.
+- User-defined lists with no item-count limit.
+- List, Flow, Table, Today, and Week views.
+- Filters, priorities, planned dates, and fixed workflow status.
+- One level of subtasks.
+- Named agent identities, assignment, scoped tokens, and CLI execution.
+- Compatibility for existing board, list, task, and CLI clients.
 
-## UX Principles
+Not included:
 
-- The board is the interface.
-- Keep list items compact.
-- Avoid dashboards.
-- Keep items flat and use buckets for structure.
-- Avoid heavy metadata.
-- Prefer text over configuration.
-- Make limits visible.
-- Make overload obvious.
-- Show the fixed item state in the detail panel without adding ownership or workflow configuration.
-- Make capture fast.
-- Make review calm.
+- Embedded chat or AI refinement actions.
+- Deeply nested task trees.
+- Custom workflow builders.
+- Team roles and permissions.
+- Comments, notifications, calendar sync, or rich labels.
 
-## Initial Prototype
-
-The first static prototype is:
-
-- `list-app-mockup.html`
-
-It shows:
-
-- Sidebar boards.
-- List grid.
-- Responsive list grid.
-- Item add flow.
-- Item drag flow.
-- Detail panel.
-- Title and description.
-- Planned date.
-- Weekly calendar view.
-
-## Success Criteria
+## Success criteria
 
 Slate is working when:
 
-- The user can see active work at a glance.
-- Buckets stay small.
-- The user knows what matters this week.
-- Agents can find queued work.
-- Agent work can be reviewed without clutter.
-- The product feels lighter than Trello, Notion, GitHub Issues, or a normal task app.
-
-## Open Questions
-
-- Should the default bucket limit be 3 or 5?
-- Should Inbox have a limit?
-- Should the CLI be part of v1 or come right after the web app?
+- Any work can be captured as one task without deciding its structure first.
+- A creator can replace a planning table such as an Airtable video pipeline with a filtered Slate list.
+- A human can switch between list, flow, and table views without duplicating data.
+- A complex task can be divided between a human and agents while progress stays visible on the parent.
+- An agent can find only its assigned work, execute it through the CLI, and return it for review.
+- The interface feels calm, direct, and consistent with Slate's existing visual identity.

@@ -75,16 +75,19 @@ slate auth status</code></pre>
         <section id="commands" class="docs-section">
           <h2>Find and manage work</h2>
           <p>Slate's data and workflow commands return JSON, including the IDs needed by later commands.</p>
-          <pre><code>slate boards list
-slate lists list --board &lt;board-id&gt;
+          <pre><code>slate tasks create --title "Captured thought"
 slate tasks pull --limit 5
 slate tasks get &lt;task-id&gt;</code></pre>
-          <p>Create a task with enough context for an agent to execute it:</p>
+          <p>A task without a list enters Inbox. Use a list when its bucket is already clear:</p>
           <pre><code>slate tasks create \
   --list &lt;list-id&gt; \
   --title "Draft launch note" \
   --description "Write the first version" \
-  --date 2026-07-21</code></pre>
+  --date 2026-07-21
+
+slate tasks create \
+  --parent &lt;task-id&gt; \
+  --title "Human review"</code></pre>
           <p>Run <code>slate help boards</code>, <code>slate help lists</code>, or <code>slate help tasks</code> for every command and flag.</p>
         </section>
 

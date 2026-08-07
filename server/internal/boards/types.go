@@ -41,23 +41,29 @@ type Bucket struct {
 	UpdatedAt           time.Time `json:"updatedAt"`
 	Tasks               []Task    `json:"tasks,omitempty"`
 	CompletedNextCursor string    `json:"completedNextCursor,omitempty"`
+	BoardName           string    `json:"boardName,omitempty"`
 }
 
 type Task struct {
-	ID              string    `json:"id"`
-	BoardID         string    `json:"boardId"`
-	BucketID        string    `json:"bucketId"`
-	Title           string    `json:"title"`
-	Description     string    `json:"description,omitempty"`
-	ScheduledDate   string    `json:"scheduledDate"`
-	Kind            string    `json:"kind"`
-	Done            bool      `json:"done"`
-	Status          string    `json:"status"`
-	Priority        string    `json:"priority"`
-	AssigneeAgentID string    `json:"assigneeAgentId,omitempty"`
-	SortOrder       int       `json:"sortOrder"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID                string    `json:"id"`
+	BoardID           string    `json:"boardId"`
+	BucketID          string    `json:"bucketId"`
+	Title             string    `json:"title"`
+	Description       string    `json:"description,omitempty"`
+	ScheduledDate     string    `json:"scheduledDate"`
+	Kind              string    `json:"kind"`
+	Done              bool      `json:"done"`
+	Status            string    `json:"status"`
+	Priority          string    `json:"priority"`
+	AssigneeAgentID   string    `json:"assigneeAgentId,omitempty"`
+	AssigneeAgentName string    `json:"assigneeAgentName,omitempty"`
+	ParentTaskID      string    `json:"parentTaskId,omitempty"`
+	ParentTaskTitle   string    `json:"parentTaskTitle,omitempty"`
+	BucketName        string    `json:"listName,omitempty"`
+	BoardName         string    `json:"boardName,omitempty"`
+	SortOrder         int       `json:"sortOrder"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 type CreateBoardInput struct {
@@ -97,6 +103,7 @@ type CreateTaskInput struct {
 	Kind            string `json:"kind"`
 	OverrideLimit   bool   `json:"overrideLimit"`
 	AssigneeAgentID string `json:"assigneeAgentId"`
+	ParentTaskID    string `json:"parentTaskId"`
 	IdempotencyKey  string `json:"-"`
 }
 
@@ -128,6 +135,13 @@ type TaskFilter struct {
 	Cursor          string
 	ActionsOnly     bool
 	AssigneeAgentID string
+	Unassigned      bool
+	Query           string
+	ScheduledFrom   string
+	ScheduledTo     string
+	ParentTaskID    string
+	TopLevelOnly    bool
+	InboxOnly       bool
 }
 
 type TaskPage struct {

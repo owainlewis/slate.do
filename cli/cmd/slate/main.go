@@ -124,7 +124,7 @@ items per list. Use "tasks list --done true" to page older completed work.
   slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--done <true|false>] [--limit <n>] [--cursor <cursor>]
   slate tasks get <task-id>
   slate tasks pull [--board <board-id>] [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
-  slate tasks create --list <list-id> --title <title> [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>] [--override-limit]
+  slate tasks create --title <title> [--list <list-id> | --parent <task-id>] [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>]
   slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>] [--priority <p0|p1|p2>]
   slate tasks delete <task-id>
   slate tasks reorder --list <list-id> <task-id>...
@@ -370,20 +370,30 @@ func tasksCmd(c client, args []string) error {
 		fs := newFlagSet("tasks create")
 		listID := fs.String("list", "", "list id")
 		bucketID := fs.String("bucket", "", "deprecated alias for --list")
+		parentID := fs.String("parent", "", "parent task id for a subtask")
 		title := fs.String("title", "", "task title")
 		description := fs.String("description", "", "task description")
 		date := fs.String("date", "", "planned date")
 		idempotencyKey := fs.String("idempotency-key", "", "stable key for safe retries")
-		override := fs.Bool("override-limit", false, "override the configured Max active items per list, never the Pro maximum")
+		override := fs.Bool("override-limit", false, "deprecated compatibility flag; Lists no longer reject tasks by count")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		targetList := firstNonEmpty(*listID, *bucketID)
-		if fs.NArg() != 0 || targetList == "" || strings.TrimSpace(*title) == "" {
-			return errors.New("--list and --title are required")
+		if fs.NArg() != 0 || strings.TrimSpace(*title) == "" {
+			return errors.New("--title is required")
+		}
+		if targetList != "" && strings.TrimSpace(*parentID) != "" {
+			return errors.New("choose --list or --parent, not both")
 		}
 		body := map[string]any{"title": *title, "description": *description, "scheduledDate": *date, "kind": "action", "overrideLimit": *override}
-		return c.sendJSONWithHeaders(http.MethodPost, "/api/v1/buckets/"+url.PathEscape(targetList)+"/tasks", body, map[string]string{"Idempotency-Key": *idempotencyKey})
+		path := "/api/v1/tasks"
+		if targetList != "" {
+			path = "/api/v1/buckets/" + url.PathEscape(targetList) + "/tasks"
+		} else if strings.TrimSpace(*parentID) != "" {
+			path = "/api/v1/tasks/" + url.PathEscape(strings.TrimSpace(*parentID)) + "/subtasks"
+		}
+		return c.sendJSONWithHeaders(http.MethodPost, path, body, map[string]string{"Idempotency-Key": *idempotencyKey})
 	case "update":
 		if len(args) < 2 {
 			return errors.New("usage: slate tasks update <task-id> [flags]")

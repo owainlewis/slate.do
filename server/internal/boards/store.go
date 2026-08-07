@@ -35,6 +35,8 @@ const (
 	maxCompletedHistoryLimit     = 100
 )
 
+const inboxCaptureFingerprintTarget = "account-inbox"
+
 type completedTaskCursor struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	ID        string    `json:"id"`
@@ -134,6 +136,147 @@ func (s *Store) ListBoardsForAgent(ctx context.Context, userID string, agentID s
 		boards = append(boards, board)
 	}
 	return boards, rows.Err()
+}
+
+func (s *Store) ListAllBuckets(ctx context.Context, userID string) ([]Bucket, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT l.id::text, l.board_id::text, l.name, l.goal, l.is_inbox, b.max_tasks_per_list, l.sort_order,
+			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.done = false)::int AS open_count,
+			l.created_at, l.updated_at, b.name
+		FROM buckets l
+		JOIN boards b ON b.id = l.board_id
+		LEFT JOIN tasks t ON t.bucket_id = l.id
+		WHERE b.user_id = $1
+		GROUP BY l.id, b.max_tasks_per_list, b.name, b.sort_order, b.created_at
+		ORDER BY b.sort_order, b.created_at, l.sort_order, l.created_at
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var lists []Bucket
+	for rows.Next() {
+		var list Bucket
+		if err := rows.Scan(
+			&list.ID, &list.BoardID, &list.Name, &list.Goal, &list.IsInbox, &list.LimitCount,
+			&list.SortOrder, &list.OpenCount, &list.CreatedAt, &list.UpdatedAt, &list.BoardName,
+		); err != nil {
+			return nil, err
+		}
+		lists = append(lists, list)
+	}
+	if lists == nil {
+		lists = []Bucket{}
+	}
+	return lists, rows.Err()
+}
+
+func (s *Store) InboxBucketID(ctx context.Context, userID string) (string, error) {
+	var id string
+	err := s.db.QueryRow(ctx, `
+		SELECT l.id::text
+		FROM buckets l
+		JOIN boards b ON b.id = l.board_id
+		WHERE b.user_id = $1 AND l.is_inbox = true
+		ORDER BY b.sort_order, b.created_at, l.sort_order, l.created_at
+		LIMIT 1
+	`, userID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return id, err
+}
+
+// EnsureInboxBucketID repairs the valid empty-account states left by older
+// clients and returns an Inbox for universal capture. The account lock is shared
+// with board, list, and task writes, so concurrent first-task requests cannot
+// create duplicate defaults.
+func (s *Store) EnsureInboxBucketID(ctx context.Context, userID string) (string, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := accountLimitsForUpdate(ctx, tx, userID); err != nil {
+		return "", err
+	}
+
+	var inboxID string
+	err = tx.QueryRow(ctx, `
+		SELECT l.id::text
+		FROM buckets l
+		JOIN boards b ON b.id = l.board_id
+		WHERE b.user_id = $1 AND l.is_inbox = true
+		ORDER BY b.sort_order, b.created_at, b.id, l.sort_order, l.created_at, l.id
+		LIMIT 1
+		FOR UPDATE OF l
+	`, userID).Scan(&inboxID)
+	if err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return inboxID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+
+	var firstListID string
+	err = tx.QueryRow(ctx, `
+		SELECT l.id::text
+		FROM buckets l
+		JOIN boards b ON b.id = l.board_id
+		WHERE b.user_id = $1
+		ORDER BY b.sort_order, b.created_at, b.id, l.sort_order, l.created_at, l.id
+		LIMIT 1
+		FOR UPDATE OF l
+	`, userID).Scan(&firstListID)
+	if err == nil {
+		if _, err := tx.Exec(ctx, "UPDATE buckets SET is_inbox = true, updated_at = now() WHERE id = $1", firstListID); err != nil {
+			return "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return firstListID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+
+	var boardID string
+	var listLimit int
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, max_tasks_per_list
+		FROM boards
+		WHERE user_id = $1
+		ORDER BY sort_order, created_at, id
+		LIMIT 1
+		FOR UPDATE
+	`, userID).Scan(&boardID, &listLimit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx, `
+			INSERT INTO boards (user_id, name, max_tasks_per_list, sort_order)
+			VALUES ($1, 'Today', $2, 0)
+			RETURNING id::text, max_tasks_per_list
+		`, userID, defaultMaxTasksPerList).Scan(&boardID, &listLimit)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO buckets (board_id, name, goal, is_inbox, limit_count, sort_order)
+		VALUES ($1, 'Inbox', 'Capture now, organise later', true, $2, 0)
+		RETURNING id::text
+	`, boardID, listLimit).Scan(&inboxID)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return inboxID, nil
 }
 
 func (s *Store) GetBoard(ctx context.Context, userID string, id string) (Board, error) {
@@ -343,6 +486,15 @@ func (s *Store) DeleteBoard(ctx context.Context, userID string, id string) error
 	} else if err != nil {
 		return err
 	}
+	var containsInbox bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM buckets WHERE board_id = $1 AND is_inbox = true)", boardID).Scan(&containsInbox); err != nil {
+		return err
+	}
+	if containsInbox {
+		if err := ensureInboxSurvives(ctx, tx, userID, "", boardID); err != nil {
+			return err
+		}
+	}
 	usage, err := lockedBoardTaskStorage(ctx, tx, boardID)
 	if err != nil {
 		return err
@@ -422,10 +574,19 @@ func (s *Store) CreateBucket(ctx context.Context, userID string, boardID string,
 }
 
 func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, input UpdateBucketInput) (Bucket, error) {
-	current, err := s.getBucket(ctx, userID, id)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Bucket{}, err
 	}
+	defer tx.Rollback(ctx)
+	if _, err := lockStorageQuota(ctx, tx, userID); err != nil {
+		return Bucket{}, err
+	}
+	current, err := lockedBucket(ctx, tx, userID, id)
+	if err != nil {
+		return Bucket{}, err
+	}
+	wasInbox := current.IsInbox
 	if input.Name != nil {
 		current.Name = clean(*input.Name)
 	}
@@ -447,8 +608,13 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	if current.LimitCount < 1 {
 		return Bucket{}, fmt.Errorf("%w: bucket limit must be positive", ErrInvalidData)
 	}
+	if wasInbox && !current.IsInbox {
+		if err := ensureInboxSurvives(ctx, tx, userID, current.ID, ""); err != nil {
+			return Bucket{}, err
+		}
+	}
 	var bucket Bucket
-	err = s.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		UPDATE buckets b
 		SET name = $3, goal = $4, limit_count = $5, is_inbox = $6, sort_order = $7, updated_at = now()
 		FROM boards bo
@@ -461,7 +627,13 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Bucket{}, ErrNotFound
 	}
-	return bucket, err
+	if err != nil {
+		return Bucket{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Bucket{}, err
+	}
+	return bucket, nil
 }
 
 func (s *Store) DeleteBucket(ctx context.Context, userID string, id string) error {
@@ -475,16 +647,22 @@ func (s *Store) DeleteBucket(ctx context.Context, userID string, id string) erro
 		return err
 	}
 	var bucketID string
+	var isInbox bool
 	if err := tx.QueryRow(ctx, `
-		SELECT b.id::text
+		SELECT b.id::text, b.is_inbox
 		FROM buckets b
 		JOIN boards bo ON bo.id = b.board_id
 		WHERE bo.user_id = $1 AND b.id = $2
 		FOR UPDATE OF b
-	`, userID, id).Scan(&bucketID); errors.Is(err, pgx.ErrNoRows) {
+	`, userID, id).Scan(&bucketID, &isInbox); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
+	}
+	if isInbox {
+		if err := ensureInboxSurvives(ctx, tx, userID, bucketID, ""); err != nil {
+			return err
+		}
 	}
 	usage, err := lockedBucketTaskStorage(ctx, tx, bucketID)
 	if err != nil {
@@ -501,6 +679,28 @@ func (s *Store) DeleteBucket(ctx context.Context, userID string, id string) erro
 		return ErrNotFound
 	}
 	return tx.Commit(ctx)
+}
+
+func ensureInboxSurvives(ctx context.Context, tx pgx.Tx, userID string, excludedBucketID string, excludedBoardID string) error {
+	var survives bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM buckets l
+			JOIN boards b ON b.id = l.board_id
+			WHERE b.user_id = $1
+				AND l.is_inbox = true
+				AND ($2 = '' OR l.id <> $2::uuid)
+				AND ($3 = '' OR b.id <> $3::uuid)
+		)
+	`, userID, excludedBucketID, excludedBoardID).Scan(&survives)
+	if err != nil {
+		return err
+	}
+	if !survives {
+		return fmt.Errorf("%w: the account must keep an Inbox list", ErrInvalidData)
+	}
+	return nil
 }
 
 func (s *Store) ReorderBuckets(ctx context.Context, userID string, boardID string, ids []string) error {
@@ -524,7 +724,19 @@ func (s *Store) ReorderBuckets(ctx context.Context, userID string, boardID strin
 	return tx.Commit(ctx)
 }
 
+func (s *Store) CreateInboxTask(ctx context.Context, userID string, input CreateTaskInput) (Task, error) {
+	bucketID, err := s.EnsureInboxBucketID(ctx, userID)
+	if err != nil {
+		return Task{}, err
+	}
+	return s.createTaskForTarget(ctx, userID, bucketID, inboxCaptureFingerprintTarget, input)
+}
+
 func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, input CreateTaskInput) (Task, error) {
+	return s.createTaskForTarget(ctx, userID, bucketID, bucketID, input)
+}
+
+func (s *Store) createTaskForTarget(ctx context.Context, userID string, bucketID string, fingerprintTarget string, input CreateTaskInput) (Task, error) {
 	title := clean(input.Title)
 	if title == "" {
 		return Task{}, fmt.Errorf("%w: task title is required", ErrInvalidData)
@@ -540,21 +752,53 @@ func (s *Store) CreateTask(ctx context.Context, userID string, bucketID string, 
 	if !validKind(kind) {
 		return Task{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 	}
+	parentTaskID := clean(input.ParentTaskID)
+	if parentTaskID != "" {
+		parent, err := s.GetTask(ctx, userID, parentTaskID)
+		if err != nil {
+			return Task{}, err
+		}
+		if parent.ParentTaskID != "" {
+			return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+		}
+		if parent.BucketID != bucketID {
+			return Task{}, fmt.Errorf("%w: subtask must use its parent list", ErrInvalidData)
+		}
+	}
 	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
 	if len(idempotencyKey) > httpapi.TaskIdempotencyBytes {
 		return Task{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
 	}
 	if idempotencyKey != "" {
-		fingerprint, err := taskCreateFingerprint(bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, input.OverrideLimit)
+		fingerprint, err := taskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, input.OverrideLimit)
 		if err != nil {
 			return Task{}, err
 		}
-		return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, idempotencyKey, fingerprint, input.OverrideLimit)
+		compatibleFingerprint := ""
+		if parentTaskID == "" {
+			compatibleFingerprint, err = parentAwareTaskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", input.OverrideLimit)
+			if err != nil {
+				return Task{}, err
+			}
+		}
+		return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, idempotencyKey, fingerprint, compatibleFingerprint, input.OverrideLimit)
 	}
-	return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", "", input.OverrideLimit)
+	return s.createTask(ctx, userID, bucketID, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, "", "", "", input.OverrideLimit)
 }
 
-func (s *Store) createTask(ctx context.Context, userID string, bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, key string, fingerprint string, overrideLimit bool) (Task, error) {
+func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID string, input CreateTaskInput) (Task, error) {
+	parent, err := s.GetTask(ctx, userID, parentTaskID)
+	if err != nil {
+		return Task{}, err
+	}
+	if parent.ParentTaskID != "" {
+		return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+	}
+	input.ParentTaskID = parent.ID
+	return s.CreateTask(ctx, userID, parent.BucketID, input)
+}
+
+func (s *Store) createTask(ctx context.Context, userID string, bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string, key string, fingerprint string, compatibleFingerprint string, overrideLimit bool) (Task, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Task{}, err
@@ -571,7 +815,9 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 			WHERE user_id = $1 AND key = $2
 		`, userID, key).Scan(&existingFingerprint, &existingTaskID)
 		if err == nil {
-			if existingFingerprint != fingerprint {
+			fingerprintMatches := existingFingerprint == fingerprint ||
+				(compatibleFingerprint != "" && existingFingerprint == compatibleFingerprint)
+			if !fingerprintMatches {
 				return Task{}, ErrIdempotencyKey
 			}
 			if existingTaskID == "" {
@@ -587,6 +833,18 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 	if err != nil {
 		return Task{}, err
 	}
+	if parentTaskID != "" {
+		parent, err := lockedTask(ctx, tx, userID, parentTaskID)
+		if err != nil {
+			return Task{}, err
+		}
+		if parent.ParentTaskID != "" {
+			return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+		}
+		if parent.BucketID != bucketID {
+			return Task{}, fmt.Errorf("%w: subtask must use its parent list", ErrInvalidData)
+		}
+	}
 	bucket, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
 		return Task{}, err
@@ -601,7 +859,7 @@ func (s *Store) createTask(ctx context.Context, userID string, bucketID string, 
 	if err != nil {
 		return Task{}, err
 	}
-	task, err := insertTask(ctx, tx, bucket, title, description, scheduledDate, kind, assigneeAgentID)
+	task, err := insertTask(ctx, tx, bucket, title, description, scheduledDate, kind, assigneeAgentID, parentTaskID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -663,17 +921,17 @@ func validUUID(value string) bool {
 	return true
 }
 
-func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string, description string, scheduledDate string, kind string, assigneeAgentID string) (Task, error) {
+func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string) (Task, error) {
 	row := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, status, assignee_agent_id, sort_order)
+		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, status, assignee_agent_id, parent_task_id, sort_order)
 		VALUES (
-			$1, $2, $3, $4, NULLIF($5, '')::date, $6, $7, NULLIF($8, '')::uuid,
+			$1, $2, $3, $4, NULLIF($5, '')::date, $6, $7, NULLIF($8, '')::uuid, NULLIF($9, '')::uuid,
 			COALESCE((SELECT max(sort_order) + 1 FROM tasks WHERE bucket_id = $2), 0)
 		)
 		RETURNING id::text, board_id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, done, status, priority, sort_order, created_at, updated_at
-			, COALESCE(assignee_agent_id::text, '')
-	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusQueued, assigneeAgentID)
+			, COALESCE(assignee_agent_id::text, ''), COALESCE(parent_task_id::text, '')
+	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusQueued, assigneeAgentID, parentTaskID)
 	return scanTask(row)
 }
 
@@ -681,7 +939,7 @@ func taskByID(ctx context.Context, db queryRower, id string) (Task, error) {
 	row := db.QueryRow(ctx, `
 		SELECT id::text, board_id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, done,
-			status, priority, sort_order, created_at, updated_at, COALESCE(assignee_agent_id::text, '')
+			status, priority, sort_order, created_at, updated_at, COALESCE(assignee_agent_id::text, ''), COALESCE(parent_task_id::text, '')
 		FROM tasks
 		WHERE id = $1
 	`, id)
@@ -692,7 +950,36 @@ func taskByID(ctx context.Context, db queryRower, id string) (Task, error) {
 	return task, err
 }
 
-func taskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, overrideLimit bool) (string, error) {
+func taskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string, overrideLimit bool) (string, error) {
+	// Keep the original top-level task payload byte-for-byte compatible with
+	// fingerprints stored before subtasks were introduced. Idempotency keys live
+	// for seven days, so adding an empty parentTaskId field here would turn valid
+	// retries during a rolling deployment into conflicts.
+	if parentTaskID == "" {
+		return topLevelTaskCreateFingerprint(bucketID, title, description, scheduledDate, kind, assigneeAgentID, overrideLimit)
+	}
+	return parentAwareTaskCreateFingerprint(bucketID, title, description, scheduledDate, kind, assigneeAgentID, parentTaskID, overrideLimit)
+}
+
+func parentAwareTaskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string, overrideLimit bool) (string, error) {
+	raw, err := json.Marshal(struct {
+		BucketID        string `json:"bucketId"`
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		ScheduledDate   string `json:"scheduledDate"`
+		Kind            string `json:"kind"`
+		AssigneeAgentID string `json:"assigneeAgentId"`
+		ParentTaskID    string `json:"parentTaskId"`
+		OverrideLimit   bool   `json:"overrideLimit"`
+	}{bucketID, title, description, scheduledDate, kind, strings.TrimSpace(assigneeAgentID), parentTaskID, overrideLimit})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func topLevelTaskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, overrideLimit bool) (string, error) {
 	raw, err := json.Marshal(struct {
 		BucketID        string `json:"bucketId"`
 		Title           string `json:"title"`
@@ -754,6 +1041,15 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	if err != nil {
 		return Task{}, err
 	}
+	if current.ParentTaskID != "" {
+		parent, err := lockedTask(ctx, tx, userID, current.ParentTaskID)
+		if err != nil {
+			return Task{}, err
+		}
+		if current.BucketID == parent.BucketID || parent.BucketID != bucketID {
+			return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+		}
+	}
 	destination, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
 		return Task{}, err
@@ -768,22 +1064,34 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	if err != nil {
 		return Task{}, err
 	}
+	childIDs, err := orderedChildTaskIDs(ctx, tx, current.ID)
+	if err != nil {
+		return Task{}, err
+	}
+	destinationIDs = removeTaskIDs(destinationIDs, childIDs)
 	if *input.Position > len(destinationIDs) {
 		return Task{}, fmt.Errorf("%w: position is outside the destination list", ErrInvalidData)
 	}
-	destinationIDs = insertID(destinationIDs, current.ID, *input.Position)
+	taskGroup := append([]string{current.ID}, childIDs...)
+	destinationIDs = insertTaskIDs(destinationIDs, taskGroup, *input.Position)
 
 	if current.BucketID != destination.ID {
 		sourceIDs, err := orderedTaskIDs(ctx, tx, current.BucketID, current.ID)
 		if err != nil {
 			return Task{}, err
 		}
+		sourceIDs = removeTaskIDs(sourceIDs, childIDs)
 		if err := updateTaskLocation(ctx, tx, current.ID, destination, *input.Position); err != nil {
+			return Task{}, err
+		}
+		if err := updateChildTaskLocations(ctx, tx, current.ID, destination); err != nil {
 			return Task{}, err
 		}
 		if err := writeTaskOrder(ctx, tx, sourceIDs); err != nil {
 			return Task{}, err
 		}
+	} else if err := touchTask(ctx, tx, current.ID); err != nil {
+		return Task{}, err
 	}
 	if err := writeTaskOrder(ctx, tx, destinationIDs); err != nil {
 		return Task{}, err
@@ -822,11 +1130,52 @@ func orderedTaskIDs(ctx context.Context, tx pgx.Tx, bucketID string, exceptID st
 	return ids, rows.Err()
 }
 
-func insertID(ids []string, id string, position int) []string {
-	ids = append(ids, "")
-	copy(ids[position+1:], ids[position:])
-	ids[position] = id
-	return ids
+func orderedChildTaskIDs(ctx context.Context, tx pgx.Tx, parentTaskID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id::text
+		FROM tasks
+		WHERE parent_task_id = $1
+		ORDER BY sort_order, created_at
+		FOR UPDATE
+	`, parentTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func removeTaskIDs(ids []string, removed []string) []string {
+	if len(removed) == 0 {
+		return ids
+	}
+	removedSet := make(map[string]struct{}, len(removed))
+	for _, id := range removed {
+		removedSet[id] = struct{}{}
+	}
+	kept := ids[:0]
+	for _, id := range ids {
+		if _, remove := removedSet[id]; !remove {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
+func insertTaskIDs(ids []string, inserted []string, position int) []string {
+	result := make([]string, 0, len(ids)+len(inserted))
+	result = append(result, ids[:position]...)
+	result = append(result, inserted...)
+	result = append(result, ids[position:]...)
+	return result
 }
 
 func updateTaskLocation(ctx context.Context, tx pgx.Tx, taskID string, destination Bucket, position int) error {
@@ -838,13 +1187,27 @@ func updateTaskLocation(ctx context.Context, tx pgx.Tx, taskID string, destinati
 	return err
 }
 
+func updateChildTaskLocations(ctx context.Context, tx pgx.Tx, parentTaskID string, destination Bucket) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET board_id = $2, bucket_id = $3, updated_at = now()
+		WHERE parent_task_id = $1
+	`, parentTaskID, destination.BoardID, destination.ID)
+	return err
+}
+
 func writeTaskOrder(ctx context.Context, tx pgx.Tx, ids []string) error {
 	for position, id := range ids {
-		if _, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1, updated_at = now() WHERE id = $2", position, id); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE tasks SET sort_order = $1 WHERE id = $2", position, id); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func touchTask(ctx context.Context, tx pgx.Tx, taskID string) error {
+	_, err := tx.Exec(ctx, "UPDATE tasks SET updated_at = now() WHERE id = $1", taskID)
+	return err
 }
 
 func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID string, id string, input UpdateTaskInput, allowWorking bool) (Task, error) {
@@ -886,14 +1249,46 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		}
 		current.Kind = kind
 	}
+	moveChildren := false
+	var sourceOrder []string
+	var destinationOrder []string
 	if input.BucketID != nil && *input.BucketID != current.BucketID {
+		if input.SortOrder != nil {
+			return Task{}, fmt.Errorf("%w: use the move endpoint to change a task list and position together", ErrInvalidData)
+		}
+		if current.ParentTaskID != "" {
+			parent, err := lockedTask(ctx, tx, userID, current.ParentTaskID)
+			if err != nil {
+				return Task{}, err
+			}
+			if parent.BucketID != *input.BucketID {
+				return Task{}, fmt.Errorf("%w: a subtask must stay in its parent list", ErrInvalidData)
+			}
+		}
 		bucket, err := lockedBucket(ctx, tx, userID, *input.BucketID)
 		if err != nil {
 			return Task{}, err
 		}
+		destinationOrder, err = orderedTaskIDs(ctx, tx, bucket.ID, current.ID)
+		if err != nil {
+			return Task{}, err
+		}
+		childIDs, err := orderedChildTaskIDs(ctx, tx, current.ID)
+		if err != nil {
+			return Task{}, err
+		}
+		destinationOrder = removeTaskIDs(destinationOrder, childIDs)
+		taskGroup := append([]string{current.ID}, childIDs...)
+		destinationOrder = insertTaskIDs(destinationOrder, taskGroup, 0)
+		sourceOrder, err = orderedTaskIDs(ctx, tx, current.BucketID, current.ID)
+		if err != nil {
+			return Task{}, err
+		}
+		sourceOrder = removeTaskIDs(sourceOrder, childIDs)
 		current.BucketID = bucket.ID
 		current.BoardID = bucket.BoardID
 		current.SortOrder = 0
+		moveChildren = current.ParentTaskID == ""
 	}
 	if input.Status != nil {
 		if err := applyTaskStatus(&current, *input.Status, allowWorking); err != nil {
@@ -962,7 +1357,7 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-			COALESCE(t.assignee_agent_id::text, '')
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, '')
 	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Description, current.ScheduledDate, current.Kind, current.Done,
 		current.Status, current.Priority, current.SortOrder, current.AssigneeAgentID)
 	task, err := scanTask(row)
@@ -971,6 +1366,22 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	}
 	if err != nil {
 		return Task{}, err
+	}
+	if moveChildren {
+		destination := Bucket{ID: task.BucketID, BoardID: task.BoardID}
+		if err := updateChildTaskLocations(ctx, tx, task.ID, destination); err != nil {
+			return Task{}, err
+		}
+	}
+	if sourceOrder != nil {
+		if err := writeTaskOrder(ctx, tx, sourceOrder); err != nil {
+			return Task{}, err
+		}
+	}
+	if destinationOrder != nil {
+		if err := writeTaskOrder(ctx, tx, destinationOrder); err != nil {
+			return Task{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Task{}, err
@@ -1007,7 +1418,7 @@ func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-			COALESCE(t.assignee_agent_id::text, '')
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, '')
 	`, args...)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1030,7 +1441,16 @@ func (s *Store) DeleteTask(ctx context.Context, userID string, id string) error 
 	if err != nil {
 		return err
 	}
-	if err := quota.apply(ctx, tx, -1, -taskContentBytes(task)); err != nil {
+	usage, err := lockedTaskStorage(ctx, tx, `
+		SELECT t.storage_bytes
+		FROM tasks t
+		WHERE t.id = $1 OR t.parent_task_id = $1
+		FOR UPDATE OF t
+	`, task.ID)
+	if err != nil {
+		return err
+	}
+	if err := quota.apply(ctx, tx, -usage.Tasks, -usage.ContentBytes); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, "DELETE FROM tasks WHERE id = $1", task.ID)
@@ -1091,7 +1511,7 @@ func (s *Store) getTask(ctx context.Context, userID string, agentID string, id s
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-			COALESCE(t.assignee_agent_id::text, '')
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2
@@ -1140,6 +1560,30 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		args = append(args, filter.AssigneeAgentID)
 		whereSQL += fmt.Sprintf(" AND t.assignee_agent_id = $%d", len(args))
 	}
+	if filter.Unassigned {
+		whereSQL += " AND t.assignee_agent_id IS NULL"
+	}
+	if filter.Query != "" {
+		args = append(args, "%"+filter.Query+"%")
+		whereSQL += fmt.Sprintf(" AND (t.title ILIKE $%d OR t.description ILIKE $%d)", len(args), len(args))
+	}
+	if filter.ScheduledFrom != "" {
+		args = append(args, filter.ScheduledFrom)
+		whereSQL += fmt.Sprintf(" AND t.scheduled_date >= $%d::date", len(args))
+	}
+	if filter.ScheduledTo != "" {
+		args = append(args, filter.ScheduledTo)
+		whereSQL += fmt.Sprintf(" AND t.scheduled_date <= $%d::date", len(args))
+	}
+	if filter.ParentTaskID != "" {
+		args = append(args, filter.ParentTaskID)
+		whereSQL += fmt.Sprintf(" AND t.parent_task_id = $%d", len(args))
+	} else if filter.TopLevelOnly {
+		whereSQL += " AND t.parent_task_id IS NULL"
+	}
+	if filter.InboxOnly {
+		whereSQL += " AND l.is_inbox = true"
+	}
 	completedHistory := filter.Done != nil && *filter.Done
 	limit := filter.Limit
 	if completedHistory {
@@ -1157,28 +1601,31 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		orderSQL = "t.updated_at DESC, t.id DESC"
 	}
 	if filter.Cursor != "" {
-		if !completedHistory {
-			return TaskPage{}, fmt.Errorf("%w: cursor requires done=true", ErrInvalidData)
-		}
 		cursor, err := decodeCompletedTaskCursor(filter.Cursor, taskCursorScope(userID, filter))
 		if err != nil {
 			return TaskPage{}, err
 		}
 		args = append(args, cursor.UpdatedAt, cursor.ID)
-		whereSQL += fmt.Sprintf(" AND (t.updated_at < $%d OR (t.updated_at = $%d AND t.id < $%d::uuid))", len(args)-1, len(args)-1, len(args))
+		column := "t.created_at"
+		if completedHistory {
+			column = "t.updated_at"
+		}
+		whereSQL += fmt.Sprintf(" AND (%s < $%d OR (%s = $%d AND t.id < $%d::uuid))", column, len(args)-1, column, len(args)-1, len(args))
 	}
-	fetchLimit := limit
-	if completedHistory {
-		fetchLimit++
-	}
+	fetchLimit := limit + 1
 	args = append(args, fetchLimit)
 	query := `
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, '',
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-			COALESCE(t.assignee_agent_id::text, '')
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, ''),
+			l.name, b.name, COALESCE(a.name, ''), COALESCE(parent.title, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
+		JOIN buckets l ON l.id = t.bucket_id
+		LEFT JOIN agents a ON a.id = t.assignee_agent_id
+		LEFT JOIN tasks parent ON parent.id = t.parent_task_id
+			AND parent.board_id = t.board_id AND parent.bucket_id = t.bucket_id
 		WHERE b.user_id = $1` + whereSQL + `
 		ORDER BY ` + orderSQL + `
 		LIMIT $` + fmt.Sprint(len(args))
@@ -1190,7 +1637,7 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 
 	var tasks []Task
 	for rows.Next() {
-		task, err := scanTask(rows)
+		task, err := scanTaskSummary(rows)
 		if err != nil {
 			return TaskPage{}, err
 		}
@@ -1203,9 +1650,13 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	if page.Tasks == nil {
 		page.Tasks = []Task{}
 	}
-	if completedHistory && len(page.Tasks) > limit {
+	if len(page.Tasks) > limit {
 		page.Tasks = page.Tasks[:limit]
-		page.NextCursor, err = encodeCompletedTaskCursor(page.Tasks[len(page.Tasks)-1], taskCursorScope(userID, filter))
+		cursorTask := page.Tasks[len(page.Tasks)-1]
+		if !completedHistory {
+			cursorTask.UpdatedAt = cursorTask.CreatedAt
+		}
+		page.NextCursor, err = encodeCompletedTaskCursor(cursorTask, taskCursorScope(userID, filter))
 		if err != nil {
 			return TaskPage{}, err
 		}
@@ -1321,7 +1772,7 @@ func lockedTaskForAgent(ctx context.Context, tx pgx.Tx, userID string, agentID s
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind, t.done,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-			COALESCE(t.assignee_agent_id::text, '')
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2
@@ -1336,21 +1787,8 @@ func lockedTaskForAgent(ctx context.Context, tx pgx.Tx, userID string, agentID s
 }
 
 func checkTaskCapacity(ctx context.Context, tx pgx.Tx, bucket Bucket, exceptTaskID string, overrideWorkingLimit bool) error {
-	var activeCount int
-	if err := tx.QueryRow(ctx, `
-		SELECT count(*)
-		FROM tasks
-		WHERE bucket_id = $1 AND kind = 'action' AND done = false
-			AND ($2 = '' OR id <> NULLIF($2, '')::uuid)
-	`, bucket.ID, exceptTaskID).Scan(&activeCount); err != nil {
-		return err
-	}
-	if activeCount >= entitlements.ProLimits.ActiveItemsPerList {
-		return ErrActiveItemLimit
-	}
-	if !overrideWorkingLimit && activeCount >= bucket.LimitCount {
-		return ErrLimitFull
-	}
+	// Lists organise work. They do not reject new work. Account-level task and
+	// content quotas remain the storage boundary.
 	return nil
 }
 
@@ -1359,14 +1797,16 @@ func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID str
 		WITH active AS (
 			SELECT t.id, t.board_id, t.bucket_id, t.title, COALESCE(t.scheduled_date::text, '') AS scheduled_date,
 				t.kind, t.done, t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-				COALESCE(t.assignee_agent_id::text, '') AS assignee_agent_id, false AS completed_history
+				COALESCE(t.assignee_agent_id::text, '') AS assignee_agent_id,
+				COALESCE(t.parent_task_id::text, '') AS parent_task_id, false AS completed_history
 			FROM tasks t
 			JOIN boards b ON b.id = t.board_id
 			WHERE b.user_id = $1 AND t.bucket_id = $2 AND t.done = false
 		), completed AS (
 			SELECT t.id, t.board_id, t.bucket_id, t.title, COALESCE(t.scheduled_date::text, '') AS scheduled_date,
 				t.kind, t.done, t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-				COALESCE(t.assignee_agent_id::text, '') AS assignee_agent_id, true AS completed_history
+				COALESCE(t.assignee_agent_id::text, '') AS assignee_agent_id,
+				COALESCE(t.parent_task_id::text, '') AS parent_task_id, true AS completed_history
 			FROM tasks t
 			JOIN boards b ON b.id = t.board_id
 			WHERE b.user_id = $1 AND t.bucket_id = $2 AND t.done = true
@@ -1378,7 +1818,7 @@ func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID str
 			SELECT * FROM completed
 		)
 		SELECT id::text, board_id::text, bucket_id::text, title, '', scheduled_date, kind, done,
-			status, priority, sort_order, created_at, updated_at, assignee_agent_id, completed_history
+			status, priority, sort_order, created_at, updated_at, assignee_agent_id, parent_task_id, completed_history
 		FROM selected
 		ORDER BY completed_history,
 			CASE WHEN completed_history = false THEN sort_order END,
@@ -1469,6 +1909,13 @@ func scanTask(row rowScanner) (Task, error) {
 	return task, err
 }
 
+func scanTaskSummary(row rowScanner) (Task, error) {
+	var task Task
+	destinations := append(taskScanDestinations(&task), &task.BucketName, &task.BoardName, &task.AssigneeAgentName, &task.ParentTaskTitle)
+	err := row.Scan(destinations...)
+	return task, err
+}
+
 func scanTaskCollection(row rowScanner) (Task, bool, error) {
 	var task Task
 	var completedHistory bool
@@ -1483,6 +1930,7 @@ func taskScanDestinations(task *Task) []any {
 		&task.Status, &task.Priority,
 		&task.SortOrder, &task.CreatedAt, &task.UpdatedAt,
 		&task.AssigneeAgentID,
+		&task.ParentTaskID,
 	}
 }
 
@@ -1493,7 +1941,9 @@ func taskCursorScope(userID string, filter TaskFilter) string {
 	}
 	value := strings.Join([]string{
 		userID, filter.BoardID, filter.BucketID, filter.Status, filter.Priority,
-		done, fmt.Sprint(filter.ActionsOnly), filter.AssigneeAgentID,
+		done, fmt.Sprint(filter.ActionsOnly), filter.AssigneeAgentID, fmt.Sprint(filter.Unassigned),
+		filter.Query, filter.ScheduledFrom, filter.ScheduledTo, filter.ParentTaskID, fmt.Sprint(filter.TopLevelOnly),
+		fmt.Sprint(filter.InboxOnly),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])

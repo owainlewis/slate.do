@@ -60,8 +60,11 @@ func StaticHandler(content fs.FS) http.Handler {
 // These shapes mirror parseRoute in web/dist/app.js; keep the two in step.
 func isAppRoute(clean string) bool {
 	switch clean {
-	case "/", "/login", "/app", "/app/settings", "/early-access", "/reset-password":
+	case "/", "/login", "/app", "/app/tasks", "/app/inbox", "/app/today", "/app/week", "/app/review", "/app/settings", "/early-access", "/reset-password":
 		return true
+	}
+	if listPath, ok := strings.CutPrefix(clean, "/app/lists/"); ok && listPath != "" {
+		return !strings.Contains(listPath, "/")
 	}
 	// Settings subpaths must boot the app so valid pages can render and invalid
 	// pages can show the deliberate frontend not-found state.

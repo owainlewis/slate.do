@@ -65,6 +65,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/credential", a.session(a.agents.RevokeCredential))
 	mux.HandleFunc("POST /api/v1/agents/{id}/archive", a.session(a.agents.Archive))
 	mux.HandleFunc("POST /api/v1/agents/{id}/restore", a.session(a.agents.Restore))
+	mux.HandleFunc("DELETE /api/v1/agents/{id}/permanent", a.session(a.agents.Delete))
 	// Compatibility for clients released before credentials became their own
 	// lifecycle. Both aliases use the safe owner-scoped behavior.
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/token", a.session(a.agents.RevokeCredential))
@@ -73,6 +74,7 @@ func (a *App) Routes() http.Handler {
 		a.agents.Archive(w, r, user)
 	}))
 	mux.HandleFunc("GET /api/v1/boards", a.accountRead(a.boards.ListBoards))
+	mux.HandleFunc("GET /api/v1/lists", a.accountRead(a.boards.ListAllBuckets))
 	mux.HandleFunc("POST /api/v1/boards", a.accountManage(a.boards.CreateBoard))
 	mux.HandleFunc("GET /api/v1/boards/{id}", a.accountRead(a.boards.GetBoard))
 	mux.HandleFunc("PATCH /api/v1/boards/{id}", a.accountManage(a.boards.UpdateBoard))
@@ -85,7 +87,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/buckets/{id}/tasks", a.accountManage(a.boards.CreateTask))
 	mux.HandleFunc("POST /api/v1/buckets/{id}/reorder-tasks", a.accountManage(a.boards.ReorderTasks))
 	mux.HandleFunc("GET /api/v1/tasks", a.user(a.boards.ListTasks))
+	mux.HandleFunc("POST /api/v1/tasks", a.accountManage(a.boards.CreateInboxTask))
 	mux.HandleFunc("GET /api/v1/tasks/{id}", a.user(a.boards.GetTask))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/subtasks", a.accountManage(a.boards.CreateSubtask))
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}", a.user(a.boards.UpdateTask))
 	mux.HandleFunc("POST /api/v1/tasks/{id}/move", a.accountManage(a.boards.MoveTask))
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}/status", a.session(a.boards.UpdateTaskStatus))
