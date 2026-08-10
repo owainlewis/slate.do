@@ -68,10 +68,10 @@ The parent card shows progress and a compact child-card list. Deleting a parent 
 
 A conversation entry belongs to a card and is one of:
 
-- Comment: feedback, context, a question, or a request for a response.
+- Comment: feedback, context, or a question.
 - Output: a result, link, deliverable, or summary returned by a human or agent.
 
-An output or a comment marked Needs response moves the card to Review. The latest output is pinned in card detail while the full conversation remains visible.
+An output moves the card to Review. The latest output is pinned in card detail while the full conversation remains visible.
 
 ### Agent
 
@@ -93,14 +93,13 @@ New card creates one card in Inbox and opens it for editing.
 
 Every view reads and edits the same card records:
 
-- Cards: compact rows for scanning and thinking.
-- Flow: Open, Working, Review, and Done columns.
+- Kanban: group cards by status or by their user-defined list.
 - Table: card, list, status, priority, owner, and planned date.
 - Week: planned cards grouped Monday through Sunday.
 
 Opening a card uses a right drawer so its list remains visible as context. Card detail contains Prompt and context, Act with agent, latest Output, Conversation, Child cards, and Properties.
 
-Review separates work that needs a response from agent outputs waiting for judgment.
+Review separates outputs waiting for judgment from cards manually placed in Review.
 
 ## Workflow status
 
@@ -122,11 +121,11 @@ Included:
 - Account-wide card workspace with Today as the default.
 - Inbox capture and generic cards.
 - Lists as flexible context, with boards hidden from primary UI.
-- Cards, Flow, Table, Review, Today, and Week views.
+- Kanban, Table, Review, Today, and Week views.
 - Filters, priorities, planned dates, and fixed workflow status.
 - One level of child cards.
 - Named agent identities, assignment, scoped tokens, and CLI execution.
-- Human and agent comments, requests for response, and outputs.
+- Human and agent comments and outputs.
 - Compatibility for existing board, list, task, and CLI clients.
 
 Not included:

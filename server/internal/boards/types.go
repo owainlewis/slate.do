@@ -150,21 +150,20 @@ type TaskPage struct {
 }
 
 type CardEntry struct {
-	ID            string    `json:"id"`
-	TaskID        string    `json:"cardId"`
-	Kind          string    `json:"kind"`
-	Body          string    `json:"body"`
-	NeedsResponse bool      `json:"needsResponse"`
-	AuthorKind    string    `json:"authorKind"`
-	AuthorID      string    `json:"authorId"`
-	AuthorName    string    `json:"authorName"`
-	CreatedAt     time.Time `json:"createdAt"`
+	ID         string    `json:"id"`
+	TaskID     string    `json:"cardId"`
+	Kind       string    `json:"kind"`
+	Body       string    `json:"body"`
+	AuthorKind string    `json:"authorKind"`
+	AuthorID   string    `json:"authorId"`
+	AuthorName string    `json:"authorName"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 type CreateCardEntryInput struct {
-	Kind          string `json:"kind"`
-	Body          string `json:"body"`
-	NeedsResponse bool   `json:"needsResponse"`
+	Kind           string `json:"kind"`
+	Body           string `json:"body"`
+	IdempotencyKey string `json:"-"`
 }
 
 const MaxCardEntries = 200

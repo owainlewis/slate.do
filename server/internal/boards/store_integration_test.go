@@ -86,14 +86,44 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	comment, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, CreateCardEntryInput{Kind: "comment", Body: "Keep it concise"})
+	commentInput := CreateCardEntryInput{Kind: "comment", Body: "Keep it concise", IdempotencyKey: "comment-attempt"}
+	comment, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, commentInput)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if comment.AuthorKind != "human" || comment.AuthorName != "Owain" {
 		t.Fatalf("human comment author = %#v", comment)
 	}
-	output, err := store.CreateCardEntry(ctx, ownerID, agentID, "", card.ID, CreateCardEntryInput{Kind: "output", Body: "Draft is ready"})
+	retriedComment, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, commentInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retriedComment.ID != comment.ID {
+		t.Fatalf("retried comment = %q, want %q", retriedComment.ID, comment.ID)
+	}
+	changedComment := commentInput
+	changedComment.Body = "A different comment"
+	if _, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, changedComment); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("changed comment retry error = %v, want ErrIdempotencyKey", err)
+	}
+	concurrentIDs := make([]string, 8)
+	concurrentInput := CreateCardEntryInput{Kind: "comment", Body: "One concurrent comment", IdempotencyKey: "concurrent-comment"}
+	concurrentResults := runConcurrently(len(concurrentIDs), func(index int) error {
+		entry, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, concurrentInput)
+		if err == nil {
+			concurrentIDs[index] = entry.ID
+		}
+		return err
+	})
+	for index, err := range concurrentResults {
+		if err != nil {
+			t.Fatalf("concurrent comment %d: %v", index, err)
+		}
+		if concurrentIDs[index] != concurrentIDs[0] {
+			t.Fatalf("concurrent comment %d = %q, want %q", index, concurrentIDs[index], concurrentIDs[0])
+		}
+	}
+	output, err := store.CreateCardEntry(ctx, ownerID, agentID, "", card.ID, CreateCardEntryInput{Kind: "output", Body: "Draft is ready", IdempotencyKey: "output-attempt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +134,7 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].ID != comment.ID || entries[1].ID != output.ID {
+	if len(entries) != 3 || entries[0].ID != comment.ID || entries[1].ID != concurrentIDs[0] || entries[2].ID != output.ID {
 		t.Fatalf("entries = %#v", entries)
 	}
 	updated, err := store.GetTask(ctx, ownerID, card.ID)
@@ -127,7 +157,7 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if _, err := store.ListCardEntries(ctx, otherID, "", card.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other owner list error = %v, want ErrNotFound", err)
 	}
-	assertStorageUsage(t, ctx, db, ownerID, 1, taskContentBytes(card)+int64(len(comment.Body)+len(output.Body)))
+	assertStorageUsage(t, ctx, db, ownerID, 1, taskContentBytes(card)+int64(len(comment.Body)+len(concurrentInput.Body)+len(output.Body)))
 	if err := store.DeleteTask(ctx, ownerID, card.ID); err != nil {
 		t.Fatal(err)
 	}

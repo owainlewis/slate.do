@@ -25,7 +25,7 @@ var (
 	ErrActiveItemLimit = errors.New("active item limit reached")
 	ErrInvalidData     = errors.New("invalid data")
 	ErrTaskUnavailable = errors.New("task is not available")
-	ErrIdempotencyKey  = errors.New("idempotency key already used with different task data")
+	ErrIdempotencyKey  = errors.New("idempotency key already used with different data")
 	ErrIdempotencyGone = errors.New("task created by idempotency key was deleted")
 	ErrAgentTaskScope  = errors.New("agent credentials cannot move, reorder, or reassign tasks")
 )
@@ -1530,7 +1530,7 @@ func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID stri
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT id::text, task_id::text, kind, body, needs_response,
+		SELECT id::text, task_id::text, kind, body,
 			author_kind, author_id::text, author_name, created_at
 		FROM card_entries
 		WHERE task_id = $1
@@ -1543,7 +1543,7 @@ func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID stri
 	entries := []CardEntry{}
 	for rows.Next() {
 		var entry CardEntry
-		if err := rows.Scan(&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body, &entry.NeedsResponse,
+		if err := rows.Scan(&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body,
 			&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -1571,10 +1571,10 @@ func (s *Store) ListCardReviewKinds(ctx context.Context, userID string, agentID 
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		LEFT JOIN LATERAL (
-			SELECT CASE WHEN entry.kind = 'output' THEN 'output' ELSE 'needs_response' END AS kind
+			SELECT 'output' AS kind
 			FROM card_entries entry
 			WHERE entry.task_id = t.id
-				AND (entry.kind = 'output' OR entry.needs_response)
+				AND entry.kind = 'output'
 			ORDER BY entry.created_at DESC, entry.id DESC
 			LIMIT 1
 		) review_entry ON true
@@ -1598,6 +1598,7 @@ func (s *Store) ListCardReviewKinds(ctx context.Context, userID string, agentID 
 func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID string, authorName string, taskID string, input CreateCardEntryInput) (CardEntry, error) {
 	body := strings.TrimSpace(input.Body)
 	kind := strings.TrimSpace(input.Kind)
+	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
 	if body == "" {
 		return CardEntry{}, fmt.Errorf("%w: entry body is required", ErrInvalidData)
 	}
@@ -1606,6 +1607,9 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	}
 	if len([]byte(body)) > httpapi.CardEntryBytes {
 		return CardEntry{}, fmt.Errorf("%w: entry body must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.CardEntryBytes)
+	}
+	if len([]byte(idempotencyKey)) > httpapi.TaskIdempotencyBytes {
+		return CardEntry{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -1635,13 +1639,6 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		}
 		return CardEntry{}, err
 	}
-	var entryCount int
-	if err := tx.QueryRow(ctx, "SELECT count(*) FROM card_entries WHERE task_id = $1", taskID).Scan(&entryCount); err != nil {
-		return CardEntry{}, err
-	}
-	if entryCount >= MaxCardEntries {
-		return CardEntry{}, fmt.Errorf("%w: cards can contain at most %d conversation entries", ErrInvalidData, MaxCardEntries)
-	}
 	authorKind := "human"
 	authorID := userID
 	if agentID != "" {
@@ -1661,14 +1658,51 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	if authorName == "" {
 		authorName = "You"
 	}
+	fingerprint, err := cardEntryFingerprint(kind, body)
+	if err != nil {
+		return CardEntry{}, err
+	}
+	if idempotencyKey != "" {
+		lockKey := strings.Join([]string{userID, "card-entry", taskID, authorKind, authorID, idempotencyKey}, ":")
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
+			return CardEntry{}, err
+		}
+		var existing CardEntry
+		var existingFingerprint string
+		err := tx.QueryRow(ctx, `
+			SELECT id::text, task_id::text, kind, body,
+				author_kind, author_id::text, author_name, created_at, request_hash
+			FROM card_entries
+			WHERE task_id = $1 AND author_kind = $2 AND author_id = $3 AND idempotency_key = $4
+		`, taskID, authorKind, authorID, idempotencyKey).Scan(
+			&existing.ID, &existing.TaskID, &existing.Kind, &existing.Body,
+			&existing.AuthorKind, &existing.AuthorID, &existing.AuthorName, &existing.CreatedAt, &existingFingerprint,
+		)
+		if err == nil {
+			if existingFingerprint != fingerprint {
+				return CardEntry{}, ErrIdempotencyKey
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return CardEntry{}, err
+		}
+	}
+	var entryCount int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM card_entries WHERE task_id = $1", taskID).Scan(&entryCount); err != nil {
+		return CardEntry{}, err
+	}
+	if entryCount >= MaxCardEntries {
+		return CardEntry{}, fmt.Errorf("%w: cards can contain at most %d conversation entries", ErrInvalidData, MaxCardEntries)
+	}
 	var entry CardEntry
 	err = tx.QueryRow(ctx, `
-		INSERT INTO card_entries (task_id, kind, body, needs_response, author_kind, author_id, author_name)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id::text, task_id::text, kind, body, needs_response,
+		INSERT INTO card_entries (task_id, kind, body, author_kind, author_id, author_name, idempotency_key, request_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8)
+		RETURNING id::text, task_id::text, kind, body,
 			author_kind, author_id::text, author_name, created_at
-	`, taskID, kind, body, input.NeedsResponse, authorKind, authorID, authorName).Scan(
-		&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body, &entry.NeedsResponse,
+	`, taskID, kind, body, authorKind, authorID, authorName, idempotencyKey, fingerprint).Scan(
+		&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body,
 		&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.CreatedAt,
 	)
 	if err != nil {
@@ -1677,7 +1711,7 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	if err := quota.apply(ctx, tx, 0, int64(len([]byte(body)))); err != nil {
 		return CardEntry{}, err
 	}
-	if kind == "output" || input.NeedsResponse {
+	if kind == "output" {
 		if _, err := tx.Exec(ctx, `
 			UPDATE tasks
 			SET status = $1, done = false, updated_at = now()
@@ -1690,6 +1724,18 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		return CardEntry{}, err
 	}
 	return entry, nil
+}
+
+func cardEntryFingerprint(kind string, body string) (string, error) {
+	raw, err := json.Marshal(struct {
+		Kind string `json:"kind"`
+		Body string `json:"body"`
+	}{kind, body})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Store) getTask(ctx context.Context, userID string, agentID string, id string) (Task, error) {

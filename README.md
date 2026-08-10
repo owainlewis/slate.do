@@ -23,7 +23,7 @@ Slate now has an admin-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Admin sign in with a seeded admin.
-- Inbox, account-wide cards, Lists, Cards, Flow and Table views, filters, planned dates, Week, Today, Review, and theme.
+- Inbox, account-wide cards, Kanban grouped by status or list, Table, filters, planned dates, Week, Today, Review, and theme.
 - One level of child cards with independent owner and workflow state.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.

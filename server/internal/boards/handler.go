@@ -264,6 +264,10 @@ func (h *Handler) CreateCardEntry(w http.ResponseWriter, r *http.Request, user a
 	if !httpapi.ByteLimit(w, "body", input.Body, httpapi.CardEntryBytes) {
 		return
 	}
+	input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if !validateTaskIdempotencyKey(w, input.IdempotencyKey) {
+		return
+	}
 	entry, err := h.store.CreateCardEntry(r.Context(), user.ID, user.AgentID, user.DisplayName, r.PathValue("id"), input)
 	if handleStoreError(w, err) {
 		return

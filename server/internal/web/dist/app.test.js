@@ -196,7 +196,8 @@ test("New list is bound centrally for shared-shell and settings routes", () => {
   const workspaceEnd = source.indexOf("function bindWorkspaceDetail(options = {})", workspaceStart);
 
   assert.match(source.slice(shellStart, shellEnd), /bindWorkspaceListControl\(\)/);
-  assert.match(source.slice(controlStart, controlEnd), /#new-workspace-list[^\n]*createWorkspaceList/);
+  assert.match(source.slice(controlStart, controlEnd), /#new-workspace-list/);
+  assert.match(source.slice(controlStart, controlEnd), /workspaceListDialog = "create"/);
   assert.match(source.slice(settingsStart, settingsEnd), /bindWorkspaceListControl\(\)/);
   assert.doesNotMatch(source.slice(workspaceStart, workspaceEnd), /#new-workspace-list/);
 });
@@ -204,10 +205,8 @@ test("New list is bound centrally for shared-shell and settings routes", () => {
 test("New list chooses a board with capacity and updates account-wide state immediately", async () => {
   vm.runInContext(`
     savedWorkspaceListRender = render;
-    savedWorkspaceListPrompt = globalThis.prompt;
     savedWorkspaceListPost = api.post;
     render = () => {};
-    globalThis.prompt = () => " Launch plan ";
     workspaceListPosts = [];
     api.post = async (path, input) => {
       workspaceListPosts.push({ path, input });
@@ -228,7 +227,7 @@ test("New list chooses a board with capacity and updates account-wide state imme
     state.workspaceListPending = false;
   `, app);
 
-  assert.equal(await app.createWorkspaceList(), true);
+  assert.equal(await app.createWorkspaceList(" Launch plan ", "board-open"), true);
   const posts = JSON.parse(vm.runInContext(`JSON.stringify(workspaceListPosts)`, app));
   assert.deepEqual(posts, [{ path: "/api/v1/boards/board-open/buckets", input: { name: "Launch plan" } }]);
   assert.equal(vm.runInContext(`state.workspaceLists.find(list => list.id === "list-created").boardId`, app), "board-open");
@@ -237,7 +236,6 @@ test("New list chooses a board with capacity and updates account-wide state imme
 
   vm.runInContext(`
     render = savedWorkspaceListRender;
-    globalThis.prompt = savedWorkspaceListPrompt;
     api.post = savedWorkspaceListPost;
     state.me = null;
     state.boards = [];
@@ -249,10 +247,8 @@ test("New list chooses a board with capacity and updates account-wide state imme
 test("New list reports exhausted capacity without sending a request", async () => {
   vm.runInContext(`
     savedNoCapacityRender = render;
-    savedNoCapacityPrompt = globalThis.prompt;
     savedNoCapacityPost = api.post;
     render = () => {};
-    globalThis.prompt = () => "Blocked";
     noCapacityPosts = 0;
     api.post = async () => { noCapacityPosts += 1; throw new Error("must not post"); };
     authVersion = 9;
@@ -265,13 +261,12 @@ test("New list reports exhausted capacity without sending a request", async () =
     state.workspaceListPending = false;
   `, app);
 
-  assert.equal(await app.createWorkspaceList(), false);
+  assert.equal(await app.createWorkspaceList("Blocked", "board-full"), false);
   assert.equal(vm.runInContext(`noCapacityPosts`, app), 0);
-  assert.equal(vm.runInContext(`state.workspaceListError`, app), "Every board has reached the list limit for your plan.");
+  assert.equal(vm.runInContext(`state.workspaceListDialogError`, app), "Choose a board with room for another list.");
 
   vm.runInContext(`
     render = savedNoCapacityRender;
-    globalThis.prompt = savedNoCapacityPrompt;
     api.post = savedNoCapacityPost;
     state.me = null;
     state.boards = [];
@@ -490,11 +485,11 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   `, app);
 
   const html = app.appHTML();
-  for (const [view, label] of [["list", "Cards"], ["flow", "Flow"], ["table", "Table"]]) {
+  for (const [view, label] of [["flow", "Kanban"], ["table", "Table"]]) {
     assert.match(html, new RegExp(`id="workspace-tab-${view}"[^>]*data-workspace-view="${view}"[^>]*role="tab"[^>]*aria-controls="workspace-task-panel"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
   assert.match(html, /id="workspace-tab-table"[^>]*tabindex="0"[^>]*aria-selected="true"/);
-  assert.match(html, /id="workspace-tab-list"[^>]*tabindex="-1"[^>]*aria-selected="false"/);
+  assert.doesNotMatch(html, /id="workspace-tab-list"/);
   assert.match(html, /id="workspace-task-panel" role="tabpanel" tabindex="0" aria-labelledby="workspace-tab-table"/);
   assert.match(html, /id="new-task"/);
   assert.match(html, /id="workspace-filter-toggle"/);
@@ -547,6 +542,26 @@ test("every global card view identifies child cards with parent context", () => 
     assert.match(html, /Child of Parent &amp; plan/);
   }
   vm.runInContext(`state.me = null;`, app);
+});
+
+test("list-grouped Kanban keeps empty selected and Inbox lists visible", () => {
+  vm.runInContext(`
+    state.workspaceKanbanGroup = "list";
+    state.workspaceLists = [
+      { id: "inbox", boardId: "board", name: "Inbox", isInbox: true },
+      { id: "planning", boardId: "board", name: "Planning", isInbox: false },
+    ];
+    state.workspaceScope = "list";
+    state.workspaceListID = "planning";
+  `, app);
+  assert.match(app.workspaceFlowHTML([]), /data-kanban-list="planning"/);
+  assert.match(app.workspaceFlowHTML([]), /<h2>Planning<\/h2>/);
+
+  vm.runInContext(`state.workspaceScope = "inbox"; state.workspaceListID = "";`, app);
+  const inbox = app.workspaceFlowHTML([]);
+  assert.match(inbox, /data-kanban-list="inbox"/);
+  assert.doesNotMatch(inbox, /data-kanban-list="planning"/);
+  vm.runInContext(`state.workspaceKanbanGroup = "status"; state.workspaceScope = "all"; state.workspaceLists = [];`, app);
 });
 
 test("subtask detail keeps its list fixed to the parent", () => {
