@@ -1038,6 +1038,18 @@ test("an older workspace response cannot replace the latest route", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("a malformed list route renders Not found without querying cards", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  const taskQueryCount = state.taskQueries.length;
+
+  await page.goto(`${origin}/app/lists/not-a-uuid`);
+  await page.getByRole("heading", { name: "Not found.", exact: true }).waitFor();
+
+  assert.equal(new URL(page.url()).pathname, "/app/lists/not-a-uuid");
+  assert.equal(state.taskQueries.length, taskQueryCount);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("an older same-view response cannot steal focus from the latest panel", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 

@@ -1888,6 +1888,9 @@ func (s *Store) ListTasks(ctx context.Context, userID string, filter TaskFilter)
 }
 
 func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilter) (TaskPage, error) {
+	if err := validateTaskFilterLocationIDs(filter); err != nil {
+		return TaskPage{}, fmt.Errorf("%w: %v", ErrInvalidData, err)
+	}
 	whereSQL := ""
 	args := []any{userID}
 	if filter.BoardID != "" {

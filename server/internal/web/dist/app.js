@@ -752,6 +752,10 @@ async function loadWorkspace(route, expectedRouteVersion) {
     && sessionIsCurrent(sessionVersion, userID)
     && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
   state.workspaceLoading = true;
+  if (route.scope === "list" && !state.workspaceLists.some(list => list.id === route.listId)) {
+    state.workspaceLoading = false;
+    return false;
+  }
   let taskData;
   try {
     taskData = await api.get(`/api/v1/tasks?${workspaceQuery(route)}`);
@@ -783,7 +787,6 @@ async function loadWorkspace(route, expectedRouteVersion) {
   const requestedGroup = new URLSearchParams(location.search).get("group");
   if (requestedView === "flow" && requestedGroup === "list") state.workspaceView = "board";
   state.workspaceLoading = false;
-  if (route.scope === "list" && !state.workspaceLists.some(list => list.id === route.listId)) return false;
   return true;
 }
 
