@@ -33,10 +33,10 @@ The authenticated user response exposes the resolved plan, grant source, server-
 | Legacy active-item setting | 20 | 20 |
 | Active agents | 1 | 5 |
 | Stored tasks | 500 | 10,000 |
-| Stored task content | 10 MiB | 250 MiB |
+| Stored content | 10 MiB | 250 MiB |
 | API tokens | 3 | 20 |
 
-Usage reports boards, the largest list count on a board, the largest active-item count on a list, active agents, all stored tasks, stored task-content bytes, and active API tokens. Content is measured as UTF-8 bytes from task titles and descriptions.
+Usage reports boards, the largest list count on a board, the largest active-item count on a list, active agents, all stored tasks, stored-content bytes, and active API tokens. Content is measured as UTF-8 bytes from task titles, task descriptions, and card conversation bodies, including human comments and agent outputs.
 
 The active-item value remains in entitlement and board responses for compatibility, but task creation, reopening, and movement do not enforce it. Lists organise work and account-level stored-task and content quotas provide the capacity boundary. The legacy override flag is accepted and ignored.
 
@@ -50,6 +50,7 @@ Every JSON mutation request is limited to 64 KiB before decoding. Oversized bodi
 | --- | ---: | --- |
 | Task title | 300 | Unicode characters |
 | Task description | 16 KiB | UTF-8 bytes |
+| Card comment or output body | 16 KiB | UTF-8 bytes |
 | Board name | 100 | Unicode characters |
 | Board background kind | 32 | Unicode characters |
 | Board background value | 100 | Unicode characters |
