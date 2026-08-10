@@ -767,6 +767,10 @@ func (s *Store) createTaskForTarget(ctx context.Context, userID string, bucketID
 	if err != nil {
 		return Task{}, err
 	}
+	return s.createPreparedTask(ctx, userID, bucketID, prepared)
+}
+
+func (s *Store) createPreparedTask(ctx context.Context, userID string, bucketID string, prepared preparedTaskCreate) (Task, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Task{}, err
@@ -783,16 +787,16 @@ func (s *Store) createTaskForTarget(ctx context.Context, userID string, bucketID
 }
 
 type preparedTaskCreate struct {
-	title                 string
-	description           string
-	scheduledDate         string
-	kind                  string
-	assigneeAgentID       string
-	parentTaskID          string
-	idempotencyKey        string
-	fingerprint           string
-	compatibleFingerprint string
-	overrideLimit         bool
+	title                  string
+	description            string
+	scheduledDate          string
+	kind                   string
+	assigneeAgentID        string
+	parentTaskID           string
+	idempotencyKey         string
+	fingerprint            string
+	compatibleFingerprints []string
+	overrideLimit          bool
 }
 
 func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (preparedTaskCreate, error) {
@@ -828,10 +832,11 @@ func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (prepare
 		}
 		prepared.fingerprint = fingerprint
 		if parentTaskID == "" {
-			prepared.compatibleFingerprint, err = parentAwareTaskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", input.OverrideLimit)
+			compatibleFingerprint, err := parentAwareTaskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, "", input.OverrideLimit)
 			if err != nil {
 				return preparedTaskCreate{}, err
 			}
+			prepared.compatibleFingerprints = append(prepared.compatibleFingerprints, compatibleFingerprint)
 		}
 	}
 	return prepared, nil
@@ -846,7 +851,48 @@ func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID s
 		return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
 	}
 	input.ParentTaskID = parent.ID
-	return s.CreateTask(ctx, userID, parent.BucketID, input)
+	prepared, err := prepareTaskCreate(input, "parent:"+parent.ID)
+	if err != nil {
+		return Task{}, err
+	}
+	if prepared.idempotencyKey != "" {
+		rows, err := s.db.Query(ctx, `
+			SELECT b.id::text
+			FROM buckets b
+			JOIN boards bo ON bo.id = b.board_id
+			WHERE bo.user_id = $1
+		`, userID)
+		if err != nil {
+			return Task{}, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var bucketID string
+			if err := rows.Scan(&bucketID); err != nil {
+				return Task{}, err
+			}
+			fingerprint, err := parentAwareTaskCreateFingerprint(
+				bucketID,
+				prepared.title,
+				prepared.description,
+				prepared.scheduledDate,
+				prepared.kind,
+				prepared.assigneeAgentID,
+				prepared.parentTaskID,
+				prepared.overrideLimit,
+			)
+			if err != nil {
+				return Task{}, err
+			}
+			prepared.compatibleFingerprints = append(prepared.compatibleFingerprints, fingerprint)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return Task{}, err
+		}
+		rows.Close()
+	}
+	return s.createPreparedTask(ctx, userID, parent.BucketID, prepared)
 }
 
 func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucketID string, input preparedTaskCreate) (Task, error) {
@@ -861,9 +907,23 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 			WHERE user_id = $1 AND key = $2
 		`, userID, input.idempotencyKey).Scan(&existingFingerprint, &existingTaskID)
 		if err == nil {
-			fingerprintMatches := existingFingerprint == input.fingerprint ||
-				(input.compatibleFingerprint != "" && existingFingerprint == input.compatibleFingerprint)
+			fingerprintMatches := existingFingerprint == input.fingerprint
+			for _, compatibleFingerprint := range input.compatibleFingerprints {
+				if existingFingerprint == compatibleFingerprint {
+					fingerprintMatches = true
+					break
+				}
+			}
 			if !fingerprintMatches {
+				if input.parentTaskID != "" && existingTaskID != "" {
+					existingTask, err := taskByID(ctx, tx, existingTaskID)
+					if err != nil {
+						return Task{}, err
+					}
+					if subtaskMatchesCreateInput(existingTask, input) {
+						return existingTask, nil
+					}
+				}
 				return Task{}, ErrIdempotencyKey
 			}
 			if existingTaskID == "" {
@@ -918,6 +978,15 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 		}
 	}
 	return task, nil
+}
+
+func subtaskMatchesCreateInput(task Task, input preparedTaskCreate) bool {
+	return task.ParentTaskID == input.parentTaskID &&
+		task.Title == input.title &&
+		task.Description == input.description &&
+		task.ScheduledDate == input.scheduledDate &&
+		task.Kind == input.kind &&
+		task.AssigneeAgentID == input.assigneeAgentID
 }
 
 type queryRower interface {
@@ -1853,8 +1922,8 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		whereSQL += " AND t.assignee_agent_id IS NULL"
 	}
 	if filter.Query != "" {
-		args = append(args, "%"+filter.Query+"%")
-		whereSQL += fmt.Sprintf(" AND (t.title ILIKE $%d OR t.description ILIKE $%d)", len(args), len(args))
+		args = append(args, taskSearchPattern(filter.Query))
+		whereSQL += fmt.Sprintf(" AND (t.title ILIKE $%d ESCAPE E'\\\\' OR t.description ILIKE $%d ESCAPE E'\\\\')", len(args), len(args))
 	}
 	if filter.ScheduledFrom != "" {
 		args = append(args, filter.ScheduledFrom)
@@ -1951,6 +2020,11 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		}
 	}
 	return page, nil
+}
+
+func taskSearchPattern(query string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
+	return "%" + escaped + "%"
 }
 
 func (s *Store) listBuckets(ctx context.Context, userID string, boardID string) ([]Bucket, error) {

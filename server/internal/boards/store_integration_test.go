@@ -432,6 +432,56 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	assertStorageUsage(t, ctx, db, userID, 0, 0)
 }
 
+func TestTaskSearchTreatsPatternCharactersAsLiteralText(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Cards"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := []CreateTaskInput{
+		{Title: "100% coverage"},
+		{Title: "100 percent coverage"},
+		{Title: "Plan_A"},
+		{Title: "PlanBA"},
+		{Title: `Path \ docs`},
+		{Title: "Path docs"},
+		{Title: "Metrics", Description: "Uses a 50% threshold"},
+		{Title: "Other metrics", Description: "Uses a 50 percent threshold"},
+	}
+	created := make([]Task, 0, len(inputs))
+	for _, input := range inputs {
+		task, err := store.CreateTask(ctx, userID, bucket.ID, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		created = append(created, task)
+	}
+
+	assertSearch := func(query string, want Task) {
+		t.Helper()
+		page, err := store.ListTaskPage(ctx, userID, TaskFilter{Query: query})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Tasks) != 1 || page.Tasks[0].ID != want.ID {
+			t.Fatalf("query %q tasks = %#v, want only %q", query, page.Tasks, want.ID)
+		}
+	}
+	assertSearch("100% COVERAGE", created[0])
+	assertSearch("Plan_A", created[2])
+	assertSearch(`\`, created[4])
+	assertSearch("50% threshold", created[6])
+}
+
 func TestAccountAlwaysKeepsAnInboxForUniversalCapture(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -1397,6 +1447,10 @@ func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	parent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Ship release"})
 	if err != nil {
 		t.Fatal(err)
@@ -1406,12 +1460,19 @@ func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
 	retry, err := store.CreateSubtask(ctx, userID, parent.ID, input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if retry.ID != first.ID {
 		t.Fatalf("subtask retry created %q, want original %q", retry.ID, first.ID)
+	}
+	if retry.BucketID != destination.ID {
+		t.Fatalf("retried subtask list = %q, want moved parent list %q", retry.BucketID, destination.ID)
 	}
 
 	changed := input
@@ -1428,6 +1489,73 @@ func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
 	}
 	if _, err := store.CreateSubtask(ctx, userID, otherParent.ID, input); !errors.Is(err, ErrIdempotencyKey) {
 		t.Fatalf("different-parent reuse of subtask key error = %v, want ErrIdempotencyKey", err)
+	}
+}
+
+func TestSubtaskCreationAcceptsThePredeploymentFingerprintAfterParentMoves(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Rolling child retries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalList, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, originalList.ID, CreateTaskInput{Title: "Ship release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Write notes", IdempotencyKey: "predeployment-subtask-request"}
+	original, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: input.Title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousFingerprint, err := parentAwareTaskCreateFingerprint(
+		originalList.ID,
+		input.Title,
+		input.Description,
+		"",
+		KindAction,
+		input.AssigneeAgentID,
+		parent.ID,
+		input.OverrideLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, input.IdempotencyKey, previousFingerprint, original.ID); err != nil {
+		t.Fatal(err)
+	}
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteBucket(ctx, userID, originalList.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.CreateSubtask(ctx, userID, parent.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != original.ID {
+		t.Fatalf("rolling deployment retry created %q, want original %q", retry.ID, original.ID)
+	}
+	if retry.BucketID != destination.ID {
+		t.Fatalf("rolling deployment retry list = %q, want moved parent list %q", retry.BucketID, destination.ID)
 	}
 }
 

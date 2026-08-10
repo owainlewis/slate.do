@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -232,6 +232,8 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const subtaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/subtasks$/);
     if (subtaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
+      const idempotencyKey = request.headers["idempotency-key"] || "";
+      state.subtaskRequestKeys.push(idempotencyKey);
       if (state.delayNextSubtask) {
         state.delayNextSubtask = false;
         await new Promise(resolve => { state.releaseSubtask = resolve; });
@@ -240,10 +242,17 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         state.failNextSubtask = false;
         return json(response, { error: "Could not add subtask" }, 500);
       }
+      const existing = idempotencyKey && state.subtaskIdempotency.get(idempotencyKey);
+      if (existing) return json(response, existing, 201);
       const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
       const created = { ...parent, id: `task-child-${state.subtasks.length + 1}`, parentTaskId: parent.id, title: input.title, description: "", done: false, status: "new", priority: "", assigneeAgentId: "", assigneeAgentName: "" };
       state.subtasks.push(created);
+      if (idempotencyKey) state.subtaskIdempotency.set(idempotencyKey, created);
       state.lists.find(list => list.id === created.bucketId).openCount += 1;
+      if (state.commitNextSubtaskThenFail) {
+        state.commitNextSubtaskThenFail = false;
+        return json(response, { error: "Response lost after commit" }, 500);
+      }
       return json(response, created, 201);
     }
     const statusMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/status$/);
@@ -2662,6 +2671,48 @@ test("New card captures directly into Inbox and opens a normal card editor", asy
   await page.locator(`[data-open-task="${state.created[0].id}"]`).getByText("Prepare launch brief", { exact: true }).waitFor();
   assert.equal(state.patches.at(-1).title, "Prepare launch brief");
   assert.equal(state.patches.at(-1).priority, "p0");
+});
+
+test("New card preserves a successful capture when the workspace refresh fails", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.failNextWorkspaceTasks = true;
+  await page.getByRole("button", { name: "New card", exact: true }).click();
+  const recovery = page.getByRole("alert", { name: "Created card recovery" });
+  await recovery.waitFor();
+
+  assert.equal(state.created.length, 1);
+  assert.match(await recovery.textContent(), /Card created/);
+  assert.equal(await page.getByRole("button", { name: "New card", exact: true }).isDisabled(), true);
+
+  await page.getByRole("button", { name: "Open card", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Untitled card");
+  assert.equal(state.created.length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a lost child-card response retries with one idempotency key and no duplicate", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByLabel("Child card title", { exact: true }).fill("Verify final copy");
+  state.commitNextSubtaskThenFail = true;
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await page.getByText("Response lost after commit", { exact: true }).waitFor();
+
+  assert.equal(state.subtasks.filter(task => task.title === "Verify final copy").length, 1);
+  assert.equal(await page.getByLabel("Child card title", { exact: true }).inputValue(), "Verify final copy");
+  assert.equal(state.subtaskRequestKeys.length, 1);
+  assert.ok(state.subtaskRequestKeys[0]);
+
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await page.locator(".workspace-subtask-list").getByText("Verify final copy", { exact: true }).waitFor();
+
+  assert.equal(state.subtasks.filter(task => task.title === "Verify final copy").length, 1);
+  assert.equal(state.subtaskRequestKeys.length, 2);
+  assert.equal(state.subtaskRequestKeys[1], state.subtaskRequestKeys[0]);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("task detail coordinates one level of human and agent subtasks through the CLI model", async t => {

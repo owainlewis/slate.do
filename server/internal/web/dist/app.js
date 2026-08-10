@@ -34,12 +34,13 @@ function icon(name, cls = "") {
 const api = {
   async request(path, options = {}) {
     const sessionVersion = authVersion;
+    const { headers = {}, ...requestOptions } = options;
     let res;
     try {
       res = await fetch(path, {
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options,
+        ...requestOptions,
+        headers: { "Content-Type": "application/json", ...headers },
       });
     } catch (err) {
       if (sessionVersion !== authVersion) return new Promise(() => {});
@@ -127,8 +128,11 @@ const state = {
   taskDetailDrafts: {},
   taskCompletionError: null,
   subtaskDraft: "",
+  subtaskCreateAttempt: null,
   subtaskPending: false,
   subtaskError: "",
+  newTaskRecovery: null,
+  newTaskCapturePending: false,
   settings: false,
   settingsPage: "profile",
   view: "home",
@@ -437,8 +441,11 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.cardEntryError = "";
   state.taskDetailDrafts = {};
   state.subtaskDraft = "";
+  state.subtaskCreateAttempt = null;
   state.subtaskPending = false;
   state.subtaskError = "";
+  state.newTaskRecovery = null;
+  state.newTaskCapturePending = false;
   state.agentAssignOpen = false;
   state.agentAssignError = "";
   state.agentAssignNotice = "";
@@ -507,6 +514,7 @@ async function applyRoute() {
     state.cardEntryAttemptKey = "";
     state.taskDetailDrafts = {};
     state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
     state.subtaskError = "";
   }
@@ -829,8 +837,11 @@ function resetAuthenticatedState() {
   state.taskDetailDrafts = {};
   state.taskCompletionError = null;
   state.subtaskDraft = "";
+  state.subtaskCreateAttempt = null;
   state.subtaskPending = false;
   state.subtaskError = "";
+  state.newTaskRecovery = null;
+  state.newTaskCapturePending = false;
   state.settings = false;
   state.settingsPage = "profile";
   state.error = "";
@@ -1159,6 +1170,7 @@ async function openTaskDetail(taskID, trigger, options = {}) {
   if (!movingWithinTaskChain) {
     state.taskDetailDrafts = {};
     state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
     state.subtaskError = "";
   }
   const summary = findTask(taskID) || {};
@@ -1542,7 +1554,7 @@ function appHTML() {
       <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
       <div class="workspace-topbar-actions">
         ${state.workspaceScope === "list" && list && !list.isInbox ? `<button class="plain-btn danger-text" id="delete-workspace-list" type="button" data-list-id="${escapeAttr(list.id)}">${icon("trash")}<span>Delete list</span></button>` : ""}
-        <button class="primary" id="new-task">${icon("plus")}<span>New card</span></button>
+        <button class="primary" id="new-task" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New card"}</span></button>
       </div>
     </header>
     ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskCompletionError?.message)}
@@ -1783,6 +1795,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
       </div>
       <div class="sidebar-content" id="sidebar-content">
         ${showNewTask ? globalNewTaskButtonHTML() : ""}
+        ${newTaskRecoveryNoticeHTML()}
         <section class="nav-sec workspace-nav">
           <h3>Attention</h3>
           <div class="pages task-nav-pages">
@@ -1920,7 +1933,21 @@ function themeSwitchHTML(theme) {
 }
 
 function globalNewTaskButtonHTML() {
-  return `<button class="primary sidebar-new-task" id="global-new-task" type="button">${icon("plus")}<span>New card</span></button>`;
+  return `<button class="primary sidebar-new-task" id="global-new-task" type="button" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New card"}</span></button>`;
+}
+
+function newTaskCaptureBlocked() {
+  return state.newTaskCapturePending || Boolean(state.newTaskRecovery);
+}
+
+function newTaskRecoveryNoticeHTML() {
+  const recovery = state.newTaskRecovery;
+  if (!recovery) return "";
+  return `<section class="status-notice new-task-recovery" role="alert" aria-label="Created card recovery"><span><strong>Card created.</strong> Slate saved ${escapeHTML(recovery.task.title)} in Inbox, but could not open it: ${escapeHTML(recovery.message)}</span><button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open card"}</button></section>`;
+}
+
+function bindNewTaskRecoveryActions() {
+  document.querySelector("#retry-created-task")?.addEventListener("click", recoverCreatedTask);
 }
 
 function boardRowHTML(board) {
@@ -2848,6 +2875,7 @@ function settingsHTML() {
       <aside class="sidebar settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         ${globalNewTaskButtonHTML()}
+        ${newTaskRecoveryNoticeHTML()}
         <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Workspace">
           <div class="pages task-nav-pages">
             <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
@@ -2892,6 +2920,7 @@ function boardSettingsHTML() {
       <aside class="sidebar settings-sidebar board-settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         ${globalNewTaskButtonHTML()}
+        ${newTaskRecoveryNoticeHTML()}
         <p class="settings-sidebar-title">Board settings</p>
         <div class="board-settings-context">
           ${icon("rows")}
@@ -3542,6 +3571,7 @@ function bindWorkspaceDetail(options = {}) {
     state.cardEntryAttemptKey = "";
     state.taskDetailDrafts = {};
     state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
     state.subtaskError = "";
     if (refreshWorkspace) {
@@ -3658,12 +3688,14 @@ function bindWorkspaceDetail(options = {}) {
   document.querySelector("[data-open-parent]")?.addEventListener("click", event => {
     preserveTaskDraft();
     state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
     state.subtaskError = "";
     openTaskDetail(state.selectedTask.parentTaskId, event.currentTarget);
   });
   document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = () => {
     preserveTaskDraft();
     state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
     state.subtaskError = "";
     openTaskDetail(element.dataset.openTask, element);
   });
@@ -3723,12 +3755,18 @@ function bindWorkspaceDetail(options = {}) {
     state.subtaskDraft = title;
     state.subtaskPending = true;
     state.subtaskError = "";
+    const idempotencyKey = subtaskCreateIdempotencyKey(parentID, title);
+    const attemptIsCurrent = () => state.subtaskCreateAttempt?.key === idempotencyKey;
     input.readOnly = true;
     const addButton = subtaskControl.querySelector("button");
     addButton.disabled = true;
     addButton.querySelector("span").textContent = "Adding…";
     try {
-      const created = await api.post(`/api/v1/tasks/${parentID}/subtasks`, { title, kind: "action" });
+      const created = await api.post(
+        `/api/v1/tasks/${parentID}/subtasks`,
+        { title, kind: "action" },
+        { headers: { "Idempotency-Key": idempotencyKey } },
+      );
       reconcileLoadedTask(created);
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
         await refreshCurrentTaskSurface();
@@ -3736,18 +3774,28 @@ function bindWorkspaceDetail(options = {}) {
           const focus = captureDetailFocus();
           preserveTaskDraft();
           state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
-          state.subtaskPending = false;
-          state.subtaskDraft = "";
+          if (attemptIsCurrent()) {
+            state.subtaskPending = false;
+            state.subtaskDraft = "";
+            state.subtaskCreateAttempt = null;
+          }
           await refreshAfterSubtaskMutation(focus);
         }
         return;
       }
-      state.subtaskPending = false;
-      state.subtaskDraft = "";
+      if (attemptIsCurrent()) {
+        state.subtaskPending = false;
+        state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
+      }
       state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
       await refreshAfterSubtaskMutation({ openTask: created.id });
     } catch (err) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        reportBackgroundMutationFailure("add child card", title, err);
+        return;
+      }
+      if (!attemptIsCurrent()) {
         reportBackgroundMutationFailure("add child card", title, err);
         return;
       }
@@ -3759,7 +3807,10 @@ function bindWorkspaceDetail(options = {}) {
     }
   };
   subtaskControl?.querySelector("button")?.addEventListener("click", addSubtask);
-  subtaskControl?.querySelector("input")?.addEventListener("input", event => { state.subtaskDraft = event.currentTarget.value; });
+  subtaskControl?.querySelector("input")?.addEventListener("input", event => {
+    if (event.currentTarget.value !== state.subtaskDraft) state.subtaskCreateAttempt = null;
+    state.subtaskDraft = event.currentTarget.value;
+  });
   subtaskControl?.querySelector("input")?.addEventListener("keydown", event => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -3799,6 +3850,7 @@ function bindWorkspaceDetail(options = {}) {
           state.selectedTask = null;
           state.selectedSubtasks = [];
           state.subtaskDraft = "";
+          state.subtaskCreateAttempt = null;
           state.subtaskPending = false;
           state.subtaskError = "";
           state.agentTaskFocusID = taskID;
@@ -3808,6 +3860,7 @@ function bindWorkspaceDetail(options = {}) {
         if (state.selectedTask?.id !== taskID) return;
         delete state.taskDetailDrafts[taskID];
         state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
         state.subtaskPending = false;
         state.subtaskError = "";
         if (parentTaskID) {
@@ -3825,6 +3878,7 @@ function bindWorkspaceDetail(options = {}) {
       if (parentTaskID) {
         delete state.taskDetailDrafts[taskID];
         state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
         state.subtaskPending = false;
         state.subtaskError = "";
         await openTaskDetail(parentTaskID);
@@ -3836,6 +3890,7 @@ function bindWorkspaceDetail(options = {}) {
       state.selectedSubtasks = [];
       state.taskDetailDrafts = {};
       state.subtaskDraft = "";
+      state.subtaskCreateAttempt = null;
       state.subtaskPending = false;
       state.subtaskError = "";
       await refreshAfterCommittedMutation("deleted");
@@ -3894,6 +3949,7 @@ function bindWorkspaceDetail(options = {}) {
       if (parentTaskID) {
         delete state.taskDetailDrafts[taskID];
         state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
         state.subtaskPending = false;
         state.subtaskError = "";
         await openTaskDetail(parentTaskID);
@@ -3905,6 +3961,7 @@ function bindWorkspaceDetail(options = {}) {
       state.selectedSubtasks = [];
       state.taskDetailDrafts = {};
       state.subtaskDraft = "";
+      state.subtaskCreateAttempt = null;
       state.subtaskPending = false;
       state.subtaskError = "";
       await refreshAfterCommittedMutation("saved");
@@ -4191,6 +4248,7 @@ function bindAppShell() {
     sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
   };
   bindThemeControls();
+  bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   bindWorkspaceListControl();
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
@@ -4316,16 +4374,66 @@ function bindWorkspaceListDialog() {
 }
 
 async function captureInboxTask(button) {
-  button.disabled = true;
-  button.querySelector("span").textContent = "Creating…";
+  if (newTaskCaptureBlocked()) return false;
+  state.newTaskCapturePending = true;
+  state.error = "";
+  render();
+  let task;
   try {
-    const task = await api.post("/api/v1/tasks", { title: "Untitled card", description: "", kind: "action" });
-    if (parseRoute(location.pathname).name === "workspace") await reload();
-    else await navigate(INBOX_PATH);
-    await openTaskDetail(task.id, button);
+    task = await api.post("/api/v1/tasks", { title: "Untitled card", description: "", kind: "action" });
   } catch (err) {
+    state.newTaskCapturePending = false;
     state.error = err.message;
     render();
+    return false;
+  }
+
+  state.newTaskCapturePending = false;
+  state.newTaskRecovery = { task, message: "The Inbox could not be refreshed.", pending: false };
+  try {
+    if (parseRoute(location.pathname).name === "workspace") {
+      if (!await reload()) throw new Error(state.error || "The Inbox could not be refreshed.");
+    } else {
+      await navigate(INBOX_PATH);
+      if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
+        throw new Error(state.error || "The Inbox could not be loaded.");
+      }
+    }
+    let detailError;
+    const opened = await openTaskDetail(task.id, null, { onError: err => { detailError = err; } });
+    if (!opened) throw detailError || new Error("The card could not be loaded.");
+    state.newTaskRecovery = null;
+    render();
+    return true;
+  } catch (err) {
+    state.error = "";
+    state.newTaskRecovery = { task, message: err.message || "The card could not be opened.", pending: false };
+    render();
+    return false;
+  }
+}
+
+async function recoverCreatedTask() {
+  const recovery = state.newTaskRecovery;
+  if (!recovery || recovery.pending || state.newTaskCapturePending) return false;
+  state.newTaskRecovery = { ...recovery, pending: true };
+  render();
+  try {
+    await navigate(INBOX_PATH);
+    if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
+      throw new Error(state.error || "The Inbox could not be loaded.");
+    }
+    let detailError;
+    const opened = await openTaskDetail(recovery.task.id, null, { onError: err => { detailError = err; } });
+    if (!opened) throw detailError || new Error("The card could not be loaded.");
+    state.newTaskRecovery = null;
+    render();
+    return true;
+  } catch (err) {
+    state.error = "";
+    state.newTaskRecovery = { ...recovery, message: err.message || "The card could not be opened.", pending: false };
+    render();
+    return false;
   }
 }
 
@@ -4444,6 +4552,7 @@ async function deleteBoard(id) {
 
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   bindWorkspaceListControl();
   document.querySelectorAll(".settings-nav-link").forEach(el => el.onclick = event => {
@@ -4587,6 +4696,7 @@ async function bindSettings() {
 
 function bindBoardSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   document.querySelector("#back-to-board").onclick = () => navigate(APP_PATH);
   document.querySelector("#account-settings-link").onclick = event => {
@@ -5016,6 +5126,14 @@ function newClientRequestKey() {
   const values = new Uint8Array(24);
   globalThis.crypto.getRandomValues(values);
   return [...values].map(value => value.toString(16).padStart(2, "0")).join("");
+}
+
+function subtaskCreateIdempotencyKey(parentID, title) {
+  const previous = state.subtaskCreateAttempt;
+  if (previous?.parentID === parentID && previous.title === title) return previous.key;
+  const key = newClientRequestKey();
+  state.subtaskCreateAttempt = { parentID, title, key };
+  return key;
 }
 
 function agentMutationContext() {

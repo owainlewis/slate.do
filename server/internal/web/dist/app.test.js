@@ -2332,6 +2332,8 @@ test("switching accounts clears old account data and loads only the new account'
     state.settings = true;
     state.tokens = [{ id: "token-a" }];
     state.newToken = "secret-token-a";
+    state.newTaskRecovery = { task: { id: "secret-a", title: "Account A card" }, message: "Could not open", pending: false };
+    state.newTaskCapturePending = true;
     state.goalErrors = { "list-a": "old error" };
     state.flowListId = "list-a";
     state.weekStart = "2026-07-20";
@@ -2361,6 +2363,8 @@ test("switching accounts clears old account data and loads only the new account'
       settingsPage: state.settingsPage,
       tokens: state.tokens,
       newToken: state.newToken,
+      newTaskRecovery: state.newTaskRecovery,
+      newTaskCapturePending: state.newTaskCapturePending,
       goalErrors: state.goalErrors,
       flowListId: state.flowListId,
       weekStart: state.weekStart,
@@ -2374,6 +2378,8 @@ test("switching accounts clears old account data and loads only the new account'
       settingsPage: "profile",
       tokens: [],
       newToken: "",
+      newTaskRecovery: null,
+      newTaskCapturePending: false,
       goalErrors: {},
       flowListId: "",
       weekStart: "",
