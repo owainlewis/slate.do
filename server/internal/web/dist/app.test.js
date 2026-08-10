@@ -191,7 +191,7 @@ test("New list is bound centrally for shared-shell and settings routes", () => {
   const controlStart = source.indexOf("function bindWorkspaceListControl()");
   const controlEnd = source.indexOf("async function captureInboxTask", controlStart);
   const settingsStart = source.indexOf("async function bindSettings()");
-  const settingsEnd = source.indexOf("function bindBoardSettings()", settingsStart);
+  const settingsEnd = source.indexOf("function bindAgents()", settingsStart);
   const workspaceStart = source.indexOf("function bindWorkspace()");
   const workspaceEnd = source.indexOf("function bindWorkspaceDetail(options = {})", workspaceStart);
 
@@ -497,10 +497,7 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   assert.match(html, /class="theme-switch light"[\s\S]*?id="settings"/);
   assert.match(html, /id="settings"[\s\S]*?<span>Settings<\/span>/);
   assert.match(html, /id="logout"[\s\S]*?<span>Sign out<\/span>/);
-  const boardSettings = app.boardSettingsHTML();
-  assert.match(boardSettings, /No hard item limits/);
-  assert.doesNotMatch(boardSettings, /settings-list-limit|Maximum active items/);
-  assert.doesNotMatch(boardSettings, /data-set-theme=/);
+  assert.doesNotMatch(html, /data-board-settings|Board settings/);
   vm.runInContext(`state.boards = []; state.board = null;`, app);
 });
 
@@ -590,17 +587,6 @@ test("agent work renders the shared inline task detail with parent context", () 
   assert.match(html, /Review/);
   assert.doesNotMatch(html, /data-detail-overlay|aria-modal="true"|id="detail-form"/);
   vm.runInContext(`state.view = "home"; state.selectedTask = null; state.selectedSubtasks = []; state.workspaceLists = [];`, app);
-});
-
-test("list limits remain scoped to the selected board", () => {
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(app.listLimitUpdate("current-board", "12"))),
-    { next: 12, path: "/api/v1/boards/current-board", input: { maxTasksPerList: 12 } },
-  );
-  assert.equal(app.validateListLimit("0", 20), "Enter a value from 1 to 20.");
-  assert.equal(app.validateListLimit("21", 20), "Enter a value from 1 to 20.");
-  assert.equal(app.validateListLimit("2.5", 20), "Enter a whole number.");
-  assert.equal(app.validateListLimit("20", 20), "");
 });
 
 test("completed history pages append to a list and preserve the next cursor", async () => {
@@ -2846,9 +2832,9 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/early-access"), { name: "early-access" });
   assert.deepEqual(route("/reset-password"), { name: "reset-password" });
   assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1" });
-  assert.deepEqual(route("/app/boards/board_1/settings"), { name: "board-settings", boardId: "board_1" });
+  assert.deepEqual(route("/app/boards/board_1/settings"), { name: "board", boardId: "board_1", redirect: true });
   assert.deepEqual(route("/app/boards/a%20b"), { name: "board", boardId: "a b" });
-  assert.deepEqual(route("/app/boards/a%20b/settings"), { name: "board-settings", boardId: "a b" });
+  assert.deepEqual(route("/app/boards/a%20b/settings"), { name: "board", boardId: "a b", redirect: true });
   assert.deepEqual(route("/app/boards/%ED%A0%80"), { name: "not-found" });
 
   // Trailing slashes, queries, and fragments never change which route is named.
@@ -2971,15 +2957,16 @@ test("a board deep link loads that board, and an unknown id is not found", async
   assert.equal(missing.board(), null);
 });
 
-test("a missing exact-board settings route owns its error and keeps its URL", async () => {
+test("legacy board settings URLs return to the board", async () => {
+  const existing = router({ url: "/app/boards/board_1/settings", signedIn: true, boards: [{ id: "board_1" }] });
+  await existing.apply();
+  assert.equal(existing.url(), "/app/boards/board_1");
+  assert.equal(existing.view(), "board");
+
   const missing = router({ url: "/app/boards/missing/settings", signedIn: true, boards: [{ id: "board_1" }] });
-
   await missing.apply();
-
-  assert.equal(missing.view(), "route-error");
-  assert.equal(missing.routeError(), "board-settings");
-  assert.equal(missing.error(), "This board does not exist or is no longer available to you.");
-  assert.equal(missing.url(), "/app/boards/missing/settings");
+  assert.equal(missing.view(), "not-found");
+  assert.equal(missing.url(), "/app/boards/missing");
   assert.equal(missing.board(), null);
 });
 
@@ -3034,22 +3021,7 @@ test("a failed board-detail navigation renders an error for that board without r
   assert.equal(it.error(), "Board could not be loaded");
 });
 
-test("failed board-settings and token loads render route-owned errors at the requested page", async () => {
-  const boardFailure = router({ url: "/", signedIn: true });
-  vm.runInContext(`
-    api.get = async path => {
-      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
-      throw new Error("Settings board could not be loaded");
-    };
-  `, boardFailure.context);
-
-  await assert.doesNotReject(boardFailure.go("/app/boards/board_1/settings"));
-
-  assert.equal(boardFailure.url(), "/app/boards/board_1/settings");
-  assert.equal(boardFailure.view(), "route-error");
-  assert.equal(boardFailure.routeError(), "board-settings");
-  assert.equal(boardFailure.error(), "Settings board could not be loaded");
-
+test("failed token loads render route-owned errors at the requested page", async () => {
   const tokenFailure = router({ url: "/app/boards/board_1", signedIn: true, boards: [{ id: "board_1" }] });
   await tokenFailure.apply();
   tokenFailure.context.loadTokens = tokenFailure.context.realLoadTokens;
@@ -3188,32 +3160,6 @@ test("a current workspace request for a missing list renders Not Found", async (
 
   assert.equal(it.url(), "/app/lists/list-missing");
   assert.equal(it.view(), "not-found");
-});
-
-test("a stale board-settings load cannot overwrite newer board navigation", async () => {
-  const it = router({ url: "/", signedIn: true });
-  let releaseSettingsBoard;
-  it.context.settingsBoardResponse = new Promise(resolve => { releaseSettingsBoard = resolve; });
-  vm.runInContext(`
-    api.get = async path => {
-      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
-      if (path === "/api/v1/boards/board_1") return settingsBoardResponse;
-      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
-      if (path === "/api/v1/lists") return { lists: [] };
-      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
-      throw new Error("unexpected request: " + path);
-    };
-  `, it.context);
-
-  const staleSettings = it.go("/app/boards/board_1/settings");
-  await new Promise(resolve => setImmediate(resolve));
-  await it.go("/app/boards/board_2");
-  releaseSettingsBoard({ id: "board_1", name: "Board one", buckets: [] });
-  await staleSettings;
-
-  assert.equal(it.board(), "board_2");
-  assert.equal(it.url(), "/app/boards/board_2");
-  assert.equal(it.view(), "board");
 });
 
 test("a stale settings token response cannot overwrite newer settings data", async () => {

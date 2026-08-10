@@ -383,16 +383,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .seg button .icon { width: 14px; height: 14px; color: var(--faint); }
 .seg button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.1); }
 .seg button.on .icon, .seg button:hover .icon { color: inherit; }
-.limit-control input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  background: var(--card);
-  color: var(--ink);
-  font-weight: 600;
-}
-
 /* ---------- Main ---------- */
 .main {
   flex: 1;
@@ -726,10 +716,15 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(210px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(280px, 340px);
+  grid-template-rows: minmax(230px, 1fr);
   gap: 12px;
   margin: 10px 24px 10px;
-  overflow: auto;
+  padding-bottom: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
 }
 .flow-column {
   min-width: 0;
@@ -1729,10 +1724,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .agent-credentials-link strong { font-size: 14px; }
 .agent-credentials-link small { color: var(--faint); font-size: 13px; line-height: 1.45; }
 .agent-credentials-link .chevron-right { transform: rotate(180deg); color: var(--faint); }
-.board-settings-context { margin: -4px 2px 0; padding: 10px 8px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--card); color: var(--soft); }
-.board-settings-context span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
-.board-settings-context .icon { color: var(--accent); }
-.board-settings-head h1 { overflow-wrap: anywhere; }
 
 /* ---------- Agents ---------- */
 .agents-main { flex: 1; min-width: 0; overflow-y: auto; background: var(--bg); }
@@ -1953,9 +1944,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .settings-page .settings-nav-link { min-width: 0; padding: 7px 4px; justify-content: center; text-align: center; white-space: nowrap; }
   .settings-page .settings-actions { margin-top: 2px; padding-top: 8px; flex-direction: row; justify-content: space-between; }
   .settings-page .settings-actions .plain-btn { width: auto; white-space: nowrap; }
-  .board-settings-page .settings-actions { flex-direction: column; align-items: stretch; }
-  .board-settings-page .settings-actions .plain-btn { width: 100%; white-space: normal; }
-  .board-settings-page .settings-actions .plain-btn span { min-width: 0; overflow-wrap: anywhere; }
   .board-actions button { opacity: 1; }
   .bucket-menu .icon-btn { opacity: 1; }
   .bucket-goal { opacity: 1; }
@@ -1963,8 +1951,8 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   .grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(280px, 85vw); grid-template-rows: minmax(280px, 1fr); margin: 10px 14px; overflow-x: auto; overflow-y: hidden; }
   .bucket.drop-before-bucket { box-shadow: -9px 0 0 -7px var(--accent); }
   .bucket.drop-after-bucket { box-shadow: 9px 0 0 -7px var(--accent); }
-  .flow { grid-template-columns: 1fr; margin: 10px 14px 20px; overflow: visible; }
-  .flow-view { overflow: visible; }
+  .flow { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(280px, 85vw); grid-template-rows: minmax(280px, 1fr); margin: 10px 14px 20px; overflow-x: auto; overflow-y: hidden; }
+  .flow-view { overflow: hidden; }
   .flow-toolbar { margin: 10px 14px 0; }
   .flow-toolbar select { flex: 1; min-width: 0; max-width: none; }
   .flow-column { min-height: 180px; }

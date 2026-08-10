@@ -571,6 +571,18 @@ test("boards own their lists and support create, rename, and delete", async t =>
   assert.deepEqual(pageErrors, []);
 });
 
+test("board settings are removed and legacy links return to the board", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t);
+
+  assert.equal(await page.getByRole("button", { name: /Board settings for/ }).count(), 0);
+  await page.goto(`${origin}/app/boards/board-one/settings`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+
+  assert.equal(new URL(page.url()).pathname, "/app/boards/board-one");
+  assert.equal(await page.getByText("Board settings", { exact: true }).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a board can be created from the primary navigation", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
@@ -762,6 +774,29 @@ test("board lists stay in one horizontal scroll lane", async t => {
   await waitFor(() => state.reorderedLists[0] === "list-planning");
   assert.deepEqual(state.reorderedLists, ["list-planning", "list-inbox", "list-youtube"]);
   assert.equal(await grid.locator(".bucket").first().getAttribute("data-bucket"), "list-planning");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("board Flow stays in one horizontal scroll lane", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t, { width: 720, height: 900 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  await page.locator('[data-board-mode="flow"]').click();
+  const flow = page.locator(".flow");
+  const columns = flow.locator(".flow-column");
+  const [first, second, last] = await Promise.all([
+    columns.nth(0).boundingBox(),
+    columns.nth(1).boundingBox(),
+    columns.nth(4).boundingBox(),
+  ]);
+  const dimensions = await flow.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+
+  assert.equal(await columns.count(), 5);
+  assert.ok(Math.abs(first.y - second.y) < 2, `Flow columns should share a row: ${first.y} vs ${second.y}`);
+  assert.ok(Math.abs(first.y - last.y) < 2, `the final Flow column should not wrap: ${first.y} vs ${last.y}`);
+  assert.ok(second.x > first.x, `second Flow column should be to the right: ${first.x} vs ${second.x}`);
+  assert.ok(dimensions.scrollWidth > dimensions.clientWidth, `Flow should scroll horizontally: ${JSON.stringify(dimensions)}`);
   assert.deepEqual(pageErrors, []);
 });
 

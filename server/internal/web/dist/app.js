@@ -90,18 +90,6 @@ function utf8Length(value) {
   return bytes;
 }
 
-function listLimitUpdate(boardId, value) {
-  const next = Number(value);
-  return { next, path: `/api/v1/boards/${boardId}`, input: { maxTasksPerList: next } };
-}
-
-function validateListLimit(value, maximum = accountLimits().activeItemsPerList) {
-  const next = Number(value);
-  if (!Number.isInteger(next)) return "Enter a whole number.";
-  if (next < 1 || next > maximum) return `Enter a value from 1 to ${maximum}.`;
-  return "";
-}
-
 const goalSaveChains = new Map();
 let themeSaveChain = Promise.resolve();
 let themeChangeVersion = 0;
@@ -249,10 +237,6 @@ function listPath(id) {
   return `/app/lists/${encodeURIComponent(id)}`;
 }
 
-function boardSettingsPath(id) {
-  return `${boardPath(id)}/settings`;
-}
-
 function settingsPath(page = "profile") {
   return `${SETTINGS_PATH}/${page}`;
 }
@@ -338,7 +322,7 @@ function parseRoute(pathname) {
   const boardSettings = /^\/app\/boards\/([^/]+)\/settings$/.exec(path);
   if (boardSettings) {
     try {
-      return { name: "board-settings", boardId: decodeURIComponent(boardSettings[1]) };
+      return { name: "board", boardId: decodeURIComponent(boardSettings[1]), redirect: true };
     } catch {
       return { name: "not-found" };
     }
@@ -355,7 +339,7 @@ function parseRoute(pathname) {
 }
 
 function isProtectedRoute(name) {
-  return name === "workspace" || name === "board" || name === "board-settings" || name === "settings"
+  return name === "workspace" || name === "board" || name === "settings"
     || name === "agents" || name === "agent-new" || name === "agent-detail" || name === "agent-work" || name === "agent-settings";
 }
 
@@ -544,6 +528,8 @@ async function applyRoute() {
       ? navigate(TODAY_PATH, { replace: true })
       : route.name === "agents"
       ? navigate(AGENTS_PATH, { replace: true })
+      : route.name === "board"
+      ? navigate(boardPath(route.boardId), { replace: true })
       : navigate(settingsPath(route.settingsPage), { replace: true });
   }
   if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) prepareAgentRoute(route);
@@ -614,18 +600,12 @@ async function applyRoute() {
       if (!workspaceLoaded) return showRoute("not-found");
       return showRoute("app");
     }
-    if (route.name === "board" || route.name === "board-settings") {
+    if (route.name === "board") {
       if (!state.boards.some(board => board.id === route.boardId)) {
-        if (route.name === "board-settings") {
-          state.error = "This board does not exist or is no longer available to you.";
-          state.routeError = route;
-          return showRoute("route-error");
-        }
         return showRoute("not-found");
       }
       if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
       if (routeVersion !== version) return;
-      if (route.name === "board-settings") return showRoute("board-settings");
       return showRoute("board");
     }
     if (route.settingsPage === "api" && !await loadTokens(authVersion, state.me?.id, version)) return;
@@ -1263,12 +1243,6 @@ function render() {
     bindSettings();
     return;
   }
-  if (state.view === "board-settings") {
-    syncPath(boardSettingsPath(state.board.id));
-    root.innerHTML = boardSettingsHTML();
-    bindBoardSettings();
-    return;
-  }
   if (state.view === "agents" || state.view === "agent-new") {
     syncPath(state.view === "agent-new" ? NEW_AGENT_PATH : AGENTS_PATH);
     root.innerHTML = agentsHTML();
@@ -1325,8 +1299,6 @@ function routeErrorHTML() {
   const settingsPage = SETTINGS_PAGES.find(page => page.id === state.routeError?.settingsPage);
   const target = settingsPage
     ? `${settingsPage.title} settings`
-    : state.routeError?.name === "board-settings"
-      ? "board settings"
     : state.routeError?.name === "settings"
       ? "settings"
       : state.routeError?.name === "board"
@@ -2007,7 +1979,7 @@ function bindNewTaskRecoveryActions() {
 
 function boardRowHTML(board) {
   const route = parseRoute(globalThis.location?.pathname || APP_PATH);
-  const current = ["board", "board-settings"].includes(route.name) && board.id === state.board?.id;
+  const current = route.name === "board" && board.id === state.board?.id;
   const deletable = boardCanBeDeleted(board.id);
   if (board.id === state.renamingBoardId) {
     return `
@@ -2026,7 +1998,6 @@ function boardRowHTML(board) {
     <div class="board-row ${current ? "on" : ""}">
       <button class="board-select" data-board="${board.id}"><span>${escapeHTML(board.name)}</span></button>
       <div class="board-actions">
-        <button data-board-settings="${board.id}" aria-label="Board settings for ${escapeAttr(board.name)}" title="Board settings">${icon("gear")}</button>
         <button data-start-rename-board="${board.id}" aria-label="Rename ${escapeAttr(board.name)}" title="Rename board">${icon("pencil")}</button>
         <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="${deletable ? "Delete board" : "Move or create another Inbox before deleting this board"}" ${deletable ? "" : "disabled"}>${icon("trash")}</button>
       </div>
@@ -2962,53 +2933,6 @@ function settingsHTML() {
         </section>
       </main>
       ${workspaceListDialogHTML()}
-    </section>`;
-}
-
-function boardSettingsHTML() {
-  const theme = currentTheme();
-  const board = state.board;
-  return `
-    <section class="settings-page board-settings-page theme-${theme}">
-      <aside class="sidebar settings-sidebar board-settings-sidebar">
-        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-        ${globalNewTaskButtonHTML()}
-        ${newTaskRecoveryNoticeHTML()}
-        <p class="settings-sidebar-title">Board settings</p>
-        <div class="board-settings-context">
-          ${icon("rows")}
-          <span>${escapeHTML(board.name)}</span>
-        </div>
-        <section class="settings-actions" aria-label="Board actions">
-          <button class="plain-btn icon-label" id="back-to-board">${icon("chevronLeft")}<span>Back to board</span></button>
-          <a class="plain-btn icon-label settings-account-link" href="${settingsPath()}" id="account-settings-link">${icon("user")}<span>Account settings</span></a>
-        </section>
-      </aside>
-      <main class="settings-main">
-        <section class="settings-panel">
-          <div class="settings-head board-settings-head">
-            <div>
-              <p>Board settings</p>
-              <h1>${escapeHTML(board.name)}</h1>
-              <p class="settings-description">Configuration here applies only to this board.</p>
-            </div>
-          </div>
-          <section class="settings-section" aria-labelledby="list-behaviour-heading">
-            <div class="settings-section-head">
-              <h2 id="list-behaviour-heading">List behaviour</h2>
-              <p>Lists organise tasks into useful buckets. They do not impose an item limit.</p>
-            </div>
-            <div class="settings-card">
-              <div class="settings-row">
-                <div class="settings-row-copy">
-                  <strong>No hard item limits</strong>
-                  <span>Use status, priority, filters, and views to focus the work. Account storage quotas still apply.</span>
-                </div>
-              </div>
-            </div>
-          </section>
-        </section>
-      </main>
     </section>`;
 }
 
@@ -4305,7 +4229,6 @@ function bindAppShell() {
 
 function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar")) {
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
-  document.querySelectorAll("[data-board-settings]").forEach(el => el.onclick = () => navigate(boardSettingsPath(el.dataset.boardSettings)));
   document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
     const keepSidebarOpen = sidebar?.classList.contains("open");
     state.renamingBoardId = el.dataset.startRenameBoard;
@@ -4726,7 +4649,7 @@ async function deleteBoard(id) {
   if (state.board?.id === id) state.board = null;
   if (!routeIsCurrent()) {
     const currentRoute = parseRoute(location.pathname);
-    if (["board", "board-settings"].includes(currentRoute.name) && currentRoute.boardId === id) {
+    if (currentRoute.name === "board" && currentRoute.boardId === id) {
       await navigate(TASKS_PATH, { replace: true });
     }
     return true;
@@ -4909,17 +4832,6 @@ async function bindSettings() {
     event.preventDefault();
     navigate(AGENTS_PATH);
   });
-}
-
-function bindBoardSettings() {
-  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
-  bindNewTaskRecoveryActions();
-  bindGlobalNewTask();
-  document.querySelector("#back-to-board").onclick = () => navigate(APP_PATH);
-  document.querySelector("#account-settings-link").onclick = event => {
-    event.preventDefault();
-    navigate(settingsPath());
-  };
 }
 
 function bindAgents() {
@@ -6079,16 +5991,6 @@ function clearAgentLifecycleCredential() {
 function settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, expectedPage) {
   return sessionIsCurrent(sessionVersion, userID)
     && (expectedRouteVersion === undefined || settingsRouteIsCurrent(expectedRouteVersion, expectedPage));
-}
-
-function boardSettingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, boardID) {
-  const route = parseRoute(location.pathname);
-  return sessionIsCurrent(sessionVersion, userID)
-    && expectedRouteVersion === routeVersion
-    && state.view === "board-settings"
-    && route.name === "board-settings"
-    && route.boardId === boardID
-    && state.board?.id === boardID;
 }
 
 function agentRouteIsCurrent(expectedRouteVersion, expectedView) {
