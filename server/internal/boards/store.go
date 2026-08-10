@@ -1351,7 +1351,13 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		SET board_id = $3, bucket_id = $4, title = $5, description = $6,
 			scheduled_date = NULLIF($7, '')::date, kind = $8,
 			done = $9, status = $10, priority = $11, sort_order = $12,
-			assignee_agent_id = NULLIF($13, '')::uuid, updated_at = now()
+			assignee_agent_id = NULLIF($13, '')::uuid,
+			review_reason = CASE
+				WHEN $10 <> 'needs_review' THEN ''
+				WHEN t.status <> 'needs_review' THEN ''
+				ELSE t.review_reason
+			END,
+			updated_at = now()
 		FROM boards b
 		WHERE b.id = t.board_id AND b.user_id = $1 AND t.id = $2
 		RETURNING t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
@@ -1406,7 +1412,7 @@ func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id
 	}
 	row := s.db.QueryRow(ctx, `
 		UPDATE tasks t
-		SET status = $3, updated_at = now()
+		SET status = $3, review_reason = '', updated_at = now()
 		FROM boards b
 		WHERE b.id = t.board_id
 			AND b.user_id = $1
@@ -1567,17 +1573,9 @@ func (s *Store) ListCardReviewKinds(ctx context.Context, userID string, agentID 
 		agentSQL = " AND t.assignee_agent_id = $3"
 	}
 	rows, err := s.db.Query(ctx, `
-		SELECT t.id::text, COALESCE(review_entry.kind, 'other')
+		SELECT t.id::text, COALESCE(NULLIF(t.review_reason, ''), 'other')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
-		LEFT JOIN LATERAL (
-			SELECT 'output' AS kind
-			FROM card_entries entry
-			WHERE entry.task_id = t.id
-				AND entry.kind = 'output'
-			ORDER BY entry.created_at DESC, entry.id DESC
-			LIMIT 1
-		) review_entry ON true
 		WHERE b.user_id = $1 AND t.status = $2`+agentSQL+`
 	`, args...)
 	if err != nil {
@@ -1714,7 +1712,7 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	if kind == "output" {
 		if _, err := tx.Exec(ctx, `
 			UPDATE tasks
-			SET status = $1, done = false, updated_at = now()
+			SET status = $1, done = false, review_reason = 'output', updated_at = now()
 			WHERE id = $2
 		`, StatusNeedsReview, taskID); err != nil {
 			return CardEntry{}, err

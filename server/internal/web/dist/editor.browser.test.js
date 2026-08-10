@@ -86,10 +86,9 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     }
     if (url.pathname === "/api/v1/agents" && request.method === "GET") return json(response, { agents: state.agents, maxAgents: 5 });
     if (url.pathname === "/api/v1/card-review-kinds" && request.method === "GET") {
-      const kinds = Object.fromEntries([...state.tasks, ...state.subtasks].filter(task => task.status === "needs_review").map(task => {
-        const trigger = [...(state.entries[task.id] || [])].reverse().find(entry => entry.kind === "output");
-        return [task.id, trigger ? "output" : "other"];
-      }));
+      const kinds = Object.fromEntries([...state.tasks, ...state.subtasks]
+        .filter(task => task.status === "needs_review")
+        .map(task => [task.id, task.reviewReason || "other"]));
       return json(response, { kinds });
     }
     const entryMatch = url.pathname.match(/^\/api\/v1\/cards\/([^/]+)\/entries$/);
@@ -102,7 +101,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const entry = { id: `entry-${Object.values(state.entries).flat().length + 1}`, cardId: task.id, ...input, authorKind: "human", authorId: "owner", authorName: "Owain", createdAt: new Date().toISOString() };
       state.entries[task.id] = [...(state.entries[task.id] || []), entry];
       if (attemptKey) state.entryAttempts[attemptKey] = entry;
-      if (entry.kind === "output") Object.assign(task, { status: "needs_review", done: false });
+      if (entry.kind === "output") Object.assign(task, { status: "needs_review", done: false, reviewReason: "output" });
       if (state.failNextEntryResponse) {
         state.failNextEntryResponse = false;
         return json(response, { error: "Response was lost" }, 500);
@@ -248,6 +247,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === statusMatch[1]);
       const previousBucketID = task.bucketId;
+      if (input.status && input.status !== task.status) task.reviewReason = "";
       Object.assign(task, input, { done: input.status === "done" });
       if (!task.parentTaskId && input.bucketId) {
         const list = state.lists.find(item => item.id === input.bucketId);
@@ -477,6 +477,7 @@ test("Review separates agent outputs from cards manually placed in review", asyn
   const { page, state, pageErrors } = await startWorkspace(t);
   const [assigned, unassigned] = state.tasks;
   assigned.status = "needs_review";
+  assigned.reviewReason = "output";
   unassigned.status = "needs_review";
   state.entries[assigned.id] = [{ id: "output-1", cardId: assigned.id, kind: "output", body: "Draft ready", authorKind: "agent", authorId: "agent-research", authorName: "Research agent", createdAt: "2026-08-10T12:00:00Z" }];
   state.entries[unassigned.id] = [{ id: "comment-1", cardId: unassigned.id, kind: "comment", body: "Which audience?", authorKind: "human", authorId: "owner", authorName: "Owain", createdAt: "2026-08-10T12:01:00Z" }];
