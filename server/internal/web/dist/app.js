@@ -117,6 +117,13 @@ const state = {
   renamingBoardId: "",
   selectedTask: null,
   selectedSubtasks: [],
+  selectedEntries: [],
+  workspaceReviewKinds: {},
+  cardEntryDraft: "",
+  cardEntryKind: "comment",
+  cardEntryNeedsResponse: false,
+  cardEntryPending: false,
+  cardEntryError: "",
   taskDetailDrafts: {},
   taskCompletionError: null,
   subtaskDraft: "",
@@ -193,7 +200,7 @@ const DEFAULT_MAX_BOARDS = 5;
 const DEFAULT_MAX_LISTS_PER_BOARD = 9;
 const DEFAULT_MAX_AGENTS = 5;
 const FLOW_STATES = [
-  { value: "queued", label: "Ready" },
+  { value: "queued", label: "Open" },
   { value: "working", label: "Working" },
   { value: "needs_review", label: "Review" },
   { value: "done", label: "Done" },
@@ -271,7 +278,7 @@ function parseRoute(pathname) {
   if (path === LOGIN_PATH) return { name: "login" };
   if (path === EARLY_ACCESS_PATH) return { name: "early-access" };
   if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
-  if (path === APP_PATH) return { name: "workspace", scope: "all", redirect: true };
+  if (path === APP_PATH) return { name: "workspace", scope: "today", redirect: true };
   if (path === TASKS_PATH) return { name: "workspace", scope: "all" };
   if (path === INBOX_PATH) return { name: "workspace", scope: "inbox" };
   if (path === TODAY_PATH) return { name: "workspace", scope: "today" };
@@ -417,6 +424,12 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   taskDetailVersion += 1;
   state.selectedTask = null;
   state.selectedSubtasks = [];
+  state.selectedEntries = [];
+  state.cardEntryDraft = "";
+  state.cardEntryKind = "comment";
+  state.cardEntryNeedsResponse = false;
+  state.cardEntryPending = false;
+  state.cardEntryError = "";
   state.taskDetailDrafts = {};
   state.subtaskDraft = "";
   state.subtaskPending = false;
@@ -481,6 +494,12 @@ async function applyRoute() {
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
+    state.selectedEntries = [];
+    state.cardEntryDraft = "";
+    state.cardEntryKind = "comment";
+    state.cardEntryNeedsResponse = false;
+    state.cardEntryPending = false;
+    state.cardEntryError = "";
     state.taskDetailDrafts = {};
     state.subtaskDraft = "";
     state.subtaskPending = false;
@@ -508,7 +527,7 @@ async function applyRoute() {
   if (!state.me) return navigate(loginPathFor(currentLocationPath()), { replace: true });
   if (route.redirect) {
     return route.name === "workspace"
-      ? navigate(TASKS_PATH, { replace: true })
+      ? navigate(TODAY_PATH, { replace: true })
       : route.name === "agents"
       ? navigate(AGENTS_PATH, { replace: true })
       : navigate(settingsPath(route.settingsPage), { replace: true });
@@ -730,6 +749,19 @@ async function loadWorkspace(route, expectedRouteVersion) {
   }
   if (!loadIsCurrent()) return null;
   state.workspaceTasks = taskData.tasks || [];
+  state.workspaceReviewKinds = {};
+  if (route.scope === "review") {
+    let reviewData;
+    try {
+      reviewData = await api.get("/api/v1/card-review-kinds");
+    } catch (err) {
+      if (!loadIsCurrent()) return null;
+      state.workspaceLoading = false;
+      throw err;
+    }
+    if (!loadIsCurrent()) return null;
+    state.workspaceReviewKinds = reviewData.kinds || {};
+  }
   state.workspaceNextCursor = taskData.nextCursor || "";
   state.workspaceScope = route.scope || "all";
   state.workspaceListID = route.listId || "";
@@ -781,6 +813,13 @@ function resetAuthenticatedState() {
   taskDetailVersion += 1;
   state.selectedTask = null;
   state.selectedSubtasks = [];
+  state.selectedEntries = [];
+  state.workspaceReviewKinds = {};
+  state.cardEntryDraft = "";
+  state.cardEntryKind = "comment";
+  state.cardEntryNeedsResponse = false;
+  state.cardEntryPending = false;
+  state.cardEntryError = "";
   state.taskDetailDrafts = {};
   state.taskCompletionError = null;
   state.subtaskDraft = "";
@@ -1052,13 +1091,20 @@ async function openTaskDetail(taskID, trigger, options = {}) {
   const isCurrent = () => sessionIsCurrent(sessionVersion, userID) && version === routeVersion && detailVersion === taskDetailVersion;
   if (trigger) trigger.disabled = true;
   try {
-    const [detail, subtasks] = await Promise.all([
+    const [detail, subtasks, entryPage] = await Promise.all([
       api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}`),
       loadAllSubtasks(taskID, isCurrent),
+      api.get(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`),
     ]);
     if (!isCurrent() || subtasks === null) return false;
     state.selectedTask = { ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) };
     state.selectedSubtasks = subtasks;
+    state.selectedEntries = entryPage.entries || [];
+    state.cardEntryDraft = "";
+    state.cardEntryKind = "comment";
+    state.cardEntryNeedsResponse = false;
+    state.cardEntryPending = false;
+    state.cardEntryError = "";
     state.error = "";
     render();
     return true;
@@ -1336,12 +1382,12 @@ function landingHTML() {
             <button class="tour-tab" type="button" data-tour="week" role="tab" aria-selected="false">Week</button>
           </div>
           <div class="tour-frame" data-reveal>
-            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: three goal-led lists of work, each with a hard cap on open items">
-            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Flow view: work moving through Ready, Working, Review, and Done">
-            <img class="tour-img" data-tour-img="week" src="/app-week.jpg" alt="Slate Week view: tasks laid out across the days of the week">
+            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: flexible contexts containing cards">
+            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Flow view: cards moving through Open, Working, Review, and Done">
+            <img class="tour-img" data-tour-img="week" src="/app-week.jpg" alt="Slate Week view: cards laid out across the days of the week">
           </div>
           <p class="preview-caption" data-reveal>
-            <span class="tour-caption on" data-tour-caption="lists">A few lists, each with a hard cap on open work.</span>
+            <span class="tour-caption on" data-tour-caption="lists">Use a list as a project, goal, area, or any context that helps you think.</span>
             <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same four states.</span>
             <span class="tour-caption" data-tour-caption="week">See the week before you're already in it.</span>
           </p>
@@ -1357,7 +1403,7 @@ function landingHTML() {
           <div class="principle" data-reveal style="--d:1">
             <span class="principle-num">02</span>
             <h3>One shared state</h3>
-            <p>Every item is completable and moves through the same four states. You and your agents are always reading the same truth.</p>
+            <p>Every card carries its prompt, conversation, output, and state. You and your agents are always reading the same truth.</p>
           </div>
           <div class="principle" data-reveal style="--d:2">
             <span class="principle-num">03</span>
@@ -1408,40 +1454,42 @@ function appHTML() {
     : state.workspaceScope === "today" ? "Today"
       : state.workspaceScope === "week" ? "Week"
         : state.workspaceScope === "review" ? "Review"
-          : state.workspaceScope === "list" ? list?.name || "List" : "All tasks";
-  const subtitle = state.workspaceScope === "inbox" ? "New work waiting to be organised."
-    : state.workspaceScope === "today" ? "Work planned for today."
-      : state.workspaceScope === "week" ? "Work planned across this week."
+          : state.workspaceScope === "list" ? list?.name || "List" : "All cards";
+  const subtitle = state.workspaceScope === "inbox" ? "New cards waiting for context."
+    : state.workspaceScope === "today" ? "The cards that deserve your attention today."
+      : state.workspaceScope === "week" ? "Cards planned across this week."
         : state.workspaceScope === "review" ? "Work waiting for your judgment."
           : state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
   const overview = `
     <header class="workspace-topbar">
       <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
-      <button class="primary" id="new-task">${icon("plus")}<span>New task</span></button>
+      <button class="primary" id="new-task">${icon("plus")}<span>New card</span></button>
     </header>
-    ${statusErrorHTML(state.error || state.taskCompletionError?.message)}
+    ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskCompletionError?.message)}
     ${statusNoticeHTML(state.moveNotice)}
-    <div class="workspace-viewbar ${state.workspaceScope === "week" ? "week-only" : ""}">
-      ${state.workspaceScope === "week" ? "" : `<div class="workspace-tabs" role="tablist" aria-label="Task view">
-        ${["list", "flow", "table"].map(view => `<button type="button" id="workspace-tab-${view}" data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" role="tab" tabindex="${state.workspaceView === view ? "0" : "-1"}" aria-selected="${state.workspaceView === view}" aria-controls="workspace-task-panel">${view === "flow" ? icon("kanban") : view === "table" ? icon("columns") : icon("rows")}<span>${view[0].toUpperCase() + view.slice(1)}</span></button>`).join("")}
+    <div class="workspace-viewbar ${["week", "review"].includes(state.workspaceScope) ? "week-only" : ""}">
+      ${["week", "review"].includes(state.workspaceScope) ? "" : `<div class="workspace-tabs" role="tablist" aria-label="Card view">
+        ${["list", "flow", "table"].map(view => `<button type="button" id="workspace-tab-${view}" data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" role="tab" tabindex="${state.workspaceView === view ? "0" : "-1"}" aria-selected="${state.workspaceView === view}" aria-controls="workspace-task-panel">${view === "flow" ? icon("kanban") : view === "table" ? icon("columns") : icon("rows")}<span>${view === "list" ? "Cards" : view[0].toUpperCase() + view.slice(1)}</span></button>`).join("")}
       </div>`}
       <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
     </div>
     ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
     <div class="workspace-content" ${state.workspaceScope === "week" ? "" : `id="workspace-task-panel" role="tabpanel" tabindex="0" aria-labelledby="workspace-tab-${state.workspaceView}"`}>
-      ${state.workspaceLoading ? `<div class="workspace-empty">Loading tasks…</div>`
+      ${state.workspaceLoading ? `<div class="workspace-empty">Loading cards…</div>`
         : state.workspaceScope === "week" ? workspaceWeekHTML(tasks)
+          : state.workspaceScope === "review" ? workspaceReviewHTML(tasks)
           : state.workspaceView === "flow" ? workspaceFlowHTML(tasks)
             : state.workspaceView === "list" ? workspaceListHTML(tasks)
               : workspaceTableHTML(tasks)}
     </div>
-    ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more tasks"}</button>` : ""}`;
+    ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more cards"}</button>` : ""}`;
   return `
     <section class="shell task-shell theme-${theme}">
       ${appSidebarHTML({ theme, showNewTask: false })}
       <div class="main workspace-main">
-        ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : overview}
+        ${overview}
       </div>
+      ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : ""}
     </section>`;
 }
 
@@ -1463,7 +1511,7 @@ function workspaceFilterHTML() {
   const query = new URLSearchParams(globalThis.location?.search || "");
   const agentOptions = state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
   return `<form class="workspace-filters" id="workspace-filters">
-    <label class="workspace-search"><span>Search</span><input name="q" value="${escapeAttr(query.get("q") || "")}" placeholder="Search tasks…"></label>
+    <label class="workspace-search"><span>Search</span><input name="q" value="${escapeAttr(query.get("q") || "")}" placeholder="Search cards…"></label>
     ${state.workspaceScope === "review" ? "" : `<label><span>Status</span><select name="status"><option value="">Any status</option>${FLOW_STATES.map(item => `<option value="${item.value}" ${query.get("status") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>`}
     <label><span>Priority</span><select name="priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
     <label><span>Owner</span><select name="assigneeAgentId"><option value="">Anyone</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
@@ -1479,7 +1527,7 @@ function workspaceTaskOwner(task) {
 
 function workspaceTaskContext(task, includeOwner = false) {
   const context = [];
-  if (task.parentTaskId) context.push(`Subtask of ${task.parentTaskTitle || "parent task"}`);
+  if (task.parentTaskId) context.push(`Child of ${task.parentTaskTitle || "parent card"}`);
   context.push(task.listName || "Inbox");
   if (includeOwner) context.push(workspaceTaskOwner(task));
   return context.join(" · ");
@@ -1487,22 +1535,31 @@ function workspaceTaskContext(task, includeOwner = false) {
 
 function workspaceListHTML(tasks) {
   if (!tasks.length) return `<div class="workspace-empty">Nothing here yet.</div>`;
-  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}"><span class="workspace-check ${task.done ? "done" : ""}">${task.done ? icon("check") : ""}</span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></span>${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
+  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><span class="workspace-card-mark"></span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></span>${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
 }
 
 function workspaceTableHTML(tasks) {
-  return `<table class="workspace-table" aria-label="Tasks">
-    <colgroup><col class="workspace-table-check"><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
-    <thead><tr class="workspace-table-head"><th scope="col"><span class="sr-only">Completion</span></th><th scope="col">Task</th><th scope="col">List</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
-    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><button type="button" class="workspace-check workspace-completion-toggle ${task.done ? "done" : ""}" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="Mark ${escapeAttr(task.title)} ${task.done ? "not complete" : "complete"}">${task.done ? icon("check") : ""}</button></td><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Subtask of ${escapeHTML(task.parentTaskTitle || "parent task")}</small>` : ""}</button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="7"><div class="workspace-empty">No tasks match these filters.</div></td></tr>`}</tbody>
+  return `<table class="workspace-table" aria-label="Cards">
+    <colgroup><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
+    <thead><tr class="workspace-table-head"><th scope="col">Card</th><th scope="col">List</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
+    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Child of ${escapeHTML(task.parentTaskTitle || "parent card")}</small>` : ""}</button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="6"><div class="workspace-empty">No cards match these filters.</div></td></tr>`}</tbody>
   </table>`;
 }
 
 function workspaceFlowHTML(tasks) {
   return `<section class="workspace-flow">${FLOW_STATES.map(flowState => {
     const items = tasks.filter(task => task.status === flowState.value);
-    return `<section class="workspace-flow-column" data-flow-status="${flowState.value}"><header><h2>${flowState.label}</h2><span>${items.length}</span></header><div>${items.length ? items.map(task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task, true))}</small></button></article>`).join("") : `<p>Drag tasks here</p>`}</div></section>`;
+    return `<section class="workspace-flow-column" data-flow-status="${flowState.value}"><header><h2>${flowState.label}</h2><span>${items.length}</span></header><div>${items.length ? items.map(task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task, true))}</small></button></article>`).join("") : `<p>Drag cards here</p>`}</div></section>`;
   }).join("")}</section>`;
+}
+
+function workspaceReviewHTML(tasks) {
+  if (!tasks.length) return `<div class="workspace-empty">Nothing needs your attention.</div>`;
+  const needsResponse = tasks.filter(task => state.workspaceReviewKinds[task.id] === "needs_response");
+  const outputs = tasks.filter(task => state.workspaceReviewKinds[task.id] === "output");
+  const other = tasks.filter(task => !["needs_response", "output"].includes(state.workspaceReviewKinds[task.id]));
+  const group = (title, description, items) => `<section class="workspace-review-group"><header><div><h2>${title}</h2><p>${description}</p></div><span>${items.length}</span></header>${items.length ? workspaceListHTML(items) : `<div class="workspace-review-empty">Nothing here.</div>`}</section>`;
+  return `<div class="workspace-review">${group("Needs response", "Questions and decisions waiting for you.", needsResponse)}${group("Agent outputs", "Work returned by agents for your judgment.", outputs)}${other.length ? group("Other review", "Cards placed in Review without a conversation entry.", other) : ""}</div>`;
 }
 
 function workspaceWeekHTML(tasks) {
@@ -1515,7 +1572,7 @@ function workspaceWeekHTML(tasks) {
 }
 
 function taskDetailBackLabel() {
-  return ["agent-detail", "agent-work", "agent-settings"].includes(state.view) ? "Back to agent work" : "Back to tasks";
+  return ["agent-detail", "agent-work", "agent-settings"].includes(state.view) ? "Back to agent work" : "Close card";
 }
 
 function workspaceListLabel(list) {
@@ -1534,37 +1591,54 @@ function workspaceListLabel(list) {
 function workspaceDetailHTML(task) {
   const list = state.workspaceLists.find(item => item.id === task.bucketId);
   const completed = state.selectedSubtasks.filter(item => item.done).length;
-  const subtaskSection = task.parentTaskId ? `<button class="workspace-parent-link" type="button" data-open-parent>${icon("chevronLeft")}<span>Back to parent task</span></button>` : `
+  const latestOutput = [...state.selectedEntries].reverse().find(entry => entry.kind === "output");
+  const entries = state.selectedEntries.map(entry => `<article class="card-entry card-entry-${entry.kind}">
+    <header><span class="card-entry-author ${entry.authorKind === "agent" ? "agent" : ""}">${entry.authorKind === "agent" ? icon("bot") : icon("user")}<strong>${escapeHTML(entry.authorName)}</strong></span><time>${new Date(entry.createdAt).toLocaleString()}</time></header>
+    <p>${escapeHTML(entry.body).replace(/\n/g, "<br>")}</p>
+    <footer>${entry.kind === "output" ? `<span class="card-entry-kind">Output</span>` : ""}${entry.needsResponse ? `<span class="card-entry-response">Needs response</span>` : ""}</footer>
+  </article>`).join("");
+  const subtaskSection = task.parentTaskId ? `<button class="workspace-parent-link" type="button" data-open-parent>${icon("chevronLeft")}<span>Back to parent card</span></button>` : `
     <section class="workspace-subtasks" aria-labelledby="subtasks-heading">
-      <header><div><h3 id="subtasks-heading">Subtasks</h3><span>${completed} of ${state.selectedSubtasks.length} complete</span></div></header>
+      <header><div><h3 id="subtasks-heading">Child cards</h3><span>${completed} of ${state.selectedSubtasks.length} done</span></div></header>
       ${state.selectedSubtasks.length ? `<div class="workspace-subtask-list">
         ${state.selectedSubtasks.map(item => `<div class="workspace-subtask-row"><button class="workspace-subtask-toggle" type="button" data-toggle-subtask="${item.id}" aria-label="Mark ${escapeAttr(item.title)} ${item.done ? "not complete" : "complete"}"><span class="workspace-check ${item.done ? "done" : ""}">${item.done ? icon("check") : ""}</span></button><button class="workspace-subtask-open" type="button" data-open-task="${item.id}"><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button></div>`).join("")}
-      </div>` : `<p class="workspace-subtask-empty">Break complex work into clear human and agent-owned steps.</p>`}
-      <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a subtask" aria-label="Subtask title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add subtask"}</span></button></div>
+      </div>` : `<p class="workspace-subtask-empty">Use child cards only when this intent needs smaller pieces.</p>`}
+      <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a child card" aria-label="Child card title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add child"}</span></button></div>
       <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
     </section>`;
-  return `<section class="workspace-detail" aria-label="Task detail" data-detail-surface tabindex="-1">
-      <header class="detail-head"><button class="workspace-detail-back" type="button" data-close-detail aria-label="${taskDetailBackLabel()}">${icon("chevronLeft")}<span>Back</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Subtask" : "Task"}</b></div></header>
+  return `<section class="workspace-detail" aria-label="Card detail" data-detail-surface tabindex="-1">
+      <header class="detail-head"><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Child card" : "Card"}</b></div><button class="icon-btn workspace-detail-close" type="button" data-close-detail aria-label="${taskDetailBackLabel()}">${icon("x")}</button></header>
       <form id="workspace-detail-form" class="workspace-detail-form">
         <div class="workspace-detail-main">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
-          <label class="workspace-brief-label" for="workspace-detail-description">Task brief</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="Add the outcome, context, and definition of done…">${escapeHTML(task.description || "")}</textarea>
-          ${task.assigneeAgentId ? `<aside class="workspace-cli-handoff">${icon("bot")}<div><strong>Available to ${escapeHTML(workspaceTaskOwner(task))} through the CLI</strong><code>slate tasks pull</code></div></aside>` : ""}
+          <label class="workspace-brief-label" for="workspace-detail-description">Prompt and context</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…">${escapeHTML(task.description || "")}</textarea>
+          <aside class="workspace-agent-action">${icon("bot")}<div><strong>${task.assigneeAgentId ? `Assigned to ${escapeHTML(workspaceTaskOwner(task))}` : "Act with an agent"}</strong><p>${task.assigneeAgentId ? "This card is available to the agent as a prompt." : "Choose an agent as owner to make this card available for work."}</p></div><button type="button" class="secondary" id="act-with-agent">${task.assigneeAgentId ? "Change agent" : "Choose agent"}</button></aside>
+          ${latestOutput ? `<section class="card-latest-output"><header>${icon("bot")}<div><span>Latest output</span><strong>${escapeHTML(latestOutput.authorName)}</strong></div></header><p>${escapeHTML(latestOutput.body).replace(/\n/g, "<br>")}</p></section>` : ""}
+          <section class="card-conversation" aria-labelledby="card-conversation-heading">
+            <header><div><h3 id="card-conversation-heading">Conversation</h3><span>${state.selectedEntries.length}</span></div></header>
+            ${entries ? `<div class="card-entry-list">${entries}</div>` : `<p class="card-conversation-empty">Comments and agent outputs will appear here.</p>`}
+            <div class="card-entry-composer">
+              <div class="card-entry-tabs" role="group" aria-label="Entry type"><button type="button" data-entry-kind="comment" class="${state.cardEntryKind === "comment" ? "on" : ""}">Comment</button><button type="button" data-entry-kind="output" class="${state.cardEntryKind === "output" ? "on" : ""}">Output</button></div>
+              <textarea id="card-entry-body" placeholder="${state.cardEntryKind === "output" ? "Add the result, links, or deliverable…" : "Add feedback, context, or a question…"}" ${state.cardEntryPending ? "disabled" : ""}>${escapeHTML(state.cardEntryDraft)}</textarea>
+              <footer>${state.cardEntryKind === "comment" ? `<label><input id="card-entry-needs-response" type="checkbox" ${state.cardEntryNeedsResponse ? "checked" : ""}> Needs response</label>` : `<span>Outputs move the card to Review.</span>`}<button class="primary" id="add-card-entry" type="button" ${state.cardEntryPending ? "disabled" : ""}>${state.cardEntryPending ? "Adding…" : `Add ${state.cardEntryKind}`}</button></footer>
+              <p class="error card-entry-error" role="alert">${escapeHTML(state.cardEntryError)}</p>
+            </div>
+          </section>
           ${task.parentTaskId ? "" : subtaskSection}
           <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
         </div>
-        <aside class="workspace-detail-properties" aria-label="Task properties">
+        <aside class="workspace-detail-properties" aria-label="Card properties">
           <h2>Properties</h2>
-          ${task.parentTaskId ? `<div class="workspace-parent-context"><span>Part of a larger task</span>${subtaskSection}</div>` : ""}
+          ${task.parentTaskId ? `<div class="workspace-parent-context"><span>Part of a parent card</span>${subtaskSection}</div>` : ""}
           <div class="detail-properties">
             <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
-            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Subtasks stay with their parent task.</small>` : ""}</div>
+            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Child cards stay with their parent card.</small>` : ""}</div>
             <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
             <div class="field"><label for="workspace-detail-owner">Owner</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
             <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
           </div>
         </aside>
-        <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete task</button><div><button class="secondary" type="button" data-close-detail>Cancel</button><button class="primary" type="submit">Save changes</button></div></footer>
+        <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete card</button><div><button class="primary" type="submit">Save changes</button></div></footer>
       </form>
     </section>`;
 }
@@ -1582,13 +1656,18 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
       <div class="sidebar-content" id="sidebar-content">
         ${showNewTask ? globalNewTaskButtonHTML() : ""}
         <section class="nav-sec workspace-nav">
-          <h3>Workspace</h3>
+          <h3>Attention</h3>
           <div class="pages task-nav-pages">
             <a class="nav-link ${workspaceOn("inbox") ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
             <a class="nav-link ${workspaceOn("today") ? "on" : ""}" href="${TODAY_PATH}">${icon("sun")}<span>Today</span></a>
-            <a class="nav-link ${workspaceOn("week") ? "on" : ""}" href="${WEEK_PATH}">${icon("calendar")}<span>Week</span></a>
             <a class="nav-link ${workspaceOn("review") ? "on" : ""}" href="${REVIEW_PATH}">${icon("check")}<span>Review</span></a>
-            <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("rows")}<span>All tasks</span></a>
+          </div>
+        </section>
+        <section class="nav-sec workspace-nav workspace-plan-nav">
+          <h3>Plan</h3>
+          <div class="pages task-nav-pages">
+            <a class="nav-link ${workspaceOn("week") ? "on" : ""}" href="${WEEK_PATH}">${icon("calendar")}<span>Week</span></a>
+            <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("rows")}<span>All cards</span></a>
           </div>
         </section>
         <section class="nav-sec workspace-nav">
@@ -1713,7 +1792,7 @@ function themeSwitchHTML(theme) {
 }
 
 function globalNewTaskButtonHTML() {
-  return `<button class="primary sidebar-new-task" id="global-new-task" type="button">${icon("plus")}<span>New task</span></button>`;
+  return `<button class="primary sidebar-new-task" id="global-new-task" type="button">${icon("plus")}<span>New card</span></button>`;
 }
 
 function boardRowHTML(board) {
@@ -1986,7 +2065,7 @@ function statusOptionsHTML(selected) {
 }
 
 function statusLabel(status) {
-  return FLOW_STATES.find(item => item.value === status)?.label || "Ready";
+  return FLOW_STATES.find(item => item.value === status)?.label || "Open";
 }
 
 function footerHTML(board, todayMode) {
@@ -2086,9 +2165,9 @@ function agentRowHTML(agent) {
   const counts = agent.workCounts || {};
   const assigned = Number(counts.ready || 0) + Number(counts.working || 0) + Number(counts.review || 0);
   const countParts = [
-    counts.ready ? formatCount(counts.ready, "ready item", "ready items") : "",
-    counts.working ? formatCount(counts.working, "working item", "working items") : "",
-    counts.review ? formatCount(counts.review, "review item", "review items") : "",
+    counts.ready ? formatCount(counts.ready, "open card", "open cards") : "",
+    counts.working ? formatCount(counts.working, "working card", "working cards") : "",
+    counts.review ? formatCount(counts.review, "review card", "review cards") : "",
   ].filter(Boolean);
   const archived = stateLabel === "Archived";
   return `
@@ -2288,8 +2367,8 @@ function agentLifecycleConfirmHTML() {
     archive: {
       title: conflict ? "Open work is still assigned." : "Archive this agent?",
       body: conflict
-        ? `${formatCount(conflict.ready, "Ready item", "Ready items")} and ${formatCount(conflict.working, "Working item", "Working items")} must be unassigned. Review and Done history will remain attached.`
-        : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for Ready and Working work.",
+        ? `${formatCount(conflict.ready, "Open card", "Open cards")} and ${formatCount(conflict.working, "Working card", "Working cards")} must be unassigned. Review and Done history will remain attached.`
+        : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for Open and Working cards.",
       confirm: conflict ? "Unassign open work and archive" : "Archive agent",
     },
     restore: {
@@ -2332,7 +2411,7 @@ function agentOverviewHTML(agent) {
         <div class="agent-no-current">${icon("inboxTray")}<p>${escapeHTML(agent.displayName)} has no active work.</p></div>`}
     </section>
     <div class="agent-work-groups">
-      ${agentWorkSectionHTML("Ready", "Work assigned and ready to pick up.", work.ready, work.totals?.ready, "queued")}
+      ${agentWorkSectionHTML("Open", "Cards assigned and ready to pick up.", work.ready, work.totals?.ready, "queued")}
       ${agentWorkSectionHTML("Review", "Work waiting for human review.", work.review, work.totals?.review, "needs_review")}
       ${agentWorkSectionHTML("Recently completed", "Current completed tasks, sorted by their latest update. This is not run history.", work.recentlyCompleted, work.totals?.completed, "done")}
     </div>
@@ -2374,7 +2453,7 @@ function agentWorkPageHTML(agent) {
     return `<section class="agents-state agent-detail-state"><h2>Work couldn’t be loaded.</h2><button class="secondary" id="retry-agent-detail" type="button">Try again</button></section>`;
   }
   const groups = [
-    ["Ready", "queued"],
+    ["Open", "queued"],
     ["Working", "working"],
     ["Review", "needs_review"],
     ["Completed", "done"],
@@ -2636,7 +2715,7 @@ function settingsHTML() {
         <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Workspace">
           <div class="pages task-nav-pages">
             <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
-            <a class="nav-link" href="${TASKS_PATH}">${icon("rows")}<span>All tasks</span></a>
+            <a class="nav-link" href="${TASKS_PATH}">${icon("rows")}<span>All cards</span></a>
           </div>
           <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
           <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
@@ -2847,6 +2926,7 @@ function bindLanding() {
 }
 
 function bindWorkspace() {
+  document.onkeydown = null;
   document.querySelectorAll("[data-open-task]").forEach(element => {
     element.onclick = () => openTaskDetail(element.dataset.openTask, element);
     if (!["BUTTON", "A"].includes(element.tagName)) element.addEventListener("keydown", event => {
@@ -3180,7 +3260,7 @@ function bindWorkspaceDetail(options = {}) {
       if (handleError(err)) return false;
       latestFocus = captureDetailFocus() || latestFocus;
       preserveTaskDraft();
-      state.error = `The task was updated, but this view couldn’t be refreshed: ${err.message}`;
+      state.error = `The card was updated, but this view couldn’t be refreshed: ${err.message}`;
       render();
       restoreDetailFocus(latestFocus);
       return false;
@@ -3278,7 +3358,7 @@ function bindWorkspaceDetail(options = {}) {
         render();
         return false;
       }
-      state.agentTaskRefreshError = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      state.agentTaskRefreshError = `The card was updated, but assigned work couldn’t be refreshed: ${err.message}`;
       state.agentTaskMutationError = state.agentTaskRefreshError;
       if (state.selectedTask) {
         state.error = state.agentTaskMutationError;
@@ -3315,6 +3395,12 @@ function bindWorkspaceDetail(options = {}) {
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
+    state.selectedEntries = [];
+    state.cardEntryDraft = "";
+    state.cardEntryKind = "comment";
+    state.cardEntryNeedsResponse = false;
+    state.cardEntryPending = false;
+    state.cardEntryError = "";
     state.taskDetailDrafts = {};
     state.subtaskDraft = "";
     state.subtaskPending = false;
@@ -3325,6 +3411,7 @@ function bindWorkspaceDetail(options = {}) {
       render();
       try {
         await reload();
+        document.querySelector(`[data-open-task="${CSS.escape(closedTaskID)}"]`)?.focus();
       } catch (err) {
         if (handleError(err)) return;
         state.workspaceLoading = false;
@@ -3355,9 +3442,60 @@ function bindWorkspaceDetail(options = {}) {
       return;
     }
     render();
+    document.querySelector(`[data-open-task="${CSS.escape(closedTaskID)}"]`)?.focus();
   };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
-  detailSurface?.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
+  document.onkeydown = event => { if (event.key === "Escape") close(); };
+  document.querySelector("#act-with-agent")?.addEventListener("click", () => {
+    document.querySelector("#workspace-detail-owner")?.focus();
+  });
+  document.querySelectorAll("[data-entry-kind]").forEach(element => element.addEventListener("click", () => {
+    preserveTaskDraft();
+    state.cardEntryDraft = document.querySelector("#card-entry-body")?.value || state.cardEntryDraft;
+    state.cardEntryKind = element.dataset.entryKind;
+    state.cardEntryNeedsResponse = state.cardEntryKind === "comment" && state.cardEntryNeedsResponse;
+    render();
+    document.querySelector("#card-entry-body")?.focus();
+  }));
+  document.querySelector("#card-entry-body")?.addEventListener("input", event => { state.cardEntryDraft = event.currentTarget.value; });
+  document.querySelector("#card-entry-needs-response")?.addEventListener("change", event => { state.cardEntryNeedsResponse = event.currentTarget.checked; });
+  document.querySelector("#add-card-entry")?.addEventListener("click", async () => {
+    const taskID = state.selectedTask?.id;
+    const body = document.querySelector("#card-entry-body")?.value.trim() || "";
+    if (!taskID || !body || state.cardEntryPending) return;
+    const detailVersion = taskDetailVersion;
+    preserveTaskDraft();
+    state.cardEntryDraft = body;
+    state.cardEntryPending = true;
+    state.cardEntryError = "";
+    render();
+    try {
+      const entry = await api.post(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`, {
+        kind: state.cardEntryKind,
+        body,
+        needsResponse: state.cardEntryKind === "comment" && state.cardEntryNeedsResponse,
+      });
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
+      state.selectedEntries = [...state.selectedEntries, entry];
+      state.cardEntryDraft = "";
+      state.cardEntryNeedsResponse = false;
+      state.cardEntryPending = false;
+      if (entry.kind === "output" || entry.needsResponse) {
+        state.selectedTask = { ...state.selectedTask, status: "needs_review", done: false };
+        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, status: "needs_review", done: false } : item);
+        state.workspaceRefreshOnDetailClose = true;
+      }
+      render();
+      document.querySelector("#card-entry-body")?.focus();
+    } catch (err) {
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
+      if (handleError(err)) return;
+      state.cardEntryPending = false;
+      state.cardEntryError = err.message;
+      render();
+      document.querySelector("#card-entry-body")?.focus();
+    }
+  });
   document.querySelector("[data-open-parent]")?.addEventListener("click", event => {
     preserveTaskDraft();
     state.subtaskDraft = "";
@@ -3404,7 +3542,7 @@ function bindWorkspaceDetail(options = {}) {
       await refreshAfterSubtaskMutation(focus || { toggleSubtask: subtask.id });
     } catch (err) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
-        reportBackgroundMutationFailure("update subtask", subtask.title, err);
+        reportBackgroundMutationFailure("update child card", subtask.title, err);
         return;
       }
       if (handleError(err)) return;
@@ -3451,7 +3589,7 @@ function bindWorkspaceDetail(options = {}) {
       await refreshAfterSubtaskMutation({ openTask: created.id });
     } catch (err) {
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
-        reportBackgroundMutationFailure("add subtask", title, err);
+        reportBackgroundMutationFailure("add child card", title, err);
         return;
       }
       if (handleError(err)) return;
@@ -3470,7 +3608,7 @@ function bindWorkspaceDetail(options = {}) {
     }
   });
   document.querySelector("#delete-task")?.addEventListener("click", async () => {
-    if (!confirm("Delete this task and its subtasks?")) return;
+    if (!confirm("Delete this card and its child cards?")) return;
     const taskID = state.selectedTask.id;
     const taskTitle = state.selectedTask.title;
     const parentTaskID = state.selectedTask.parentTaskId || "";
@@ -3799,7 +3937,7 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
   } catch (err) {
     if (refreshRouteVersion !== routeVersion) return false;
     state.workspaceLoading = false;
-    state.error = `The task was updated, but this view couldn’t be refreshed: ${err.message}`;
+    state.error = `The card was updated, but this view couldn’t be refreshed: ${err.message}`;
     renderPreservingCurrentTaskDetail();
     return false;
   }
@@ -3933,7 +4071,7 @@ async function captureInboxTask(button) {
   button.disabled = true;
   button.querySelector("span").textContent = "Creating…";
   try {
-    const task = await api.post("/api/v1/tasks", { title: "New task", description: "", kind: "action" });
+    const task = await api.post("/api/v1/tasks", { title: "Untitled card", description: "", kind: "action" });
     if (parseRoute(location.pathname).name === "workspace") await reload();
     else await navigate(INBOX_PATH);
     await openTaskDetail(task.id, button);
@@ -4858,7 +4996,7 @@ async function refreshAgentSurface(options = {}) {
     if (version !== routeVersion) return false;
     if (handleAgentUnauthorized(err, route)) return false;
     if (options.preserveTaskDetail && state.selectedTask) {
-      const message = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      const message = `The card was updated, but assigned work couldn’t be refreshed: ${err.message}`;
       options.beforeTaskDetailRender?.();
       state.agentDetailLoadState = "ready";
       state.agentTaskRefreshError = message;

@@ -240,6 +240,37 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request, user auth.User
 	writeJSON(w, http.StatusOK, task)
 }
 
+func (h *Handler) ListCardEntries(w http.ResponseWriter, r *http.Request, user auth.User) {
+	entries, err := h.store.ListCardEntries(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+func (h *Handler) ListCardReviewKinds(w http.ResponseWriter, r *http.Request, user auth.User) {
+	kinds, err := h.store.ListCardReviewKinds(r.Context(), user.ID, user.AgentID)
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"kinds": kinds})
+}
+
+func (h *Handler) CreateCardEntry(w http.ResponseWriter, r *http.Request, user auth.User) {
+	var input CreateCardEntryInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if !httpapi.ByteLimit(w, "body", input.Body, httpapi.CardEntryBytes) {
+		return
+	}
+	entry, err := h.store.CreateCardEntry(r.Context(), user.ID, user.AgentID, user.DisplayName, r.PathValue("id"), input)
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusCreated, entry)
+}
+
 func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input UpdateTaskInput
 	if !decodeJSON(w, r, &input) {

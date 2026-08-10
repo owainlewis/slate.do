@@ -115,7 +115,11 @@ func lockedBoardTaskStorage(ctx context.Context, tx pgx.Tx, boardID string) (sto
 			FROM tasks child
 			JOIN cascade_tasks parent ON parent.id = child.parent_task_id
 		)
-		SELECT t.storage_bytes
+		SELECT t.storage_bytes + COALESCE((
+			SELECT sum(octet_length(entry.body))
+			FROM card_entries entry
+			WHERE entry.task_id = t.id
+		), 0)
 		FROM tasks t
 		JOIN cascade_tasks deleted_task ON deleted_task.id = t.id
 		FOR UPDATE OF t
@@ -135,7 +139,11 @@ func lockedBucketTaskStorage(ctx context.Context, tx pgx.Tx, bucketID string) (s
 			FROM tasks child
 			JOIN cascade_tasks parent ON parent.id = child.parent_task_id
 		)
-		SELECT t.storage_bytes
+		SELECT t.storage_bytes + COALESCE((
+			SELECT sum(octet_length(entry.body))
+			FROM card_entries entry
+			WHERE entry.task_id = t.id
+		), 0)
 		FROM tasks t
 		JOIN cascade_tasks deleted_task ON deleted_task.id = t.id
 		FOR UPDATE OF t

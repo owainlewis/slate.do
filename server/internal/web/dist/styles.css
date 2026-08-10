@@ -21,8 +21,9 @@
 .task-shell { height: 100vh; overflow: hidden; }
 .workspace-main { min-width: 0; height: 100vh; display: flex; flex: 1; flex-direction: column; overflow: hidden; }
 .workspace-nav { min-height: 0; }
-.workspace-nav:nth-of-type(2) { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
-.workspace-nav:nth-of-type(2) .pages { overflow-y: auto; }
+.workspace-nav:has(.nav-section-title) { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.workspace-nav:has(.nav-section-title) .pages { overflow-y: auto; }
+.workspace-plan-nav { flex: 0 0 auto !important; }
 .nav-section-title { display: flex; align-items: center; justify-content: space-between; }
 .nav-section-title button { width: 25px; height: 25px; padding: 3px; }
 .sidebar-list-error { margin: 4px 9px 2px; line-height: 1.4; }
@@ -64,6 +65,7 @@
 .workspace-check { width: 17px; height: 17px; display: grid; place-items: center; border: 1.5px solid var(--faint); border-radius: 50%; color: var(--card); }
 .workspace-check.done { border-color: var(--accent); background: var(--accent); }
 .workspace-check .icon { width: 12px; height: 12px; }
+.workspace-card-mark { width: 8px; height: 8px; margin-left: 5px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 76%, var(--card)); }
 .workspace-completion-toggle { padding: 0; background: transparent; cursor: pointer; }
 .workspace-task-copy { min-width: 0; display: grid; gap: 3px; }
 .workspace-task-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
@@ -98,6 +100,12 @@
 .workspace-week header { display: flex; justify-content: space-between; color: var(--faint); font-size: 12px; }
 .workspace-week button { width: 100%; margin-top: 9px; padding: 9px; display: grid; gap: 4px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--bg); color: var(--ink); text-align: left; cursor: pointer; }
 .workspace-week button strong { font-size: 13px; }.workspace-week button small, .workspace-week p { color: var(--faint); font-size: 11px; }
+.workspace-review { display: grid; gap: 30px; }
+.workspace-review-group > header { margin-bottom: 10px; display: flex; align-items: flex-start; justify-content: space-between; }
+.workspace-review-group h2 { margin: 0; font-size: 15px; }
+.workspace-review-group header p { margin: 5px 0 0; color: var(--faint); font-size: 12px; }
+.workspace-review-group header > span { min-width: 24px; padding: 3px 7px; border-radius: 999px; background: var(--panel); color: var(--faint); text-align: center; font-size: 11px; }
+.workspace-review-empty { padding: 22px; border: 1px dashed var(--line); border-radius: var(--radius); color: var(--faint); font-size: 12px; text-align: center; }
 .workspace-brief-label { display: block; margin: 26px 0 8px; color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .workspace-cli-handoff { margin: 24px 0; padding: 14px; display: flex; gap: 11px; border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
 .workspace-cli-handoff > .icon { width: 19px; color: var(--accent); }.workspace-cli-handoff div { display: grid; gap: 5px; }.workspace-cli-handoff strong { font-size: 13px; }.workspace-cli-handoff code { color: var(--soft); font-size: 12px; }
@@ -943,16 +951,23 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .detail-actions > div { display: flex; align-items: center; gap: 8px; }
 .workspace-detail {
-  width: 100%;
-  height: 100%;
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  right: 0;
+  width: min(780px, calc(100vw - var(--nav-w) - 36px));
+  height: 100vh;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--card);
+  border-left: 1px solid var(--line);
+  box-shadow: -18px 0 50px rgba(0, 0, 0, .18);
 }
-.workspace-detail .detail-head { min-height: 58px; padding: 11px 16px 11px 28px; }
+.workspace-detail .detail-head { min-height: 58px; padding: 11px 16px 11px 28px; display: flex; align-items: center; justify-content: space-between; }
 .workspace-detail .detail-context { font-size: 13px; }
+.workspace-detail-close { width: 34px; height: 34px; }
 .workspace-detail-back { min-height: 34px; margin-right: 12px; padding: 7px 9px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--soft); font-size: 13px; font-weight: 650; }
 .workspace-detail-back:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
 .workspace-detail-back .icon { width: 15px; height: 15px; }
@@ -960,13 +975,13 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   flex: 1;
   min-height: 0;
   display: grid !important;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 230px;
   grid-template-rows: minmax(0, 1fr) auto;
 }
 .workspace-detail-main {
   min-width: 0;
   min-height: 0;
-  padding: 38px 48px 30px;
+  padding: 32px 34px 30px;
   overflow-y: auto;
   border-right: 1px solid var(--line-2);
 }
@@ -979,12 +994,51 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .workspace-detail-properties h2 { margin: 0 0 28px; font-size: 15px; letter-spacing: -.01em; }
 .workspace-detail .detail-title { font-size: 26px; line-height: 1.25; }
-.workspace-detail .detail-description { min-height: 170px; margin: 0 0 24px; font-size: 15px; line-height: 1.65; }
+.workspace-detail .detail-description { min-height: 150px; margin: 0 0 20px; font-size: 14px; line-height: 1.6; }
 .workspace-detail .detail-properties { display: grid; grid-template-columns: 1fr; gap: 20px; padding: 0; border: 0; }
 .workspace-detail .field label { margin-bottom: 7px; font-size: 11px; letter-spacing: .1em; }
 .workspace-detail .field input, .workspace-detail .field select { min-height: 40px; padding: 9px 11px; font-size: 13px; }
 .workspace-detail .detail-actions { grid-column: 1 / -1; min-height: 64px; padding: 12px 18px; }
 .workspace-detail .detail-actions button { min-height: 38px; font-size: 13px; }
+.workspace-agent-action { margin: 8px 0 24px; padding: 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
+.workspace-agent-action > .icon { width: 19px; height: 19px; color: var(--accent); }
+.workspace-agent-action strong { font-size: 13px; }
+.workspace-agent-action p { margin: 3px 0 0; color: var(--faint); font-size: 11px; line-height: 1.4; }
+.workspace-agent-action button { white-space: nowrap; }
+.card-latest-output { margin: 0 0 28px; padding: 15px; border: 1px solid color-mix(in srgb, var(--review) 28%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--review) 6%, var(--card)); }
+.card-latest-output header { display: flex; align-items: center; gap: 9px; }
+.card-latest-output header .icon { color: var(--review); }
+.card-latest-output header div { display: flex; align-items: baseline; gap: 7px; }
+.card-latest-output header span { color: var(--review); font-size: 11px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
+.card-latest-output header strong { font-size: 12px; }
+.card-latest-output > p { margin: 13px 0 0; color: var(--soft); font-size: 13px; line-height: 1.55; }
+.card-conversation { margin-top: 30px; padding-top: 25px; border-top: 1px solid var(--line); }
+.card-conversation > header > div { display: flex; align-items: baseline; gap: 8px; }
+.card-conversation h3 { margin: 0; font-size: 16px; }
+.card-conversation header span { color: var(--faint); font-size: 12px; }
+.card-conversation-empty { padding: 18px 0 8px; color: var(--faint); font-size: 12px; }
+.card-entry-list { margin-top: 12px; display: grid; gap: 9px; }
+.card-entry { padding: 12px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--bg); }
+.card-entry-output { border-color: color-mix(in srgb, var(--review) 24%, var(--line)); }
+.card-entry header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.card-entry-author { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.card-entry-author .icon { width: 14px; height: 14px; color: var(--faint); }
+.card-entry-author.agent .icon { color: var(--accent); }
+.card-entry time { color: var(--faint); font-size: 10px; }
+.card-entry > p { margin: 9px 0 0; color: var(--soft); font-size: 13px; line-height: 1.5; }
+.card-entry > footer { margin-top: 9px; display: flex; gap: 6px; }
+.card-entry-kind, .card-entry-response { padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--review) 10%, transparent); color: var(--review); font-size: 10px; font-weight: 700; }
+.card-entry-response { background: color-mix(in srgb, var(--warn) 10%, transparent); color: var(--warn); }
+.card-entry-composer { margin-top: 12px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--card); }
+.card-entry-tabs { display: flex; padding: 5px; gap: 3px; border-bottom: 1px solid var(--line-2); background: var(--panel); }
+.card-entry-tabs button { padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--faint); font-size: 11px; font-weight: 650; }
+.card-entry-tabs button.on { background: var(--card); color: var(--ink); }
+.card-entry-composer textarea { width: 100%; min-height: 88px; padding: 11px; resize: vertical; border: 0; background: transparent; color: var(--ink); font-size: 13px; outline: 0; }
+.card-entry-composer > footer { min-height: 43px; padding: 6px 8px; display: flex; align-items: center; justify-content: space-between; gap: 9px; border-top: 1px solid var(--line-2); }
+.card-entry-composer footer label, .card-entry-composer footer > span { color: var(--faint); font-size: 11px; }
+.card-entry-composer footer input { accent-color: var(--accent); }
+.card-entry-composer footer button { min-height: 31px; }
+.card-entry-error { min-height: 0; margin: 0; padding: 0 10px 7px; }
 .workspace-subtasks h3 { font-size: 16px; }
 .workspace-subtasks header span { font-size: 12px; }
 .toggles { display: flex; gap: 10px; }

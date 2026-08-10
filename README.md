@@ -1,14 +1,14 @@
 # slate.do
 
-A task control plane for clear thinking and focused human and agent execution.
+A card-first control plane for clear thinking and focused human and agent execution.
 
-Slate captures work as tasks, organises it into lists, and shows the same work as a compact list, workflow board, table, or weekly plan.
+Slate captures units of intent as cards, organises them into lists, and shows the same cards as a compact list, flow, table, or weekly plan.
 
 ## Product
 
-The task is the core unit. New tasks enter Inbox, lists provide thinking buckets, and every task can move through Ready, Working, Review, and Done. Lists do not impose hard item limits.
+The card is the core unit. A card can be a task, goal, project, idea, decision, or agent prompt. New cards enter Inbox, lists provide context, and every card can move through Open, Working, Review, and Done.
 
-Tasks can have one level of real subtasks for shared human and agent work. Agents execute assigned tasks through the CLI rather than embedded AI actions.
+Cards can have one level of child cards for shared human and agent work. Agents execute assigned cards through the CLI and return comments or outputs to the card.
 
 ## Docs
 
@@ -23,8 +23,8 @@ Slate now has an admin-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Admin sign in with a seeded admin.
-- Inbox, account-wide tasks, goal-led Lists, List, Flow and Table views, filters, planned dates, Week and Today views, and theme.
-- One level of subtasks with independent owner and workflow state.
+- Inbox, account-wide cards, Lists, Cards, Flow and Table views, filters, planned dates, Week, Today, Review, and theme.
+- One level of child cards with independent owner and workflow state.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.

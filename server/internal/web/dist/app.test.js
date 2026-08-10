@@ -107,14 +107,14 @@ test("password reset forms collect email and a secure replacement password", () 
   vm.runInContext(`state.resetToken = ""`, app);
 });
 
-test("sidebar makes tasks, lists, and agents the primary control plane", () => {
+test("sidebar makes cards, lists, and agents the primary control plane", () => {
   vm.runInContext(`
     state.workspaceLists = [{ id: "youtube", name: "YouTube", openCount: 18 }];
     state.workspaceScope = "all";
   `, app);
 
   const html = app.appHTML();
-  for (const label of ["Inbox", "Today", "Week", "Review", "All tasks", "Lists", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
+  for (const label of ["Attention", "Inbox", "Today", "Review", "Plan", "Week", "All cards", "Lists", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
   assert.match(html, /href="\/app\/lists\/youtube"[^>]*>[\s\S]*?YouTube[\s\S]*?<b data-workspace-count="youtube">18<\/b>/);
   assert.match(html, /id="new-workspace-list"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
@@ -490,7 +490,7 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   `, app);
 
   const html = app.appHTML();
-  for (const [view, label] of [["list", "List"], ["flow", "Flow"], ["table", "Table"]]) {
+  for (const [view, label] of [["list", "Cards"], ["flow", "Flow"], ["table", "Table"]]) {
     assert.match(html, new RegExp(`id="workspace-tab-${view}"[^>]*data-workspace-view="${view}"[^>]*role="tab"[^>]*aria-controls="workspace-task-panel"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
   assert.match(html, /id="workspace-tab-table"[^>]*tabindex="0"[^>]*aria-selected="true"/);
@@ -510,7 +510,7 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   vm.runInContext(`state.boards = []; state.board = null;`, app);
 });
 
-test("the task table exposes native headers, cells, and keyboard-operable rows", () => {
+test("the card table exposes native headers, cells, and keyboard-operable rows", () => {
   vm.runInContext(`
     state.me = { id: "owner", displayName: "Owain" };
     state.agents = [];
@@ -520,18 +520,18 @@ test("the task table exposes native headers, cells, and keyboard-operable rows",
     priority: "p1", scheduledDate: "2026-08-05", done: false, assigneeAgentId: "",
   }]);
 
-  assert.match(html, /^<table class="workspace-table" aria-label="Tasks">/);
-  for (const heading of ["Task", "List", "Status", "Priority", "Owner", "Planned"]) {
+  assert.match(html, /^<table class="workspace-table" aria-label="Cards">/);
+  for (const heading of ["Card", "List", "Status", "Priority", "Owner", "Planned"]) {
     assert.match(html, new RegExp(`<th scope="col">${heading}<\\/th>`));
   }
   assert.match(html, /<tr class="workspace-table-row" data-task-row>/);
-  assert.match(html, /<button type="button" class="workspace-check workspace-completion-toggle " data-toggle-done="task-one" aria-pressed="false" aria-label="Mark Accessible task complete"><\/button>/);
-  assert.match(html, /<button type="button" class="workspace-table-open" data-open-task="task-one" aria-label="Open task: Accessible task"><strong>Accessible task<\/strong><\/button>/);
+  assert.doesNotMatch(html, /workspace-completion-toggle|data-toggle-done/);
+  assert.match(html, /<button type="button" class="workspace-table-open" data-open-task="task-one" aria-label="Open card: Accessible task"><strong>Accessible task<\/strong><\/button>/);
   assert.doesNotMatch(html, /<section class="workspace-table"|<tr[^>]*tabindex=/);
   vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
 
-test("every global task view identifies subtasks with parent context", () => {
+test("every global card view identifies child cards with parent context", () => {
   vm.runInContext(`state.me = { id: "owner", displayName: "Owain" }; state.agents = [];`, app);
   const planned = app.dateKey(app.startOfWeek(new Date()));
   const subtask = {
@@ -544,7 +544,7 @@ test("every global task view identifies subtasks with parent context", () => {
     app.workspaceFlowHTML([subtask]),
     app.workspaceWeekHTML([subtask]),
   ]) {
-    assert.match(html, /Subtask of Parent &amp; plan/);
+    assert.match(html, /Child of Parent &amp; plan/);
   }
   vm.runInContext(`state.me = null;`, app);
 });
@@ -558,7 +558,7 @@ test("subtask detail keeps its list fixed to the parent", () => {
   const html = vm.runInContext(`workspaceDetailHTML(state.selectedTask)`, app);
   assert.match(html, /id="workspace-detail-list" disabled aria-describedby="workspace-detail-list-help"/);
   assert.doesNotMatch(html, /name="bucketId"/);
-  assert.match(html, /Subtasks stay with their parent task\./);
+  assert.match(html, /Child cards stay with their parent card\./);
 });
 
 test("agent work renders the shared inline task detail with parent context", () => {
@@ -570,9 +570,9 @@ test("agent work renders the shared inline task detail with parent context", () 
   `, app);
   const html = app.agentDetailHTML();
   assert.match(html, /class="main workspace-main agent-task-main"/);
-  assert.match(html, /class="workspace-detail" aria-label="Task detail"/);
+  assert.match(html, /class="workspace-detail" aria-label="Card detail"/);
   assert.match(html, /aria-label="Back to agent work"/);
-  assert.match(html, /1 of 1 complete/);
+  assert.match(html, /1 of 1 done/);
   assert.match(html, /Review/);
   assert.doesNotMatch(html, /data-detail-overlay|aria-modal="true"|id="detail-form"/);
   vm.runInContext(`state.view = "home"; state.selectedTask = null; state.selectedSubtasks = []; state.workspaceLists = [];`, app);
@@ -645,6 +645,7 @@ test("opening a task loads its full description and subtasks", async () => {
       if (path.includes("parentTaskId=")) {
         return { tasks: [{ id: "subtask-one", parentTaskId: "task-one", title: "Research" }], nextCursor: "children-two" };
       }
+      if (path === "/api/v1/cards/task-one/entries") return { entries: [] };
       return { id: "task-one", bucketId: "list-one", title: "Summary", description: "Full private detail" };
     };
   `, app);
@@ -653,6 +654,7 @@ test("opening a task loads its full description and subtasks", async () => {
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
     "/api/v1/tasks/task-one",
     "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/cards/task-one/entries",
     "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
   ]);
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
@@ -667,9 +669,11 @@ test("opening a task loads its full description and subtasks", async () => {
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
     "/api/v1/tasks/task-one",
     "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/cards/task-one/entries",
     "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
     "/api/v1/tasks/task-one",
     "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/cards/task-one/entries",
     "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
   ]);
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
@@ -980,7 +984,7 @@ test("agent directory shows credential facts, work counts, archived identities, 
   assert.match(html, />Connected</);
   assert.match(html, />Needs connection</);
   assert.match(html, />Archived</);
-  assert.match(html, /2 ready items · 1 working item · 1 review item/);
+  assert.match(html, /2 open cards · 1 working card · 1 review card/);
   assert.match(html, /href="\/app\/agents\/agent-connected" data-agent-link="agent-connected"/);
   assert.match(html, /No open work assigned/);
   assert.match(html, /<details class="archived-agents">/);
@@ -1448,22 +1452,22 @@ test("credential copy failure leaves the token selected for manual copy", async 
   vm.runInContext(`state.credentialCopyError = "";`, app);
 });
 
-test("the task header stays focused on the workspace and new-task action", () => {
+test("the card header stays focused on the workspace and new-card action", () => {
   vm.runInContext(`
     state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
     state.board = { id: "board", name: "Business", maxTasksPerList: 20, buckets: [] };
     state.boards = [{ id: "board", name: "Business" }];
   `, app);
   const html = app.appHTML();
-  assert.match(html, /class="workspace-title"><h1>All tasks<\/h1>/);
+  assert.match(html, /class="workspace-title"><h1>All cards<\/h1>/);
   assert.match(html, /id="new-task"/);
   assert.doesNotMatch(html, /class="current-user"|>OL<\/span>/);
   vm.runInContext(`state.me = null; state.board = null; state.boards = [];`, app);
 });
 
-test("New task remains available from agent and account settings pages", () => {
-  assert.match(app.agentsHTML(), /id="global-new-task"[^>]*>.*New task/s);
-  assert.match(app.settingsHTML(), /id="global-new-task"[^>]*>.*New task/s);
+test("New card remains available from agent and account settings pages", () => {
+  assert.match(app.agentsHTML(), /id="global-new-task"[^>]*>.*New card/s);
+  assert.match(app.settingsHTML(), /id="global-new-task"[^>]*>.*New card/s);
 });
 
 test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
@@ -1932,6 +1936,7 @@ test("an older workspace response cannot overwrite a newer same-route load", asy
     state.workspaceTasks = [];
     let workspaceRequests = 0;
     api.get = async path => {
+      if (path === "/api/v1/card-review-kinds") return { kinds: { task: "other" } };
       if (!path.startsWith("/api/v1/tasks?")) throw new Error("unexpected request " + path);
       workspaceRequests += 1;
       return workspaceRequests === 1
@@ -2230,7 +2235,7 @@ test("detail exposes state without a type control", () => {
   assert.doesNotMatch(actionHTML, /name="kind"/);
 });
 
-test("detail presents one inline accessible editor with clear actions", () => {
+test("detail presents one contextual accessible card editor with clear actions", () => {
   vm.runInContext(`
     state.view = "home";
     state.workspaceLists = [{ id: "inbox", name: "Home list" }];
@@ -2238,16 +2243,16 @@ test("detail presents one inline accessible editor with clear actions", () => {
   `, app);
   const html = app.workspaceDetailHTML({ ...board.buckets[0].tasks[1], description: "", priority: "", assigneeAgentId: "" });
 
-  assert.match(html, /class="workspace-detail" aria-label="Task detail"/);
+  assert.match(html, /class="workspace-detail" aria-label="Card detail"/);
   assert.doesNotMatch(html, /role="dialog"|aria-modal="true"|detail-overlay/);
   assert.match(html, /class="detail-title"/);
   assert.match(html, /class="detail-description"/);
   assert.match(html, /class="detail-properties"/);
   assert.match(html, />Save changes</);
-  assert.match(html, /data-close-detail>Cancel</);
-  assert.match(html, />Delete task</);
+  assert.match(html, /data-close-detail aria-label="Close card"/);
+  assert.match(html, />Delete card</);
   assert.match(html, /Home list/);
-  assert.match(html, /aria-label="Back to tasks"/);
+  assert.match(html, /aria-label="Close card"/);
 });
 
 test("detail can move a parent task between account-wide lists", () => {
@@ -2788,7 +2793,7 @@ test("routes parse into the surface they name", () => {
 
   assert.deepEqual(route("/"), { name: "home" });
   assert.deepEqual(route("/login"), { name: "login" });
-  assert.deepEqual(route("/app"), { name: "workspace", scope: "all", redirect: true });
+  assert.deepEqual(route("/app"), { name: "workspace", scope: "today", redirect: true });
   assert.deepEqual(route("/app/tasks"), { name: "workspace", scope: "all" });
   assert.deepEqual(route("/app/inbox"), { name: "workspace", scope: "inbox" });
   assert.deepEqual(route("/app/today"), { name: "workspace", scope: "today" });
@@ -2814,7 +2819,7 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/app/boards/%ED%A0%80"), { name: "not-found" });
 
   // Trailing slashes, queries, and fragments never change which route is named.
-  assert.deepEqual(route("/app/"), { name: "workspace", scope: "all", redirect: true });
+  assert.deepEqual(route("/app/"), { name: "workspace", scope: "today", redirect: true });
   assert.deepEqual(route("/login?next=/app"), { name: "login" });
   assert.deepEqual(route("/app/settings#token"), { name: "settings", settingsPage: "profile", redirect: true });
 
@@ -2867,7 +2872,7 @@ test("logging in returns to the requested route, defaulting to the app", async (
 
   const plain = router({ url: "/login", signedIn: true, boards: [{ id: "board_1" }] });
   await plain.apply();
-  assert.equal(plain.url(), "/app/tasks");
+  assert.equal(plain.url(), "/app/today");
 });
 
 test("a rejected next target falls back to the app rather than leaving the origin", async () => {
@@ -2875,44 +2880,44 @@ test("a rejected next target falls back to the app rather than leaving the origi
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/today");
 });
 
-test("/app resolves to the account-wide task workspace", async () => {
+test("/app resolves to Today", async () => {
   const withBoards = router({ url: "/app", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await withBoards.apply();
-  assert.equal(withBoards.url(), "/app/tasks");
+  assert.equal(withBoards.url(), "/app/today");
   assert.equal(withBoards.board(), "board_1");
   assert.equal(withBoards.depth(), 1, "resolving /app must not add a history entry");
 
   const empty = router({ url: "/app", signedIn: true, boards: [] });
   await empty.apply();
-  assert.equal(empty.url(), "/app/tasks");
+  assert.equal(empty.url(), "/app/today");
   assert.equal(empty.view(), "app");
   assert.equal(empty.board(), null);
 });
 
-test("the brand link goes to all tasks when signed in, and home when signed out", async () => {
+test("the brand link goes to Today when signed in, and home when signed out", async () => {
   const onBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await onBoard.apply();
   await onBoard.home();
-  assert.equal(onBoard.url(), "/app/tasks", "the brand must not drop a signed-in user onto the landing page");
+  assert.equal(onBoard.url(), "/app/today", "the brand must not drop a signed-in user onto the landing page");
 
   const noBoardLoaded = router({ url: "/app/settings/profile", signedIn: true, boards: [{ id: "board_1" }] });
   await noBoardLoaded.apply();
   await noBoardLoaded.home();
-  assert.equal(noBoardLoaded.url(), "/app/tasks");
+  assert.equal(noBoardLoaded.url(), "/app/today");
 
   const staleBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await staleBoard.apply();
   vm.runInContext(`state.boards = [{ id: "board_1" }];`, staleBoard.context);
   await staleBoard.home();
-  assert.equal(staleBoard.url(), "/app/tasks");
+  assert.equal(staleBoard.url(), "/app/today");
 
   const noBoards = router({ url: "/app", signedIn: true, boards: [] });
   await noBoards.apply();
   await noBoards.home();
-  assert.equal(noBoards.url(), "/app/tasks");
+  assert.equal(noBoards.url(), "/app/today");
 
   const signedOut = router({ url: "/login" });
   await signedOut.apply();
@@ -3246,7 +3251,7 @@ test("back and forward move between landing, boards, and settings", async () => 
   assert.equal(it.view(), "home");
 
   await it.go("/app");
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/today");
   await it.go("/app/boards/board_2");
   assert.equal(it.board(), "board_2");
   await it.go("/app/settings/profile");
@@ -3256,7 +3261,7 @@ test("back and forward move between landing, boards, and settings", async () => 
   assert.equal(it.url(), "/app/tasks");
   assert.equal(it.view(), "app");
   await it.back();
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/today");
   await it.back();
   assert.equal(it.url(), "/");
   assert.equal(it.view(), "home");
@@ -3277,7 +3282,7 @@ test("an authenticated visit to early access is sent to the app", async () => {
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/today");
 });
 
 test("the landing page stays public while signed in", async () => {

@@ -1,156 +1,151 @@
 # Slate PRD
 
-Status: Task-first redesign.
+Status: Card-first control plane.
 
 ## Summary
 
-Slate is a task management and organising system for humans and command-line agents.
+Slate is an agent control plane that helps people clarify intent, focus attention, and run all of their work with human and AI collaborators.
 
-The task is the core unit. Lists help people think in buckets. Views show the same tasks in the shape needed for planning or execution. Agents are external collaborators that claim assigned work through the CLI.
+The card is the core unit of intent. Lists give cards useful context without forcing every card to be a task, goal, or project. A list can itself represent a project, goal, area, or workflow. Agents receive cards as prompts and return comments or outputs to the same card.
 
 ## Product principles
 
-- Capture work before organising it.
+- Capture intent before deciding its structure.
 - Keep one source of truth for human and agent work.
-- Make lists useful for clear thinking, not workflow enforcement.
-- Keep task metadata small and visible.
-- Let the CLI be the agent interface. Do not embed AI actions in the product.
-- Prefer one level of subtasks over deep project trees.
+- Let cards stay generic. Do not require a task, goal, or project type.
+- Let lists carry context such as a project, goal, area, or category.
+- Keep properties small and visible.
+- Keep human judgment in Slate and agent execution available through the CLI.
+- Prefer one level of child cards over deep project trees.
+- Show agent contributions as comments and outputs, not runtime logs.
 
 ## Core workflow
 
-1. A human or integration creates a task in Inbox.
-2. The task is refined and moved into a list when its bucket is clear.
-3. The human sets priority, planned date, status, and owner when useful.
-4. A human works directly, or an assigned agent pulls and claims the task through the CLI.
-5. Work moves through Ready, Working, Review, and Done.
-6. Complex work can be split into one level of real subtasks shared between humans and agents.
+1. A human, agent, or integration creates a card in Inbox.
+2. The card is refined with enough prompt and context to act on.
+3. The card can stay in Inbox or move to a list that gives it meaning.
+4. A human owns the card directly, or assigns it to an agent.
+5. Work moves through Open, Working, Review, and Done.
+6. The agent can comment, request a response, or return an output on the card.
+7. Complex intent can be split into one level of child cards.
 
 ## Core model
 
-### Task
+### Card
 
-A task is any captured unit of work, including an action, idea, thought, or planned content item.
+A card is a generic unit of intent. It can represent an action, goal, project, idea, decision, email to triage, planned content, or any other thing worth directing attention toward.
 
 Core fields:
 
 - `id`
 - `title`
-- `description`
+- `description` as prompt and context
 - `listId`
 - `status`
 - `priority`
 - `scheduledDate`
 - `assigneeAgentId`
-- `parentTaskId`
+- `parentCardId`
 - timestamps
+
+The current database and legacy API retain task field names for compatibility. Card API aliases expose the product language to new integrations.
 
 ### List
 
-A list is a named bucket for organising tasks, such as Product, YouTube, Content, LinkedIn, Personal, or Waiting.
+A list is a named context for cards. Examples include Build AI Systems Course, YouTube, Growth, Personal, Waiting, or an August revenue goal.
 
-Lists can have a short goal. Lists do not reject tasks based on item count. Focus comes from filters, priorities, dates, and status. Account-level storage quotas remain the capacity boundary.
+Lists can have a short purpose. They do not impose a specific semantic type or reject cards based on item count. Focus comes from views, filters, priority, dates, and status.
 
-Boards remain an internal compatibility container for existing data and API clients. They are not the primary navigation model.
+Boards remain an internal compatibility container for existing data and API clients. They are not part of primary navigation.
 
-### Subtask
+### Child card
 
-A subtask is a real task with its own status, priority, planned date, list, and owner. A task can contain subtasks, but a subtask cannot contain another subtask.
+A card can contain one level of child cards. Each child has its own status, priority, planned date, and owner, but stays in the same list as its parent. A child cannot contain another child.
 
-The parent detail view shows completed progress and a compact subtask list. Deleting a parent deletes its subtasks.
+The parent card shows progress and a compact child-card list. Deleting a parent deletes its children.
+
+### Conversation entry
+
+A conversation entry belongs to a card and is one of:
+
+- Comment: feedback, context, a question, or a request for a response.
+- Output: a result, link, deliverable, or summary returned by a human or agent.
+
+An output or a comment marked Needs response moves the card to Review. The latest output is pinned in card detail while the full conversation remains visible.
 
 ### Agent
 
-An agent is a named external collaborator with a scoped credential. Tasks can be assigned to agents. An agent token can only read and change that agent's assigned work.
+An agent is a named external collaborator with a scoped credential. Cards can be assigned to agents. An agent token can only read and change that agent's assigned cards.
 
-Agents use the CLI to pull, claim, update, request review, and complete tasks. Slate does not offer in-product actions such as “refine with agent”.
+Agents use the CLI or card API to pull, claim, update, comment, add outputs, request review, and complete assigned work. Slate shows the result and conversation, not model selection, retries, or execution logs.
 
 ## Navigation
 
-The signed-in app opens to All tasks and keeps these destinations visible:
+The signed-in app opens to Today and keeps three levels visible:
 
-- Inbox
-- Today
-- Week
-- Review
-- All tasks
-- User-defined lists
-- Agents
+- Attention: Inbox, Today, Review.
+- Plan: Week, All cards.
+- Context: user-defined Lists and Agents.
 
-New Task creates one task in Inbox and opens it for editing. There is no separate quick-capture product surface.
+New card creates one card in Inbox and opens it for editing.
 
 ## Views
 
-Every view reads and edits the same task records:
+Every view reads and edits the same card records:
 
-- List: compact rows for scanning and thinking.
-- Flow: Ready, Working, Review, and Done columns.
-- Table: task, list, status, priority, owner, and planned date.
-- Week: planned work grouped Monday through Sunday.
+- Cards: compact rows for scanning and thinking.
+- Flow: Open, Working, Review, and Done columns.
+- Table: card, list, status, priority, owner, and planned date.
+- Week: planned cards grouped Monday through Sunday.
 
-Filters cover text, status, priority, owner, and planned date range. A list route combines its list scope with the selected filters.
+Opening a card uses a right drawer so its list remains visible as context. Card detail contains Prompt and context, Act with agent, latest Output, Conversation, Child cards, and Properties.
+
+Review separates work that needs a response from agent outputs waiting for judgment.
 
 ## Workflow status
 
-- `queued`
-- `working`
-- `needs_review`
-- `done`
+- `queued`, labelled Open
+- `working`, labelled Working
+- `needs_review`, labelled Review
+- `done`, labelled Done
 
-The labels in the interface are Ready, Working, Review, and Done. Workflow states are fixed in this version.
+The underlying status values stay stable for existing clients.
 
-## CLI workflow
+## Compatibility
 
-Capture directly into Inbox:
-
-```bash
-slate tasks create --title "Draft launch note"
-```
-
-Create in a known list or under a parent:
-
-```bash
-slate tasks create --list <list-id> --title "Research examples"
-slate tasks create --parent <task-id> --title "Human review"
-```
-
-An agent run:
-
-```bash
-slate tasks pull --limit 5
-slate tasks claim <task-id>
-slate tasks get <task-id>
-slate tasks status <task-id> needs_review
-```
+Existing board, list, task, agent, and CLI routes remain supported. New integrations can use `/api/v1/cards` aliases and `/api/v1/cards/{id}/entries`. The implementation can continue using task names internally until changing them has clear product value.
 
 ## Scope
 
 Included:
 
-- Account-wide task workspace.
-- Inbox capture.
-- User-defined lists with no item-count limit.
-- List, Flow, Table, Today, and Week views.
+- Account-wide card workspace with Today as the default.
+- Inbox capture and generic cards.
+- Lists as flexible context, with boards hidden from primary UI.
+- Cards, Flow, Table, Review, Today, and Week views.
 - Filters, priorities, planned dates, and fixed workflow status.
-- One level of subtasks.
+- One level of child cards.
 - Named agent identities, assignment, scoped tokens, and CLI execution.
+- Human and agent comments, requests for response, and outputs.
 - Compatibility for existing board, list, task, and CLI clients.
 
 Not included:
 
-- Embedded chat or AI refinement actions.
-- Deeply nested task trees.
+- Required goal, project, or task types.
+- Deeply nested card trees.
 - Custom workflow builders.
 - Team roles and permissions.
-- Comments, notifications, calendar sync, or rich labels.
+- Agent runtime logs, model controls, retries, or embedded chat.
+- Notifications, calendar sync, or rich labels.
 
 ## Success criteria
 
 Slate is working when:
 
-- Any work can be captured as one task without deciding its structure first.
-- A creator can replace a planning table such as an Airtable video pipeline with a filtered Slate list.
-- A human can switch between list, flow, and table views without duplicating data.
-- A complex task can be divided between a human and agents while progress stays visible on the parent.
-- An agent can find only its assigned work, execute it through the CLI, and return it for review.
-- The interface feels calm, direct, and consistent with Slate's existing visual identity.
+- Any intent can be captured without deciding whether it is a task, goal, or project.
+- A list can represent a project or goal without requiring a separate object type.
+- A human can move between cards, flow, table, and time views without duplicating data.
+- A card is useful as an agent prompt and keeps the agent's feedback and output attached.
+- A complex card can be divided between a human and agents while progress stays visible.
+- An agent can access only assigned cards and return work for review.
+- The interface clarifies and focuses human attention instead of exposing agent machinery.

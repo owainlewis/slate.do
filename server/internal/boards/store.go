@@ -1442,7 +1442,11 @@ func (s *Store) DeleteTask(ctx context.Context, userID string, id string) error 
 		return err
 	}
 	usage, err := lockedTaskStorage(ctx, tx, `
-		SELECT t.storage_bytes
+		SELECT t.storage_bytes + COALESCE((
+			SELECT sum(octet_length(entry.body))
+			FROM card_entries entry
+			WHERE entry.task_id = t.id
+		), 0)
 		FROM tasks t
 		WHERE t.id = $1 OR t.parent_task_id = $1
 		FOR UPDATE OF t
@@ -1498,6 +1502,194 @@ func (s *Store) GetTask(ctx context.Context, userID string, id string) (Task, er
 
 func (s *Store) GetTaskForAgent(ctx context.Context, userID string, agentID string, id string) (Task, error) {
 	return s.getTask(ctx, userID, agentID, id)
+}
+
+func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID string, taskID string) ([]CardEntry, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	args := []any{userID, taskID}
+	agentSQL := ""
+	if agentID != "" {
+		args = append(args, agentID)
+		agentSQL = " AND t.assignee_agent_id = $3"
+	}
+	var authorizedTaskID string
+	if err := tx.QueryRow(ctx, `
+		SELECT t.id::text
+		FROM tasks t
+		JOIN boards b ON b.id = t.board_id
+		WHERE b.user_id = $1 AND t.id = $2`+agentSQL+`
+		FOR SHARE OF t
+	`, args...).Scan(&authorizedTaskID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, task_id::text, kind, body, needs_response,
+			author_kind, author_id::text, author_name, created_at
+		FROM card_entries
+		WHERE task_id = $1
+		ORDER BY created_at, id
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := []CardEntry{}
+	for rows.Next() {
+		var entry CardEntry
+		if err := rows.Scan(&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body, &entry.NeedsResponse,
+			&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.CreatedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func (s *Store) ListCardReviewKinds(ctx context.Context, userID string, agentID string) (map[string]string, error) {
+	args := []any{userID, StatusNeedsReview}
+	agentSQL := ""
+	if agentID != "" {
+		args = append(args, agentID)
+		agentSQL = " AND t.assignee_agent_id = $3"
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT t.id::text, COALESCE(review_entry.kind, 'other')
+		FROM tasks t
+		JOIN boards b ON b.id = t.board_id
+		LEFT JOIN LATERAL (
+			SELECT CASE WHEN entry.kind = 'output' THEN 'output' ELSE 'needs_response' END AS kind
+			FROM card_entries entry
+			WHERE entry.task_id = t.id
+				AND (entry.kind = 'output' OR entry.needs_response)
+			ORDER BY entry.created_at DESC, entry.id DESC
+			LIMIT 1
+		) review_entry ON true
+		WHERE b.user_id = $1 AND t.status = $2`+agentSQL+`
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	kinds := map[string]string{}
+	for rows.Next() {
+		var taskID, kind string
+		if err := rows.Scan(&taskID, &kind); err != nil {
+			return nil, err
+		}
+		kinds[taskID] = kind
+	}
+	return kinds, rows.Err()
+}
+
+func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID string, authorName string, taskID string, input CreateCardEntryInput) (CardEntry, error) {
+	body := strings.TrimSpace(input.Body)
+	kind := strings.TrimSpace(input.Kind)
+	if body == "" {
+		return CardEntry{}, fmt.Errorf("%w: entry body is required", ErrInvalidData)
+	}
+	if kind != "comment" && kind != "output" {
+		return CardEntry{}, fmt.Errorf("%w: entry kind must be comment or output", ErrInvalidData)
+	}
+	if len([]byte(body)) > httpapi.CardEntryBytes {
+		return CardEntry{}, fmt.Errorf("%w: entry body must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.CardEntryBytes)
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return CardEntry{}, err
+	}
+	defer tx.Rollback(ctx)
+	quota, err := lockStorageQuota(ctx, tx, userID)
+	if err != nil {
+		return CardEntry{}, err
+	}
+	args := []any{userID, taskID}
+	agentSQL := ""
+	if agentID != "" {
+		args = append(args, agentID)
+		agentSQL = " AND t.assignee_agent_id = $3"
+	}
+	var authorizedTaskID string
+	if err := tx.QueryRow(ctx, `
+		SELECT t.id::text
+		FROM tasks t
+		JOIN boards b ON b.id = t.board_id
+		WHERE b.user_id = $1 AND t.id = $2`+agentSQL+`
+		FOR UPDATE OF t
+	`, args...).Scan(&authorizedTaskID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return CardEntry{}, ErrNotFound
+		}
+		return CardEntry{}, err
+	}
+	var entryCount int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM card_entries WHERE task_id = $1", taskID).Scan(&entryCount); err != nil {
+		return CardEntry{}, err
+	}
+	if entryCount >= MaxCardEntries {
+		return CardEntry{}, fmt.Errorf("%w: cards can contain at most %d conversation entries", ErrInvalidData, MaxCardEntries)
+	}
+	authorKind := "human"
+	authorID := userID
+	if agentID != "" {
+		authorKind = "agent"
+		authorID = agentID
+		if err := tx.QueryRow(ctx, `
+			SELECT name FROM agents
+			WHERE id = $1 AND owner_user_id = $2 AND archived_at IS NULL
+		`, agentID, userID).Scan(&authorName); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return CardEntry{}, ErrNotFound
+			}
+			return CardEntry{}, err
+		}
+	}
+	authorName = strings.TrimSpace(authorName)
+	if authorName == "" {
+		authorName = "You"
+	}
+	var entry CardEntry
+	err = tx.QueryRow(ctx, `
+		INSERT INTO card_entries (task_id, kind, body, needs_response, author_kind, author_id, author_name)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id::text, task_id::text, kind, body, needs_response,
+			author_kind, author_id::text, author_name, created_at
+	`, taskID, kind, body, input.NeedsResponse, authorKind, authorID, authorName).Scan(
+		&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body, &entry.NeedsResponse,
+		&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.CreatedAt,
+	)
+	if err != nil {
+		return CardEntry{}, err
+	}
+	if err := quota.apply(ctx, tx, 0, int64(len([]byte(body)))); err != nil {
+		return CardEntry{}, err
+	}
+	if kind == "output" || input.NeedsResponse {
+		if _, err := tx.Exec(ctx, `
+			UPDATE tasks
+			SET status = $1, done = false, updated_at = now()
+			WHERE id = $2
+		`, StatusNeedsReview, taskID); err != nil {
+			return CardEntry{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CardEntry{}, err
+	}
+	return entry, nil
 }
 
 func (s *Store) getTask(ctx context.Context, userID string, agentID string, id string) (Task, error) {

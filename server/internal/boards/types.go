@@ -148,3 +148,23 @@ type TaskPage struct {
 	Tasks      []Task `json:"tasks"`
 	NextCursor string `json:"nextCursor,omitempty"`
 }
+
+type CardEntry struct {
+	ID            string    `json:"id"`
+	TaskID        string    `json:"cardId"`
+	Kind          string    `json:"kind"`
+	Body          string    `json:"body"`
+	NeedsResponse bool      `json:"needsResponse"`
+	AuthorKind    string    `json:"authorKind"`
+	AuthorID      string    `json:"authorId"`
+	AuthorName    string    `json:"authorName"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+type CreateCardEntryInput struct {
+	Kind          string `json:"kind"`
+	Body          string `json:"body"`
+	NeedsResponse bool   `json:"needsResponse"`
+}
+
+const MaxCardEntries = 200

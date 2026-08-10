@@ -57,6 +57,83 @@ func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
 	}
 }
 
+func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	ownerID := createIntegrationUser(t, ctx, db)
+	otherID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
+	})
+
+	var agentID, siblingAgentID string
+	if err := db.QueryRow(ctx, `INSERT INTO agents (owner_user_id, name) VALUES ($1, 'Builder') RETURNING id::text`, ownerID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `INSERT INTO agents (owner_user_id, name) VALUES ($1, 'Sibling') RETURNING id::text`, ownerID).Scan(&siblingAgentID); err != nil {
+		t.Fatal(err)
+	}
+	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Launch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateTask(ctx, ownerID, list.ID, CreateTaskInput{Title: "Draft launch", AssigneeAgentID: agentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comment, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, CreateCardEntryInput{Kind: "comment", Body: "Keep it concise"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comment.AuthorKind != "human" || comment.AuthorName != "Owain" {
+		t.Fatalf("human comment author = %#v", comment)
+	}
+	output, err := store.CreateCardEntry(ctx, ownerID, agentID, "", card.ID, CreateCardEntryInput{Kind: "output", Body: "Draft is ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.AuthorKind != "agent" || output.AuthorName != "Builder" {
+		t.Fatalf("agent output author = %#v", output)
+	}
+	entries, err := store.ListCardEntries(ctx, ownerID, agentID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].ID != comment.ID || entries[1].ID != output.ID {
+		t.Fatalf("entries = %#v", entries)
+	}
+	updated, err := store.GetTask(ctx, ownerID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != StatusNeedsReview || updated.Done {
+		t.Fatalf("card status = %q, done = %v", updated.Status, updated.Done)
+	}
+	reviewKinds, err := store.ListCardReviewKinds(ctx, ownerID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewKinds[card.ID] != "output" {
+		t.Fatalf("review kind = %q, want output", reviewKinds[card.ID])
+	}
+	if _, err := store.ListCardEntries(ctx, ownerID, siblingAgentID, card.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("sibling agent list error = %v, want ErrNotFound", err)
+	}
+	if _, err := store.ListCardEntries(ctx, otherID, "", card.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other owner list error = %v, want ErrNotFound", err)
+	}
+	assertStorageUsage(t, ctx, db, ownerID, 1, taskContentBytes(card)+int64(len(comment.Body)+len(output.Body)))
+	if err := store.DeleteTask(ctx, ownerID, card.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertStorageUsage(t, ctx, db, ownerID, 0, 0)
+}
+
 func TestFreeAccountUsesCatalogBoardAndListLimits(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

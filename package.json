@@ -2,7 +2,7 @@
   "name": "slate.do",
   "version": "0.0.0",
   "private": true,
-  "description": "A minimal visual task manager for humans and agents.",
+  "description": "A card-first control plane for human and agent work.",
   "scripts": {
     "verify:browser": "playwright --version",
 	"test:web": "node --test server/internal/web/dist/app.test.js",
