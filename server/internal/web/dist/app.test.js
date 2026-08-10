@@ -2475,8 +2475,9 @@ test("a delayed board deletion from an old account cannot create data in the new
   vm.runInContext(`
     authVersion = 50;
     state.me = { id: "account-a" };
-    state.boards = [{ id: "board-a", name: "Account A board" }];
+    state.boards = [{ id: "board-a", name: "Account A board" }, { id: "board-survivor", name: "Survivor" }];
     state.board = { id: "board-a", name: "Account A board", buckets: [] };
+    state.workspaceLists = [{ id: "surviving-inbox", boardId: "board-survivor", isInbox: true }];
     api.del = async path => {
       if (path !== "/api/v1/boards/board-a") throw new Error("unexpected delete for " + path);
       await oldDeleteResponse;
@@ -2752,15 +2753,15 @@ test("counts use readable singular and plural labels", () => {
   assert.equal(app.formatCount(2, "open action", "open actions"), "2 open actions");
 });
 
-test("single-column list drops use vertical position", () => {
+test("horizontal list drops use pointer x position", () => {
   const rects = [
-    { top: 0, bottom: 100, left: 0, width: 300, height: 100 },
-    { top: 120, bottom: 220, left: 0, width: 300, height: 100 },
+    { left: 0, width: 300 },
+    { left: 320, width: 300 },
   ];
 
-  assert.equal(app.bucketDropIndexForRects(rects, 280, 20, true), 0);
-  assert.equal(app.bucketDropIndexForRects(rects, 20, 90, true), 1);
-  assert.equal(app.bucketDropIndexForRects(rects, 280, 210, true), 2);
+  assert.equal(app.bucketDropIndexForRects(rects, 20), 0);
+  assert.equal(app.bucketDropIndexForRects(rects, 280), 1);
+  assert.equal(app.bucketDropIndexForRects(rects, 640), 2);
 });
 
 // Each router test gets its own module instance so history and auth state

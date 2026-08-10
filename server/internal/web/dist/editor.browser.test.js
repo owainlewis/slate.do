@@ -36,7 +36,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], deletedBoards: [], taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
+  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -82,6 +82,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       return json(response, { ...board, buckets });
     }
     if (boardMatch && request.method === "DELETE") {
+      if (state.delayNextBoardDelete) {
+        state.delayNextBoardDelete = false;
+        await new Promise(resolve => { state.releaseBoardDelete = resolve; });
+      }
       if (state.failNextBoardDelete) {
         state.failNextBoardDelete = false;
         return json(response, { error: "Could not delete board" }, 500);
@@ -89,9 +93,27 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const boardID = boardMatch[1];
       const index = state.boards.findIndex(item => item.id === boardID);
       if (index < 0) return json(response, { error: "board not found" }, 404);
+      if (!state.lists.some(list => list.isInbox && list.boardId !== boardID)) {
+        return json(response, { code: "inbox_required", error: "Move or create another Inbox before deleting this board" }, 409);
+      }
+      const deletedListIDs = new Set(state.lists.filter(list => list.boardId === boardID).map(list => list.id));
       state.boards.splice(index, 1);
       state.lists = state.lists.filter(list => list.boardId !== boardID);
+      state.tasks = state.tasks.filter(task => !deletedListIDs.has(task.bucketId));
+      state.subtasks = state.subtasks.filter(task => !deletedListIDs.has(task.bucketId));
       state.deletedBoards.push(boardID);
+      return json(response, {});
+    }
+    const reorderListsMatch = url.pathname.match(/^\/api\/v1\/boards\/([^/]+)\/reorder-buckets$/);
+    if (reorderListsMatch && request.method === "POST") {
+      const input = await requestJSON(request);
+      const positions = new Map(input.ids.map((id, index) => [id, index]));
+      const boardLists = state.lists
+        .filter(list => list.boardId === reorderListsMatch[1])
+        .sort((a, b) => positions.get(a.id) - positions.get(b.id));
+      let boardIndex = 0;
+      state.lists = state.lists.map(list => list.boardId === reorderListsMatch[1] ? boardLists[boardIndex++] : list);
+      state.reorderedLists = input.ids;
       return json(response, {});
     }
     const createListMatch = url.pathname.match(/^\/api\/v1\/boards\/([^/]+)\/buckets$/);
@@ -120,7 +142,18 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }
       return json(response, { lists: state.lists });
     }
-    if (url.pathname === "/api/v1/agents" && request.method === "GET") return json(response, { agents: state.agents, maxAgents: 5 });
+    if (url.pathname === "/api/v1/agents" && request.method === "GET") {
+      const agents = state.dynamicAgentCounts ? state.agents.map(agent => {
+        const assigned = [...state.tasks, ...state.subtasks].filter(task => task.assigneeAgentId === agent.id);
+        return { ...agent, workCounts: {
+          ready: assigned.filter(task => task.status === "queued").length,
+          working: assigned.filter(task => task.status === "working").length,
+          review: assigned.filter(task => task.status === "needs_review").length,
+          completed: assigned.filter(task => task.done || task.status === "done").length,
+        } };
+      }) : state.agents;
+      return json(response, { agents, maxAgents: 5 });
+    }
     if (url.pathname === "/api/v1/card-review-kinds" && request.method === "GET") {
       const kinds = Object.fromEntries([...state.tasks, ...state.subtasks]
         .filter(task => task.status === "needs_review")
@@ -578,6 +611,13 @@ test("a delayed board creation cannot override newer navigation", async t => {
 test("board deletion uses a recoverable designed dialog", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
+  const protectedDelete = page.getByRole("button", { name: "Delete Workspace", exact: true });
+  assert.equal(await protectedDelete.isDisabled(), true);
+  assert.equal(await protectedDelete.getAttribute("title"), "Move or create another Inbox before deleting this board");
+  state.lists.push({ id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Other Inbox", goal: "", isInbox: true, openCount: 0 });
+  await page.reload();
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  assert.equal(await protectedDelete.isEnabled(), true);
   const deleteOther = page.getByRole("button", { name: "Delete Other", exact: true });
   await deleteOther.click();
   let dialog = page.getByRole("dialog", { name: "Delete Other?", exact: true });
@@ -596,16 +636,132 @@ test("board deletion uses a recoverable designed dialog", async t => {
   await dialog.waitFor({ state: "detached" });
   assert.deepEqual(state.deletedBoards, ["board-two"]);
   assert.equal(await page.getByRole("button", { name: "Other", exact: true }).count(), 0);
+  assert.equal(await protectedDelete.isDisabled(), true);
+  await page.getByRole("button", { name: "Open card: Write the doc my boss asked for", exact: true }).click();
+  assert.equal(await page.getByLabel("List", { exact: true }).locator("option", { hasText: "Other Inbox" }).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
-  state.failNextBoardCreate = true;
-  await page.getByRole("button", { name: "Delete Workspace", exact: true }).click();
-  dialog = page.getByRole("dialog", { name: "Delete Workspace?", exact: true });
+test("board deletion refreshes assigned work counts on the agent directory", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  state.dynamicAgentCounts = true;
+  state.lists.push({ id: "list-other-work", boardId: "board-two", boardName: "Other", name: "Other work", goal: "", isInbox: false, openCount: 1 });
+  state.tasks.push({
+    id: "task-other-agent", boardId: "board-two", bucketId: "list-other-work", listName: "Other work",
+    title: "Research the other board", description: "", scheduledDate: "", kind: "action",
+    done: false, status: "working", priority: "", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent",
+  });
+  await page.goto(`${origin}/app/agents`);
+  await page.getByRole("heading", { name: "Agents", level: 1, exact: true }).waitFor();
+  const researchAgent = page.locator(".agent-directory-row").filter({ hasText: "Research agent" });
+  await researchAgent.getByText("2 working cards", { exact: true }).waitFor();
+
+  await page.getByRole("button", { name: "Delete Other", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete Other?", exact: true });
   await dialog.getByRole("button", { name: "Delete board", exact: true }).click();
-  await page.getByRole("alert").filter({ hasText: "The board was deleted, but Slate could not create a replacement: Could not create replacement board" }).waitFor();
-  assert.equal(new URL(page.url()).pathname, "/app/tasks");
-  assert.deepEqual(state.deletedBoards, ["board-two", "board-one"]);
+
+  await researchAgent.getByText("1 working card", { exact: true }).waitFor();
+  assert.equal(state.tasks.some(task => task.id === "task-other-agent"), false);
+  assert.equal(await researchAgent.getByText("2 working cards", { exact: true }).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed board deletion cannot clear a newer board route", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  state.lists.push({ id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Other Inbox", goal: "", isInbox: true, openCount: 0 });
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextBoardDelete = true;
+  await page.getByRole("button", { name: "Delete Workspace", exact: true }).click();
+  await page.getByRole("dialog", { name: "Delete Workspace?", exact: true }).getByRole("button", { name: "Delete board", exact: true }).click();
+  await waitFor(() => typeof state.releaseBoardDelete === "function");
+
+  await page.evaluate(() => {
+    history.pushState({}, "", "/app/boards/board-two");
+    dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  state.releaseBoardDelete();
+  await waitFor(() => state.deletedBoards.includes("board-one"));
+  await page.getByRole("dialog", { name: "Delete Workspace?", exact: true }).waitFor({ state: "detached" });
+
+  assert.equal(new URL(page.url()).pathname, "/app/boards/board-two");
+  await page.getByRole("button", { name: "New list", exact: true }).click();
+  await page.getByRole("dialog", { name: "New list", exact: true }).getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed board deletion failure stays out of a newer route", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.delayNextBoardDelete = true;
+  state.failNextBoardDelete = true;
+  await page.getByRole("button", { name: "Delete Other", exact: true }).click();
+  await page.getByRole("dialog", { name: "Delete Other?", exact: true }).getByRole("button", { name: "Delete board", exact: true }).click();
+  await waitFor(() => typeof state.releaseBoardDelete === "function");
+  await page.evaluate(() => {
+    history.pushState({}, "", "/app/settings/profile");
+    dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+  state.releaseBoardDelete();
+  await page.getByRole("dialog", { name: "Delete Other?", exact: true }).waitFor({ state: "detached" });
+
+  assert.equal(new URL(page.url()).pathname, "/app/settings/profile");
+  assert.equal(await page.getByText("Could not delete board", { exact: true }).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an agent surface reports refresh failure after a committed board deletion", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  state.lists.push({ id: "list-other-work", boardId: "board-two", boardName: "Other", name: "Other work", goal: "", isInbox: false, openCount: 1 });
+  state.tasks.push({
+    id: "task-other-agent", boardId: "board-two", bucketId: "list-other-work", listName: "Other work",
+    title: "Research the other board", description: "", scheduledDate: "", kind: "action",
+    done: false, status: "working", priority: "", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent",
+  });
+  await page.goto(`${origin}/app/agents/agent-research`);
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Delete Other", exact: true }).click();
+  state.failNextAgentDetail = true;
+  await page.getByRole("dialog", { name: "Delete Other?", exact: true }).getByRole("button", { name: "Delete board", exact: true }).click();
+
+  await page.getByRole("alert").filter({ hasText: "The board was deleted, but Slate could not refresh all views" }).waitFor();
+  assert.equal(state.tasks.some(task => task.id === "task-other-agent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("board lists stay in one horizontal scroll lane", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t, { width: 720, height: 900 });
+
+  state.lists.push({ id: "list-planning", boardId: "board-one", boardName: "Workspace", name: "Planning", goal: "", isInbox: false, openCount: 0 });
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  const grid = page.locator(".grid");
+  const lists = grid.locator(".bucket");
+  const [first, second] = await Promise.all([lists.nth(0).boundingBox(), lists.nth(1).boundingBox()]);
+  const dimensions = await grid.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+
+  assert.ok(Math.abs(first.y - second.y) < 2, `lists should share a row: ${first.y} vs ${second.y}`);
+  assert.ok(second.x > first.x, `second list should be to the right: ${first.x} vs ${second.x}`);
+  assert.ok(dimensions.scrollWidth > dimensions.clientWidth, `board should scroll horizontally: ${JSON.stringify(dimensions)}`);
+
+  await page.evaluate(() => {
+    const source = document.querySelector('[data-bucket="list-planning"] .bucket-head');
+    const target = document.querySelector(".grid");
+    const dataTransfer = new DataTransfer();
+    const rect = target.getBoundingClientRect();
+    source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer }));
+    target.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.top + 120, dataTransfer }));
+    target.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.top + 120, dataTransfer }));
+    source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer }));
+  });
+  await waitFor(() => state.reorderedLists[0] === "list-planning");
+  assert.deepEqual(state.reorderedLists, ["list-planning", "list-inbox", "list-youtube"]);
+  assert.equal(await grid.locator(".bucket").first().getAttribute("data-bucket"), "list-planning");
   assert.deepEqual(pageErrors, []);
 });
 

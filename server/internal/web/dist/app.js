@@ -2008,6 +2008,7 @@ function bindNewTaskRecoveryActions() {
 function boardRowHTML(board) {
   const route = parseRoute(globalThis.location?.pathname || APP_PATH);
   const current = ["board", "board-settings"].includes(route.name) && board.id === state.board?.id;
+  const deletable = boardCanBeDeleted(board.id);
   if (board.id === state.renamingBoardId) {
     return `
       <div class="board-row board-row-editing ${current ? "on" : ""}">
@@ -2027,7 +2028,7 @@ function boardRowHTML(board) {
       <div class="board-actions">
         <button data-board-settings="${board.id}" aria-label="Board settings for ${escapeAttr(board.name)}" title="Board settings">${icon("gear")}</button>
         <button data-start-rename-board="${board.id}" aria-label="Rename ${escapeAttr(board.name)}" title="Rename board">${icon("pencil")}</button>
-        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="Delete board">${icon("trash")}</button>
+        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="${deletable ? "Delete board" : "Move or create another Inbox before deleting this board"}" ${deletable ? "" : "disabled"}>${icon("trash")}</button>
       </div>
     </div>`;
 }
@@ -4435,7 +4436,7 @@ function openWorkspaceListDeleteDialog(listID) {
 }
 
 function openBoardDeleteDialog(boardID) {
-  if (!state.boards.some(item => item.id === boardID)) return;
+  if (!state.boards.some(item => item.id === boardID) || !boardCanBeDeleted(boardID)) return;
   state.workspaceListDialog = "delete-board";
   state.workspaceListDialogListID = "";
   state.workspaceListDialogName = "";
@@ -4666,9 +4667,19 @@ async function renameBoard(id, name) {
 
 async function deleteBoard(id) {
   const board = state.boards.find(item => item.id === id);
-  if (!board || state.workspaceListPending) return false;
+  if (!board || !boardCanBeDeleted(id) || state.workspaceListPending) return false;
   const sessionVersion = authVersion;
   const userID = state.me?.id;
+  const startedRouteVersion = routeVersion;
+  const routeIsCurrent = () => startedRouteVersion === routeVersion;
+  const clearCommittedDialog = ({ remove = false } = {}) => {
+    if (state.workspaceListDialog !== "delete-board" || state.workspaceListDialogBoardID !== id) return;
+    state.workspaceListPending = false;
+    state.workspaceListDialog = "";
+    state.workspaceListDialogBoardID = "";
+    state.workspaceListDialogError = "";
+    if (remove) globalThis.document?.querySelector?.(".workspace-list-dialog-overlay")?.remove();
+  };
   state.workspaceListPending = true;
   state.workspaceListDialogError = "";
   render();
@@ -4677,6 +4688,10 @@ async function deleteBoard(id) {
     await api.del(`/api/v1/boards/${id}`);
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    if (!routeIsCurrent()) {
+      clearCommittedDialog({ remove: true });
+      return false;
+    }
     state.workspaceListPending = false;
     state.workspaceListDialogError = err.message;
     render();
@@ -4684,43 +4699,71 @@ async function deleteBoard(id) {
     return false;
   }
   if (!sessionIsCurrent(sessionVersion, userID)) return false;
-  state.workspaceListPending = false;
-  state.workspaceListDialog = "";
-  state.workspaceListDialogBoardID = "";
-  state.workspaceListDialogError = "";
-  state.selectedTask = null;
-  state.board = null;
-  try {
-    if (!await loadBoards()) return false;
-  } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID)) return false;
-    state.error = `The board was deleted, but Slate could not refresh: ${err.message}`;
-    render();
-    return false;
+  const deletedListIDs = new Set(state.workspaceLists.filter(list => list.boardId === id).map(list => list.id));
+  const belongsToDeletedBoard = task => task.boardId === id || deletedListIDs.has(task.bucketId);
+  const cachedAgentTasks = [
+    ...(state.agentWorkPage?.items || []),
+    ...["ready", "working", "review", "recentlyCompleted"].flatMap(group => state.agentDetail?.work?.[group] || []),
+  ].filter(belongsToDeletedBoard);
+  const reconciledAgentTaskIDs = new Set();
+  for (const task of cachedAgentTasks) {
+    if (reconciledAgentTaskIDs.has(task.id)) continue;
+    reconciledAgentTaskIDs.add(task.id);
+    reconcileAgentTaskCaches(task, { deleted: true });
   }
-  if (!sessionIsCurrent(sessionVersion, userID)) return false;
-  if (!state.board) {
-    try {
-      const next = await api.post("/api/v1/boards", { name: "Today", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
-      if (!sessionIsCurrent(sessionVersion, userID)) return false;
-      await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Inbox", isInbox: true });
-      if (!sessionIsCurrent(sessionVersion, userID)) return false;
-      await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Focus" });
-      if (!sessionIsCurrent(sessionVersion, userID)) return false;
-      if (!await loadBoards(next.id)) return false;
-    } catch (err) {
-      if (!sessionIsCurrent(sessionVersion, userID)) return false;
-      const message = `The board was deleted, but Slate could not create a replacement: ${err.message}`;
+  const deletedTasks = [...state.workspaceTasks, ...state.selectedSubtasks].filter(belongsToDeletedBoard);
+  workspaceListVersion += 1;
+  state.boards = state.boards.filter(board => board.id !== id);
+  state.workspaceLists = state.workspaceLists.filter(list => list.boardId !== id);
+  state.workspaceTasks = state.workspaceTasks.filter(task => !belongsToDeletedBoard(task));
+  state.selectedSubtasks = state.selectedSubtasks.filter(task => !belongsToDeletedBoard(task));
+  for (const task of [...deletedTasks, ...cachedAgentTasks]) {
+    delete state.workspaceReviewKinds[task.id];
+    delete state.taskDetailDrafts[task.id];
+  }
+  clearCommittedDialog({ remove: !routeIsCurrent() });
+  if (state.selectedTask && belongsToDeletedBoard(state.selectedTask)) state.selectedTask = null;
+  if (state.board?.id === id) state.board = null;
+  if (!routeIsCurrent()) {
+    const currentRoute = parseRoute(location.pathname);
+    if (["board", "board-settings"].includes(currentRoute.name) && currentRoute.boardId === id) {
       await navigate(TASKS_PATH, { replace: true });
-      if (!sessionIsCurrent(sessionVersion, userID)) return false;
-      state.error = message;
-      render();
-      return false;
     }
+    return true;
   }
-  if (!sessionIsCurrent(sessionVersion, userID)) return false;
+  try {
+    if (!await loadBoards(undefined, startedRouteVersion)) return false;
+    if (!await loadAgents(false, sessionVersion, userID, startedRouteVersion)) return false;
+    const route = parseRoute(location.pathname);
+    if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) {
+      const loaded = await loadAgentDetail(route.agentId, {
+        includeWorkPage: route.name === "agent-work",
+        page: route.name === "agent-work" ? workPageFromLocation() : 1,
+        sessionVersion,
+        userID,
+        expectedRouteVersion: startedRouteVersion,
+      });
+      if (!loaded) return false;
+    }
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+    const message = `The board was deleted, but Slate could not refresh all views: ${err.message}`;
+    state.error = message;
+    if (["agent-detail", "agent-work", "agent-settings"].includes(parseRoute(location.pathname).name)) {
+      state.agentTaskRefreshError = message;
+      state.agentTaskMutationError = message;
+    }
+    render();
+    return true;
+  }
+  if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+  if (!state.board) return false;
   render();
   return true;
+}
+
+function boardCanBeDeleted(boardID) {
+  return state.workspaceLists.some(list => list.isInbox && list.boardId !== boardID);
 }
 
 async function bindSettings() {
@@ -5911,17 +5954,13 @@ function isDraggedTaskChild(taskID) {
 function bucketDropIndex(event) {
   const buckets = [...document.querySelectorAll(".grid [data-bucket]:not(.dragging)")];
   const rects = buckets.map(bucket => bucket.getBoundingClientRect());
-  return bucketDropIndexForRects(rects, event.clientX, event.clientY, window.matchMedia("(max-width: 900px)").matches);
+  return bucketDropIndexForRects(rects, event.clientX);
 }
 
-function bucketDropIndexForRects(rects, x, y, singleColumn) {
+function bucketDropIndexForRects(rects, x) {
   for (let i = 0; i < rects.length; i++) {
     const rect = rects[i];
-    if (singleColumn) {
-      if (y < rect.top + rect.height / 2) return i;
-      continue;
-    }
-    if (y < rect.top || (y <= rect.bottom && x < rect.left + rect.width / 2)) return i;
+    if (x < rect.left + rect.width / 2) return i;
   }
   return rects.length;
 }
