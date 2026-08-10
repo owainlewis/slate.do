@@ -3607,7 +3607,16 @@ function bindWorkspaceDetail(options = {}) {
         kind: state.cardEntryKind,
         body,
       }, { headers: { "Idempotency-Key": state.cardEntryAttemptKey } });
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        const currentRoute = parseRoute(location.pathname);
+        const currentAgentSurface = boundAgentID
+          && ["agent-detail", "agent-work"].includes(currentRoute.name)
+          && currentRoute.agentId === boundAgentID;
+        if (entry.kind === "output" && (boundRouteVersion === routeVersion || currentAgentSurface)) {
+          await refreshCurrentTaskSurface();
+        }
+        return;
+      }
       state.selectedEntries = [...state.selectedEntries, entry];
       state.cardEntryDraft = "";
       state.cardEntryAttemptKey = "";
@@ -3615,7 +3624,12 @@ function bindWorkspaceDetail(options = {}) {
       if (entry.kind === "output") {
         state.selectedTask = { ...state.selectedTask, status: "needs_review", done: false };
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, status: "needs_review", done: false } : item);
-        state.workspaceRefreshOnDetailClose = true;
+        const currentRoute = parseRoute(location.pathname);
+        if (boundAgentID && ["agent-detail", "agent-work"].includes(currentRoute.name) && currentRoute.agentId === boundAgentID) {
+          state.agentRefreshOnDetailClose = boundAgentID;
+        } else {
+          state.workspaceRefreshOnDetailClose = true;
+        }
       }
       render();
       document.querySelector("#card-entry-body")?.focus();

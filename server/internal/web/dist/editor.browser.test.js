@@ -35,7 +35,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], taskQueries: [], created: [], createdLists: [], patches: [], requests: [], hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextCompletion: false, delayNextCompletion: false, releaseCompletion: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -102,6 +102,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       state.entries[task.id] = [...(state.entries[task.id] || []), entry];
       if (attemptKey) state.entryAttempts[attemptKey] = entry;
       if (entry.kind === "output") Object.assign(task, { status: "needs_review", done: false, reviewReason: "output" });
+      if (state.delayNextEntry) {
+        state.delayNextEntry = false;
+        await new Promise(resolve => { state.releaseEntry = resolve; });
+      }
       if (state.failNextEntryResponse) {
         state.failNextEntryResponse = false;
         return json(response, { error: "Response was lost" }, 500);
@@ -505,6 +509,28 @@ test("a lost conversation response retries without duplicating the entry", async
   await page.locator(".card-entry").filter({ hasText: "One durable comment" }).waitFor();
   assert.equal(state.entries["task-parent"].length, 1);
   assert.equal(Object.keys(state.entryAttempts).length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an output committed while Agent Work detail closes still refreshes the card into Review", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByRole("button", { name: "Output", exact: true }).click();
+  await page.locator("#card-entry-body").fill("Draft ready for review");
+  state.delayNextEntry = true;
+  await page.getByRole("button", { name: "Add output", exact: true }).click();
+  await waitFor(() => typeof state.releaseEntry === "function");
+
+  const workRequestsBeforeClose = state.requests.filter(request => request === "GET /api/v1/agents/agent-research/work?page=2&pageSize=50").length;
+  await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
+  state.releaseEntry();
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/agents/agent-research/work?page=2&pageSize=50").length > workRequestsBeforeClose);
+  await page.getByRole("button", { name: /Publish task-first agents video.*Review/ }).waitFor();
+
+  assert.equal(state.tasks.find(task => task.id === "task-parent").reviewReason, "output");
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
   assert.deepEqual(pageErrors, []);
 });
 
