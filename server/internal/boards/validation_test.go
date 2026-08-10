@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidStatus(t *testing.T) {
-	for _, status := range []string{StatusQueued, StatusWorking, StatusNeedsReview, StatusDone} {
+	for _, status := range []string{StatusNew, StatusQueued, StatusWorking, StatusNeedsReview, StatusDone} {
 		if !validStatus(status) {
 			t.Fatalf("%s should be valid", status)
 		}
@@ -18,7 +18,7 @@ func TestValidStatus(t *testing.T) {
 }
 
 func TestApplyTaskStatusAllowsEveryHumanTransition(t *testing.T) {
-	for _, status := range []string{StatusQueued, StatusWorking, StatusNeedsReview, StatusDone} {
+	for _, status := range []string{StatusNew, StatusQueued, StatusWorking, StatusNeedsReview, StatusDone} {
 		task := Task{Kind: KindAction, Status: StatusQueued}
 		if err := applyTaskStatus(&task, status, true); err != nil {
 			t.Fatalf("apply %q: %v", status, err)

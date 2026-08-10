@@ -2,11 +2,11 @@
 
 A card-first control plane for clear thinking and focused human and agent execution.
 
-Slate captures units of intent as cards, organises them into lists, and shows the same cards as a compact list, flow, table, or weekly plan.
+Slate captures units of intent as cards, organises them into lists, and shows the same cards as a board, workflow, table, or weekly plan.
 
 ## Product
 
-The card is the core unit. A card can be a task, goal, project, idea, decision, or agent prompt. New cards enter Inbox, lists provide context, and every card can move through Open, Working, Review, and Done.
+The card is the core unit. A card can be a task, goal, project, idea, decision, or agent prompt. New cards enter Inbox, lists provide context, and every card can move through New, Ready, In Progress, Review, and Done.
 
 Cards can have one level of child cards for shared human and agent work. Agents execute assigned cards through the CLI and return comments or outputs to the card.
 
@@ -23,7 +23,7 @@ Slate now has an admin-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Admin sign in with a seeded admin.
-- Inbox, account-wide cards, Kanban grouped by status or list, Table, filters, planned dates, Week, Today, Review, and theme.
+- Inbox, account-wide cards, Board grouped by list, Flow grouped by status, Table, filters, planned dates, Week, Today, Review, and theme.
 - One level of child cards with independent owner and workflow state.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.

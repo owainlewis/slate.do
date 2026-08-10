@@ -284,7 +284,7 @@ func (s *Store) ArchiveAgent(ctx context.Context, userID string, agentID string,
 		WHERE b.user_id = $1
 			AND t.assignee_agent_id = $2
 			AND NOT t.done
-			AND t.status IN ('queued', 'working')
+			AND t.status IN ('new', 'queued', 'working')
 		FOR UPDATE OF t
 	`, userID, agentID)
 	if err != nil {
@@ -296,9 +296,12 @@ func (s *Store) ArchiveAgent(ctx context.Context, userID string, agentID string,
 			rows.Close()
 			return ArchiveConflict{}, err
 		}
-		if status == "working" {
+		switch status {
+		case "new":
+			conflict.New++
+		case "working":
 			conflict.Working++
-		} else {
+		default:
 			conflict.Ready++
 		}
 	}
@@ -307,19 +310,22 @@ func (s *Store) ArchiveAgent(ctx context.Context, userID string, agentID string,
 		return ArchiveConflict{}, err
 	}
 	rows.Close()
-	if (conflict.Ready > 0 || conflict.Working > 0) && !unassignOpen {
+	if (conflict.New > 0 || conflict.Ready > 0 || conflict.Working > 0) && !unassignOpen {
 		return conflict, &ArchiveConflictError{Counts: conflict}
 	}
 	if unassignOpen {
 		if _, err := tx.Exec(ctx, `
 			UPDATE tasks t
-			SET assignee_agent_id = NULL, status = 'queued', done = false, updated_at = now()
+			SET assignee_agent_id = NULL,
+				status = CASE WHEN t.status = 'working' THEN 'queued' ELSE t.status END,
+				done = false,
+				updated_at = now()
 			FROM boards b
 			WHERE b.id = t.board_id
 				AND b.user_id = $1
 				AND t.assignee_agent_id = $2
 				AND NOT t.done
-				AND t.status IN ('queued', 'working')
+				AND t.status IN ('new', 'queued', 'working')
 		`, userID, agentID); err != nil {
 			return ArchiveConflict{}, err
 		}

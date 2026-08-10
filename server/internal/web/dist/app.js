@@ -184,8 +184,7 @@ const state = {
   workspaceTasks: [],
   workspaceScope: "all",
   workspaceListID: "",
-  workspaceView: "table",
-  workspaceKanbanGroup: "status",
+  workspaceView: "board",
   workspaceNextCursor: "",
   workspaceLoading: false,
   workspaceRefreshOnDetailClose: false,
@@ -206,8 +205,9 @@ const DEFAULT_MAX_BOARDS = 5;
 const DEFAULT_MAX_LISTS_PER_BOARD = 9;
 const DEFAULT_MAX_AGENTS = 5;
 const FLOW_STATES = [
-  { value: "queued", label: "Open" },
-  { value: "working", label: "Working" },
+  { value: "new", label: "New" },
+  { value: "queued", label: "Ready" },
+  { value: "working", label: "In Progress" },
   { value: "needs_review", label: "Review" },
   { value: "done", label: "Done" },
 ];
@@ -771,9 +771,9 @@ async function loadWorkspace(route, expectedRouteVersion) {
   state.workspaceScope = route.scope || "all";
   state.workspaceListID = route.listId || "";
   const requestedView = new URLSearchParams(location.search).get("view");
-  if (route.scope !== "week" && ["flow", "table"].includes(requestedView)) state.workspaceView = requestedView;
+  if (route.scope !== "week" && ["board", "flow", "table"].includes(requestedView)) state.workspaceView = requestedView;
   const requestedGroup = new URLSearchParams(location.search).get("group");
-  if (["status", "list"].includes(requestedGroup)) state.workspaceKanbanGroup = requestedGroup;
+  if (requestedView === "flow" && requestedGroup === "list") state.workspaceView = "board";
   state.workspaceLoading = false;
   if (route.scope === "list" && !state.workspaceLists.some(list => list.id === route.listId)) return false;
   return true;
@@ -884,8 +884,7 @@ function resetAuthenticatedState() {
   state.workspaceTasks = [];
   state.workspaceScope = "all";
   state.workspaceListID = "";
-  state.workspaceView = "table";
-  state.workspaceKanbanGroup = "status";
+  state.workspaceView = "board";
   state.workspaceNextCursor = "";
   state.workspaceLoading = false;
   state.workspaceRefreshOnDetailClose = false;
@@ -991,15 +990,15 @@ function boardWithWorkspaceListCapacity() {
   return state.boards.find(board => workspaceListCount(board.id) < limit) || null;
 }
 
-async function createWorkspaceList(name, boardID) {
+async function createWorkspaceList(name) {
   if (state.workspaceListPending) return false;
   name = String(name || "").trim();
   if (!name) return false;
   state.workspaceListDialogName = name;
-  state.workspaceListDialogBoardID = boardID;
-  const board = state.boards.find(item => item.id === boardID && workspaceListCount(item.id) < state.maxListsPerBoard);
+  const board = boardWithWorkspaceListCapacity();
+  state.workspaceListDialogBoardID = board?.id || "";
   if (!board) {
-    state.workspaceListDialogError = "Choose a board with room for another list.";
+    state.workspaceListDialogError = "No room for another list.";
     render();
     return false;
   }
@@ -1456,17 +1455,17 @@ function landingHTML() {
         <section class="landing-preview" aria-label="Slate preview">
           <div class="tour-tabs rise" style="--d:2" role="tablist" aria-label="Slate views">
             <button class="tour-tab on" type="button" data-tour="lists" role="tab" aria-selected="true">Lists</button>
-            <button class="tour-tab" type="button" data-tour="flow" role="tab" aria-selected="false">Kanban</button>
+            <button class="tour-tab" type="button" data-tour="flow" role="tab" aria-selected="false">Flow</button>
             <button class="tour-tab" type="button" data-tour="week" role="tab" aria-selected="false">Week</button>
           </div>
           <div class="tour-frame" data-reveal>
             <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: flexible contexts containing cards">
-            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Kanban view: cards grouped by status or list">
+            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Flow view: cards grouped by status">
             <img class="tour-img" data-tour-img="week" src="/app-week.jpg" alt="Slate Week view: cards laid out across the days of the week">
           </div>
           <p class="preview-caption" data-reveal>
             <span class="tour-caption on" data-tour-caption="lists">Use a list as a project, goal, area, or any context that helps you think.</span>
-            <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same four states.</span>
+            <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same five states.</span>
             <span class="tour-caption" data-tour-caption="week">See the week before you're already in it.</span>
           </p>
         </section>
@@ -1550,10 +1549,13 @@ function appHTML() {
     ${statusNoticeHTML(state.moveNotice)}
     <div class="workspace-viewbar ${["week", "review"].includes(state.workspaceScope) ? "week-only" : ""}">
       ${["week", "review"].includes(state.workspaceScope) ? "" : `<div class="workspace-tabs" role="tablist" aria-label="Card view">
-        ${["flow", "table"].map(view => `<button type="button" id="workspace-tab-${view}" data-workspace-view="${view}" class="${state.workspaceView === view ? "on" : ""}" role="tab" tabindex="${state.workspaceView === view ? "0" : "-1"}" aria-selected="${state.workspaceView === view}" aria-controls="workspace-task-panel">${view === "flow" ? icon("kanban") : icon("columns")}<span>${view === "flow" ? "Kanban" : "Table"}</span></button>`).join("")}
+        ${[
+          { value: "board", label: "Board", icon: "kanban" },
+          { value: "flow", label: "Flow", icon: "columns" },
+          { value: "table", label: "Table", icon: "rows" },
+        ].map(view => `<button type="button" id="workspace-tab-${view.value}" data-workspace-view="${view.value}" class="${state.workspaceView === view.value ? "on" : ""}" role="tab" tabindex="${state.workspaceView === view.value ? "0" : "-1"}" aria-selected="${state.workspaceView === view.value}" aria-controls="workspace-task-panel">${icon(view.icon)}<span>${view.label}</span></button>`).join("")}
       </div>`}
       <div class="workspace-view-actions">
-        ${state.workspaceView === "flow" && !["week", "review"].includes(state.workspaceScope) ? `<div class="workspace-kanban-group" role="group" aria-label="Group Kanban by"><span>Group by</span><button type="button" data-kanban-group="status" aria-pressed="${state.workspaceKanbanGroup === "status"}">Status</button><button type="button" data-kanban-group="list" aria-pressed="${state.workspaceKanbanGroup === "list"}">List</button></div>` : ""}
         <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
       </div>
     </div>
@@ -1562,7 +1564,8 @@ function appHTML() {
       ${state.workspaceLoading ? `<div class="workspace-empty">Loading cards…</div>`
         : state.workspaceScope === "week" ? workspaceWeekHTML(tasks)
           : state.workspaceScope === "review" ? workspaceReviewHTML(tasks)
-          : state.workspaceView === "flow" ? workspaceFlowHTML(tasks)
+          : state.workspaceView === "board" ? workspaceBoardHTML(tasks)
+            : state.workspaceView === "flow" ? workspaceFlowHTML(tasks)
             : workspaceTableHTML(tasks)}
     </div>
     ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more cards"}</button>` : ""}`;
@@ -1629,24 +1632,31 @@ function workspaceTableHTML(tasks) {
   </table>`;
 }
 
-function workspaceFlowHTML(tasks) {
-  const byList = state.workspaceKanbanGroup === "list";
+function workspaceBoardHTML(tasks) {
   const visibleListIDs = new Set(tasks.map(task => task.bucketId));
-  let groups = byList
-    ? state.workspaceLists.filter(list => visibleListIDs.has(list.id)
-      || state.workspaceScope === "all"
-      || (state.workspaceScope === "list" && list.id === state.workspaceListID)
-      || (state.workspaceScope === "inbox" && list.isInbox))
-      .map(list => ({ value: list.id, label: workspaceListLabel(list) }))
-    : FLOW_STATES;
-  if (byList && state.workspaceScope === "list") {
+  let groups = state.workspaceLists.filter(list => visibleListIDs.has(list.id)
+    || state.workspaceScope === "all"
+    || (state.workspaceScope === "list" && list.id === state.workspaceListID)
+    || (state.workspaceScope === "inbox" && list.isInbox))
+    .map(list => ({ value: list.id, label: workspaceListLabel(list) }));
+  if (state.workspaceScope === "list") {
     groups = groups.filter(group => group.value === state.workspaceListID);
   }
-  const card = task => `<article class="workspace-flow-card" draggable="${byList && task.parentTaskId ? "false" : "true"}" data-task="${task.id}"><button data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(byList ? `${statusLabel(task.status)} · ${workspaceTaskOwner(task)}` : workspaceTaskContext(task, true))}</small></button></article>`;
-  return `<section class="workspace-flow ${byList ? "grouped-by-list" : "grouped-by-status"}">${groups.map(group => {
-    const items = tasks.filter(task => byList ? task.bucketId === group.value : task.status === group.value);
-    const dropAttribute = byList ? `data-kanban-list="${escapeAttr(group.value)}"` : `data-flow-status="${escapeAttr(group.value)}"`;
-    return `<section class="workspace-flow-column" ${dropAttribute}><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag cards here</p>`}</div></section>`;
+  const card = task => {
+    const parent = task.parentTaskId ? `Child of ${task.parentTaskTitle || "parent card"} · ` : "";
+    return `<article class="workspace-flow-card" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(`${parent}${statusLabel(task.status)} · ${workspaceTaskOwner(task)}`)}</small></button></article>`;
+  };
+  return `<section class="workspace-flow grouped-by-list">${groups.map(group => {
+    const items = tasks.filter(task => task.bucketId === group.value);
+    return `<section class="workspace-flow-column" data-kanban-list="${escapeAttr(group.value)}"><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag cards here</p>`}</div></section>`;
+  }).join("")}</section>`;
+}
+
+function workspaceFlowHTML(tasks) {
+  const card = task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task, true))}</small></button></article>`;
+  return `<section class="workspace-flow grouped-by-status">${FLOW_STATES.map(group => {
+    const items = tasks.filter(task => task.status === group.value);
+    return `<section class="workspace-flow-column" data-flow-status="${escapeAttr(group.value)}"><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag cards here</p>`}</div></section>`;
   }).join("")}</section>`;
 }
 
@@ -1675,7 +1685,6 @@ function workspaceListDialogHTML() {
   if (!state.workspaceListDialog) return "";
   const deleting = state.workspaceListDialog === "delete";
   const list = state.workspaceLists.find(item => item.id === state.workspaceListDialogListID);
-  const boards = state.boards.filter(board => workspaceListCount(board.id) < state.maxListsPerBoard);
   if (deleting && (!list || list.isInbox)) return "";
   return `<div class="detail-overlay workspace-list-dialog-overlay">
     <section class="agent-lifecycle-dialog workspace-list-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-list-dialog-title" tabindex="-1">
@@ -1684,8 +1693,7 @@ function workspaceListDialogHTML() {
         <div><h2 id="workspace-list-dialog-title">${deleting ? `Delete ${escapeHTML(list.name)}?` : "New list"}</h2><p>${deleting ? "Cards in this list will also be permanently deleted. This cannot be undone." : "Lists are flexible containers for related cards."}</p></div>
       </header>
       <form id="workspace-list-dialog-form">
-        ${deleting ? "" : `<label class="workspace-list-dialog-field"><span>Name</span><input id="workspace-list-name" name="name" value="${escapeAttr(state.workspaceListDialogName)}" maxlength="100" autocomplete="off" required ${state.workspaceListPending ? "disabled" : ""}></label>
-          <label class="workspace-list-dialog-field"><span>Board</span><select id="workspace-list-board" name="boardId" required ${state.workspaceListPending ? "disabled" : ""}>${boards.map(board => `<option value="${escapeAttr(board.id)}" ${state.workspaceListDialogBoardID === board.id ? "selected" : ""}>${escapeHTML(board.name)}</option>`).join("")}</select></label>`}
+        ${deleting ? "" : `<label class="workspace-list-dialog-field"><span>Name</span><input id="workspace-list-name" name="name" value="${escapeAttr(state.workspaceListDialogName)}" maxlength="100" autocomplete="off" required ${state.workspaceListPending ? "disabled" : ""}></label>`}
         <p class="status-error" role="alert">${escapeHTML(state.workspaceListDialogError)}</p>
         <footer><button class="secondary" id="cancel-workspace-list-dialog" type="button" ${state.workspaceListPending ? "disabled" : ""}>Cancel</button><button class="${deleting ? "danger" : "primary"}" id="confirm-workspace-list-dialog" type="submit" ${state.workspaceListPending ? "disabled" : ""}>${state.workspaceListPending ? (deleting ? "Deleting…" : "Creating…") : (deleting ? "Delete list" : "Create list")}</button></footer>
       </form>
@@ -1694,16 +1702,18 @@ function workspaceListDialogHTML() {
 }
 
 function workspaceListLabel(list) {
-  const boardIDs = new Set(state.workspaceLists.map(item => item.boardId).filter(Boolean));
-  const labelFor = item => {
-    const name = item.isInbox ? "Inbox" : item.name;
-    if (boardIDs.size < 2) return name;
-    const board = state.boards.find(candidate => candidate.id === item.boardId);
-    return board?.name ? `${board.name} / ${name}` : name;
-  };
-  const label = labelFor(list);
-  const duplicate = state.workspaceLists.some(item => item.id !== list.id && labelFor(item) === label);
-  return duplicate ? `${label} (${list.id})` : label;
+  const name = list.isInbox ? "Inbox" : list.name;
+  const duplicates = state.workspaceLists.filter(item => (item.isInbox ? "Inbox" : item.name) === name);
+  if (duplicates.length < 2) return name;
+  const duplicateBoardIDs = new Set(duplicates.map(item => item.boardId).filter(Boolean));
+  const board = state.boards.find(candidate => candidate.id === list.boardId);
+  const qualified = duplicateBoardIDs.size > 1 && board?.name ? `${board.name} / ${name}` : name;
+  const sameQualified = duplicates.filter(item => {
+    const itemBoard = state.boards.find(candidate => candidate.id === item.boardId);
+    const itemQualified = duplicateBoardIDs.size > 1 && itemBoard?.name ? `${itemBoard.name} / ${name}` : name;
+    return itemQualified === qualified;
+  });
+  return sameQualified.length > 1 ? `${qualified} (${list.id})` : qualified;
 }
 
 function workspaceDetailHTML(task) {
@@ -2050,7 +2060,7 @@ function taskHTML(task) {
 }
 
 function taskStateBadgeHTML(task) {
-  if (task.status === "queued" || task.status === "done") return "";
+  if (task.status === "new" || task.status === "queued" || task.status === "done") return "";
   return `<span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span>`;
 }
 
@@ -2183,7 +2193,7 @@ function statusOptionsHTML(selected) {
 }
 
 function statusLabel(status) {
-  return FLOW_STATES.find(item => item.value === status)?.label || "Open";
+  return FLOW_STATES.find(item => item.value === status)?.label || "New";
 }
 
 function footerHTML(board, todayMode) {
@@ -2469,6 +2479,13 @@ function agentLifecycleConfirmHTML() {
   const action = state.agentLifecycleConfirm;
   const pending = Boolean(state.agentLifecyclePending);
   const conflict = state.agentArchiveConflict;
+  const conflictSummary = conflict
+    ? [
+      formatCount(conflict.new, "New card", "New cards"),
+      formatCount(conflict.ready, "Ready card", "Ready cards"),
+      formatCount(conflict.working, "In Progress card", "In Progress cards"),
+    ].filter((label, index) => [conflict.new, conflict.ready, conflict.working][index] > 0).join(", ")
+    : "";
   const config = {
     rotate: {
       title: agentConnectionState(agent) === "Connected" ? "Rotate credential?" : "Create credential?",
@@ -2483,10 +2500,10 @@ function agentLifecycleConfirmHTML() {
       confirm: "Revoke credential",
     },
     archive: {
-      title: conflict ? "Open work is still assigned." : "Archive this agent?",
+      title: conflict ? "Active work is still assigned." : "Archive this agent?",
       body: conflict
-        ? `${formatCount(conflict.ready, "Open card", "Open cards")} and ${formatCount(conflict.working, "Working card", "Working cards")} must be unassigned. Review and Done history will remain attached.`
-        : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for Open and Working cards.",
+        ? `${conflictSummary} must be unassigned. Review and Done history will remain attached.`
+        : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for New, Ready, and In Progress cards.",
       confirm: conflict ? "Unassign open work and archive" : "Archive agent",
     },
     restore: {
@@ -2529,7 +2546,7 @@ function agentOverviewHTML(agent) {
         <div class="agent-no-current">${icon("inboxTray")}<p>${escapeHTML(agent.displayName)} has no active work.</p></div>`}
     </section>
     <div class="agent-work-groups">
-      ${agentWorkSectionHTML("Open", "Cards assigned and ready to pick up.", work.ready, work.totals?.ready, "queued")}
+      ${agentWorkSectionHTML("Ready", "Cards assigned and ready to pick up.", work.ready, work.totals?.ready, "queued")}
       ${agentWorkSectionHTML("Review", "Work waiting for human review.", work.review, work.totals?.review, "needs_review")}
       ${agentWorkSectionHTML("Recently completed", "Current completed tasks, sorted by their latest update. This is not run history.", work.recentlyCompleted, work.totals?.completed, "done")}
     </div>
@@ -2571,8 +2588,9 @@ function agentWorkPageHTML(agent) {
     return `<section class="agents-state agent-detail-state"><h2>Work couldn’t be loaded.</h2><button class="secondary" id="retry-agent-detail" type="button">Try again</button></section>`;
   }
   const groups = [
-    ["Open", "queued"],
-    ["Working", "working"],
+    ["New", "new"],
+    ["Ready", "queued"],
+    ["In Progress", "working"],
     ["Review", "needs_review"],
     ["Completed", "done"],
   ];
@@ -3065,6 +3083,7 @@ function bindWorkspace() {
     const activationVersion = ++workspaceViewActivationVersion;
     const query = new URLSearchParams(location.search);
     query.set("view", view);
+    query.delete("group");
     await navigate(`${location.pathname}?${query}`);
     if (activationVersion !== workspaceViewActivationVersion) return;
     document.querySelector(`[data-workspace-view="${view}"][aria-selected="true"]`)?.focus();
@@ -3082,14 +3101,6 @@ function bindWorkspace() {
       activateView(viewTabs[targetIndex]);
     });
   });
-  document.querySelectorAll("[data-kanban-group]").forEach(element => element.addEventListener("click", async () => {
-    const group = element.dataset.kanbanGroup;
-    const query = new URLSearchParams(location.search);
-    query.set("view", "flow");
-    query.set("group", group);
-    await navigate(`${location.pathname}?${query}`);
-    document.querySelector(`[data-kanban-group="${group}"]`)?.focus();
-  }));
   document.querySelector("#workspace-filter-toggle")?.addEventListener("click", () => {
     state.workspaceFiltersOpen = !state.workspaceFiltersOpen;
     render();
@@ -3099,7 +3110,6 @@ function bindWorkspace() {
     const data = new FormData(event.currentTarget);
     const query = new URLSearchParams();
     if (state.workspaceScope !== "week" && state.workspaceView !== "table") query.set("view", state.workspaceView);
-    if (state.workspaceView === "flow") query.set("group", state.workspaceKanbanGroup);
     for (const name of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
       const value = String(data.get(name) || "").trim();
       if (value) query.set(name, value);
@@ -3109,7 +3119,6 @@ function bindWorkspace() {
   document.querySelector("#clear-workspace-filters")?.addEventListener("click", () => {
     const query = new URLSearchParams();
     if (state.workspaceScope !== "week" && state.workspaceView !== "table") query.set("view", state.workspaceView);
-    if (state.workspaceView === "flow") query.set("group", state.workspaceKanbanGroup);
     navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
   });
   document.querySelector("#new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
@@ -3122,7 +3131,8 @@ function agentWorkGroupForTask(task) {
   if (task.done || task.status === "done") return "recentlyCompleted";
   if (task.status === "working") return "working";
   if (task.status === "needs_review") return "review";
-  return "ready";
+  if (task.status === "queued") return "ready";
+  return "";
 }
 
 function taskWithResolvedLocation(task) {
@@ -3227,7 +3237,7 @@ function taskDraftFromCurrentForm(task) {
   return {
     title: value("title"),
     description: value("description"),
-    status: value("status") || "queued",
+    status: value("status") || task.status || "new",
     bucketId: task.parentTaskId ? task.bucketId : value("bucketId"),
     priority: value("priority"),
     assigneeAgentId: value("assigneeAgentId"),
@@ -4266,9 +4276,6 @@ function bindWorkspaceListDialog() {
   document.querySelector("#workspace-list-name")?.addEventListener("input", event => {
     state.workspaceListDialogName = event.currentTarget.value;
   });
-  document.querySelector("#workspace-list-board")?.addEventListener("change", event => {
-    state.workspaceListDialogBoardID = event.currentTarget.value;
-  });
   overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
   overlay.addEventListener("keydown", event => {
     if (event.key === "Escape") {
@@ -4301,8 +4308,7 @@ function bindWorkspaceListDialog() {
     }
     const data = new FormData(form);
     state.workspaceListDialogName = String(data.get("name") || "");
-    state.workspaceListDialogBoardID = String(data.get("boardId") || "");
-    await createWorkspaceList(data.get("name"), data.get("boardId"));
+    await createWorkspaceList(data.get("name"));
   });
 }
 
@@ -4930,6 +4936,7 @@ async function runAgentLifecycleMutation() {
     state.agentLifecyclePending = "";
     if (action === "archive" && err.status === 409 && err.code === "agent_open_work") {
       state.agentArchiveConflict = {
+        new: Number(err.data?.conflict?.new || 0),
         ready: Number(err.data?.conflict?.ready || 0),
         working: Number(err.data?.conflict?.working || 0),
       };
@@ -5993,7 +6000,7 @@ function todayActionCount(board) {
 }
 
 function statusCounts(board) {
-  const counts = { queued: 0, working: 0, needs_review: 0, done: 0 };
+  const counts = { new: 0, queued: 0, working: 0, needs_review: 0, done: 0 };
   for (const { task } of allTasks(board)) {
     if (Object.hasOwn(counts, task.status)) counts[task.status] += 1;
   }

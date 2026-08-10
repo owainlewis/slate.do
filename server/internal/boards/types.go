@@ -4,6 +4,7 @@ import "time"
 
 const (
 	KindAction        = "action"
+	StatusNew         = "new"
 	StatusQueued      = "queued"
 	StatusWorking     = "working"
 	StatusNeedsReview = "needs_review"

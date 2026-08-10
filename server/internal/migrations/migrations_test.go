@@ -1133,3 +1133,51 @@ func TestNeutralItemsMigrationsPreserveExistingTasksAsActions(t *testing.T) {
 		t.Fatal("parent_task_id should be removed")
 	}
 }
+
+func TestNewCardStatusMigrationAddsCaptureStateAndDefault(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tasks (
+			status text NOT NULL DEFAULT 'queued',
+			CONSTRAINT tasks_status_check CHECK (status IN ('queued', 'working', 'needs_review', 'done'))
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("037_new_card_status.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var status string
+	if err := tx.QueryRow(ctx, "INSERT INTO tasks DEFAULT VALUES RETURNING status").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "new" {
+		t.Fatalf("default status = %q, want new", status)
+	}
+	for _, value := range []string{"new", "queued", "working", "needs_review", "done"} {
+		if _, err := tx.Exec(ctx, "INSERT INTO tasks (status) VALUES ($1)", value); err != nil {
+			t.Fatalf("insert status %q: %v", value, err)
+		}
+	}
+}

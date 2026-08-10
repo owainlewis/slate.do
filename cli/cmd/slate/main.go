@@ -129,7 +129,7 @@ items per list. Use "tasks list --done true" to page older completed work.
   slate tasks delete <task-id>
   slate tasks reorder --list <list-id> <task-id>...
   slate tasks claim <task-id>
-  slate tasks status <task-id> queued|working|needs_review|done
+  slate tasks status <task-id> new|queued|working|needs_review|done
   slate tasks done <task-id>
 
 "pull" returns open queued tasks. Claim before starting work. Use an empty
@@ -459,10 +459,10 @@ func tasksCmd(c client, args []string) error {
 		return c.sendJSON(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(id)+"/claim", map[string]any{})
 	case "status":
 		if len(args) != 3 {
-			return errors.New("usage: slate tasks status <task-id> queued|working|needs_review|done")
+			return errors.New("usage: slate tasks status <task-id> new|queued|working|needs_review|done")
 		}
 		if !validStatus(args[2]) {
-			return fmt.Errorf("invalid status %q; choose queued, working, needs_review, or done", args[2])
+			return fmt.Errorf("invalid status %q; choose new, queued, working, needs_review, or done", args[2])
 		}
 		if args[2] == "working" {
 			return c.sendJSON(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/claim", map[string]any{})
@@ -607,7 +607,7 @@ func setQuery(q url.Values, key string, value string) {
 
 func validStatus(status string) bool {
 	switch status {
-	case "queued", "working", "needs_review", "done":
+	case "new", "queued", "working", "needs_review", "done":
 		return true
 	default:
 		return false

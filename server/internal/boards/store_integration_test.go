@@ -278,6 +278,10 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
 	if err != nil || len(tasks) != 1 || tasks[0].ID != task.ID {
 		t.Fatalf("assigned queue = %#v, error = %v", tasks, err)
 	}
+	ready := StatusQueued
+	if _, err := store.UpdateTaskForHuman(ctx, ownerID, task.ID, UpdateTaskInput{Status: &ready}); err != nil {
+		t.Fatalf("mark assigned card ready: %v", err)
+	}
 	if _, err := store.ClaimTaskForAgent(ctx, ownerID, otherAgentID, task.ID); !errors.Is(err, ErrTaskUnavailable) {
 		t.Fatalf("other agent claim error = %v", err)
 	}
@@ -1784,6 +1788,10 @@ func TestUnifiedListItemsAndActions(t *testing.T) {
 	if err := store.DeleteTask(ctx, userID, replacement.ID); err != nil {
 		t.Fatal(err)
 	}
+	ready := StatusQueued
+	if _, err := store.UpdateTaskForHuman(ctx, userID, reference.ID, UpdateTaskInput{Status: &ready}); err != nil {
+		t.Fatalf("mark default list item ready: %v", err)
+	}
 	claimed, err := store.ClaimTask(ctx, userID, reference.ID)
 	if err != nil {
 		t.Fatalf("claim default list item: %v", err)
@@ -1830,8 +1838,15 @@ func TestAnyQueuedTaskCanBeClaimed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Description != "Compare the three strongest options." || task.ScheduledDate != "2026-07-13" || task.Status != StatusQueued {
+	if task.Description != "Compare the three strongest options." || task.ScheduledDate != "2026-07-13" || task.Status != StatusNew {
 		t.Fatalf("created task = %#v", task)
+	}
+	if _, err := store.ClaimTask(ctx, userID, task.ID); !errors.Is(err, ErrTaskUnavailable) {
+		t.Fatalf("new task claim error = %v, want ErrTaskUnavailable", err)
+	}
+	ready := StatusQueued
+	if _, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Status: &ready}); err != nil {
+		t.Fatalf("mark task ready: %v", err)
 	}
 
 	tasks, err := store.ListTasks(ctx, userID, TaskFilter{Status: StatusQueued})
@@ -1893,7 +1908,7 @@ func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, status := range []string{StatusWorking, StatusNeedsReview, StatusDone, StatusQueued} {
+	for _, status := range []string{StatusQueued, StatusWorking, StatusNeedsReview, StatusDone, StatusNew} {
 		updated, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Status: &status})
 		if err != nil {
 			t.Fatalf("set %q: %v", status, err)

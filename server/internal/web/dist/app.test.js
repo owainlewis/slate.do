@@ -227,7 +227,7 @@ test("New list chooses a board with capacity and updates account-wide state imme
     state.workspaceListPending = false;
   `, app);
 
-  assert.equal(await app.createWorkspaceList(" Launch plan ", "board-open"), true);
+  assert.equal(await app.createWorkspaceList(" Launch plan "), true);
   const posts = JSON.parse(vm.runInContext(`JSON.stringify(workspaceListPosts)`, app));
   assert.deepEqual(posts, [{ path: "/api/v1/boards/board-open/buckets", input: { name: "Launch plan" } }]);
   assert.equal(vm.runInContext(`state.workspaceLists.find(list => list.id === "list-created").boardId`, app), "board-open");
@@ -261,9 +261,9 @@ test("New list reports exhausted capacity without sending a request", async () =
     state.workspaceListPending = false;
   `, app);
 
-  assert.equal(await app.createWorkspaceList("Blocked", "board-full"), false);
+  assert.equal(await app.createWorkspaceList("Blocked"), false);
   assert.equal(vm.runInContext(`noCapacityPosts`, app), 0);
-  assert.equal(vm.runInContext(`state.workspaceListDialogError`, app), "Choose a board with room for another list.");
+  assert.equal(vm.runInContext(`state.workspaceListDialogError`, app), "No room for another list.");
 
   vm.runInContext(`
     render = savedNoCapacityRender;
@@ -481,16 +481,15 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
     state.board = { id: "board", name: "Board", maxTasksPerList: 12, buckets: [] };
     state.boardMode = "lists";
     state.workspaceScope = "all";
-    state.workspaceView = "table";
+    state.workspaceView = "board";
   `, app);
 
   const html = app.appHTML();
-  for (const [view, label] of [["flow", "Kanban"], ["table", "Table"]]) {
+  for (const [view, label] of [["board", "Board"], ["flow", "Flow"], ["table", "Table"]]) {
     assert.match(html, new RegExp(`id="workspace-tab-${view}"[^>]*data-workspace-view="${view}"[^>]*role="tab"[^>]*aria-controls="workspace-task-panel"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
-  assert.match(html, /id="workspace-tab-table"[^>]*tabindex="0"[^>]*aria-selected="true"/);
-  assert.doesNotMatch(html, /id="workspace-tab-list"/);
-  assert.match(html, /id="workspace-task-panel" role="tabpanel" tabindex="0" aria-labelledby="workspace-tab-table"/);
+  assert.match(html, /id="workspace-tab-board"[^>]*tabindex="0"[^>]*aria-selected="true"/);
+  assert.match(html, /id="workspace-task-panel" role="tabpanel" tabindex="0" aria-labelledby="workspace-tab-board"/);
   assert.match(html, /id="new-task"/);
   assert.match(html, /id="workspace-filter-toggle"/);
   assert.match(html, /data-set-theme="light"[\s\S]*?<span>Light<\/span>/);
@@ -527,26 +526,26 @@ test("the card table exposes native headers, cells, and keyboard-operable rows",
 });
 
 test("every global card view identifies child cards with parent context", () => {
-  vm.runInContext(`state.me = { id: "owner", displayName: "Owain" }; state.agents = [];`, app);
+  vm.runInContext(`state.me = { id: "owner", displayName: "Owain" }; state.agents = []; state.workspaceLists = [{ id: "product", name: "Product", boardId: "board" }];`, app);
   const planned = app.dateKey(app.startOfWeek(new Date()));
   const subtask = {
-    id: "child", parentTaskId: "parent", parentTaskTitle: "Parent & plan", title: "Research", listName: "Product",
+    id: "child", parentTaskId: "parent", parentTaskTitle: "Parent & plan", bucketId: "product", title: "Research", listName: "Product",
     status: "needs_review", priority: "", scheduledDate: planned, done: false, assigneeAgentId: "",
   };
   for (const html of [
     app.workspaceListHTML([subtask]),
     app.workspaceTableHTML([subtask]),
+    app.workspaceBoardHTML([subtask]),
     app.workspaceFlowHTML([subtask]),
     app.workspaceWeekHTML([subtask]),
   ]) {
     assert.match(html, /Child of Parent &amp; plan/);
   }
-  vm.runInContext(`state.me = null;`, app);
+  vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
 });
 
-test("list-grouped Kanban keeps empty selected and Inbox lists visible", () => {
+test("Board keeps empty selected and Inbox lists visible", () => {
   vm.runInContext(`
-    state.workspaceKanbanGroup = "list";
     state.workspaceLists = [
       { id: "inbox", boardId: "board", name: "Inbox", isInbox: true },
       { id: "planning", boardId: "board", name: "Planning", isInbox: false },
@@ -554,14 +553,14 @@ test("list-grouped Kanban keeps empty selected and Inbox lists visible", () => {
     state.workspaceScope = "list";
     state.workspaceListID = "planning";
   `, app);
-  assert.match(app.workspaceFlowHTML([]), /data-kanban-list="planning"/);
-  assert.match(app.workspaceFlowHTML([]), /<h2>Planning<\/h2>/);
+  assert.match(app.workspaceBoardHTML([]), /data-kanban-list="planning"/);
+  assert.match(app.workspaceBoardHTML([]), /<h2>Planning<\/h2>/);
 
   vm.runInContext(`state.workspaceScope = "inbox"; state.workspaceListID = "";`, app);
-  const inbox = app.workspaceFlowHTML([]);
+  const inbox = app.workspaceBoardHTML([]);
   assert.match(inbox, /data-kanban-list="inbox"/);
   assert.doesNotMatch(inbox, /data-kanban-list="planning"/);
-  vm.runInContext(`state.workspaceKanbanGroup = "status"; state.workspaceScope = "all"; state.workspaceLists = [];`, app);
+  vm.runInContext(`state.workspaceScope = "all"; state.workspaceLists = [];`, app);
 });
 
 test("subtask detail keeps its list fixed to the parent", () => {
@@ -862,7 +861,7 @@ test("list items show compact state treatment", () => {
   const done = app.taskHTML({ id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "", done: true });
 
   assert.doesNotMatch(ready, /state-badge/);
-  assert.match(working, /state-working[^>]*>Working/);
+  assert.match(working, /state-working[^>]*>In Progress/);
   assert.match(review, /state-needs_review[^>]*>Review/);
   assert.match(done, /class="task action done"/);
 });
@@ -1303,7 +1302,7 @@ test("task list options disambiguate duplicate board and list names", () => {
 
   assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[0]", app)), "Content / YouTube (list-one)");
   assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[1]", app)), "Content / YouTube (list-two)");
-  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[2]", app)), "Content / LinkedIn");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[2]", app)), "LinkedIn");
 
   vm.runInContext(`
     state.boards = [{ id: "board-one", name: "Content" }];
@@ -1374,6 +1373,15 @@ test("agent settings separate identity, credential, and archive lifecycle withou
   assert.match(settings, /id="revoke-agent-credential"/);
   assert.match(settings, /id="archive-agent"/);
   assert.doesNotMatch(settings, />Delete</);
+
+  vm.runInContext(`
+    state.agentLifecycleConfirm = "archive";
+    state.agentArchiveConflict = { new: 1, ready: 2, working: 1 };
+  `, app);
+  const archiveConflict = app.agentLifecycleConfirmHTML();
+  assert.match(archiveConflict, /Active work is still assigned/);
+  assert.match(archiveConflict, /1 New card, 2 Ready cards, 1 In Progress card must be unassigned/);
+  vm.runInContext(`state.agentLifecycleConfirm = ""; state.agentArchiveConflict = null;`, app);
 
   vm.runInContext(`
     state.agentCredentialResult = { ownerID: "owner", agentID: "agent-one", token: "slate_agent_once_only" };
@@ -1998,10 +2006,10 @@ const board = {
   ],
 };
 
-test("Flow groups every list item into four fixed states without redundant move controls", () => {
+test("Flow groups every list item into five fixed states without redundant move controls", () => {
   const html = app.flowHTML(board);
 
-  assert.deepEqual([...html.matchAll(/data-flow-status="([^"]+)"/g)].map(match => match[1]), ["queued", "working", "needs_review", "done"]);
+  assert.deepEqual([...html.matchAll(/data-flow-status="([^"]+)"/g)].map(match => match[1]), ["new", "queued", "working", "needs_review", "done"]);
   assert.match(html, /Working action/);
   assert.match(html, /Home list/);
   assert.match(html, /Fri, Jul 17/);
@@ -2246,7 +2254,7 @@ test("detail exposes state without a type control", () => {
   const actionHTML = app.workspaceDetailHTML({ ...board.buckets[0].tasks[1], description: "", priority: "", assigneeAgentId: "" });
 
   assert.match(actionHTML, /name="status"/);
-  assert.match(actionHTML, /value="working" selected>Working/);
+  assert.match(actionHTML, /value="working" selected>In Progress/);
   assert.doesNotMatch(actionHTML, /name="kind"/);
 });
 

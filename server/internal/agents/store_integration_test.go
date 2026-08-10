@@ -266,38 +266,46 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	}
 
 	boardID, bucketID := insertBoardAndBucket(t, ctx, db, owner.ID, "Lifecycle board")
+	newID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "New", "new", false)
 	readyID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Ready", "queued", false)
 	workingID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Working", "working", false)
 	reviewID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Review", "needs_review", false)
 	doneID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Done", "done", true)
 
-	var agentUpdatedBefore, readyUpdatedBefore, workingUpdatedBefore time.Time
+	var agentUpdatedBefore, newUpdatedBefore, readyUpdatedBefore, workingUpdatedBefore time.Time
 	if err := db.QueryRow(ctx, "SELECT updated_at FROM agents WHERE id = $1", agent.ID).Scan(&agentUpdatedBefore); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(ctx, "SELECT updated_at FROM tasks WHERE id = $1", readyID).Scan(&readyUpdatedBefore); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(ctx, "SELECT updated_at FROM tasks WHERE id = $1", newID).Scan(&newUpdatedBefore); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(ctx, "SELECT updated_at FROM tasks WHERE id = $1", workingID).Scan(&workingUpdatedBefore); err != nil {
 		t.Fatal(err)
 	}
 	counts, err := store.ArchiveAgent(ctx, owner.ID, agent.ID, false)
-	if !errors.Is(err, ErrArchiveConflict) || counts != (ArchiveConflict{Ready: 1, Working: 1}) {
+	if !errors.Is(err, ErrArchiveConflict) || counts != (ArchiveConflict{New: 1, Ready: 1, Working: 1}) {
 		t.Fatalf("archive conflict = %#v, error = %v", counts, err)
 	}
+	assertLifecycleTask(t, ctx, db, newID, agent.ID, "new", false)
 	assertLifecycleTask(t, ctx, db, readyID, agent.ID, "queued", false)
 	assertLifecycleTask(t, ctx, db, workingID, agent.ID, "working", false)
-	var agentUpdatedAfter, readyUpdatedAfter, workingUpdatedAfter time.Time
+	var agentUpdatedAfter, newUpdatedAfter, readyUpdatedAfter, workingUpdatedAfter time.Time
 	if err := db.QueryRow(ctx, "SELECT updated_at FROM agents WHERE id = $1", agent.ID).Scan(&agentUpdatedAfter); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(ctx, "SELECT updated_at FROM tasks WHERE id = $1", readyID).Scan(&readyUpdatedAfter); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.QueryRow(ctx, "SELECT updated_at FROM tasks WHERE id = $1", newID).Scan(&newUpdatedAfter); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.QueryRow(ctx, "SELECT updated_at FROM tasks WHERE id = $1", workingID).Scan(&workingUpdatedAfter); err != nil {
 		t.Fatal(err)
 	}
-	if !agentUpdatedAfter.Equal(agentUpdatedBefore) || !readyUpdatedAfter.Equal(readyUpdatedBefore) || !workingUpdatedAfter.Equal(workingUpdatedBefore) {
+	if !agentUpdatedAfter.Equal(agentUpdatedBefore) || !newUpdatedAfter.Equal(newUpdatedBefore) || !readyUpdatedAfter.Equal(readyUpdatedBefore) || !workingUpdatedAfter.Equal(workingUpdatedBefore) {
 		t.Fatal("archive conflict changed agent or task metadata")
 	}
 	if _, err := authStore.FindUserByAPITokenHash(ctx, lifecycleHash(preArchiveToken), time.Now()); err != nil {
@@ -330,6 +338,7 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	if _, err := store.ArchiveAgent(ctx, owner.ID, agent.ID, true); err == nil {
 		t.Fatal("forced archive succeeded despite injected final update failure")
 	}
+	assertLifecycleTask(t, ctx, db, newID, agent.ID, "new", false)
 	assertLifecycleTask(t, ctx, db, readyID, agent.ID, "queued", false)
 	assertLifecycleTask(t, ctx, db, workingID, agent.ID, "working", false)
 	if _, err := authStore.FindUserByAPITokenHash(ctx, lifecycleHash(preArchiveToken), time.Now()); err != nil {
@@ -346,9 +355,10 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	}
 
 	counts, err = store.ArchiveAgent(ctx, owner.ID, agent.ID, true)
-	if err != nil || counts != (ArchiveConflict{Ready: 1, Working: 1}) {
+	if err != nil || counts != (ArchiveConflict{New: 1, Ready: 1, Working: 1}) {
 		t.Fatalf("forced archive = %#v, error = %v", counts, err)
 	}
+	assertLifecycleTask(t, ctx, db, newID, "", "new", false)
 	assertLifecycleTask(t, ctx, db, readyID, "", "queued", false)
 	assertLifecycleTask(t, ctx, db, workingID, "", "queued", false)
 	assertLifecycleTask(t, ctx, db, reviewID, agent.ID, "needs_review", false)
@@ -359,6 +369,13 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	}
 	if _, err := authStore.FindUserByAPITokenHash(ctx, lifecycleHash(preArchiveToken), time.Now()); !errors.Is(err, auth.ErrUnauthorized) {
 		t.Fatalf("archived credential still authenticates: %v", err)
+	}
+	newStatus := boards.StatusNew
+	if _, err := boards.NewStore(db).UpdateTask(ctx, owner.ID, reviewID, boards.UpdateTaskInput{Status: &newStatus}); !errors.Is(err, boards.ErrInvalidData) {
+		t.Fatalf("archived Review item returned to New without reassignment error = %v", err)
+	}
+	if _, err := boards.NewStore(db).UpdateTask(ctx, owner.ID, doneID, boards.UpdateTaskInput{Status: &newStatus}); !errors.Is(err, boards.ErrInvalidData) {
+		t.Fatalf("archived Done item returned to New without reassignment error = %v", err)
 	}
 	queued := boards.StatusQueued
 	if _, err := boards.NewStore(db).UpdateTask(ctx, owner.ID, reviewID, boards.UpdateTaskInput{Status: &queued}); !errors.Is(err, boards.ErrInvalidData) {

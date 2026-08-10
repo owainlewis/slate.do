@@ -50,10 +50,6 @@
 .workspace-tabs button.on { border-bottom-color: var(--ink); color: var(--ink); font-weight: 700; }
 .workspace-tabs .icon { width: 14px; height: 14px; }
 .workspace-view-actions { display: flex; align-items: center; gap: 14px; }
-.workspace-kanban-group { height: 30px; padding: 3px; display: flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
-.workspace-kanban-group > span { padding: 0 6px; color: var(--faint); font-size: 10px; font-weight: 650; }
-.workspace-kanban-group button { height: 22px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--faint); font-size: 11px; }
-.workspace-kanban-group button[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); font-weight: 650; }
 .workspace-filter-toggle { display: flex; align-items: center; gap: 6px; }
 .workspace-filter-toggle .icon { width: 14px; height: 14px; }
 .workspace-filter-toggle b { min-width: 19px; padding: 2px 6px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-size: 11px; }
@@ -92,7 +88,7 @@
 .workspace-table-open small { color: var(--faint); font-size: 11px; font-weight: 500; }
 .workspace-table-open:focus-visible { outline: 0; }
 .workspace-flow { min-width: max-content; display: flex; align-items: flex-start; gap: 11px; }
-.workspace-flow.grouped-by-status { width: 100%; min-width: 980px; display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); }
+.workspace-flow.grouped-by-status { width: 100%; min-width: 1100px; display: grid; grid-template-columns: repeat(5, minmax(205px, 1fr)); }
 .workspace-flow-column { min-height: 440px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
 .workspace-flow.grouped-by-list .workspace-flow-column { width: 280px; flex: 0 0 280px; }
 .workspace-flow-column.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, var(--card)); }
@@ -147,7 +143,6 @@
   .workspace-topbar { min-height: 92px; }
   .workspace-viewbar { align-items: flex-start; gap: 8px; padding-top: 8px; padding-bottom: 8px; }
   .workspace-view-actions { align-items: flex-end; flex-direction: column-reverse; gap: 5px; }
-  .workspace-kanban-group > span { display: none; }
 }
 
 * { box-sizing: border-box; }
@@ -605,6 +600,8 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   letter-spacing: .04em;
   text-decoration: none;
 }
+.state-new { background: color-mix(in srgb, var(--soft) 10%, transparent); color: var(--soft); }
+.state-queued { background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }
 .state-working { background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent); }
 .state-needs_review { background: color-mix(in srgb, var(--review) 12%, transparent); color: var(--review); }
 .priority-badge {

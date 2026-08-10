@@ -65,6 +65,11 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	ready := boards.StatusQueued
+	taskA, err = boardStore.UpdateTaskForHuman(ctx, owner.ID, taskA.ID, boards.UpdateTaskInput{Status: &ready})
+	if err != nil {
+		t.Fatal(err)
+	}
 	taskB, err := boardStore.CreateTask(ctx, owner.ID, bucket.ID, boards.CreateTaskInput{Title: "Agent B secret", AssigneeAgentID: agentB.ID})
 	if err != nil {
 		t.Fatal(err)

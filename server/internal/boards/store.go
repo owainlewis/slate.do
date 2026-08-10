@@ -931,7 +931,7 @@ func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string,
 		RETURNING id::text, board_id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, done, status, priority, sort_order, created_at, updated_at
 			, COALESCE(assignee_agent_id::text, ''), COALESCE(parent_task_id::text, '')
-	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusQueued, assigneeAgentID, parentTaskID)
+	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusNew, assigneeAgentID, parentTaskID)
 	return scanTask(row)
 }
 
@@ -1322,9 +1322,9 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			return Task{}, err
 		}
 	}
-	if current.AssigneeAgentID != "" && !current.Done && (current.Status == StatusQueued || current.Status == StatusWorking) {
+	if current.AssigneeAgentID != "" && !current.Done && (current.Status == StatusNew || current.Status == StatusQueued || current.Status == StatusWorking) {
 		if _, err := activeAgentAssignment(ctx, tx, userID, current.AssigneeAgentID); err != nil {
-			return Task{}, fmt.Errorf("%w: clear or replace the archived agent before moving this item to Ready or Working", ErrInvalidData)
+			return Task{}, fmt.Errorf("%w: clear or replace the archived agent before moving this item to New, Ready, or In Progress", ErrInvalidData)
 		}
 	}
 	if current.Title == "" {
@@ -2259,7 +2259,7 @@ func validDate(value string) (string, error) {
 
 func validStatus(status string) bool {
 	switch status {
-	case StatusQueued, StatusWorking, StatusNeedsReview, StatusDone:
+	case StatusNew, StatusQueued, StatusWorking, StatusNeedsReview, StatusDone:
 		return true
 	default:
 		return false

@@ -205,7 +205,7 @@ func (h *Handler) Archive(w http.ResponseWriter, r *http.Request, user auth.User
 			Conflict ArchiveConflict `json:"conflict"`
 		}{
 			Code:     "agent_open_work",
-			Error:    "Ready and Working work must be unassigned before this agent can be archived.",
+			Error:    "New, Ready, and In Progress work must be unassigned before this agent can be archived.",
 			Conflict: conflict.Counts,
 		})
 	case err != nil:

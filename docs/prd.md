@@ -25,8 +25,8 @@ The card is the core unit of intent. Lists give cards useful context without for
 2. The card is refined with enough prompt and context to act on.
 3. The card can stay in Inbox or move to a list that gives it meaning.
 4. A human owns the card directly, or assigns it to an agent.
-5. Work moves through Open, Working, Review, and Done.
-6. The agent can comment, request a response, or return an output on the card.
+5. Work moves through New, Ready, In Progress, Review, and Done.
+6. The agent can comment or return an output on the card.
 7. Complex intent can be split into one level of child cards.
 
 ## Core model
@@ -56,7 +56,11 @@ A list is a named context for cards. Examples include Build AI Systems Course, Y
 
 Lists can have a short purpose. They do not impose a specific semantic type or reject cards based on item count. Focus comes from views, filters, priority, dates, and status.
 
-Boards remain an internal compatibility container for existing data and API clients. They are not part of primary navigation.
+### Board
+
+A board is a spatial view of related lists and cards. Its columns are the real, user-defined lists. Moving a card across a board changes its list, not its workflow status.
+
+The current database retains board ownership for compatibility. The primary UI treats lists as account-wide contexts and does not ask users to manage that storage detail.
 
 ### Child card
 
@@ -93,7 +97,8 @@ New card creates one card in Inbox and opens it for editing.
 
 Every view reads and edits the same card records:
 
-- Kanban: group cards by status or by their user-defined list.
+- Board: show user-defined lists as columns and move cards between them.
+- Flow: show New, Ready, In Progress, Review, and Done as columns without changing a card's list.
 - Table: card, list, status, priority, owner, and planned date.
 - Week: planned cards grouped Monday through Sunday.
 
@@ -103,12 +108,13 @@ Review separates outputs waiting for judgment from cards manually placed in Revi
 
 ## Workflow status
 
-- `queued`, labelled Open
-- `working`, labelled Working
+- `new`, labelled New
+- `queued`, labelled Ready
+- `working`, labelled In Progress
 - `needs_review`, labelled Review
 - `done`, labelled Done
 
-The underlying status values stay stable for existing clients.
+The existing status values stay stable for existing clients. `new` is added as the capture state.
 
 ## Compatibility
 
@@ -120,8 +126,8 @@ Included:
 
 - Account-wide card workspace with Today as the default.
 - Inbox capture and generic cards.
-- Lists as flexible context, with boards hidden from primary UI.
-- Kanban, Table, Review, Today, and Week views.
+- Lists as flexible context, with backend board ownership hidden from primary UI.
+- Board, Flow, Table, Review, Today, and Week views.
 - Filters, priorities, planned dates, and fixed workflow status.
 - One level of child cards.
 - Named agent identities, assignment, scoped tokens, and CLI execution.

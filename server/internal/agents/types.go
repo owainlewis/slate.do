@@ -62,6 +62,7 @@ type WorkPage struct {
 }
 
 type ArchiveConflict struct {
+	New     int `json:"new"`
 	Ready   int `json:"ready"`
 	Working int `json:"working"`
 }

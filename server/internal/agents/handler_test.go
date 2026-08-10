@@ -195,11 +195,12 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 		t.Fatalf("revoke = %d %q, owner = %q/%q", response.Code, response.Body.String(), store.lastUserID, store.lastAgentID)
 	}
 
-	store.archiveErr = &ArchiveConflictError{Counts: ArchiveConflict{Ready: 2, Working: 1}}
+	store.archiveErr = &ArchiveConflictError{Counts: ArchiveConflict{New: 3, Ready: 2, Working: 1}}
 	response = lifecycleRequest(t, handler.Archive, user, http.MethodPost, `{"unassignOpenWork":false}`)
 	var conflict struct {
 		Code     string `json:"code"`
 		Conflict struct {
+			New     int `json:"new"`
 			Ready   int `json:"ready"`
 			Working int `json:"working"`
 		} `json:"conflict"`
@@ -207,7 +208,7 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &conflict); err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != http.StatusConflict || conflict.Code != "agent_open_work" || conflict.Conflict.Ready != 2 || conflict.Conflict.Working != 1 {
+	if response.Code != http.StatusConflict || conflict.Code != "agent_open_work" || conflict.Conflict.New != 3 || conflict.Conflict.Ready != 2 || conflict.Conflict.Working != 1 {
 		t.Fatalf("archive conflict = %d %#v", response.Code, conflict)
 	}
 	store.archiveErr = nil

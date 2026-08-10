@@ -267,6 +267,9 @@ func TestTasksUpdateListAliasDoesNotLeakUnknownFields(t *testing.T) {
 }
 
 func TestInvalidStatusFailsBeforeRequest(t *testing.T) {
+	if !validStatus("new") {
+		t.Fatal("new should be a valid status")
+	}
 	err := tasksCmd(client{baseURL: "https://example.invalid", token: "test", http: http.DefaultClient}, []string{"status", "task-1", "blocked"})
 	if err == nil || !strings.Contains(err.Error(), "invalid status") {
 		t.Fatalf("error = %v", err)
