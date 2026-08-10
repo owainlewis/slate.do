@@ -282,7 +282,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const input = await requestJSON(request);
       const list = state.lists.find(item => item.id === bucketTaskMatch[1]);
       if (!list) return json(response, { error: "list not found" }, 404);
-      const created = { id: `task-created-${state.created.length + 1}`, boardId: list.boardId, bucketId: list.id, listName: list.name, title: input.title, description: input.description || "", scheduledDate: input.scheduledDate || "", kind: "action", done: false, status: "new", priority: "", assigneeAgentId: input.assigneeAgentId || "" };
+      const created = { id: `task-created-${state.created.length + 1}`, boardId: list.boardId, bucketId: list.id, listName: list.name, title: input.title, description: input.description || "", scheduledDate: input.scheduledDate || "", kind: "action", done: false, status: input.assigneeAgentId ? "queued" : "new", priority: "", assigneeAgentId: input.assigneeAgentId || "" };
       state.tasks.unshift(created);
       state.created.push(created);
       list.openCount += 1;
@@ -1440,6 +1440,8 @@ test("a list created on a board is immediately available for agent assignment", 
   await page.getByRole("button", { name: "Create item", exact: true }).click();
   await page.getByText('"Research launch examples" was assigned to Research agent.', { exact: true }).waitFor();
   assert.equal(state.created.at(-1).bucketId, state.createdLists[0].id);
+  assert.equal(state.created.at(-1).status, "queued");
+  assert.equal(await page.getByText("Research launch examples", { exact: true }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 

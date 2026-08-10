@@ -1034,6 +1034,10 @@ func validUUID(value string) bool {
 }
 
 func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string) (Task, error) {
+	status := StatusNew
+	if assigneeAgentID != "" {
+		status = StatusQueued
+	}
 	row := db.QueryRow(ctx, `
 		INSERT INTO tasks (board_id, bucket_id, title, description, scheduled_date, kind, status, assignee_agent_id, parent_task_id, sort_order)
 		VALUES (
@@ -1043,7 +1047,7 @@ func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string,
 		RETURNING id::text, board_id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, done, status, priority, sort_order, created_at, updated_at
 			, COALESCE(assignee_agent_id::text, ''), COALESCE(parent_task_id::text, '')
-	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, StatusNew, assigneeAgentID, parentTaskID)
+	`, bucket.BoardID, bucket.ID, title, description, scheduledDate, kind, status, assigneeAgentID, parentTaskID)
 	return scanTask(row)
 }
 

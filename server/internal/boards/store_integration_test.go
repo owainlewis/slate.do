@@ -280,6 +280,9 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
 	if task.AssigneeAgentID != ownerAgentID {
 		t.Fatalf("assignee = %q, want %q", task.AssigneeAgentID, ownerAgentID)
 	}
+	if task.Status != StatusQueued {
+		t.Fatalf("assigned task status = %q, want %q", task.Status, StatusQueued)
+	}
 	if _, err := store.CreateTask(ctx, ownerID, list.ID, CreateTaskInput{Title: "Malformed", AssigneeAgentID: "not-a-uuid"}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("malformed create assignment error = %v", err)
 	}
