@@ -96,12 +96,20 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     if (entryMatch && request.method === "POST") {
       const input = await requestJSON(request);
       const attemptKey = request.headers["idempotency-key"] || "";
-      if (attemptKey && state.entryAttempts[attemptKey]) return json(response, state.entryAttempts[attemptKey], 201);
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === entryMatch[1]);
+      if (attemptKey && state.entryAttempts[attemptKey]) {
+        return json(response, {
+          ...state.entryAttempts[attemptKey],
+          cardStatus: task.status,
+          cardDone: task.done,
+          cardReviewReason: task.reviewReason || "",
+        }, 201);
+      }
       const entry = { id: `entry-${Object.values(state.entries).flat().length + 1}`, cardId: task.id, ...input, authorKind: "human", authorId: "owner", authorName: "Owain", createdAt: new Date().toISOString() };
       state.entries[task.id] = [...(state.entries[task.id] || []), entry];
-      if (attemptKey) state.entryAttempts[attemptKey] = entry;
       if (entry.kind === "output") Object.assign(task, { status: "needs_review", done: false, reviewReason: "output" });
+      Object.assign(entry, { cardStatus: task.status, cardDone: task.done, cardReviewReason: task.reviewReason || "" });
+      if (attemptKey) state.entryAttempts[attemptKey] = entry;
       if (state.delayNextEntry) {
         state.delayNextEntry = false;
         await new Promise(resolve => { state.releaseEntry = resolve; });
@@ -528,6 +536,25 @@ test("a lost conversation response retries without duplicating the entry", async
   await page.locator(".card-entry").filter({ hasText: "One durable comment" }).waitFor();
   assert.equal(state.entries["task-parent"].length, 1);
   assert.equal(Object.keys(state.entryAttempts).length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an output replay keeps a newer card status", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const task = state.tasks.find(item => item.id === "task-parent");
+  await page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true }).click();
+  await page.getByRole("button", { name: "Output", exact: true }).click();
+  await page.locator("#card-entry-body").fill("One durable output");
+  state.failNextEntryResponse = true;
+  await page.getByRole("button", { name: "Add output", exact: true }).click();
+  await page.locator(".card-entry-error").filter({ hasText: "Response was lost" }).waitFor();
+  Object.assign(task, { status: "done", done: true, reviewReason: "" });
+
+  await page.getByRole("button", { name: "Add output", exact: true }).click();
+  await page.locator(".card-entry").filter({ hasText: "One durable output" }).waitFor();
+
+  assert.equal(await page.locator("#workspace-detail-status").inputValue(), "done");
+  assert.equal(state.entries[task.id].length, 1);
   assert.deepEqual(pageErrors, []);
 });
 

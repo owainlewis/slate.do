@@ -1667,14 +1667,15 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		args = append(args, agentID)
 		agentSQL = " AND t.assignee_agent_id = $3"
 	}
-	var authorizedTaskID string
+	var authorizedTaskID, cardStatus, cardReviewReason string
+	var cardDone bool
 	if err := tx.QueryRow(ctx, `
-		SELECT t.id::text
+		SELECT t.id::text, t.status, t.done, COALESCE(t.review_reason, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2`+agentSQL+`
 		FOR UPDATE OF t
-	`, args...).Scan(&authorizedTaskID); err != nil {
+	`, args...).Scan(&authorizedTaskID, &cardStatus, &cardDone, &cardReviewReason); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return CardEntry{}, ErrNotFound
 		}
@@ -1723,6 +1724,9 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 			if existingFingerprint != fingerprint {
 				return CardEntry{}, ErrIdempotencyKey
 			}
+			existing.CardStatus = cardStatus
+			existing.CardDone = cardDone
+			existing.CardReviewReason = cardReviewReason
 			return existing, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
@@ -1760,7 +1764,13 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		`, StatusNeedsReview, taskID); err != nil {
 			return CardEntry{}, err
 		}
+		cardStatus = StatusNeedsReview
+		cardDone = false
+		cardReviewReason = "output"
 	}
+	entry.CardStatus = cardStatus
+	entry.CardDone = cardDone
+	entry.CardReviewReason = cardReviewReason
 	if err := tx.Commit(ctx); err != nil {
 		return CardEntry{}, err
 	}

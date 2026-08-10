@@ -123,11 +123,12 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 			t.Fatalf("concurrent comment %d = %q, want %q", index, concurrentIDs[index], concurrentIDs[0])
 		}
 	}
-	output, err := store.CreateCardEntry(ctx, ownerID, agentID, "", card.ID, CreateCardEntryInput{Kind: "output", Body: "Draft is ready", IdempotencyKey: "output-attempt"})
+	outputInput := CreateCardEntryInput{Kind: "output", Body: "Draft is ready", IdempotencyKey: "output-attempt"}
+	output, err := store.CreateCardEntry(ctx, ownerID, agentID, "", card.ID, outputInput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.AuthorKind != "agent" || output.AuthorName != "Builder" {
+	if output.AuthorKind != "agent" || output.AuthorName != "Builder" || output.CardStatus != StatusNeedsReview || output.CardDone || output.CardReviewReason != "output" {
 		t.Fatalf("agent output author = %#v", output)
 	}
 	entries, err := store.ListCardEntries(ctx, ownerID, agentID, card.ID)
@@ -144,6 +145,7 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if updated.Status != StatusNeedsReview || updated.Done {
 		t.Fatalf("card status = %q, done = %v", updated.Status, updated.Done)
 	}
+	needsReview := StatusNeedsReview
 	reviewKinds, err := store.ListCardReviewKinds(ctx, ownerID, "")
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +169,6 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &queued}); err != nil {
 		t.Fatal(err)
 	}
-	needsReview := StatusNeedsReview
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &needsReview}); err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +178,21 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	}
 	if reviewKinds[card.ID] != "other" {
 		t.Fatalf("review kind after manual re-entry = %q, want other", reviewKinds[card.ID])
+	}
+	done := StatusDone
+	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &done}); err != nil {
+		t.Fatal(err)
+	}
+	replayedOutput, err := store.CreateCardEntry(ctx, ownerID, agentID, "", card.ID, outputInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayedOutput.ID != output.ID || replayedOutput.CardStatus != StatusDone || !replayedOutput.CardDone || replayedOutput.CardReviewReason != "" {
+		t.Fatalf("replayed output = %#v", replayedOutput)
+	}
+	updated, err = store.GetTask(ctx, ownerID, card.ID)
+	if err != nil || updated.Status != StatusDone || !updated.Done {
+		t.Fatalf("card after output replay = %#v, error = %v", updated, err)
 	}
 	if _, err := store.ListCardEntries(ctx, ownerID, siblingAgentID, card.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("sibling agent list error = %v, want ErrNotFound", err)

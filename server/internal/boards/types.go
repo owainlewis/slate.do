@@ -151,14 +151,17 @@ type TaskPage struct {
 }
 
 type CardEntry struct {
-	ID         string    `json:"id"`
-	TaskID     string    `json:"cardId"`
-	Kind       string    `json:"kind"`
-	Body       string    `json:"body"`
-	AuthorKind string    `json:"authorKind"`
-	AuthorID   string    `json:"authorId"`
-	AuthorName string    `json:"authorName"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID               string    `json:"id"`
+	TaskID           string    `json:"cardId"`
+	Kind             string    `json:"kind"`
+	Body             string    `json:"body"`
+	AuthorKind       string    `json:"authorKind"`
+	AuthorID         string    `json:"authorId"`
+	AuthorName       string    `json:"authorName"`
+	CreatedAt        time.Time `json:"createdAt"`
+	CardStatus       string    `json:"cardStatus,omitempty"`
+	CardDone         bool      `json:"cardDone,omitempty"`
+	CardReviewReason string    `json:"cardReviewReason,omitempty"`
 }
 
 type CreateCardEntryInput struct {

@@ -22,6 +22,16 @@ func TestStoreCapacityTimeoutUsesStableServiceUnavailableResponse(t *testing.T) 
 	}
 }
 
+func TestConversationReadJSONOmitsMutationOnlyCardState(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeJSON(recorder, http.StatusOK, map[string]any{
+		"entries": []CardEntry{{ID: "entry-one", TaskID: "card-one", Kind: "comment", Body: "Hello"}},
+	})
+	if strings.Contains(recorder.Body.String(), "cardStatus") || strings.Contains(recorder.Body.String(), "cardDone") || strings.Contains(recorder.Body.String(), "cardReviewReason") {
+		t.Fatalf("conversation response leaked mutation-only card state: %s", recorder.Body.String())
+	}
+}
+
 func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
 	tests := []struct {
 		err     error

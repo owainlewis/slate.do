@@ -3632,8 +3632,11 @@ function bindWorkspaceDetail(options = {}) {
       state.cardEntryAttemptKey = "";
       state.cardEntryPending = false;
       if (entry.kind === "output") {
-        state.selectedTask = { ...state.selectedTask, status: "needs_review", done: false };
-        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, status: "needs_review", done: false } : item);
+        const status = entry.cardStatus || "needs_review";
+        const done = typeof entry.cardDone === "boolean" ? entry.cardDone : status === "done";
+        const reviewReason = entry.cardReviewReason || (status === "needs_review" ? "output" : "");
+        state.selectedTask = { ...state.selectedTask, status, done, reviewReason };
+        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, status, done, reviewReason } : item);
         const currentRoute = parseRoute(location.pathname);
         if (boundAgentID && ["agent-detail", "agent-work"].includes(currentRoute.name) && currentRoute.agentId === boundAgentID) {
           state.agentRefreshOnDetailClose = boundAgentID;
