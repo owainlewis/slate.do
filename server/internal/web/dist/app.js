@@ -116,6 +116,7 @@ const state = {
   maxListsPerBoard: 9,
   board: null,
   renamingBoardId: "",
+  boardCreatePending: false,
   selectedTask: null,
   selectedSubtasks: [],
   selectedEntries: [],
@@ -625,7 +626,7 @@ async function applyRoute() {
       if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
       if (routeVersion !== version) return;
       if (route.name === "board-settings") return showRoute("board-settings");
-      return navigate(TASKS_PATH, { replace: true });
+      return showRoute("board");
     }
     if (route.settingsPage === "api" && !await loadTokens(authVersion, state.me?.id, version)) return;
     if (routeVersion !== version) return;
@@ -828,6 +829,7 @@ function resetAuthenticatedState() {
   state.maxListsPerBoard = DEFAULT_MAX_LISTS_PER_BOARD;
   state.board = null;
   state.renamingBoardId = "";
+  state.boardCreatePending = false;
   taskDetailVersion += 1;
   state.selectedTask = null;
   state.selectedSubtasks = [];
@@ -1009,7 +1011,10 @@ async function createWorkspaceList(name) {
   name = String(name || "").trim();
   if (!name) return false;
   state.workspaceListDialogName = name;
-  const board = boardWithWorkspaceListCapacity();
+  const requestedBoard = state.boards.find(item => item.id === state.workspaceListDialogBoardID);
+  const board = requestedBoard
+    ? workspaceListCount(requestedBoard.id) < state.maxListsPerBoard ? requestedBoard : null
+    : boardWithWorkspaceListCapacity();
   state.workspaceListDialogBoardID = board?.id || "";
   if (!board) {
     state.workspaceListDialogError = "No room for another list.";
@@ -1284,10 +1289,8 @@ function render() {
     bindApp();
     return;
   }
-  // Legacy board routes retain their identifier until their compatibility
-  // redirect has completed.
   syncPath(state.board ? boardPath(state.board.id) : APP_PATH);
-  root.innerHTML = appHTML();
+  root.innerHTML = boardHTML();
   bindApp();
 }
 
@@ -1594,6 +1597,45 @@ function appHTML() {
     </section>`;
 }
 
+function boardSurfaceTasks(board = state.board) {
+  return (board?.buckets || []).flatMap(list => (list.tasks || []).map(task => ({
+    ...task,
+    boardId: task.boardId || board.id,
+    bucketId: task.bucketId || list.id,
+    listName: task.listName || list.name,
+  })));
+}
+
+function boardHTML() {
+  const board = state.board;
+  const theme = currentTheme();
+  const lists = board?.buckets || [];
+  const boardMode = state.boardMode !== "flow";
+  const listLimitReached = lists.length >= state.maxListsPerBoard;
+  const openCards = boardSurfaceTasks(board).filter(task => !task.done).length;
+  return `
+    <section class="shell theme-${theme}">
+      ${appSidebarHTML({ theme, showNewTask: false })}
+      <div class="main board-main">
+        <header class="topbar board-topbar">
+          <div class="board-heading"><div><h1>${escapeHTML(board?.name || "Board")}</h1><span>${openCards}</span></div><p>Lists keep related cards together.</p></div>
+          <div class="top-actions">
+            <div class="view-switch" aria-label="Board view">
+              <button data-board-mode="lists" aria-pressed="${boardMode}" class="${boardMode ? "on" : ""}" title="Board">${icon("kanban")}<span>Board</span></button>
+              <button data-board-mode="flow" aria-pressed="${!boardMode}" class="${!boardMode ? "on" : ""}" title="Flow">${icon("columns")}<span>Flow</span></button>
+            </div>
+            <button class="secondary" id="add-list" ${boardMode && !listLimitReached ? "" : "disabled"}>${icon("plus")}<span>New list</span></button>
+          </div>
+        </header>
+        ${statusErrorHTML(state.error || state.taskCompletionError?.message)}
+        ${statusNoticeHTML(state.moveNotice)}
+        ${boardMode ? `<div class="grid">${lists.map(listHTML).join("")}</div>` : flowHTML(board)}
+        ${footerHTML(board, false)}
+      </div>
+      ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : ""}
+    </section>`;
+}
+
 function workspaceScopedTasks() {
   if (state.workspaceScope !== "inbox") return state.workspaceTasks;
   const inboxIDs = new Set(state.workspaceLists.filter(list => list.isInbox).map(list => list.id));
@@ -1698,19 +1740,24 @@ function taskDetailBackLabel() {
 
 function workspaceListDialogHTML() {
   if (!state.workspaceListDialog) return "";
-  const deleting = state.workspaceListDialog === "delete";
+  const deletingList = state.workspaceListDialog === "delete";
+  const deletingBoard = state.workspaceListDialog === "delete-board";
+  const deleting = deletingList || deletingBoard;
   const list = state.workspaceLists.find(item => item.id === state.workspaceListDialogListID);
-  if (deleting && (!list || list.isInbox)) return "";
+  const board = state.boards.find(item => item.id === state.workspaceListDialogBoardID);
+  if (deletingList && (!list || list.isInbox)) return "";
+  if (deletingBoard && !board) return "";
+  const targetName = deletingBoard ? board.name : list?.name;
   return `<div class="detail-overlay workspace-list-dialog-overlay">
     <section class="agent-lifecycle-dialog workspace-list-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-list-dialog-title" tabindex="-1">
       <header>
         <span class="agent-state-icon">${icon(deleting ? "trash" : "plus")}</span>
-        <div><h2 id="workspace-list-dialog-title">${deleting ? `Delete ${escapeHTML(list.name)}?` : "New list"}</h2><p>${deleting ? "Cards in this list will also be permanently deleted. This cannot be undone." : "Lists are flexible containers for related cards."}</p></div>
+        <div><h2 id="workspace-list-dialog-title">${deleting ? `Delete ${escapeHTML(targetName)}?` : "New list"}</h2><p>${deletingBoard ? "Every list and card on this board will be permanently deleted. This cannot be undone." : deletingList ? "Cards in this list will also be permanently deleted. This cannot be undone." : "Lists are flexible containers for related cards."}</p></div>
       </header>
       <form id="workspace-list-dialog-form">
         ${deleting ? "" : `<label class="workspace-list-dialog-field"><span>Name</span><input id="workspace-list-name" name="name" value="${escapeAttr(state.workspaceListDialogName)}" maxlength="100" autocomplete="off" required ${state.workspaceListPending ? "disabled" : ""}></label>`}
         <p class="status-error" role="alert">${escapeHTML(state.workspaceListDialogError)}</p>
-        <footer><button class="secondary" id="cancel-workspace-list-dialog" type="button" ${state.workspaceListPending ? "disabled" : ""}>Cancel</button><button class="${deleting ? "danger" : "primary"}" id="confirm-workspace-list-dialog" type="submit" ${state.workspaceListPending ? "disabled" : ""}>${state.workspaceListPending ? (deleting ? "Deleting…" : "Creating…") : (deleting ? "Delete list" : "Create list")}</button></footer>
+        <footer><button class="secondary" id="cancel-workspace-list-dialog" type="button" ${state.workspaceListPending ? "disabled" : ""}>Cancel</button><button class="${deleting ? "danger" : "primary"}" id="confirm-workspace-list-dialog" type="submit" ${state.workspaceListPending ? "disabled" : ""}>${state.workspaceListPending ? (deleting ? "Deleting…" : "Creating…") : (deletingBoard ? "Delete board" : deletingList ? "Delete list" : "Create list")}</button></footer>
       </form>
     </section>
   </div>`;
@@ -1814,13 +1861,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
             <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("rows")}<span>All cards</span></a>
           </div>
         </section>
-        <section class="nav-sec workspace-nav">
-          <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
-          <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
-          <div class="pages task-nav-pages">
-            ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link ${route.name === "workspace" && state.workspaceScope === "list" && state.workspaceListID === list.id ? "on" : ""}" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b data-workspace-count="${escapeAttr(list.id)}">${list.openCount || ""}</b></a>`).join("")}
-          </div>
-        </section>
+        ${boardsNavigationHTML()}
         <section class="nav-sec nav-collaborators">
           <h3>Agents</h3>
           <a class="plain-btn icon-label nav-link ${agentsCurrent && !route.agentId ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent && !route.agentId ? 'aria-current="page"' : ""}>${icon("bot")}<span>All agents</span></a>
@@ -1833,6 +1874,17 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
         </section>
       </div>
     </aside>${workspaceListDialogHTML()}`;
+}
+
+function boardsNavigationHTML() {
+  const boardLimitReached = state.boards.length >= state.maxBoards;
+  return `
+    <section class="nav-sec nav-boards">
+      <div class="nav-section-title"><h3>Boards</h3><button class="plain-btn" id="new-board" type="button" aria-label="New board" ${boardLimitReached || state.boardCreatePending ? "disabled" : ""}>${icon("plus")}</button></div>
+      <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
+      <div class="pages">${state.boards.map(boardRowHTML).join("")}</div>
+      ${boardLimitReached ? `<p class="board-limit">${state.maxBoards} board limit reached</p>` : ""}
+    </section>`;
 }
 
 function syncWorkspaceSidebarCounts() {
@@ -1954,7 +2006,8 @@ function bindNewTaskRecoveryActions() {
 }
 
 function boardRowHTML(board) {
-  const current = board.id === state.board?.id;
+  const route = parseRoute(globalThis.location?.pathname || APP_PATH);
+  const current = ["board", "board-settings"].includes(route.name) && board.id === state.board?.id;
   if (board.id === state.renamingBoardId) {
     return `
       <div class="board-row board-row-editing ${current ? "on" : ""}">
@@ -2011,10 +2064,10 @@ function listHTML(list) {
   return `
     <section class="bucket" data-bucket="${list.id}" draggable="true">
       <div class="bucket-head">
-        <input data-bucket-name="${list.id}" aria-label="List name" value="${escapeAttr(list.name)}">
+        <input data-bucket-name="${list.id}" aria-label="List name" title="Rename list" value="${escapeAttr(list.name)}">
         <span class="count" title="Open items">${list.openCount}</span>
         <div class="bucket-menu">
-          <button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list">${icon("trash")}</button>
+          ${list.isInbox ? "" : `<button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list" aria-label="Delete ${escapeAttr(list.name)}">${icon("trash")}</button>`}
         </div>
       </div>
       <input class="bucket-goal" data-bucket-goal="${list.id}" value="${escapeAttr(list.goal || "")}" placeholder="Add a goal" aria-label="Goal for ${escapeAttr(list.name)}">
@@ -2884,12 +2937,8 @@ function settingsHTML() {
             <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
             <a class="nav-link" href="${TASKS_PATH}">${icon("rows")}<span>All cards</span></a>
           </div>
-          <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" aria-label="New list" ${state.workspaceListPending ? "disabled" : ""}>${icon("plus")}</button></div>
-          <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
-          <div class="pages task-nav-pages">
-            ${state.workspaceLists.filter(list => !list.isInbox).map(list => `<a class="nav-link" href="${listPath(list.id)}"><i class="workspace-list-dot"></i><span>${escapeHTML(list.name)}</span><b data-workspace-count="${escapeAttr(list.id)}">${list.openCount || ""}</b></a>`).join("")}
-          </div>
         </section>
+        ${boardsNavigationHTML()}
         <p class="settings-sidebar-title">Account settings</p>
         <nav class="settings-nav" aria-label="Settings">
           ${SETTINGS_PAGES.map(item => `<a class="page-row icon-label settings-nav-link ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" ${item.id === page.id ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${item.label}</span></a>`).join("")}
@@ -4019,18 +4068,7 @@ function bindApp() {
     state.weekStart = dateKey(addDays(startOfWeek(new Date()), 7));
     render();
   });
-  const addListButton = document.querySelector("#add-list");
-  if (addListButton) addListButton.onclick = async () => {
-    if ((state.board.buckets || []).length >= state.maxListsPerBoard) return;
-    let list;
-    await runMutation(
-      async () => { list = await api.post(`/api/v1/boards/${state.board.id}/buckets`, { name: "New list" }); },
-      async () => loadBoards(state.board.id),
-    );
-    render();
-    if (list) document.querySelector(`[data-bucket="${list.id}"] input[data-bucket-name]`)?.focus();
-  };
-  document.querySelectorAll("[data-bucket-name]").forEach(el => el.addEventListener("change", async e => { await api.patch(`/api/v1/buckets/${el.dataset.bucketName}`, { name: e.target.value }); await reload(); }));
+  document.querySelectorAll("[data-bucket-name]").forEach(element => element.addEventListener("change", () => renameWorkspaceList(element)));
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
     const id = el.dataset.bucketGoal;
@@ -4254,10 +4292,21 @@ function bindAppShell() {
   bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   bindWorkspaceListControl();
+  bindBoardNavigationControls(sidebar);
+  document.querySelector("#agents-nav")?.addEventListener("click", event => {
+    event.preventDefault();
+    navigate(AGENTS_PATH);
+  });
+  document.querySelector("#settings").onclick = openSettings;
+  document.querySelector("#logout").onclick = logout;
+  return sidebar;
+}
+
+function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar")) {
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
   document.querySelectorAll("[data-board-settings]").forEach(el => el.onclick = () => navigate(boardSettingsPath(el.dataset.boardSettings)));
   document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
-    const keepSidebarOpen = sidebar.classList.contains("open");
+    const keepSidebarOpen = sidebar?.classList.contains("open");
     state.renamingBoardId = el.dataset.startRenameBoard;
     renderKeepingSidebarOpen(keepSidebarOpen);
     const input = document.querySelector(`[data-rename-board="${state.renamingBoardId}"] input[name="name"]`);
@@ -4265,24 +4314,89 @@ function bindAppShell() {
     input?.select();
   });
   document.querySelectorAll("[data-rename-board]").forEach(form => bindBoardRename(form));
-  document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
-  document.querySelector("#agents-nav")?.addEventListener("click", event => {
-    event.preventDefault();
-    navigate(AGENTS_PATH);
-  });
-  document.querySelector("#settings").onclick = openSettings;
-  document.querySelector("#logout").onclick = logout;
+  document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = () => openBoardDeleteDialog(el.dataset.deleteBoard));
   const newBoardButton = document.querySelector("#new-board");
   if (newBoardButton) newBoardButton.onclick = async () => {
-    if (state.boards.length >= state.maxBoards) return;
-    const result = await createDefaultBoard();
-    if (result.complete) navigate(boardPath(result.board.id));
+    if (state.boardCreatePending || state.boards.length >= state.maxBoards) return;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    const startedRouteVersion = routeVersion;
+    state.boardCreatePending = true;
+    render();
+    let result;
+    try {
+      result = await createDefaultBoard();
+    } catch (err) {
+      if (sessionIsCurrent(sessionVersion, userID)) state.error = err.message;
+    }
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    state.boardCreatePending = false;
+    if (startedRouteVersion !== routeVersion) {
+      const currentButton = document.querySelector("#new-board");
+      if (currentButton) currentButton.disabled = state.boards.length >= state.maxBoards;
+      return;
+    }
+    if (result?.complete) navigate(boardPath(result.board.id));
     else render();
   };
-  return sidebar;
+}
+
+async function renameWorkspaceList(element) {
+  const id = element.dataset.bucketName;
+  const list = state.board?.buckets?.find(item => item.id === id);
+  if (!list) return false;
+  const name = element.value.trim();
+  const expectedRouteVersion = routeVersion;
+  if (!name) {
+    state.error = "List name is required.";
+    render();
+    document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
+    return false;
+  }
+  if (name === list.name) {
+    element.value = name;
+    return true;
+  }
+  element.disabled = true;
+  try {
+    const updated = await api.patch(`/api/v1/buckets/${id}`, { name });
+    if (expectedRouteVersion !== routeVersion) return false;
+    const nextName = updated.name || name;
+    const rename = item => item.id === id ? {
+      ...item,
+      ...updated,
+      name: nextName,
+      tasks: (item.tasks || []).map(task => ({ ...task, listName: nextName, bucketName: nextName })),
+    } : item;
+    state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
+    state.workspaceLists = state.workspaceLists.map(rename);
+    state.error = "";
+    render();
+    document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
+    return true;
+  } catch (err) {
+    if (expectedRouteVersion !== routeVersion) return false;
+    state.error = err.message;
+    render();
+    const restored = document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`);
+    restored?.focus();
+    restored?.select();
+    return false;
+  }
 }
 
 function bindWorkspaceListControl() {
+  document.querySelector("#add-list")?.addEventListener("click", () => {
+    if (!state.board || workspaceListCount(state.board.id) >= state.maxListsPerBoard) return;
+    state.workspaceListError = "";
+    state.workspaceListDialog = "create";
+    state.workspaceListDialogListID = "";
+    state.workspaceListDialogName = "";
+    state.workspaceListDialogBoardID = state.board.id;
+    state.workspaceListDialogError = "";
+    render();
+    document.querySelector("#workspace-list-name")?.focus();
+  });
   document.querySelector("#new-workspace-list")?.addEventListener("click", () => {
     const board = boardWithWorkspaceListCapacity();
     if (!board) {
@@ -4320,21 +4434,38 @@ function openWorkspaceListDeleteDialog(listID) {
   document.querySelector("#confirm-workspace-list-dialog")?.focus();
 }
 
+function openBoardDeleteDialog(boardID) {
+  if (!state.boards.some(item => item.id === boardID)) return;
+  state.workspaceListDialog = "delete-board";
+  state.workspaceListDialogListID = "";
+  state.workspaceListDialogName = "";
+  state.workspaceListDialogBoardID = boardID;
+  state.workspaceListDialogError = "";
+  render();
+  document.querySelector("#confirm-workspace-list-dialog")?.focus();
+}
+
 function bindWorkspaceListDialog() {
   const overlay = document.querySelector(".workspace-list-dialog-overlay");
   const form = document.querySelector("#workspace-list-dialog-form");
   if (!overlay || !form) return;
   const close = () => {
     if (state.workspaceListPending) return;
-    const deleting = state.workspaceListDialog === "delete";
+    const deletingList = state.workspaceListDialog === "delete";
+    const deletingBoard = state.workspaceListDialog === "delete-board";
     const listID = state.workspaceListDialogListID;
+    const boardID = state.workspaceListDialogBoardID;
     state.workspaceListDialog = "";
     state.workspaceListDialogListID = "";
     state.workspaceListDialogName = "";
     state.workspaceListDialogBoardID = "";
     state.workspaceListDialogError = "";
     render();
-    document.querySelector(deleting ? `[data-list-id="${CSS.escape(listID)}"], [data-delete-bucket="${CSS.escape(listID)}"]` : "#new-workspace-list")?.focus();
+    const createTrigger = parseRoute(location.pathname).name === "board" ? "#add-list" : "#new-workspace-list";
+    const focusTarget = deletingBoard
+      ? `[data-delete-board="${CSS.escape(boardID)}"]`
+      : deletingList ? `[data-list-id="${CSS.escape(listID)}"], [data-delete-bucket="${CSS.escape(listID)}"]` : createTrigger;
+    document.querySelector(focusTarget)?.focus();
   };
   document.querySelector("#cancel-workspace-list-dialog")?.addEventListener("click", close);
   document.querySelector("#workspace-list-name")?.addEventListener("input", event => {
@@ -4366,6 +4497,10 @@ function bindWorkspaceListDialog() {
   });
   form.addEventListener("submit", async event => {
     event.preventDefault();
+    if (state.workspaceListDialog === "delete-board") {
+      await deleteBoard(state.workspaceListDialogBoardID);
+      return;
+    }
     if (state.workspaceListDialog === "delete") {
       await deleteWorkspaceList(state.workspaceListDialogListID);
       return;
@@ -4531,26 +4666,61 @@ async function renameBoard(id, name) {
 
 async function deleteBoard(id) {
   const board = state.boards.find(item => item.id === id);
-  if (!board || !confirm(`Delete "${board.name}" and all its lists and items?`)) return;
+  if (!board || state.workspaceListPending) return false;
   const sessionVersion = authVersion;
   const userID = state.me?.id;
-  await api.del(`/api/v1/boards/${id}`);
-  if (!sessionIsCurrent(sessionVersion, userID)) return;
+  state.workspaceListPending = true;
+  state.workspaceListDialogError = "";
+  render();
+  globalThis.document?.querySelector?.(".workspace-list-dialog")?.focus();
+  try {
+    await api.del(`/api/v1/boards/${id}`);
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    state.workspaceListPending = false;
+    state.workspaceListDialogError = err.message;
+    render();
+    globalThis.document?.querySelector?.("#confirm-workspace-list-dialog")?.focus();
+    return false;
+  }
+  if (!sessionIsCurrent(sessionVersion, userID)) return false;
+  state.workspaceListPending = false;
+  state.workspaceListDialog = "";
+  state.workspaceListDialogBoardID = "";
+  state.workspaceListDialogError = "";
   state.selectedTask = null;
   state.board = null;
-  if (!await loadBoards()) return;
-  if (!sessionIsCurrent(sessionVersion, userID)) return;
-  if (!state.board) {
-    const next = await api.post("/api/v1/boards", { name: "Today", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
-    await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Inbox", isInbox: true });
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
-    await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Focus" });
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
-    if (!await loadBoards(next.id)) return;
+  try {
+    if (!await loadBoards()) return false;
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    state.error = `The board was deleted, but Slate could not refresh: ${err.message}`;
+    render();
+    return false;
   }
-  if (!sessionIsCurrent(sessionVersion, userID)) return;
+  if (!sessionIsCurrent(sessionVersion, userID)) return false;
+  if (!state.board) {
+    try {
+      const next = await api.post("/api/v1/boards", { name: "Today", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Inbox", isInbox: true });
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Focus" });
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      if (!await loadBoards(next.id)) return false;
+    } catch (err) {
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      const message = `The board was deleted, but Slate could not create a replacement: ${err.message}`;
+      await navigate(TASKS_PATH, { replace: true });
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      state.error = message;
+      render();
+      return false;
+    }
+  }
+  if (!sessionIsCurrent(sessionVersion, userID)) return false;
   render();
+  return true;
 }
 
 async function bindSettings() {
@@ -4558,6 +4728,7 @@ async function bindSettings() {
   bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   bindWorkspaceListControl();
+  bindBoardNavigationControls(document.querySelector(".settings-sidebar"));
   document.querySelectorAll(".settings-nav-link").forEach(el => el.onclick = event => {
     event.preventDefault();
     navigate(el.getAttribute("href"));

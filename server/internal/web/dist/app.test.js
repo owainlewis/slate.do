@@ -107,18 +107,18 @@ test("password reset forms collect email and a secure replacement password", () 
   vm.runInContext(`state.resetToken = ""`, app);
 });
 
-test("sidebar makes cards, lists, and agents the primary control plane", () => {
+test("sidebar makes cards, boards, and agents the primary control plane", () => {
   vm.runInContext(`
-    state.workspaceLists = [{ id: "youtube", name: "YouTube", openCount: 18 }];
+    state.boards = [{ id: "content", name: "Content" }];
     state.workspaceScope = "all";
   `, app);
 
   const html = app.appHTML();
-  for (const label of ["Attention", "Inbox", "Today", "Review", "Plan", "Week", "All cards", "Lists", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
-  assert.match(html, /href="\/app\/lists\/youtube"[^>]*>[\s\S]*?YouTube[\s\S]*?<b data-workspace-count="youtube">18<\/b>/);
-  assert.match(html, /id="new-workspace-list"/);
+  for (const label of ["Attention", "Inbox", "Today", "Review", "Plan", "Week", "All cards", "Boards", "Content", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
+  assert.match(html, /data-board="content"><span>Content<\/span>/);
+  assert.match(html, /id="new-board"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
-  vm.runInContext(`state.workspaceLists = [];`, app);
+  vm.runInContext(`state.boards = [];`, app);
 });
 
 test("shared-shell routes load one account-wide list index and discard stale responses", async () => {
@@ -1652,6 +1652,8 @@ test("an older agent detail refresh cannot overwrite a newer refresh", async () 
   app.pendingOlderAgentDetail = new Promise(resolve => { releaseOlderDetail = resolve; });
   app.pendingOlderAgentWork = new Promise(resolve => { releaseOlderWork = resolve; });
   vm.runInContext(`
+    savedBoardDeleteRender = render;
+    render = () => {};
     authVersion = 50;
     routeVersion = 100;
     state.me = { id: "owner" };
@@ -2495,6 +2497,7 @@ test("a delayed board deletion from an old account cannot create data in the new
   assert.equal(vm.runInContext("state.me.id", app), "account-b");
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.boards)", app)), []);
   assert.equal(vm.runInContext("state.board", app), null);
+  vm.runInContext(`render = savedBoardDeleteRender;`, app);
 });
 
 test("API responses from an old session cannot resume mutation continuations", async () => {
@@ -2958,7 +2961,7 @@ test("a board deep link loads that board, and an unknown id is not found", async
   const it = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await it.apply();
   assert.equal(it.board(), "board_2");
-  assert.equal(it.view(), "app");
+  assert.equal(it.view(), "board");
 
   const missing = router({ url: "/app/boards/board_9", signedIn: true, boards: [{ id: "board_1" }] });
   await missing.apply();
@@ -3003,9 +3006,9 @@ test("a failed board-list navigation renders an error for the requested URL and 
   `, it.context);
   await it.apply();
 
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/boards/board_2");
   assert.equal(it.depth(), depth + 1, "retry must not add another history entry");
-  assert.equal(it.view(), "app");
+  assert.equal(it.view(), "board");
   assert.equal(it.board(), "board_2");
   assert.equal(it.error(), "");
 });
@@ -3077,10 +3080,10 @@ test("a route failure during back navigation preserves the history destination",
 
   await assert.doesNotReject(it.back());
 
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/boards/board_1");
   assert.equal(it.depth(), depth - 1);
   assert.equal(it.view(), "route-error");
-  assert.equal(it.routeError(), "workspace");
+  assert.equal(it.routeError(), "board");
   assert.equal(it.error(), "History destination unavailable");
 });
 
@@ -3106,9 +3109,9 @@ test("a stale board response cannot overwrite newer route navigation", async () 
   releaseBoardOne({ id: "board_1", name: "Board one", buckets: [] });
   await staleNavigation;
 
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/boards/board_2");
   assert.equal(it.board(), "board_2");
-  assert.equal(it.view(), "app");
+  assert.equal(it.view(), "board");
 });
 
 test("a stale board-list response cannot overwrite newer route navigation", async () => {
@@ -3135,7 +3138,7 @@ test("a stale board-list response cannot overwrite newer route navigation", asyn
   const boardIds = JSON.parse(vm.runInContext("JSON.stringify(state.boards.map(board => board.id))", it.context));
   assert.deepEqual(boardIds, ["board_2"]);
   assert.equal(it.board(), "board_2");
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/boards/board_2");
 });
 
 test("a stale workspace response cannot render Not Found over newer navigation", async () => {
@@ -3208,8 +3211,8 @@ test("a stale board-settings load cannot overwrite newer board navigation", asyn
   await staleSettings;
 
   assert.equal(it.board(), "board_2");
-  assert.equal(it.url(), "/app/tasks");
-  assert.equal(it.view(), "app");
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.view(), "board");
 });
 
 test("a stale settings token response cannot overwrite newer settings data", async () => {
@@ -3270,7 +3273,7 @@ test("a stale agent response cannot overwrite newer route data", async () => {
 
   const agentIDs = JSON.parse(vm.runInContext("JSON.stringify(state.agents.map(agent => agent.id))", it.context));
   assert.deepEqual(agentIDs, ["new"]);
-  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.url(), "/app/boards/board_2");
   assert.equal(it.board(), "board_2");
 });
 
@@ -3287,8 +3290,8 @@ test("back and forward move between landing, boards, and settings", async () => 
   assert.equal(it.view(), "app:settings");
 
   await it.back();
-  assert.equal(it.url(), "/app/tasks");
-  assert.equal(it.view(), "app");
+  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.view(), "board");
   await it.back();
   assert.equal(it.url(), "/app/today");
   await it.back();

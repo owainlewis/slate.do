@@ -460,6 +460,11 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
   overflow-y: auto;
   overflow-x: hidden;
 }
+.board-heading { min-width: 0; }
+.board-heading > div { display: flex; align-items: baseline; gap: 8px; }
+.board-heading h1 { margin: 0; font-size: 20px; }
+.board-heading span { color: var(--faint); font-size: 12px; }
+.board-heading p { margin: 2px 0 0; color: var(--faint); font-size: 12px; }
 .bucket {
   border: 1px solid var(--line);
   border-radius: var(--radius);
