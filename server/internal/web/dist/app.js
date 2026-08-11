@@ -3243,6 +3243,9 @@ function contextDeleteSurfaceMatchesRoute(route) {
 async function refreshAfterContextDelete() {
   const route = parseRoute(location.pathname);
   if (!contextDeleteSurfaceMatchesRoute(route)) {
+    if (["settings", "agent-new", "agent-settings"].includes(route.name)) {
+      return refreshCurrentWorkspaceListMetadata();
+    }
     await applyRoute();
     return true;
   }

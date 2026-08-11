@@ -917,6 +917,51 @@ test("an unauthorized post-delete agent refresh clears assigned work", async t =
   assert.deepEqual(pageErrors, []);
 });
 
+test("a delayed context-menu delete preserves an unrelated settings draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.delayNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+
+  const displayName = page.locator("#profile-display-name");
+  await displayName.fill("Unsaved settings draft during context delete");
+  const listRequests = state.requests.filter(request => request === "GET /api/v1/lists").length;
+  state.releaseDelete();
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/lists").length > listRequests);
+  await waitFor(() => state.tasks.some(task => task.id === "task-parent") === false);
+
+  assert.equal(await displayName.inputValue(), "Unsaved settings draft during context delete");
+  assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
+  assert.equal(new URL(page.url()).pathname, "/app/settings/profile");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete refreshes the mounted agent directory", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.dynamicAgentCounts = true;
+  state.delayNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+
+  const researchAgent = page.locator(".agent-directory-row").filter({ hasText: "Research agent" });
+  await researchAgent.getByText("1 working card", { exact: true }).waitFor();
+  state.releaseDelete();
+  await researchAgent.getByText("No open work assigned", { exact: true }).waitFor();
+
+  assert.equal(await researchAgent.getByText("1 working card", { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("legacy list-grouped Kanban links map to Board and can switch to Flow", async t => {
   const { page, origin, pageErrors } = await startWorkspace(t);
 
