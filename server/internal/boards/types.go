@@ -1,6 +1,9 @@
 package boards
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	KindAction        = "action"
@@ -66,6 +69,19 @@ type Task struct {
 	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
+// MarshalJSON keeps the released done field available during the status
+// rollout while ensuring status remains the sole completion model.
+func (task Task) MarshalJSON() ([]byte, error) {
+	type taskJSON Task
+	return json.Marshal(struct {
+		taskJSON
+		Done bool `json:"done"`
+	}{
+		taskJSON: taskJSON(task),
+		Done:     task.Status == StatusDone,
+	})
+}
+
 type CreateBoardInput struct {
 	Name            string `json:"name"`
 	BackgroundKind  string `json:"backgroundKind"`
@@ -114,6 +130,7 @@ type UpdateTaskInput struct {
 	Kind            *string `json:"kind"`
 	BucketID        *string `json:"bucketId"`
 	Status          *string `json:"status"`
+	Done            *bool   `json:"done"`
 	Priority        *string `json:"priority"`
 	AssigneeAgentID *string `json:"assigneeAgentId"`
 	SortOrder       *int    `json:"sortOrder"`
@@ -128,6 +145,7 @@ type TaskFilter struct {
 	BoardID         string
 	BucketID        string
 	Status          string
+	Done            *bool
 	Priority        string
 	Limit           int
 	Cursor          string

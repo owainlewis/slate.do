@@ -108,6 +108,47 @@ func TestTaskFilterFromQueryIncludesBoardAndList(t *testing.T) {
 	}
 }
 
+func TestTaskFilterFromQueryMapsLegacyDone(t *testing.T) {
+	doneRequest := httptest.NewRequest("GET", "/api/v1/tasks?done=true", nil)
+	doneFilter, err := taskFilterFromQuery(doneRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doneFilter.Status != StatusDone || doneFilter.Done == nil || !*doneFilter.Done {
+		t.Fatalf("done filter = %#v", doneFilter)
+	}
+
+	openRequest := httptest.NewRequest("GET", "/api/v1/tasks?done=false", nil)
+	openFilter, err := taskFilterFromQuery(openRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openFilter.Status != "" || openFilter.Done == nil || *openFilter.Done {
+		t.Fatalf("open filter = %#v", openFilter)
+	}
+	mixedRequest := httptest.NewRequest("GET", "/api/v1/tasks?status=working&done=true", nil)
+	mixedFilter, err := taskFilterFromQuery(mixedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mixedFilter.Status != StatusWorking || mixedFilter.Done == nil || !*mixedFilter.Done {
+		t.Fatalf("mixed filter = %#v", mixedFilter)
+	}
+
+	invalidRequest := httptest.NewRequest("GET", "/api/v1/tasks?done=maybe", nil)
+	if _, err := taskFilterFromQuery(invalidRequest); err == nil {
+		t.Fatal("invalid legacy done filter was accepted")
+	}
+
+	statusScope := taskCursorScope("user-one", TaskFilter{Status: StatusDone})
+	if legacyScope := taskCursorScope("user-one", doneFilter); legacyScope != statusScope {
+		t.Fatalf("done=true scope = %q, want status=done scope %q", legacyScope, statusScope)
+	}
+	if mixedScope := taskCursorScope("user-one", mixedFilter); mixedScope == taskCursorScope("user-one", TaskFilter{Status: StatusWorking}) {
+		t.Fatal("mixed legacy filter reused the status-only cursor scope")
+	}
+}
+
 func TestTaskFilterFromQueryIncludesWorkspaceFilters(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	req := httptest.NewRequest("GET", "/api/v1/tasks?q=video&assigneeAgentId=unassigned&plannedFrom=2026-08-01&plannedTo=2026-08-31&parentTaskId="+id+"&topLevel=true&inbox=true", nil)

@@ -481,6 +481,16 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 		ScheduledTo:   strings.TrimSpace(q.Get("plannedTo")),
 		ParentTaskID:  strings.TrimSpace(q.Get("parentTaskId")),
 	}
+	if raw := strings.TrimSpace(q.Get("done")); raw != "" {
+		done, err := parseQueryBool("done", raw)
+		if err != nil {
+			return TaskFilter{}, err
+		}
+		filter.Done = done
+		if filter.Status == "" && *done {
+			filter.Status = StatusDone
+		}
+	}
 	if err := validateTaskFilterLocationIDs(filter); err != nil {
 		return TaskFilter{}, err
 	}

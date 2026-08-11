@@ -2350,6 +2350,79 @@ func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
 	}
 }
 
+func TestLegacyDoneUpdatesAndFiltersMapToStatus(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Legacy completion"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Cards"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agentID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO agents (owner_user_id, name)
+		VALUES ($1, 'Legacy agent')
+		RETURNING id::text
+	`, userID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	unassigned, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Human card"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assigned, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Agent card", AssigneeAgentID: agentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := true
+	for _, task := range []Task{unassigned, assigned} {
+		updated, err := store.UpdateTask(ctx, userID, task.ID, UpdateTaskInput{Done: &done})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if updated.Status != StatusDone {
+			t.Fatalf("completed task = %#v", updated)
+		}
+	}
+	completed, err := store.ListTasks(ctx, userID, TaskFilter{Status: StatusDone})
+	if err != nil || len(completed) != 2 {
+		t.Fatalf("completed tasks = %#v, error = %v", completed, err)
+	}
+	working := StatusWorking
+	mixed, err := store.ListTasks(ctx, userID, TaskFilter{Status: working, Done: &done})
+	if err != nil || len(mixed) != 0 {
+		t.Fatalf("mixed status and done filter = %#v, error = %v", mixed, err)
+	}
+
+	done = false
+	doneStatus := StatusDone
+	reopenedHuman, err := store.UpdateTask(ctx, userID, unassigned.ID, UpdateTaskInput{Status: &doneStatus, Done: &done})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedAgent, err := store.UpdateTask(ctx, userID, assigned.ID, UpdateTaskInput{Done: &done})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopenedHuman.Status != StatusNew || reopenedAgent.Status != StatusQueued {
+		t.Fatalf("reopened statuses = %q, %q", reopenedHuman.Status, reopenedAgent.Status)
+	}
+	open, err := store.ListTasks(ctx, userID, TaskFilter{Done: &done})
+	if err != nil || len(open) != 2 {
+		t.Fatalf("open tasks = %#v, error = %v", open, err)
+	}
+}
+
 func openIntegrationDB(t *testing.T) *database.Pool {
 	t.Helper()
 	url := os.Getenv("SLATE_TEST_DATABASE_URL")

@@ -102,6 +102,39 @@ func TestConversationReadJSONOmitsMutationOnlyCardState(t *testing.T) {
 	}
 }
 
+func TestTaskJSONPreservesDerivedLegacyDoneField(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		done   bool
+	}{
+		{status: StatusDone, done: true},
+		{status: StatusQueued, done: false},
+	} {
+		recorder := httptest.NewRecorder()
+		writeJSON(recorder, http.StatusOK, Task{ID: "card-one", Status: test.status})
+		var response map[string]any
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		if response["done"] != test.done || response["status"] != test.status {
+			t.Fatalf("response = %#v", response)
+		}
+	}
+}
+
+func TestUpdateTaskInputAcceptsLegacyDoneField(t *testing.T) {
+	var input UpdateTaskInput
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/tasks/card-one", strings.NewReader(`{"done":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	if !decodeJSON(recorder, request, &input) {
+		t.Fatalf("legacy update was rejected: %s", recorder.Body.String())
+	}
+	if input.Done == nil || !*input.Done {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
 func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
 	tests := []struct {
 		err     error

@@ -1435,6 +1435,24 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			return Task{}, err
 		}
 	}
+	if input.Done != nil {
+		// Released clients still send the former completion boolean. Reopening
+		// returns the card to the first valid state for its current assignment.
+		legacyStatus := current.Status
+		if *input.Done {
+			legacyStatus = StatusDone
+		} else if current.Status == StatusDone {
+			legacyStatus = StatusNew
+			if current.AssigneeAgentID != "" {
+				legacyStatus = StatusQueued
+			}
+		}
+		if legacyStatus != current.Status {
+			if err := applyTaskStatus(&current, legacyStatus, allowWorking); err != nil {
+				return Task{}, err
+			}
+		}
+	}
 	if input.Priority != nil {
 		priority := clean(*input.Priority)
 		if !validPriority(priority) {
@@ -1926,6 +1944,13 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		args = append(args, filter.Status)
 		whereSQL += fmt.Sprintf(" AND t.status = $%d", len(args))
 	}
+	if filter.Done != nil {
+		if *filter.Done {
+			whereSQL += " AND t.status = 'done'"
+		} else {
+			whereSQL += " AND t.status <> 'done'"
+		}
+	}
 	if filter.Priority != "" {
 		args = append(args, filter.Priority)
 		whereSQL += fmt.Sprintf(" AND t.priority = $%d", len(args))
@@ -2317,12 +2342,18 @@ func taskScanDestinations(task *Task) []any {
 }
 
 func taskCursorScope(userID string, filter TaskFilter) string {
-	value := strings.Join([]string{
+	parts := []string{
 		userID, filter.BoardID, filter.BucketID, filter.Status, filter.Priority,
 		fmt.Sprint(filter.ActionsOnly), filter.AssigneeAgentID, fmt.Sprint(filter.Unassigned),
 		filter.Query, filter.ScheduledFrom, filter.ScheduledTo, filter.ParentTaskID, fmt.Sprint(filter.TopLevelOnly),
 		fmt.Sprint(filter.InboxOnly),
-	}, "\x00")
+	}
+	// done=true is the released spelling of status=done and must share its
+	// existing cursor scope. The open-only alias does not issue history cursors.
+	if filter.Done != nil && !(*filter.Done && filter.Status == StatusDone) {
+		parts = append(parts, fmt.Sprintf("done=%t", *filter.Done))
+	}
+	value := strings.Join(parts, "\x00")
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
