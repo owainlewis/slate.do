@@ -2273,7 +2273,7 @@ function agentsHTML() {
             </div>
             ${!onNew && state.agents.length ? `<a class="primary agents-new-action ${limitReached ? "disabled" : ""}" href="${NEW_AGENT_PATH}" id="new-agent-link" ${limitReached ? 'aria-disabled="true" aria-describedby="agents-limit"' : ""}>${icon("plus")}<span>New agent</span></a>` : ""}
           </header>
-          ${statusErrorHTML(state.error)}
+          <p class="status-error agents-context-error" role="alert" ${state.error ? "" : "hidden"}>${escapeHTML(state.error)}</p>
           ${state.agentLifecycleNotice && !onNew ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentLifecycleNotice)}</p>` : ""}
           ${state.agentsLoadState === "loading" ? agentsLoadingHTML() : ""}
           ${state.agentsLoadState === "error" ? agentsErrorHTML() : ""}
@@ -3300,10 +3300,34 @@ async function deleteCardFromContext(taskID) {
     if (!sessionIsCurrent(sessionVersion, userID)) return false;
     if (handleAgentUnauthorized(err)) return false;
     const message = `Couldn’t delete “${task.title}”: ${err.message}`;
-    if (["agent-detail", "agent-work"].includes(state.view)) {
+    const route = parseRoute(location.pathname);
+    if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) {
       state.agentTaskMutationError = message;
       if (state.selectedTask) state.error = message;
     } else state.error = message;
+    if (state.selectedTask) {
+      renderPreservingCurrentTaskDetail();
+      return false;
+    }
+    if (["settings", "agent-new", "agent-settings"].includes(route.name)) {
+      if (route.name === "agent-settings") syncAgentTaskMutationError();
+      if (route.name === "agent-new") {
+        const error = document.querySelector(".agents-context-error");
+        if (error) {
+          error.textContent = message;
+          error.hidden = false;
+        }
+      }
+      if (route.name === "settings") {
+        const status = document.querySelector(".settings-status");
+        if (status) {
+          status.textContent = message;
+          status.classList.add("error");
+          status.setAttribute("role", "alert");
+        }
+      }
+      return false;
+    }
     render();
     document.querySelector(`[data-task="${CSS.escape(taskID)}"] [data-open-task], [data-task="${CSS.escape(taskID)}"]`)?.focus();
     return false;

@@ -436,7 +436,7 @@ test("default board creation stays incomplete when either default list fails", a
     state.agentsLoadState = "ready";
     state.agents = [{ id: "agent", displayName: "Builder", credential: {}, workCounts: {} }];
   `, app);
-  assert.match(app.agentsHTML(), /class="status-error" role="alert">Default list failed/);
+  assert.match(app.agentsHTML(), /class="status-error agents-context-error" role="alert" >Default list failed/);
   vm.runInContext(`
     loadBoards = savedLoadBoards;
     loadBoardList = savedLoadBoardList;

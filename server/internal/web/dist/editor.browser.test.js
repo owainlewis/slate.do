@@ -157,6 +157,18 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }) : state.agents;
       return json(response, { agents, maxAgents: 5 });
     }
+    if (url.pathname === "/api/v1/agents" && request.method === "POST") {
+      const input = await requestJSON(request);
+      const agent = {
+        id: `agent-created-${state.agents.length + 1}`,
+        displayName: input.displayName,
+        purpose: input.purpose || "",
+        credential: {},
+        workCounts: {},
+      };
+      state.agents.push(agent);
+      return json(response, { ...agent, token: "slate_agent_test_secret" }, 201);
+    }
     if (url.pathname === "/api/v1/card-review-kinds" && request.method === "GET") {
       const kinds = Object.fromEntries([...state.tasks, ...state.subtasks]
         .filter(task => task.status === "needs_review")
@@ -883,6 +895,80 @@ test("a failed agent context-menu delete reports the error in place", async t =>
   assert.deepEqual(pageErrors, []);
 });
 
+test("a delayed context-menu delete failure preserves a newer card draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.locator('[data-open-task="task-inbox"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Unsaved draft after rejected context delete");
+
+  state.releaseDelete();
+  await page.locator(".detail-error").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+
+  assert.equal(await title.inputValue(), "Unsaved draft after rejected context delete");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed agent context-menu delete failure preserves settings and reports in place", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+
+  await page.locator('.agent-work-item[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  const purpose = page.locator("#agent-settings-purpose");
+  await purpose.fill("Unsaved purpose after rejected context delete");
+
+  state.releaseDelete();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+
+  assert.equal(await purpose.inputValue(), "Unsaved purpose after rejected context delete");
+  assert.equal(await purpose.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete failure preserves a one-time agent credential", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "New agent", exact: true }).click();
+  await page.locator("#agent-name").fill("New research agent");
+  await page.locator("#agent-purpose").fill("Keep this one-time credential visible");
+  await page.getByRole("button", { name: "Create agent", exact: true }).click();
+  await page.getByRole("heading", { name: "Connect your agent", exact: true }).waitFor();
+
+  const credential = page.locator("#agent-credential");
+  const secret = await credential.textContent();
+  await credential.focus();
+  state.releaseDelete();
+  await page.locator(".agents-context-error").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+
+  assert.equal(await credential.textContent(), secret);
+  assert.equal(await credential.evaluate(element => element === document.activeElement), true);
+  assert.equal(await page.getByRole("heading", { name: "Connect your agent", exact: true }).count(), 1);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("an unauthorized agent context-menu delete clears assigned work", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
   await page.goto(`${origin}/app/agents/agent-research/work`);
@@ -938,6 +1024,29 @@ test("a delayed context-menu delete preserves an unrelated settings draft", asyn
   assert.equal(await displayName.inputValue(), "Unsaved settings draft during context delete");
   assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
   assert.equal(new URL(page.url()).pathname, "/app/settings/profile");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete failure preserves and reports beside a settings draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+
+  const displayName = page.locator("#profile-display-name");
+  await displayName.fill("Unsaved settings draft after rejected delete");
+  state.releaseDelete();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+
+  assert.equal(await displayName.inputValue(), "Unsaved settings draft after rejected delete");
+  assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
   assert.deepEqual(pageErrors, []);
 });
 
