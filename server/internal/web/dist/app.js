@@ -2424,8 +2424,7 @@ function agentDetailBodyHTML() {
             <h1>${escapeHTML(agent.displayName)}</h1>
             <span class="connection-state state-${agentConnectionState(agent).toLowerCase().replace(/\s+/g, "-")}">${escapeHTML(agentConnectionState(agent))}</span>
           </div>
-          <p>${escapeHTML(agent.purpose || "No purpose added")}</p>
-          <p class="agent-last-used">Last credential use: ${escapeHTML(formatLastUse(agent.credential?.lastUsedAt || agent.lastUsedAt))}</p>
+          ${agent.purpose ? `<p>${escapeHTML(agent.purpose)}</p>` : ""}
         </div>
       </div>
       ${current === "settings" ? "" : `<button class="primary icon-label" id="assign-work" type="button">${icon("plus")}<span>Assign work</span></button>`}
@@ -2527,31 +2526,46 @@ function agentLifecycleConfirmHTML() {
 
 function agentOverviewHTML(agent) {
   const work = state.agentDetail.work;
+  const ready = work.ready || [];
   const working = work.working || [];
-  const totalOpen = Number(work.totals?.ready || 0) + Number(work.totals?.working || 0) + Number(work.totals?.review || 0);
-  const total = totalOpen + Number(work.totals?.completed || 0);
+  const review = work.review || [];
+  const recentlyCompleted = work.recentlyCompleted || [];
+  const counts = {
+    ready: Math.max(Number(work.totals?.ready || 0), ready.length),
+    working: Math.max(Number(work.totals?.working || 0), working.length),
+    review: Math.max(Number(work.totals?.review || 0), review.length),
+    completed: Math.max(Number(work.totals?.completed || 0), recentlyCompleted.length),
+  };
+  const total = counts.ready + counts.working + counts.review + counts.completed;
+  if (!total) {
+    return `
+      <section class="agent-overview-empty" aria-labelledby="agent-empty-heading">
+        <span class="agent-empty-icon" aria-hidden="true">${icon("rows")}</span>
+        <div>
+          <h2 id="agent-empty-heading">No work assigned</h2>
+          <p>Assign a card when you’re ready to put ${escapeHTML(agent.displayName)} to work.</p>
+        </div>
+      </section>`;
+  }
   return `
-    <section class="agent-current" aria-labelledby="agent-current-heading">
+    ${counts.working ? `<section class="agent-current" aria-labelledby="agent-current-heading">
       <div class="agent-section-heading">
         <div>
           <p class="eyebrow">Current focus</p>
           <h2 id="agent-current-heading">Working now</h2>
         </div>
-        <span>${Number(work.totals?.working || 0)}</span>
+        <span>${counts.working}</span>
       </div>
-      ${working.length ? `<div class="agent-current-list">${working.map(item => agentWorkItemHTML(item)).join("")}</div>` : `
-        <div class="agent-no-current">${icon("inboxTray")}<p>${escapeHTML(agent.displayName)} has no active work.</p></div>`}
-    </section>
+      ${working.length ? `<div class="agent-current-list">${working.map(item => agentWorkItemHTML(item)).join("")}</div>` : `<p class="agent-work-truncated">Open the full work view to see active cards.</p>`}
+    </section>` : ""}
     <div class="agent-work-groups">
-      ${agentWorkSectionHTML("Ready", "Cards assigned and ready to pick up.", work.ready, work.totals?.ready, "queued")}
-      ${agentWorkSectionHTML("Review", "Work waiting for human review.", work.review, work.totals?.review, "needs_review")}
-      ${agentWorkSectionHTML("Recently completed", "Current completed tasks, sorted by their latest update. This is not run history.", work.recentlyCompleted, work.totals?.completed, "done")}
+      ${counts.ready ? agentWorkSectionHTML("Ready", "Assigned and ready to pick up.", ready, counts.ready, "queued") : ""}
+      ${counts.review ? agentWorkSectionHTML("Review", "Waiting for your review.", review, counts.review, "needs_review") : ""}
+      ${counts.completed ? agentWorkSectionHTML("Recently completed", "Latest completed cards.", recentlyCompleted, counts.completed, "done") : ""}
     </div>
-    ${total ? `
-      <div class="agent-view-all">
-        <a class="secondary icon-label" href="${agentWorkPath(agent.id)}" data-agent-tab>${icon("rows")}<span>View all work</span></a>
-        <p>${formatCount(total, "assigned item", "assigned items")} in current task data.</p>
-      </div>` : ""}
+    <div class="agent-view-all">
+      <a class="secondary icon-label" href="${agentWorkPath(agent.id)}" data-agent-tab>${icon("rows")}<span>View all work</span></a>
+    </div>
   `;
 }
 

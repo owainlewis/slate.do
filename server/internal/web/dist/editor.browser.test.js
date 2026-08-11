@@ -1035,6 +1035,56 @@ test("an agent surface reports refresh failure after a committed board deletion"
   assert.deepEqual(pageErrors, []);
 });
 
+test("an idle agent detail stays quiet and uses a consistent color identity", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  state.agents[0].purpose = "";
+  for (const task of [...state.tasks, ...state.subtasks]) {
+    if (task.assigneeAgentId === "agent-research") {
+      task.assigneeAgentId = "";
+      task.assigneeAgentName = "";
+    }
+  }
+
+  await page.goto(`${origin}/app/agents/agent-research`);
+  await page.getByRole("heading", { name: "No work assigned", exact: true }).waitFor();
+
+  assert.equal(await page.locator(".agent-overview-empty").count(), 1);
+  for (const heading of ["Working now", "Ready", "Review", "Recently completed"]) {
+    assert.equal(await page.getByRole("heading", { name: heading, exact: true }).count(), 0, heading);
+  }
+  assert.equal(await page.getByText("No purpose added", { exact: true }).count(), 0);
+  assert.equal(await page.getByText(/Last credential use/).count(), 0);
+
+  const detailAvatar = page.locator(".agent-detail-identity .agent-avatar");
+  const navAvatar = page.locator(".agent-nav-link .agent-avatar");
+  const [detailStyle, navStyle] = await Promise.all([
+    detailAvatar.evaluate(element => {
+      const style = getComputedStyle(element);
+      return { color: style.color, backgroundImage: style.backgroundImage, borderRadius: style.borderRadius };
+    }),
+    navAvatar.evaluate(element => ({ color: getComputedStyle(element).color })),
+  ]);
+  assert.equal(detailStyle.color, navStyle.color);
+  assert.notEqual(detailStyle.color, "rgb(255, 255, 255)");
+  assert.match(detailStyle.backgroundImage, /linear-gradient/);
+  assert.notEqual(detailStyle.borderRadius, "50%");
+
+  for (const viewport of [{ width: 1440, height: 960 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    assert.equal(await page.getByRole("heading", { name: "No work assigned", exact: true }).isVisible(), true);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${viewport.width}px page overflow`);
+  }
+  // The legacy app shell wraps route-owned main elements in #app; this test
+  // scopes accessibility proof to the changed agent surface.
+  const scan = await new AxeBuilder({ page })
+    .include(".agents-main")
+    .disableRules(["landmark-main-is-top-level", "landmark-no-duplicate-main"])
+    .analyze();
+  assert.deepEqual(scan.violations, []);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("board lists stay in one horizontal scroll lane", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t, { width: 720, height: 900 });
 

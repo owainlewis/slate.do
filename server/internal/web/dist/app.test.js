@@ -1089,7 +1089,7 @@ test("agent detail presents real grouped task data, bounded history, and distinc
   assert.equal((overview.match(/Working item/g) || []).length, 1, "working tasks must not be duplicated");
   assert.match(overview, /Review item/);
   assert.match(overview, /Done item/);
-  assert.match(overview, /This is not run history/);
+  assert.doesNotMatch(overview, /This is not run history|current task data|Last credential use/);
   assert.match(overview, /Showing 1 of 51/);
   assert.match(overview, /href="\/app\/agents\/agent-one\/work"/);
   assert.doesNotMatch(overview, /runtime|model|concurrency|online|offline/i);
@@ -1114,6 +1114,31 @@ test("agent detail presents real grouped task data, bounded history, and distinc
     assert.match(app.agentDetailHTML(), new RegExp(text, "i"));
   }
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentWorkPage = null; state.agentDetailLoadState = "idle";`, app);
+});
+
+test("an idle agent gets one quiet empty state without placeholder metadata or zero groups", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", theme: "dark" };
+    state.view = "agent-detail";
+    state.agentDetailLoadState = "ready";
+    state.agentDetail = {
+      agent: { id: "agent-idle", displayName: "Idle agent", purpose: "", credential: {} },
+      work: {
+        ready: [], working: [], review: [], recentlyCompleted: [],
+        totals: { ready: 0, working: 0, review: 0, completed: 0 },
+      },
+    };
+    state.selectedTask = null;
+  `, app);
+
+  const html = app.agentDetailHTML();
+  assert.match(html, /class="agent-overview-empty"/);
+  assert.match(html, /<h2 id="agent-empty-heading">No work assigned<\/h2>/);
+  assert.match(html, /Assign a card when you’re ready to put Idle agent to work/);
+  assert.doesNotMatch(html, /No purpose added|Last credential use|Working now|No ready items|No review items|No recently completed items/);
+  assert.equal((html.match(/No work assigned/g) || []).length, 1);
+
+  vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentDetailLoadState = "idle";`, app);
 });
 
 test("deleting an off-page assigned subtask reconciles agent pagination and status totals", () => {
