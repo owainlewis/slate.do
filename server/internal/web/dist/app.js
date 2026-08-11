@@ -3256,7 +3256,7 @@ async function refreshAfterContextDelete() {
       const loaded = await reload();
       return Boolean(loaded) && refreshRouteVersion === routeVersion;
     }
-    const [detailLoaded, listsLoaded] = await Promise.all([
+    const [detailResult, listsResult] = await Promise.allSettled([
       loadAgentDetail(route.agentId, {
         includeWorkPage: route.name === "agent-work",
         page: route.name === "agent-work" ? workPageFromLocation() : 1,
@@ -3266,6 +3266,14 @@ async function refreshAfterContextDelete() {
       }),
       loadWorkspaceListIndex(refreshRouteVersion),
     ]);
+    if (refreshRouteVersion !== routeVersion) return false;
+    const unauthorized = [detailResult, listsResult]
+      .find(result => result.status === "rejected" && result.reason?.status === 401);
+    if (unauthorized) throw unauthorized.reason;
+    if (detailResult.status === "rejected") throw detailResult.reason;
+    if (listsResult.status === "rejected") throw listsResult.reason;
+    const detailLoaded = detailResult.value;
+    const listsLoaded = listsResult.value;
     if (!detailLoaded || !listsLoaded || refreshRouteVersion !== routeVersion) return false;
     state.agentDetailLoadState = "ready";
     state.workspaceListError = "";
