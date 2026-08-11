@@ -757,6 +757,28 @@ test("a delayed context-menu delete preserves a newer unrelated card detail", as
   assert.deepEqual(pageErrors, []);
 });
 
+test("a failed post-delete refresh preserves a newer unrelated card draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const parent = page.locator('[data-task="task-parent"]');
+  state.delayNextDelete = true;
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  await page.locator('[data-open-task="task-inbox"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Draft survives failed refresh");
+  state.failNextWorkspaceTasks = true;
+  state.releaseDelete();
+  await page.getByText("The card was deleted, but this view couldn’t be refreshed: Could not refresh tasks", { exact: true }).waitFor();
+
+  assert.equal(await title.inputValue(), "Draft survives failed refresh");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("deleting a child from its context menu keeps the parent detail open", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
   await page.locator('[data-open-task="task-parent"]').first().click();

@@ -3226,8 +3226,17 @@ function removeLoadedTaskFamily(taskID, tasks) {
 function captureContextDeleteDetail() {
   if (!state.selectedTask) return null;
   preserveCurrentTaskDraft();
+  const route = parseRoute(location.pathname);
+  const contextMatches = route.name === "workspace"
+    ? state.view === "app" && state.workspaceScope === route.scope && (route.scope !== "list" || state.workspaceListID === route.listId)
+    : route.name === "board"
+      ? state.view === "board" && state.board?.id === route.boardId
+      : ["agent-detail", "agent-work"].includes(route.name)
+        ? state.view === route.name && state.agentDetail?.agent?.id === route.agentId
+        : false;
   return {
     path: currentLocationPath(),
+    contextMatches,
     task: { ...state.selectedTask },
     subtasks: state.selectedSubtasks.map(item => ({ ...item })),
     entries: state.selectedEntries.map(item => ({ ...item })),
@@ -3239,9 +3248,49 @@ function captureContextDeleteDetail() {
   };
 }
 
+function captureContextDeleteSurface(snapshot) {
+  if (!snapshot) return;
+  snapshot.surface = {
+    view: state.view,
+    settings: state.settings,
+    board: state.board,
+    boards: state.boards,
+    workspaceLists: state.workspaceLists,
+    workspaceTasks: state.workspaceTasks,
+    workspaceReviewKinds: state.workspaceReviewKinds,
+    workspaceNextCursor: state.workspaceNextCursor,
+    workspaceScope: state.workspaceScope,
+    workspaceListID: state.workspaceListID,
+    workspaceView: state.workspaceView,
+    agentDetail: state.agentDetail,
+    agentWorkPage: state.agentWorkPage,
+    agentDetailLoadState: state.agentDetailLoadState,
+  };
+}
+
+function contextDeleteRefreshFailed() {
+  const route = parseRoute(location.pathname);
+  if (state.routeError) return true;
+  if (route.name === "workspace") return state.view !== "app";
+  if (route.name === "board") return state.view !== "board" || state.board?.id !== route.boardId;
+  if (["agent-detail", "agent-work"].includes(route.name)) {
+    return state.view !== route.name || state.agentDetailLoadState !== "ready" || state.agentDetail?.agent?.id !== route.agentId;
+  }
+  return false;
+}
+
 function restoreContextDeleteDetail(snapshot, deletedIDs, expectedRouteVersion, expectedDetailVersion) {
   if (!snapshot || deletedIDs.has(snapshot.task.id) || expectedRouteVersion !== routeVersion || expectedDetailVersion !== taskDetailVersion
-    || snapshot.path !== currentLocationPath() || state.routeError) return false;
+    || snapshot.path !== currentLocationPath() || !snapshot.contextMatches) return false;
+  if (contextDeleteRefreshFailed()) {
+    const refreshError = state.error || state.agentDetailError || "Unknown refresh error";
+    Object.assign(state, snapshot.surface);
+    state.routeError = null;
+    state.workspaceLoading = false;
+    const message = `The card was deleted, but this view couldn’t be refreshed: ${refreshError}`;
+    state.error = message;
+    if (["agent-detail", "agent-work"].includes(state.view)) state.agentTaskMutationError = message;
+  }
   const summary = findTask(snapshot.task.id);
   if (!summary) return false;
   state.taskDetailDrafts = Object.fromEntries(Object.entries(snapshot.drafts).filter(([id]) => !deletedIDs.has(id)));
@@ -3287,6 +3336,7 @@ async function deleteCardFromContext(taskID) {
   const deletedIDs = new Set([taskID, ...deletedTasks.keys()]);
   const detailSnapshot = captureContextDeleteDetail();
   removeLoadedTaskFamily(taskID, [...deletedTasks.values()]);
+  captureContextDeleteSurface(detailSnapshot);
   state.error = "";
   const refresh = applyRoute();
   const refreshRouteVersion = routeVersion;
