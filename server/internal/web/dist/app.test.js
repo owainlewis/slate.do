@@ -343,6 +343,30 @@ test("global scopes include subtasks while Inbox and individual lists remain par
   delete app.location;
 });
 
+test("global filters can hide child cards while rollup scopes stay top level", () => {
+  app.location = { search: "?children=hide" };
+  vm.runInContext(`state.workspaceScope = "all";`, app);
+  for (const scope of ["all", "today", "week", "review"]) {
+    assert.equal(app.workspaceQuery({ scope }).get("topLevel"), "true", `${scope} should hide child cards`);
+  }
+  assert.equal(app.workspaceFilterCount(), 1);
+  assert.match(app.workspaceFilterHTML(), /name="children" value="hide" checked/);
+  vm.runInContext(`state.workspaceScope = "inbox";`, app);
+  assert.doesNotMatch(app.workspaceFilterHTML(), /name="children"/);
+  vm.runInContext(`state.workspaceScope = "all";`, app);
+  delete app.location;
+});
+
+test("kanban items use raised card surfaces", () => {
+  for (const selector of [".workspace-flow-card", ".task", ".flow-card"]) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const block = styles.match(new RegExp(`${escaped} \\{([^}]*)\\}`))[1];
+    assert.match(block, /background: var\(--card\)/, selector);
+    assert.match(block, /box-shadow: var\(--card-shadow\)/, selector);
+    assert.match(block, /border-radius: 8px/, selector);
+  }
+});
+
 test("default board creation stays incomplete when either default list fails", async () => {
   vm.runInContext(`
     state.me = { id: "owner", theme: "light" };

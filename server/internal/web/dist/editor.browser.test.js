@@ -468,7 +468,7 @@ test("the task workspace supports Board, Flow, Table, lists, and filters", async
   assert.ok(parseFloat(await page.locator(".workspace-table-head").evaluate(element => getComputedStyle(element).fontSize)) >= 11);
   assert.ok(parseFloat(await page.locator(".workspace-table-row strong").first().evaluate(element => getComputedStyle(element).fontSize)) >= 14);
 
-  await page.getByRole("button", { name: "Filter", exact: true }).click();
+  await page.locator("#workspace-filter-toggle").click();
   await page.waitForTimeout(300);
   assert.equal(await page.locator("#workspace-filters").count(), 1, `url=${page.url()} errors=${pageErrors.join(" | ")}`);
   await page.getByLabel("Search", { exact: true }).fill("boss");
@@ -503,6 +503,49 @@ test("Board changes list membership and Flow changes status", async t => {
   await page.locator('[data-task="task-child"]').dragTo(page.locator('[data-flow-status="working"]'));
   await page.locator('[data-flow-status="working"] [data-task="task-child"]').waitFor();
   assert.equal(state.subtasks.find(task => task.id === "task-child").status, "working");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("global filters can hide and restore child cards", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  assert.equal(await page.locator('[data-open-task="task-child"]').count(), 1);
+  await page.locator("#workspace-filter-toggle").click();
+  await page.getByLabel("Hide child cards", { exact: true }).check();
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await waitFor(() => state.taskQueries.some(query => query.includes("topLevel=true")));
+  await page.locator('[data-open-task="task-child"]').waitFor({ state: "detached" });
+  assert.match(page.url(), /children=hide/);
+  assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
+
+  assert.equal(await page.getByLabel("Hide child cards", { exact: true }).isChecked(), true);
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  await page.locator('[data-open-task="task-child"]').waitFor();
+  assert.doesNotMatch(page.url(), /children=hide/);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("kanban items render as distinct physical card surfaces", async t => {
+  const { page, pageErrors } = await startWorkspace(t);
+
+  const workspaceCard = page.locator(".workspace-flow-card").first();
+  const workspaceAppearance = await workspaceCard.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, shadow: style.boxShadow, radius: parseFloat(style.borderRadius) };
+  });
+  assert.notEqual(workspaceAppearance.shadow, "none");
+  assert.ok(workspaceAppearance.radius >= 8);
+
+  await page.locator('[data-board="board-one"]').click();
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  const boardCard = page.locator(".task").first();
+  const boardAppearance = await boardCard.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, shadow: style.boxShadow, radius: parseFloat(style.borderRadius) };
+  });
+  assert.equal(boardAppearance.background, workspaceAppearance.background);
+  assert.notEqual(boardAppearance.shadow, "none");
+  assert.ok(boardAppearance.radius >= 8);
   assert.deepEqual(pageErrors, []);
 });
 

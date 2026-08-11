@@ -703,6 +703,7 @@ function workspaceQuery(route, cursor = "") {
   const current = new URLSearchParams(location.search);
   const query = new URLSearchParams({ limit: "200" });
   if (["inbox", "list"].includes(route.scope)) query.set("topLevel", "true");
+  if (current.get("children") === "hide") query.set("topLevel", "true");
   if (route.scope === "list" && route.listId) query.set("bucketId", route.listId);
   if (route.scope === "inbox") query.set("inbox", "true");
   if (route.scope === "review") query.set("status", "needs_review");
@@ -1624,6 +1625,7 @@ function workspaceFilterCount() {
   const names = ["q", "priority", "assigneeAgentId"];
   if (state.workspaceScope !== "review") names.push("status");
   if (!["today", "week"].includes(state.workspaceScope)) names.push("plannedFrom", "plannedTo");
+  if (!["inbox", "list"].includes(state.workspaceScope)) names.push("children");
   return names.filter(name => query.get(name)).length;
 }
 
@@ -1635,6 +1637,7 @@ function workspaceFilterHTML() {
     ${state.workspaceScope === "review" ? "" : `<label><span>Status</span><select name="status"><option value="">Any status</option>${FLOW_STATES.map(item => `<option value="${item.value}" ${query.get("status") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>`}
     <label><span>Priority</span><select name="priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
     <label><span>Owner</span><select name="assigneeAgentId"><option value="">Anyone</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
+    ${["inbox", "list"].includes(state.workspaceScope) ? "" : `<fieldset class="workspace-child-filter"><legend>Child cards</legend><label class="workspace-checkbox"><input type="checkbox" name="children" value="hide" ${query.get("children") === "hide" ? "checked" : ""}><span>Hide child cards</span></label></fieldset>`}
     ${["today", "week"].includes(state.workspaceScope) ? "" : `<label><span>From</span><input type="date" name="plannedFrom" value="${escapeAttr(query.get("plannedFrom") || "")}"></label>
     <label><span>To</span><input type="date" name="plannedTo" value="${escapeAttr(query.get("plannedTo") || "")}"></label>`}
     <button class="secondary" type="submit">Apply</button><button class="plain-btn" id="clear-workspace-filters" type="button">Clear</button>
@@ -3122,7 +3125,7 @@ function bindWorkspace() {
     const data = new FormData(event.currentTarget);
     const query = new URLSearchParams();
     if (state.workspaceScope !== "week" && state.workspaceView !== "table") query.set("view", state.workspaceView);
-    for (const name of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
+    for (const name of ["q", "status", "priority", "assigneeAgentId", "children", "plannedFrom", "plannedTo"]) {
       const value = String(data.get(name) || "").trim();
       if (value) query.set(name, value);
     }
