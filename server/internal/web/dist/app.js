@@ -3223,92 +3223,58 @@ function removeLoadedTaskFamily(taskID, tasks) {
   state.subtaskError = "";
 }
 
-function captureContextDeleteDetail() {
-  if (!state.selectedTask) return null;
-  preserveCurrentTaskDraft();
-  const route = parseRoute(location.pathname);
-  const contextMatches = route.name === "workspace"
-    ? state.view === "app" && state.workspaceScope === route.scope && (route.scope !== "list" || state.workspaceListID === route.listId)
-    : route.name === "board"
-      ? state.view === "board" && state.board?.id === route.boardId
-      : ["agent-detail", "agent-work"].includes(route.name)
-        ? state.view === route.name && state.agentDetail?.agent?.id === route.agentId
-        : false;
-  return {
-    path: currentLocationPath(),
-    contextMatches,
-    task: { ...state.selectedTask },
-    subtasks: state.selectedSubtasks.map(item => ({ ...item })),
-    entries: state.selectedEntries.map(item => ({ ...item })),
-    drafts: Object.fromEntries(Object.entries(state.taskDetailDrafts).map(([id, draft]) => [id, { ...draft }])),
-    cardEntryDraft: state.cardEntryDraft,
-    cardEntryKind: state.cardEntryKind,
-    subtaskDraft: state.subtaskDraft,
-    focus: captureTaskDetailFocus(),
-  };
-}
-
-function captureContextDeleteSurface(snapshot) {
-  if (!snapshot) return;
-  snapshot.surface = {
-    view: state.view,
-    settings: state.settings,
-    board: state.board,
-    boards: state.boards,
-    workspaceLists: state.workspaceLists,
-    workspaceTasks: state.workspaceTasks,
-    workspaceReviewKinds: state.workspaceReviewKinds,
-    workspaceNextCursor: state.workspaceNextCursor,
-    workspaceScope: state.workspaceScope,
-    workspaceListID: state.workspaceListID,
-    workspaceView: state.workspaceView,
-    agentDetail: state.agentDetail,
-    agentWorkPage: state.agentWorkPage,
-    agentDetailLoadState: state.agentDetailLoadState,
-  };
-}
-
-function contextDeleteRefreshFailed() {
-  const route = parseRoute(location.pathname);
-  if (state.routeError) return true;
-  if (route.name === "workspace") return state.view !== "app";
-  if (route.name === "board") return state.view !== "board" || state.board?.id !== route.boardId;
+function contextDeleteSurfaceMatchesRoute(route) {
+  if (route.name === "workspace") {
+    return state.view === "app" && state.workspaceScope === route.scope
+      && (route.scope !== "list" || state.workspaceListID === route.listId);
+  }
+  if (route.name === "board") return state.view === "board" && state.board?.id === route.boardId;
   if (["agent-detail", "agent-work"].includes(route.name)) {
-    return state.view !== route.name || state.agentDetailLoadState !== "ready" || state.agentDetail?.agent?.id !== route.agentId;
+    return state.view === route.name && state.agentDetailLoadState === "ready" && state.agentDetail?.agent?.id === route.agentId;
   }
   return false;
 }
 
-function restoreContextDeleteDetail(snapshot, deletedIDs, expectedRouteVersion, expectedDetailVersion) {
-  if (!snapshot || deletedIDs.has(snapshot.task.id) || expectedRouteVersion !== routeVersion || expectedDetailVersion !== taskDetailVersion
-    || snapshot.path !== currentLocationPath() || !snapshot.contextMatches) return false;
-  if (contextDeleteRefreshFailed()) {
-    const refreshError = state.error || state.agentDetailError || "Unknown refresh error";
-    Object.assign(state, snapshot.surface);
-    state.routeError = null;
-    state.workspaceLoading = false;
-    const message = `The card was deleted, but this view couldn’t be refreshed: ${refreshError}`;
-    state.error = message;
-    if (["agent-detail", "agent-work"].includes(state.view)) state.agentTaskMutationError = message;
+async function refreshAfterContextDelete() {
+  const route = parseRoute(location.pathname);
+  if (!contextDeleteSurfaceMatchesRoute(route)) {
+    await applyRoute();
+    return true;
   }
-  const summary = findTask(snapshot.task.id);
-  if (!summary) return false;
-  state.taskDetailDrafts = Object.fromEntries(Object.entries(snapshot.drafts).filter(([id]) => !deletedIDs.has(id)));
-  const draft = state.taskDetailDrafts[snapshot.task.id] || {};
-  state.selectedTask = { ...snapshot.task, ...summary, ...draft };
-  state.selectedSubtasks = snapshot.subtasks.filter(item => !deletedIDs.has(item.id));
-  state.selectedEntries = snapshot.entries;
-  state.cardEntryDraft = snapshot.cardEntryDraft;
-  state.cardEntryKind = snapshot.cardEntryKind;
-  state.cardEntryPending = false;
-  state.cardEntryError = "";
-  state.subtaskDraft = snapshot.subtaskDraft;
-  state.subtaskCreateAttempt = null;
-  state.subtaskPending = false;
-  state.subtaskError = "";
-  render();
-  restoreTaskDetailFocus(snapshot.focus);
-  return true;
+
+  const refreshRouteVersion = ++routeVersion;
+  try {
+    if (route.name === "workspace" || route.name === "board") {
+      const loaded = await reload();
+      return Boolean(loaded) && refreshRouteVersion === routeVersion;
+    }
+    const [detailLoaded, listsLoaded] = await Promise.all([
+      loadAgentDetail(route.agentId, {
+        includeWorkPage: route.name === "agent-work",
+        page: route.name === "agent-work" ? workPageFromLocation() : 1,
+        sessionVersion: authVersion,
+        userID: state.me?.id,
+        expectedRouteVersion: refreshRouteVersion,
+      }),
+      loadWorkspaceListIndex(refreshRouteVersion),
+    ]);
+    if (!detailLoaded || !listsLoaded || refreshRouteVersion !== routeVersion) return false;
+    state.agentDetailLoadState = "ready";
+    state.workspaceListError = "";
+    renderPreservingCurrentTaskDetail();
+    return true;
+  } catch (err) {
+    if (refreshRouteVersion !== routeVersion) return false;
+    state.workspaceLoading = false;
+    const message = `The card was deleted, but this view couldn’t be refreshed: ${err.message}`;
+    state.error = message;
+    if (["agent-detail", "agent-work"].includes(route.name)) {
+      state.agentTaskRefreshError = message;
+      state.agentTaskMutationError = message;
+    }
+    renderPreservingCurrentTaskDetail();
+    return false;
+  }
 }
 
 async function deleteCardFromContext(taskID) {
@@ -3333,16 +3299,9 @@ async function deleteCardFromContext(taskID) {
   }
 
   const deletedTasks = new Map([...family, ...loadedTaskFamily(taskID)].map(item => [item.id, item]));
-  const deletedIDs = new Set([taskID, ...deletedTasks.keys()]);
-  const detailSnapshot = captureContextDeleteDetail();
   removeLoadedTaskFamily(taskID, [...deletedTasks.values()]);
-  captureContextDeleteSurface(detailSnapshot);
   state.error = "";
-  const refresh = applyRoute();
-  const refreshRouteVersion = routeVersion;
-  const refreshDetailVersion = taskDetailVersion;
-  await refresh;
-  restoreContextDeleteDetail(detailSnapshot, deletedIDs, refreshRouteVersion, refreshDetailVersion);
+  await refreshAfterContextDelete();
   return true;
 }
 

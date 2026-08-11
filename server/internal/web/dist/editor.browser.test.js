@@ -412,11 +412,23 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }
       const index = state.tasks.findIndex(item => item.id === taskMatch[1]);
       if (index >= 0) {
+        const deleted = [state.tasks[index], ...state.subtasks.filter(item => item.parentTaskId === taskMatch[1])];
+        for (const item of deleted) {
+          if (item.status === "done") continue;
+          const list = state.lists.find(candidate => candidate.id === item.bucketId);
+          if (list) list.openCount = Math.max(0, list.openCount - 1);
+        }
         state.tasks.splice(index, 1);
         state.subtasks = state.subtasks.filter(item => item.parentTaskId !== taskMatch[1]);
       }
       const subtaskIndex = state.subtasks.findIndex(item => item.id === taskMatch[1]);
-      if (subtaskIndex >= 0) state.subtasks.splice(subtaskIndex, 1);
+      if (subtaskIndex >= 0) {
+        const [deleted] = state.subtasks.splice(subtaskIndex, 1);
+        if (deleted.status !== "done") {
+          const list = state.lists.find(candidate => candidate.id === deleted.bucketId);
+          if (list) list.openCount = Math.max(0, list.openCount - 1);
+        }
+      }
       return json(response, {});
     }
     if (taskMatch && request.method === "GET") {
@@ -775,6 +787,47 @@ test("a failed post-delete refresh preserves a newer unrelated card draft", asyn
 
   assert.equal(await title.inputValue(), "Draft survives failed refresh");
   assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a context-delete refresh preserves a detail opened and edited while it loads", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const parent = page.locator('[data-task="task-parent"]');
+  state.delayNextDelete = true;
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  state.delayNextWorkspaceTasks = true;
+  state.releaseDelete();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+  await page.locator('[data-open-task="task-inbox"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Edited while delete refresh loads");
+  state.releaseWorkspaceTasks();
+  await waitFor(() => state.delayedWorkspaceTasksCompleted);
+  await page.waitForTimeout(50);
+
+  assert.equal(await title.inputValue(), "Edited while delete refresh loads");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a failed overview refresh keeps the locally deleted card removed", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const parent = page.locator('[data-task="task-parent"]');
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  state.failNextWorkspaceTasks = true;
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await page.getByText("The card was deleted, but this view couldn’t be refreshed: Could not refresh tasks", { exact: true }).waitFor();
+
+  assert.equal(await page.getByRole("heading", { name: "All cards", exact: true }).count(), 1);
+  assert.equal(await page.locator('[data-task="task-parent"]').count(), 0);
+  assert.equal(await page.locator('[data-task="task-inbox"]').count(), 1);
   assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
   assert.deepEqual(pageErrors, []);
 });
