@@ -1184,6 +1184,7 @@ async function openTaskDetail(taskID, trigger, options = {}) {
     state.cardEntryAttemptKey = "";
     state.error = "";
     render();
+    focusOpenedTaskDetail();
     return true;
   } catch (err) {
     if (!isCurrent()) return false;
@@ -1193,6 +1194,10 @@ async function openTaskDetail(taskID, trigger, options = {}) {
     render();
     return false;
   }
+}
+
+function focusOpenedTaskDetail() {
+  globalThis.document?.querySelector?.("[data-close-detail]")?.focus();
 }
 
 function render() {
@@ -1562,10 +1567,9 @@ function appHTML() {
   return `
     <section class="shell task-shell theme-${theme}">
       ${appSidebarHTML({ theme, showNewTask: false })}
-      <div class="main workspace-main">
-        ${overview}
+      <div class="main workspace-main ${state.selectedTask ? "card-detail-main" : ""}">
+        ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : overview}
       </div>
-      ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : ""}
     </section>`;
 }
 
@@ -1585,26 +1589,27 @@ function boardHTML() {
   const boardMode = state.boardMode !== "flow";
   const listLimitReached = lists.length >= state.maxListsPerBoard;
   const openCards = boardSurfaceTasks(board).filter(task => !task.done).length;
+  const overview = `
+    <div class="main board-main">
+      <header class="topbar board-topbar">
+        <div class="board-heading"><div><h1>${escapeHTML(board?.name || "Board")}</h1><span>${openCards}</span></div><p>Lists keep related cards together.</p></div>
+        <div class="top-actions">
+          <div class="view-switch" aria-label="Board view">
+            <button data-board-mode="lists" aria-pressed="${boardMode}" class="${boardMode ? "on" : ""}" title="Board">${icon("kanban")}<span>Board</span></button>
+            <button data-board-mode="flow" aria-pressed="${!boardMode}" class="${!boardMode ? "on" : ""}" title="Flow">${icon("columns")}<span>Flow</span></button>
+          </div>
+          <button class="secondary" id="add-list" ${boardMode && !listLimitReached ? "" : "disabled"}>${icon("plus")}<span>New list</span></button>
+        </div>
+      </header>
+      ${statusErrorHTML(state.error || state.taskCompletionError?.message)}
+      ${statusNoticeHTML(state.moveNotice)}
+      ${boardMode ? `<div class="grid">${lists.map(listHTML).join("")}</div>` : flowHTML(board)}
+      ${footerHTML(board, false)}
+    </div>`;
   return `
     <section class="shell theme-${theme}">
       ${appSidebarHTML({ theme, showNewTask: false })}
-      <div class="main board-main">
-        <header class="topbar board-topbar">
-          <div class="board-heading"><div><h1>${escapeHTML(board?.name || "Board")}</h1><span>${openCards}</span></div><p>Lists keep related cards together.</p></div>
-          <div class="top-actions">
-            <div class="view-switch" aria-label="Board view">
-              <button data-board-mode="lists" aria-pressed="${boardMode}" class="${boardMode ? "on" : ""}" title="Board">${icon("kanban")}<span>Board</span></button>
-              <button data-board-mode="flow" aria-pressed="${!boardMode}" class="${!boardMode ? "on" : ""}" title="Flow">${icon("columns")}<span>Flow</span></button>
-            </div>
-            <button class="secondary" id="add-list" ${boardMode && !listLimitReached ? "" : "disabled"}>${icon("plus")}<span>New list</span></button>
-          </div>
-        </header>
-        ${statusErrorHTML(state.error || state.taskCompletionError?.message)}
-        ${statusNoticeHTML(state.moveNotice)}
-        ${boardMode ? `<div class="grid">${lists.map(listHTML).join("")}</div>` : flowHTML(board)}
-        ${footerHTML(board, false)}
-      </div>
-      ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : ""}
+      ${state.selectedTask ? `<div class="main workspace-main card-detail-main">${workspaceDetailHTML(state.selectedTask)}</div>` : overview}
     </section>`;
 }
 
@@ -1707,7 +1712,8 @@ function workspaceWeekHTML(tasks) {
 }
 
 function taskDetailBackLabel() {
-  return ["agent-detail", "agent-work", "agent-settings"].includes(state.view) ? "Back to agent work" : "Close card";
+  if (["agent-detail", "agent-work", "agent-settings"].includes(state.view)) return "Back to agent work";
+  return parseRoute(globalThis.location?.pathname || APP_PATH).name === "board" ? "Back to board" : "Back to cards";
 }
 
 function workspaceListDialogHTML() {
@@ -1769,7 +1775,7 @@ function workspaceDetailHTML(task) {
       <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
     </section>`;
   return `<section class="workspace-detail" aria-label="Card detail" data-detail-surface tabindex="-1">
-      <header class="detail-head"><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Child card" : "Card"}</b></div><button class="icon-btn workspace-detail-close" type="button" data-close-detail aria-label="${taskDetailBackLabel()}">${icon("x")}</button></header>
+      <header class="detail-head"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Child card" : "Card"}</b></div></header>
       <form id="workspace-detail-form" class="workspace-detail-form">
         <div class="workspace-detail-main">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
@@ -2392,7 +2398,7 @@ function agentDetailHTML() {
   return `
     <section class="shell agents-shell theme-${theme}">
       ${appSidebarHTML({ theme, agentsCurrent: true })}
-      <main class="${state.selectedTask ? "main workspace-main agent-task-main" : "agents-main"}">
+      <main class="${state.selectedTask ? "main workspace-main card-detail-main agent-task-main" : "agents-main"}">
         ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : `<div class="agents-wrap agent-detail-wrap">
           <a class="back-link" href="${AGENTS_PATH}" id="agent-detail-back">${icon("chevronLeft")}<span>Agents</span></a>
           ${agentDetailBodyHTML()}
@@ -3301,7 +3307,6 @@ function bindWorkspaceDetail(options = {}) {
   const boundAgentID = ["agent-detail", "agent-work", "agent-settings"].includes(boundRoute.name)
     ? state.agentDetail?.agent?.id || ""
     : "";
-  const detailSurface = document.querySelector("[data-detail-surface]");
   const boundContextIsCurrent = () => {
     if (!sessionIsCurrent(boundSessionVersion, boundUserID)) return false;
     const currentRoute = parseRoute(location.pathname);
@@ -4466,6 +4471,7 @@ async function captureInboxTask(button) {
     if (!opened) throw detailError || new Error("The card could not be loaded.");
     state.newTaskRecovery = null;
     render();
+    focusOpenedTaskDetail();
     return true;
   } catch (err) {
     state.error = "";
@@ -4490,6 +4496,7 @@ async function recoverCreatedTask() {
     if (!opened) throw detailError || new Error("The card could not be loaded.");
     state.newTaskRecovery = null;
     render();
+    focusOpenedTaskDetail();
     return true;
   } catch (err) {
     state.error = "";

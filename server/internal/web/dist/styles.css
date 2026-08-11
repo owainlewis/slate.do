@@ -968,31 +968,28 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 }
 .detail-actions > div { display: flex; align-items: center; gap: 8px; }
 .workspace-detail {
-  position: fixed;
-  z-index: 40;
-  top: 0;
-  right: 0;
-  width: min(780px, calc(100vw - var(--nav-w) - 36px));
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   display: flex;
+  flex: 1;
   flex-direction: column;
   overflow: hidden;
   background: var(--card);
-  border-left: 1px solid var(--line);
-  box-shadow: -18px 0 50px rgba(0, 0, 0, .18);
 }
-.workspace-detail .detail-head { min-height: 58px; padding: 11px 16px 11px 28px; display: flex; align-items: center; justify-content: space-between; }
+.card-detail-main { height: 100vh; overflow: hidden; background: var(--card); }
+.workspace-detail .detail-head { min-height: 58px; padding: 11px 24px; display: flex; align-items: center; gap: 14px; }
 .workspace-detail .detail-context { font-size: 13px; }
-.workspace-detail-close { width: 34px; height: 34px; }
-.workspace-detail-back { min-height: 34px; margin-right: 12px; padding: 7px 9px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--soft); font-size: 13px; font-weight: 650; }
-.workspace-detail-back:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
-.workspace-detail-back .icon { width: 15px; height: 15px; }
+.workspace-detail-close { min-height: 34px; padding: 7px 9px; display: inline-flex; align-items: center; gap: 6px; color: var(--soft); font-size: 13px; font-weight: 650; }
+.workspace-detail-close:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
+.workspace-detail-close .icon { width: 15px; height: 15px; }
 .workspace-detail-form {
+  width: min(1120px, 100%);
+  margin: 0 auto;
   flex: 1;
   min-height: 0;
   display: grid !important;
-  grid-template-columns: minmax(0, 1fr) 230px;
+  grid-template-columns: minmax(0, 1fr) 260px;
   grid-template-rows: minmax(0, 1fr) auto;
 }
 .workspace-detail-main {
@@ -1897,6 +1894,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {
   .shell, .settings-page { flex-direction: column; }
+  .card-detail-main { height: calc(100vh - 56px); }
   .shell .sidebar {
     position: sticky;
     top: 0;

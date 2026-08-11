@@ -580,9 +580,9 @@ test("agent work renders the shared inline task detail with parent context", () 
     state.selectedSubtasks = [{ id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", status: "done", done: true }];
   `, app);
   const html = app.agentDetailHTML();
-  assert.match(html, /class="main workspace-main agent-task-main"/);
+  assert.match(html, /class="main workspace-main card-detail-main agent-task-main"/);
   assert.match(html, /class="workspace-detail" aria-label="Card detail"/);
-  assert.match(html, /aria-label="Back to agent work"/);
+  assert.match(html, />Back to agent work<\/span>/);
   assert.match(html, /1 of 1 done/);
   assert.match(html, /Review/);
   assert.doesNotMatch(html, /data-detail-overlay|aria-modal="true"|id="detail-form"/);
@@ -2260,10 +2260,11 @@ test("detail presents one contextual accessible card editor with clear actions",
   assert.match(html, /class="detail-description"/);
   assert.match(html, /class="detail-properties"/);
   assert.match(html, />Save changes</);
-  assert.match(html, /data-close-detail aria-label="Close card"/);
+  assert.match(html, /data-close-detail/);
+  assert.match(html, />Back to cards<\/span>/);
   assert.match(html, />Delete card</);
   assert.match(html, /Home list/);
-  assert.match(html, /aria-label="Close card"/);
+  assert.doesNotMatch(html, /aria-label="Close card"/);
 });
 
 test("detail can move a parent task between account-wide lists", () => {
