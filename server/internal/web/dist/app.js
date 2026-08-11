@@ -1824,6 +1824,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
       <div class="sidebar-content" id="sidebar-content">
         ${showNewTask ? globalNewTaskButtonHTML() : ""}
         ${newTaskRecoveryNoticeHTML()}
+        ${boardsNavigationHTML()}
         <section class="nav-sec workspace-nav">
           <h3>Attention</h3>
           <div class="pages task-nav-pages">
@@ -1839,7 +1840,6 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
             <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("rows")}<span>All cards</span></a>
           </div>
         </section>
-        ${boardsNavigationHTML()}
         <section class="nav-sec nav-collaborators">
           <h3>Agents</h3>
           <a class="plain-btn icon-label nav-link ${agentsCurrent && !route.agentId ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent && !route.agentId ? 'aria-current="page"' : ""}>${icon("bot")}<span>All agents</span></a>

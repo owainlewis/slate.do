@@ -115,6 +115,7 @@ test("sidebar makes cards, boards, and agents the primary control plane", () => 
 
   const html = app.appHTML();
   for (const label of ["Attention", "Inbox", "Today", "Review", "Plan", "Week", "All cards", "Boards", "Content", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
+  assert.ok(html.indexOf(">Boards<") < html.indexOf(">Attention<"));
   assert.match(html, /data-board="content"><span>Content<\/span>/);
   assert.match(html, /id="new-board"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);

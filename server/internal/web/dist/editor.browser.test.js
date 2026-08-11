@@ -446,6 +446,9 @@ test("the task workspace supports Board, Flow, Table, lists, and filters", async
   for (const label of ["Inbox", "Today", "Week", "Review", "All cards", "Boards", "Workspace", "Other", "All agents"]) {
     assert.equal(await page.getByText(label, { exact: true }).first().isVisible(), true, label);
   }
+  const boardsHeading = page.getByRole("heading", { name: "Boards", exact: true });
+  const attentionHeading = page.getByRole("heading", { name: "Attention", exact: true });
+  assert.equal(await boardsHeading.evaluate((boards, attention) => Boolean(boards.compareDocumentPosition(attention) & Node.DOCUMENT_POSITION_FOLLOWING), await attentionHeading.elementHandle()), true);
   assert.ok(parseFloat(await page.locator(".task-nav-pages .nav-link").first().evaluate(element => getComputedStyle(element).fontSize)) >= 13);
   assert.equal(await page.getByRole("tab", { name: "Board", selected: true }).count(), 1);
   for (const list of ["Inbox", "YouTube"]) assert.equal(await page.locator(".workspace-flow-column").getByText(list, { exact: true }).count(), 1);
