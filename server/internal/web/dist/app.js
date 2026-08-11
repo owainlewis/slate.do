@@ -3239,8 +3239,8 @@ function captureContextDeleteDetail() {
   };
 }
 
-function restoreContextDeleteDetail(snapshot, deletedIDs, expectedRouteVersion) {
-  if (!snapshot || deletedIDs.has(snapshot.task.id) || expectedRouteVersion !== routeVersion
+function restoreContextDeleteDetail(snapshot, deletedIDs, expectedRouteVersion, expectedDetailVersion) {
+  if (!snapshot || deletedIDs.has(snapshot.task.id) || expectedRouteVersion !== routeVersion || expectedDetailVersion !== taskDetailVersion
     || snapshot.path !== currentLocationPath() || state.routeError) return false;
   const summary = findTask(snapshot.task.id);
   if (!summary) return false;
@@ -3290,8 +3290,9 @@ async function deleteCardFromContext(taskID) {
   state.error = "";
   const refresh = applyRoute();
   const refreshRouteVersion = routeVersion;
+  const refreshDetailVersion = taskDetailVersion;
   await refresh;
-  restoreContextDeleteDetail(detailSnapshot, deletedIDs, refreshRouteVersion);
+  restoreContextDeleteDetail(detailSnapshot, deletedIDs, refreshRouteVersion, refreshDetailVersion);
   return true;
 }
 
