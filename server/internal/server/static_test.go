@@ -38,7 +38,7 @@ func TestStaticHandlerServesAppShellForFrontendRoutesOnly(t *testing.T) {
 	handler := StaticHandler(fs.FS(content))
 
 	shell := []string{
-		"/", "/login", "/app", "/app/settings",
+		"/", "/login", "/app", "/app/tasks", "/app/inbox", "/app/today", "/app/week", "/app/review", "/app/lists/list_123", "/app/settings",
 		"/app/settings/profile", "/app/settings/board", "/app/settings/agents", "/app/settings/api",
 		"/app/settings/unknown", "/app/settings/unknown/nested",
 		"/app/boards/board_123", "/app/boards/board_123/settings", "/app/agents", "/app/agents/new", "/app/agents/agent_123",

@@ -2,12 +2,300 @@ package migrations
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/owainlewis/slate.do/server/internal/boards"
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
+
+func TestEnsureAccountInboxMigrationSkipsAnInFlightBoardCreation(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	email := fmt.Sprintf("inbox-migration-race-%d@example.invalid", time.Now().UnixNano())
+	var userID string
+	if err := db.QueryRow(ctx, "INSERT INTO users (email, password_hash) VALUES ($1, 'test') RETURNING id::text", email).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	createTx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer createTx.Rollback(ctx)
+	if _, err := createTx.Exec(ctx, "SELECT id FROM users WHERE id = $1 FOR UPDATE", userID); err != nil {
+		t.Fatal(err)
+	}
+	var boardCount int
+	if err := createTx.QueryRow(ctx, "SELECT count(*) FROM boards WHERE user_id = $1", userID).Scan(&boardCount); err != nil {
+		t.Fatal(err)
+	}
+	if boardCount != 0 {
+		t.Fatalf("boards before create = %d, want 0", boardCount)
+	}
+
+	migrationConn, err := db.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrationConn.Release()
+	body, err := files.ReadFile("032_repair_account_inbox.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationResult := make(chan error, 1)
+	go func() {
+		_, err := migrationConn.Exec(context.Background(), string(body))
+		migrationResult <- err
+	}()
+
+	select {
+	case err := <-migrationResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("migration waited for an account with an in-flight board creation")
+	}
+
+	if _, err := createTx.Exec(ctx, `
+		INSERT INTO boards (user_id, name, max_tasks_per_list, sort_order)
+		VALUES ($1, 'User board', 25, 0)
+	`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := createTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boards.NewStore(db).EnsureInboxBucketID(ctx, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	var boards, lists, inboxes int
+	if err := db.QueryRow(ctx, `
+		SELECT count(DISTINCT b.id)::int, count(l.id)::int,
+			count(l.id) FILTER (WHERE l.is_inbox)::int
+		FROM boards b
+		LEFT JOIN buckets l ON l.board_id = b.id
+		WHERE b.user_id = $1
+	`, userID).Scan(&boards, &lists, &inboxes); err != nil {
+		t.Fatal(err)
+	}
+	if boards != 1 || lists != 1 || inboxes != 1 {
+		t.Fatalf("boards = %d, lists = %d, inboxes = %d", boards, lists, inboxes)
+	}
+}
+
+func TestEnsureAccountInboxMigrationRepairsEveryExistingAccountState(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	marker := fmt.Sprintf("inbox-migration-%d", time.Now().UnixNano())
+	emails := map[string]string{
+		"noBoard":       marker + "-no-board@example.invalid",
+		"noList":        marker + "-no-list@example.invalid",
+		"existingList":  marker + "-existing-list@example.invalid",
+		"existingInbox": marker + "-existing-inbox@example.invalid",
+	}
+	for _, email := range emails {
+		if _, err := tx.Exec(ctx, "INSERT INTO users (email, password_hash) VALUES ($1, 'test')", email); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO boards (user_id, name, sort_order)
+		SELECT id, 'Empty board', 0 FROM users WHERE email = $1
+		UNION ALL
+		SELECT id, 'List board', 0 FROM users WHERE email = $2
+		UNION ALL
+		SELECT id, 'Inbox board', 0 FROM users WHERE email = $3
+	`, emails["noList"], emails["existingList"], emails["existingInbox"]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO buckets (board_id, name, is_inbox, sort_order)
+		SELECT b.id, 'First list', false, 0 FROM boards b JOIN users u ON u.id = b.user_id WHERE u.email = $1
+		UNION ALL
+		SELECT b.id, 'Second list', false, 1 FROM boards b JOIN users u ON u.id = b.user_id WHERE u.email = $1
+		UNION ALL
+		SELECT b.id, 'Existing Inbox', true, 0 FROM boards b JOIN users u ON u.id = b.user_id WHERE u.email = $2
+		UNION ALL
+		SELECT b.id, 'Other list', false, 1 FROM boards b JOIN users u ON u.id = b.user_id WHERE u.email = $2
+	`, emails["existingList"], emails["existingInbox"]); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := files.ReadFile("032_repair_account_inbox.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := tx.Exec(ctx, string(body)); err != nil {
+			t.Fatalf("apply attempt %d: %v", attempt+1, err)
+		}
+	}
+
+	tests := []struct {
+		name      string
+		email     string
+		boards    int
+		lists     int
+		inboxes   int
+		inboxName string
+	}{
+		{"no board", emails["noBoard"], 1, 1, 1, "Inbox"},
+		{"board without lists", emails["noList"], 1, 1, 1, "Inbox"},
+		{"existing lists", emails["existingList"], 1, 2, 1, "First list"},
+		{"existing Inbox", emails["existingInbox"], 1, 2, 1, "Existing Inbox"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var boards, lists, inboxes int
+			var inboxName string
+			err := tx.QueryRow(ctx, `
+				SELECT
+					count(DISTINCT b.id)::int,
+					count(l.id)::int,
+					count(l.id) FILTER (WHERE l.is_inbox)::int,
+					COALESCE(min(l.name) FILTER (WHERE l.is_inbox), '')
+				FROM users u
+				LEFT JOIN boards b ON b.user_id = u.id
+				LEFT JOIN buckets l ON l.board_id = b.id
+				WHERE u.email = $1
+				GROUP BY u.id
+			`, test.email).Scan(&boards, &lists, &inboxes, &inboxName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if boards != test.boards || lists != test.lists || inboxes != test.inboxes || inboxName != test.inboxName {
+				t.Fatalf("boards = %d, lists = %d, inboxes = %d, Inbox = %q", boards, lists, inboxes, inboxName)
+			}
+		})
+	}
+}
+
+func TestRemoveArchivedAgentsPreservesCardsAndConversationHistory(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE agents (
+			id uuid PRIMARY KEY,
+			archived_at timestamptz
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE agent_credentials (
+			agent_id uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY,
+			assignee_agent_id uuid REFERENCES agents(id) ON DELETE SET NULL
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE card_entries (
+			task_id uuid NOT NULL,
+			body text NOT NULL,
+			author_id uuid NOT NULL,
+			author_name text NOT NULL
+		) ON COMMIT DROP
+	`); err != nil {
+		t.Fatal(err)
+	}
+	const activeAgentID = "10000000-0000-0000-0000-000000000001"
+	const archivedAgentID = "10000000-0000-0000-0000-000000000002"
+	const taskID = "20000000-0000-0000-0000-000000000001"
+	if _, err := tx.Exec(ctx, "INSERT INTO agents (id, archived_at) VALUES ($1, NULL), ($2, now())", activeAgentID, archivedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO agent_credentials (agent_id) VALUES ($1)", archivedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO tasks (id, assignee_agent_id) VALUES ($1, $2)", taskID, archivedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO card_entries (task_id, body, author_id, author_name)
+		VALUES ($1, 'Historical feedback', $2, 'Legacy archived')
+	`, taskID, archivedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("042_remove_archived_agents.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var archivedAgents, archivedCredentials int
+	var assignedAgentID, entryBody, authorName string
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM agents WHERE id = $1", archivedAgentID).Scan(&archivedAgents); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM agent_credentials WHERE agent_id = $1", archivedAgentID).Scan(&archivedCredentials); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT COALESCE(assignee_agent_id::text, '') FROM tasks WHERE id = $1", taskID).Scan(&assignedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT body, author_name FROM card_entries WHERE task_id = $1", taskID).Scan(&entryBody, &authorName); err != nil {
+		t.Fatal(err)
+	}
+	var activeAgents int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM agents WHERE id = $1", activeAgentID).Scan(&activeAgents); err != nil {
+		t.Fatal(err)
+	}
+	if archivedAgents != 0 || archivedCredentials != 0 || assignedAgentID != "" || entryBody != "Historical feedback" || authorName != "Legacy archived" || activeAgents != 1 {
+		t.Fatalf("archived agents=%d credentials=%d assignment=%q entry=%q author=%q active=%d", archivedAgents, archivedCredentials, assignedAgentID, entryBody, authorName, activeAgents)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE agents SET archived_at = now() WHERE id = $1", activeAgentID); err == nil {
+		t.Fatal("archiving remained writable after migration")
+	}
+}
 
 func TestOneAgentPerOwnerMigrationUpgradesExistingAgentSchema(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
@@ -932,5 +1220,403 @@ func TestNeutralItemsMigrationsPreserveExistingTasksAsActions(t *testing.T) {
 	}
 	if hasParentColumn {
 		t.Fatal("parent_task_id should be removed")
+	}
+}
+
+func TestNewCardStatusMigrationAddsCaptureStateAndDefault(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tasks (
+			status text NOT NULL DEFAULT 'queued',
+			CONSTRAINT tasks_status_check CHECK (status IN ('queued', 'working', 'needs_review', 'done'))
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("037_new_card_status.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var status string
+	if err := tx.QueryRow(ctx, "INSERT INTO tasks DEFAULT VALUES RETURNING status").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "new" {
+		t.Fatalf("default status = %q, want new", status)
+	}
+	for _, value := range []string{"new", "queued", "working", "needs_review", "done"} {
+		if _, err := tx.Exec(ctx, "INSERT INTO tasks (status) VALUES ($1)", value); err != nil {
+			t.Fatalf("insert status %q: %v", value, err)
+		}
+	}
+}
+
+func TestStatusOnlyCardsMigrationPreservesCompletionAndSyncsLegacyColumn(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			board_id uuid NOT NULL DEFAULT gen_random_uuid(),
+			bucket_id uuid NOT NULL DEFAULT gen_random_uuid(),
+			assignee_agent_id uuid,
+			priority text NOT NULL DEFAULT '',
+			status text NOT NULL DEFAULT 'new',
+			done boolean NOT NULL DEFAULT false,
+			updated_at timestamptz NOT NULL DEFAULT now()
+		);
+		CREATE INDEX tasks_assignee_agent_status_idx ON tasks (assignee_agent_id, status) WHERE assignee_agent_id IS NOT NULL AND done = false;
+		CREATE INDEX tasks_board_priority_idx ON tasks (board_id, priority) WHERE priority <> '' AND done = false;
+		CREATE INDEX tasks_bucket_completed_history_idx ON tasks (bucket_id, updated_at DESC, id DESC) WHERE done = true;
+		CREATE INDEX tasks_status_idx ON tasks(status) WHERE done = false;
+		INSERT INTO tasks (status, done) VALUES ('queued', true), ('working', false), ('done', false);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("038_status_only_cards.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := tx.Query(ctx, "SELECT status FROM tasks ORDER BY status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var statuses []string
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		statuses = append(statuses, status)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(statuses, ",") != "done,done,working" {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+
+	var hasDoneColumn bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_attribute
+			WHERE attrelid = 'pg_temp.tasks'::regclass AND attname = 'done' AND NOT attisdropped
+		)
+	`).Scan(&hasDoneColumn); err != nil {
+		t.Fatal(err)
+	}
+	if !hasDoneColumn {
+		t.Fatal("legacy done column was removed before old revisions drained")
+	}
+
+	var oldWriterID string
+	var oldWriterStatus string
+	var oldWriterDone bool
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tasks (status, done) VALUES ('queued', true)
+		RETURNING id::text, status, done
+	`).Scan(&oldWriterID, &oldWriterStatus, &oldWriterDone); err != nil {
+		t.Fatal(err)
+	}
+	if oldWriterStatus != "done" || !oldWriterDone {
+		t.Fatalf("old-writer insert = status %q done %v", oldWriterStatus, oldWriterDone)
+	}
+
+	var newWriterID string
+	var newWriterDone bool
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tasks (status) VALUES ('done')
+		RETURNING id::text, done
+	`).Scan(&newWriterID, &newWriterDone); err != nil {
+		t.Fatal(err)
+	}
+	if !newWriterDone {
+		t.Fatal("new-writer status did not sync to done")
+	}
+
+	if _, err := tx.Exec(ctx, "UPDATE tasks SET done = false WHERE id = $1", oldWriterID); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := tx.QueryRow(ctx, "SELECT status FROM tasks WHERE id = $1", oldWriterID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" {
+		t.Fatalf("old-writer reopen status = %q, want queued", status)
+	}
+
+	if _, err := tx.Exec(ctx, "UPDATE tasks SET status = 'working' WHERE id = $1", newWriterID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT done FROM tasks WHERE id = $1", newWriterID).Scan(&newWriterDone); err != nil {
+		t.Fatal(err)
+	}
+	if newWriterDone {
+		t.Fatal("new-writer status update did not clear done")
+	}
+
+	var predicates string
+	if err := tx.QueryRow(ctx, `
+		SELECT string_agg(pg_get_expr(indexprs.indpred, indexprs.indrelid), ' ')
+		FROM pg_index indexprs
+		WHERE indexprs.indrelid = 'pg_temp.tasks'::regclass AND indexprs.indpred IS NOT NULL
+	`).Scan(&predicates); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(predicates, "done = true") || strings.Contains(predicates, "done = false") {
+		t.Fatalf("legacy index predicate remains: %s", predicates)
+	}
+}
+
+func TestStatusDoneRolloutCompatibilityRestoresDevelopmentSchema(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			status text NOT NULL DEFAULT 'new'
+		);
+		INSERT INTO tasks (status) VALUES ('new'), ('done');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("040_status_done_rollout_compatibility.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var mismatches int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM tasks WHERE done IS DISTINCT FROM (status = 'done')").Scan(&mismatches); err != nil {
+		t.Fatal(err)
+	}
+	if mismatches != 0 {
+		t.Fatalf("restored schema has %d status/done mismatches", mismatches)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE tasks SET done = true WHERE status = 'new'"); err != nil {
+		t.Fatal(err)
+	}
+	var completed int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM tasks WHERE status = 'done' AND done = true").Scan(&completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed != 2 {
+		t.Fatalf("completed rows = %d, want 2", completed)
+	}
+}
+
+func TestTaskIdempotencyRequestDataMigrationLeavesLegacyIdentityUnknownAndCapturesOldWriters(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY,
+			title text NOT NULL,
+			description text NOT NULL DEFAULT '',
+			scheduled_date date,
+			kind text NOT NULL,
+			assignee_agent_id uuid,
+			parent_task_id uuid
+		);
+		CREATE TEMP TABLE task_idempotency_keys (
+			user_id uuid NOT NULL,
+			key text NOT NULL,
+			request_hash text NOT NULL,
+			task_id uuid
+		);
+		INSERT INTO tasks (id, title, description, scheduled_date, kind, parent_task_id)
+		VALUES (
+			'11111111-1111-4111-8111-111111111111',
+			'Original child', 'Original context', '2026-08-12', 'action',
+			'22222222-2222-4222-8222-222222222222'
+		);
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES (
+			'33333333-3333-4333-8333-333333333333', 'legacy-child', 'legacy-hash',
+			'11111111-1111-4111-8111-111111111111'
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("039_task_idempotency_request_data.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tasks (id, title, description, kind, parent_task_id)
+		VALUES (
+			'44444444-4444-4444-8444-444444444444',
+			'Created after migration', '', 'action',
+			'22222222-2222-4222-8222-222222222222'
+		);
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES (
+			'33333333-3333-4333-8333-333333333333', 'old-writer-after-migration', 'old-writer-hash',
+			'44444444-4444-4444-8444-444444444444'
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE tasks SET title = 'Edited child'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var requestDataHash *string
+	if err := tx.QueryRow(ctx, `
+		SELECT request_data_hash
+		FROM task_idempotency_keys
+		WHERE key = 'legacy-child'
+	`).Scan(&requestDataHash); err != nil {
+		t.Fatal(err)
+	}
+	if requestDataHash != nil {
+		t.Fatalf("legacy request snapshot hash = %q, want NULL", *requestDataHash)
+	}
+	var oldWriterHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT request_data_hash
+		FROM task_idempotency_keys
+		WHERE key = 'old-writer-after-migration'
+	`).Scan(&oldWriterHash); err != nil {
+		t.Fatal(err)
+	}
+	if len(oldWriterHash) != 64 {
+		t.Fatalf("old-writer request snapshot hash = %q", oldWriterHash)
+	}
+}
+
+func TestLegacyTaskIdempotencyMigrationClearsMutableDevelopmentBackfill(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE schema_migrations (
+			version text PRIMARY KEY,
+			applied_at timestamptz NOT NULL
+		);
+		CREATE TEMP TABLE task_idempotency_keys (
+			key text PRIMARY KEY,
+			request_data_hash text,
+			created_at timestamptz NOT NULL
+		);
+		INSERT INTO schema_migrations (version, applied_at)
+		VALUES ('039_task_idempotency_request_data', '2026-08-11T12:00:00Z');
+		INSERT INTO task_idempotency_keys (key, request_data_hash, created_at)
+		VALUES
+			('legacy', repeat('a', 64), '2026-08-11T11:00:00Z'),
+			('old-writer-after-migration', repeat('b', 64), '2026-08-11T13:00:00Z');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("041_legacy_task_idempotency_identity.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var legacyHash *string
+	var oldWriterHash string
+	if err := tx.QueryRow(ctx, "SELECT request_data_hash FROM task_idempotency_keys WHERE key = 'legacy'").Scan(&legacyHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT request_data_hash FROM task_idempotency_keys WHERE key = 'old-writer-after-migration'").Scan(&oldWriterHash); err != nil {
+		t.Fatal(err)
+	}
+	if legacyHash != nil {
+		t.Fatalf("legacy hash = %q, want NULL", *legacyHash)
+	}
+	if oldWriterHash != strings.Repeat("b", 64) {
+		t.Fatalf("old-writer hash = %q", oldWriterHash)
 	}
 }

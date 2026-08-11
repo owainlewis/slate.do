@@ -408,7 +408,7 @@ func TestCreateAgentReturnsStableLimitConflict(t *testing.T) {
 
 	service.CreateAgent(rec, req, User{ID: "owner", Entitlement: entitlements.Pro(entitlements.SourceManual)})
 
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"agent_limit_reached"`) || !strings.Contains(rec.Body.String(), "5 active agents") {
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"agent_limit_reached"`) || !strings.Contains(rec.Body.String(), "5 agents") {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }

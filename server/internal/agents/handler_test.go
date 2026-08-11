@@ -28,10 +28,6 @@ type fakeStore struct {
 	rotateApplied bool
 	rotateErr     error
 	revokeErr     error
-	archiveCounts ArchiveConflict
-	archiveErr    error
-	restoreAgent  auth.AgentUser
-	restoreErr    error
 	lastUserID    string
 	lastAgentID   string
 	lastName      string
@@ -39,7 +35,6 @@ type fakeStore struct {
 	lastKey       string
 	lastTokenHash string
 	lastPrefix    string
-	unassignOpen  bool
 }
 
 func (s *fakeStore) GetDetail(_ context.Context, userID string, agentID string) (Detail, error) {
@@ -67,16 +62,6 @@ func (s *fakeStore) RotateCredential(_ context.Context, userID, agentID, key, to
 func (s *fakeStore) RevokeCredential(_ context.Context, userID, agentID string) error {
 	s.lastUserID, s.lastAgentID = userID, agentID
 	return s.revokeErr
-}
-
-func (s *fakeStore) ArchiveAgent(_ context.Context, userID, agentID string, unassignOpen bool) (ArchiveConflict, error) {
-	s.lastUserID, s.lastAgentID, s.unassignOpen = userID, agentID, unassignOpen
-	return s.archiveCounts, s.archiveErr
-}
-
-func (s *fakeStore) RestoreAgent(_ context.Context, userID, agentID string) (auth.AgentUser, error) {
-	s.lastUserID, s.lastAgentID = userID, agentID
-	return s.restoreAgent, s.restoreErr
 }
 
 func TestGetDetailMapsOwnedAgentResponses(t *testing.T) {
@@ -115,7 +100,11 @@ func TestGetDetailMapsOwnedAgentResponses(t *testing.T) {
 }
 
 func TestListWorkValidatesAndBoundsPagination(t *testing.T) {
-	store := &fakeStore{work: WorkPage{Page: 2, PageSize: 25}}
+	store := &fakeStore{work: WorkPage{
+		Items:    []WorkItem{{ID: "child-1", ParentTaskID: "parent-1"}},
+		Page:     2,
+		PageSize: 25,
+	}}
 	handler := NewHandler(store)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-1/work?page=2&pageSize=25", nil)
 	request.SetPathValue("id", "agent-1")
@@ -125,6 +114,9 @@ func TestListWorkValidatesAndBoundsPagination(t *testing.T) {
 
 	if response.Code != http.StatusOK || store.workPage != 2 || store.workPageSize != 25 {
 		t.Fatalf("response = %d %q, page = %d/%d", response.Code, response.Body.String(), store.workPage, store.workPageSize)
+	}
+	if !strings.Contains(response.Body.String(), `"parentTaskId":"parent-1"`) {
+		t.Fatalf("response does not expose parent task context: %s", response.Body.String())
 	}
 
 	for _, target := range []string{
@@ -147,7 +139,6 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 		updateAgent:   auth.AgentUser{ID: "agent-1", DisplayName: "Builder"},
 		rotate:        auth.AgentCredential{ID: "credential-1", TokenPrefix: "slate_agent_example"},
 		rotateApplied: true,
-		restoreAgent:  auth.AgentUser{ID: "agent-1", DisplayName: "Builder"},
 	}
 	handler := NewHandler(store)
 	user := auth.User{ID: "owner-1"}
@@ -180,33 +171,6 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 	response = lifecycleRequest(t, handler.RevokeCredential, user, http.MethodDelete, "")
 	if response.Code != http.StatusOK || store.lastUserID != user.ID || store.lastAgentID != "agent-1" {
 		t.Fatalf("revoke = %d %q, owner = %q/%q", response.Code, response.Body.String(), store.lastUserID, store.lastAgentID)
-	}
-
-	store.archiveErr = &ArchiveConflictError{Counts: ArchiveConflict{Ready: 2, Working: 1}}
-	response = lifecycleRequest(t, handler.Archive, user, http.MethodPost, `{"unassignOpenWork":false}`)
-	var conflict struct {
-		Code     string `json:"code"`
-		Conflict struct {
-			Ready   int `json:"ready"`
-			Working int `json:"working"`
-		} `json:"conflict"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &conflict); err != nil {
-		t.Fatal(err)
-	}
-	if response.Code != http.StatusConflict || conflict.Code != "agent_open_work" || conflict.Conflict.Ready != 2 || conflict.Conflict.Working != 1 {
-		t.Fatalf("archive conflict = %d %#v", response.Code, conflict)
-	}
-	store.archiveErr = nil
-	response = lifecycleRequest(t, handler.Archive, user, http.MethodPost, `{"unassignOpenWork":true}`)
-	if response.Code != http.StatusOK || !store.unassignOpen {
-		t.Fatalf("forced archive = %d %q", response.Code, response.Body.String())
-	}
-
-	store.restoreErr = ErrRestoreLimit
-	response = lifecycleRequest(t, handler.Restore, user, http.MethodPost, `{}`)
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "agent_limit_reached") {
-		t.Fatalf("restore limit = %d %q", response.Code, response.Body.String())
 	}
 
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/agent-1", strings.NewReader(`{"displayName":"Builder","purpose":""}`))

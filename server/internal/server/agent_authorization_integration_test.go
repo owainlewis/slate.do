@@ -65,6 +65,11 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	ready := boards.StatusQueued
+	taskA, err = boardStore.UpdateTaskForHuman(ctx, owner.ID, taskA.ID, boards.UpdateTaskInput{Status: &ready})
+	if err != nil {
+		t.Fatal(err)
+	}
 	taskB, err := boardStore.CreateTask(ctx, owner.ID, bucket.ID, boards.CreateTaskInput{Title: "Agent B secret", AssigneeAgentID: agentB.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +175,10 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 			t.Errorf("%s %s = %d %s, want 403", request.method, request.path, recorder.Code, recorder.Body.String())
 		}
 	}
+	permanentDelete := agentRequest(t, app, agentAToken, http.MethodDelete, "/api/v1/agents/"+agentA.ID, "")
+	if permanentDelete.Code != http.StatusUnauthorized {
+		t.Errorf("agent credential permanent delete = %d %s, want 401", permanentDelete.Code, permanentDelete.Body.String())
+	}
 
 	ownUpdate := agentRequest(t, app, agentAToken, http.MethodPatch, "/api/v1/tasks/"+taskA.ID, `{"description":"Agent A update"}`)
 	if ownUpdate.Code != http.StatusOK || !strings.Contains(ownUpdate.Body.String(), "Agent A update") {
@@ -186,6 +195,10 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	status := agentRequest(t, app, agentAToken, http.MethodPatch, "/api/v1/agent/tasks/"+taskA.ID+"/status", `{"status":"needs_review"}`)
 	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"status":"needs_review"`) {
 		t.Fatalf("assigned task status = %d %s", status.Code, status.Body.String())
+	}
+	legacyDone := agentRequest(t, app, agentAToken, http.MethodPost, "/api/v1/agent/tasks/"+taskA.ID+"/done", "")
+	if legacyDone.Code != http.StatusOK || !strings.Contains(legacyDone.Body.String(), `"status":"done"`) {
+		t.Fatalf("legacy assigned task done = %d %s", legacyDone.Code, legacyDone.Body.String())
 	}
 
 	persistedSibling, err := boardStore.GetTask(ctx, owner.ID, taskB.ID)

@@ -578,15 +578,15 @@ func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, e
 		) c ON true
 		LEFT JOIN LATERAL (
 			SELECT
-				count(*) FILTER (WHERE t.status = 'queued' AND NOT t.done) AS ready,
-				count(*) FILTER (WHERE t.status = 'working' AND NOT t.done) AS working,
-				count(*) FILTER (WHERE t.status = 'needs_review' AND NOT t.done) AS review
+				count(*) FILTER (WHERE t.status = 'queued') AS ready,
+				count(*) FILTER (WHERE t.status = 'working') AS working,
+				count(*) FILTER (WHERE t.status = 'needs_review') AS review
 			FROM tasks t
 			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
 			WHERE t.assignee_agent_id = a.id
 		) work ON true
-		WHERE a.owner_user_id = $1
-		ORDER BY a.archived_at NULLS FIRST, lower(a.name), a.created_at
+		WHERE a.owner_user_id = $1 AND a.archived_at IS NULL
+		ORDER BY lower(a.name), a.created_at
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -618,14 +618,14 @@ func (s *PGStore) GetAgent(ctx context.Context, userID string, agentID string) (
 		) c ON true
 		LEFT JOIN LATERAL (
 			SELECT
-				count(*) FILTER (WHERE t.status = 'queued' AND NOT t.done) AS ready,
-				count(*) FILTER (WHERE t.status = 'working' AND NOT t.done) AS working,
-				count(*) FILTER (WHERE t.status = 'needs_review' AND NOT t.done) AS review
+				count(*) FILTER (WHERE t.status = 'queued') AS ready,
+				count(*) FILTER (WHERE t.status = 'working') AS working,
+				count(*) FILTER (WHERE t.status = 'needs_review') AS review
 			FROM tasks t
 			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
 			WHERE t.assignee_agent_id = a.id
 		) work ON true
-		WHERE a.owner_user_id = $1 AND a.id::text = $2
+		WHERE a.owner_user_id = $1 AND a.id::text = $2 AND a.archived_at IS NULL
 	`, userID, agentID)
 	agent, err := scanAgent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -661,12 +661,13 @@ func (s *PGStore) CreateAgent(ctx context.Context, userID string, displayName st
 	}
 
 	var agent AgentUser
+	var archivedAt *time.Time
 	err = tx.QueryRow(ctx, `
 		INSERT INTO agents (owner_user_id, name, purpose)
 		VALUES ($1, $2, NULLIF($3, ''))
 		RETURNING id::text, name, COALESCE(purpose, ''), archived_at, created_at, updated_at
 	`, activeUserID, displayName, purpose).Scan(
-		&agent.ID, &agent.DisplayName, &agent.Purpose, &agent.ArchivedAt, &agent.CreatedAt, &agent.UpdatedAt,
+		&agent.ID, &agent.DisplayName, &agent.Purpose, &archivedAt, &agent.CreatedAt, &agent.UpdatedAt,
 	)
 	if constraintViolation(err, "agents_owner_active_name_idx") {
 		return AgentUser{}, ErrAgentNameTaken
@@ -800,6 +801,7 @@ type rowScanner interface {
 
 func scanAgent(row rowScanner) (AgentUser, error) {
 	var agent AgentUser
+	var archivedAt *time.Time
 	var credentialID *string
 	var credentialPrefix *string
 	var credentialLastUsedAt *time.Time
@@ -810,7 +812,7 @@ func scanAgent(row rowScanner) (AgentUser, error) {
 		&agent.ID,
 		&agent.DisplayName,
 		&agent.Purpose,
-		&agent.ArchivedAt,
+		&archivedAt,
 		&agent.CreatedAt,
 		&agent.UpdatedAt,
 		&credentialID,
@@ -826,7 +828,6 @@ func scanAgent(row rowScanner) (AgentUser, error) {
 	if err != nil {
 		return AgentUser{}, err
 	}
-	agent.DeletedAt = agent.ArchivedAt
 	if credentialID != nil && credentialCreatedAt != nil && credentialUpdatedAt != nil {
 		credential := AgentCredential{
 			ID:         *credentialID,
@@ -880,7 +881,7 @@ func (s *PGStore) AccountUsage(ctx context.Context, userID string) (entitlements
 			(SELECT COALESCE(max(active_count), 0) FROM (
 				SELECT count(*) AS active_count FROM tasks t
 				JOIN boards b ON b.id = t.board_id
-				WHERE b.user_id = $1 AND t.kind = 'action' AND t.done = false
+				WHERE b.user_id = $1 AND t.kind = 'action' AND t.status <> 'done'
 				GROUP BY t.bucket_id
 			) active),
 			(SELECT count(*) FROM agents WHERE owner_user_id = $1 AND archived_at IS NULL),

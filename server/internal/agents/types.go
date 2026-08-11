@@ -14,6 +14,7 @@ const (
 
 type WorkItem struct {
 	ID              string    `json:"id"`
+	ParentTaskID    string    `json:"parentTaskId,omitempty"`
 	BoardID         string    `json:"boardId"`
 	BoardName       string    `json:"boardName"`
 	BucketID        string    `json:"bucketId"`
@@ -22,7 +23,6 @@ type WorkItem struct {
 	Description     string    `json:"description,omitempty"`
 	ScheduledDate   string    `json:"scheduledDate"`
 	Kind            string    `json:"kind"`
-	Done            bool      `json:"done"`
 	Status          string    `json:"status"`
 	AssigneeAgentID string    `json:"assigneeAgentId"`
 	CreatedAt       time.Time `json:"createdAt"`
@@ -58,9 +58,4 @@ type WorkPage struct {
 	Total       int        `json:"total"`
 	HasNext     bool       `json:"hasNext"`
 	HasPrevious bool       `json:"hasPrevious"`
-}
-
-type ArchiveConflict struct {
-	Ready   int `json:"ready"`
-	Working int `json:"working"`
 }

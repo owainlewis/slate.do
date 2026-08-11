@@ -23,8 +23,6 @@ type detailStore interface {
 	UpdateAgent(context.Context, string, string, string, string) (auth.AgentUser, error)
 	RotateCredential(context.Context, string, string, string, string, string) (auth.AgentCredential, bool, error)
 	RevokeCredential(context.Context, string, string) error
-	ArchiveAgent(context.Context, string, string, bool) (ArchiveConflict, error)
-	RestoreAgent(context.Context, string, string) (auth.AgentUser, error)
 }
 
 type Handler struct {
@@ -179,62 +177,6 @@ func (h *Handler) RevokeCredential(w http.ResponseWriter, r *http.Request, user 
 		writeInternalError(w, err, "credential could not be revoked")
 	default:
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	}
-}
-
-func (h *Handler) Archive(w http.ResponseWriter, r *http.Request, user auth.User) {
-	if !validateMutation(w, r) {
-		return
-	}
-	var input struct {
-		UnassignOpenWork bool `json:"unassignOpenWork"`
-	}
-	if r.Method != http.MethodDelete && !decodeJSON(w, r, &input) {
-		return
-	}
-	counts, err := h.store.ArchiveAgent(r.Context(), user.ID, agentID(r), input.UnassignOpenWork)
-	var conflict *ArchiveConflictError
-	switch {
-	case errors.Is(err, auth.ErrAgentNotFound):
-		writeError(w, http.StatusNotFound, "agent not found")
-	case errors.As(err, &conflict):
-		writeJSON(w, http.StatusConflict, struct {
-			Code     string          `json:"code"`
-			Error    string          `json:"error"`
-			Conflict ArchiveConflict `json:"conflict"`
-		}{
-			Code:     "agent_open_work",
-			Error:    "Ready and Working work must be unassigned before this agent can be archived.",
-			Conflict: conflict.Counts,
-		})
-	case err != nil:
-		writeInternalError(w, err, "agent could not be archived")
-	default:
-		writeJSON(w, http.StatusOK, struct {
-			OK bool `json:"ok"`
-			ArchiveConflict
-		}{OK: true, ArchiveConflict: counts})
-	}
-}
-
-func (h *Handler) Restore(w http.ResponseWriter, r *http.Request, user auth.User) {
-	if !validateMutation(w, r) {
-		return
-	}
-	agent, err := h.store.RestoreAgent(r.Context(), user.ID, agentID(r))
-	switch {
-	case errors.Is(err, auth.ErrAgentNotFound):
-		writeError(w, http.StatusNotFound, "agent not found")
-	case errors.Is(err, ErrRestoreLimit):
-		writeCodedError(w, http.StatusConflict, "agent_limit_reached", "Archive an active agent before restoring this identity.")
-	case errors.Is(err, ErrRestoreNameTaken):
-		writeCodedError(w, http.StatusConflict, "agent_name_taken", "An active agent with that name already exists. Rename this identity before restoring it.")
-	case errors.Is(err, auth.ErrUnauthorized):
-		writeError(w, http.StatusUnauthorized, "authentication required")
-	case err != nil:
-		writeInternalError(w, err, "agent could not be restored")
-	default:
-		writeJSON(w, http.StatusOK, agent)
 	}
 }
 

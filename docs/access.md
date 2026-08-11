@@ -30,17 +30,17 @@ The authenticated user response exposes the resolved plan, grant source, server-
 | --- | ---: | ---: |
 | Boards | 1 | 5 |
 | Lists per board | 5 | 9 |
-| Active items per list | 20 | 20 |
+| Legacy active-item setting | 20 | 20 |
 | Active agents | 1 | 5 |
 | Stored tasks | 500 | 10,000 |
-| Stored task content | 10 MiB | 250 MiB |
+| Stored content | 10 MiB | 250 MiB |
 | API tokens | 3 | 20 |
 
-Usage reports boards, the largest list count on a board, the largest active-item count on a list, active agents, all stored tasks, stored task-content bytes, and active API tokens. Content is measured as UTF-8 bytes from task titles and descriptions. Stored-task and content quotas are reported here but are enforced by the separate storage-quota work.
+Usage reports boards, the largest list count on a board, the largest active-item count on a list, active agents, all stored tasks, stored-content bytes, and active API tokens. Content is measured as UTF-8 bytes from task titles, task descriptions, and card conversation bodies, including human comments and agent outputs.
 
-Completed items do not count toward the active-item maximum. A board can configure a lower Max active items per list value as a working constraint. API input cannot configure a value above 20. An explicit override can bypass only the lower working constraint, never the Pro maximum.
+The active-item value remains in entitlement and board responses for compatibility, but task creation, reopening, and movement do not enforce it. Lists organise work and account-level stored-task and content quotas provide the capacity boundary. The legacy override flag is accepted and ignored.
 
-Board, list, active-agent, and API-token limits are enforced transactionally on the server. UI checks explain obvious over-limit actions but are not an authorization boundary. Every query and mutation continues to scope resources to the authenticated account owner.
+Board, list, active-agent, stored-task, stored-content, and API-token limits are enforced transactionally on the server. Every query and mutation continues to scope resources to the authenticated account owner.
 
 ## Request and text limits
 
@@ -50,6 +50,7 @@ Every JSON mutation request is limited to 64 KiB before decoding. Oversized bodi
 | --- | ---: | --- |
 | Task title | 300 | Unicode characters |
 | Task description | 16 KiB | UTF-8 bytes |
+| Card comment or output body | 16 KiB | UTF-8 bytes |
 | Board name | 100 | Unicode characters |
 | Board background kind | 32 | Unicode characters |
 | Board background value | 100 | Unicode characters |
@@ -69,15 +70,15 @@ An oversized field returns HTTP 400 with `field_too_long`, the JSON field name, 
 
 An account owner can create named agent identities without an email, password, registration, or browser session. Identity and credential lifecycle are separate:
 
-- An `agents` row is the durable identity until the owner deletes it. Its immutable ID owns every task assignment. It has a name, an optional purpose, archive state, and timestamps.
+- An `agents` row is the durable identity until the owner deletes it. Its immutable ID owns every task assignment. It has a name, an optional purpose, and timestamps.
 - An `agent_credentials` row authenticates one identity. It contains a SHA-256 token hash, a safe display prefix when available, last-used and revoked times, and timestamps. The database permits at most one active credential per agent.
 
 Creation returns one plaintext `slate_agent_...` token once. Slate stores only its SHA-256 hash and safe prefix. List and creation responses expose identity and credential state but never a token hash. Credentials migrated from the earlier combined model have no display prefix because the plaintext token cannot be recovered from its hash.
 
 An agent token resolves to its owning account and immutable agent ID for assigned-work authorization. Agent credentials can read board and list metadata only when the board or list contains work assigned to that agent. These metadata responses do not include nested tasks. Agent credentials cannot use account-level board or list creation, editing, deletion, or reordering routes, or general task create, reorder, move, and delete routes. Supported general task reads and updates are always restricted to that agent's assignments. An agent cannot read, claim, or mutate another agent's assigned work, even when both agents belong to the same account. Claim and status changes remain atomic.
 
-Free permits one active agent and Pro permits five. Archived agents do not consume the limit. Active names are stored trimmed and must be unique per account using case-insensitive comparison. Creation locks the account while checking the plan limit, so concurrent requests cannot exceed it.
+Free permits one agent and Pro permits five. Names are stored trimmed and must be unique per account using case-insensitive comparison. Creation locks the account while checking the plan limit, so concurrent requests cannot exceed it.
 
-Revoking a credential leaves the agent identity and assignments intact, and the active identity still consumes a Pro slot. Archiving an agent also revokes its active credential, removes the identity from future assignment choices, and frees the slot. Existing assignments keep the archived identity so task history remains understandable. Deleting an agent permanently removes its identity and credentials; assigned tasks remain but become unassigned. The browser presents deletion as the main lifecycle action and archive as the history-preserving alternative. Existing live, revoked, and deleted agent records migrate without changing identity IDs; legacy deleted records become archived identities and no migration creates or logs plaintext credentials.
+Revoking a credential leaves the agent identity and assignments intact, and the identity still consumes an agent slot. Deleting an agent removes its identity, credentials, and credential-rotation records. Assigned cards remain but become unassigned. Comments and outputs remain with their stored author name, so the conversation stays understandable after the identity is deleted. Legacy archived identities are deleted during migration without exposing or recreating plaintext credentials.
 
 Slate does not currently have a vetted image upload or object-storage pipeline. Primary users and agent identities therefore use deterministic initials-and-colour avatars derived from their stored identity. Display names are escaped before rendering. Uploaded files and external avatar URLs are intentionally unsupported until image validation, processing, scanning, and durable storage are designed.

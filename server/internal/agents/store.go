@@ -9,22 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/owainlewis/slate.do/server/internal/auth"
 	"github.com/owainlewis/slate.do/server/internal/database"
-	"github.com/owainlewis/slate.do/server/internal/entitlements"
 )
 
 var (
-	ErrArchiveConflict     = errors.New("agent has open assigned work")
 	ErrIdempotencyConflict = errors.New("idempotency key belongs to another agent")
-	ErrRestoreLimit        = errors.New("active agent limit reached")
-	ErrRestoreNameTaken    = errors.New("active agent name already exists")
 )
-
-type ArchiveConflictError struct {
-	Counts ArchiveConflict
-}
-
-func (e *ArchiveConflictError) Error() string { return ErrArchiveConflict.Error() }
-func (e *ArchiveConflictError) Unwrap() error { return ErrArchiveConflict }
 
 type agentFinder interface {
 	GetAgent(context.Context, string, string) (auth.AgentUser, error)
@@ -248,170 +237,6 @@ func (s *Store) RevokeCredential(ctx context.Context, userID string, agentID str
 	return tx.Commit(ctx)
 }
 
-func (s *Store) ArchiveAgent(ctx context.Context, userID string, agentID string, unassignOpen bool) (ArchiveConflict, error) {
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return ArchiveConflict{}, err
-	}
-	defer tx.Rollback(ctx)
-
-	var archived bool
-	err = tx.QueryRow(ctx, `
-		SELECT archived_at IS NOT NULL
-		FROM agents
-		WHERE owner_user_id = $1 AND id::text = $2
-		FOR UPDATE
-	`, userID, agentID).Scan(&archived)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ArchiveConflict{}, auth.ErrAgentNotFound
-	}
-	if err != nil {
-		return ArchiveConflict{}, err
-	}
-	if archived {
-		if err := tx.Commit(ctx); err != nil {
-			return ArchiveConflict{}, err
-		}
-		return ArchiveConflict{}, nil
-	}
-
-	var conflict ArchiveConflict
-	rows, err := tx.Query(ctx, `
-		SELECT t.status
-		FROM tasks t
-		JOIN boards b ON b.id = t.board_id
-		WHERE b.user_id = $1
-			AND t.assignee_agent_id = $2
-			AND NOT t.done
-			AND t.status IN ('queued', 'working')
-		FOR UPDATE OF t
-	`, userID, agentID)
-	if err != nil {
-		return ArchiveConflict{}, err
-	}
-	for rows.Next() {
-		var status string
-		if err := rows.Scan(&status); err != nil {
-			rows.Close()
-			return ArchiveConflict{}, err
-		}
-		if status == "working" {
-			conflict.Working++
-		} else {
-			conflict.Ready++
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return ArchiveConflict{}, err
-	}
-	rows.Close()
-	if (conflict.Ready > 0 || conflict.Working > 0) && !unassignOpen {
-		return conflict, &ArchiveConflictError{Counts: conflict}
-	}
-	if unassignOpen {
-		if _, err := tx.Exec(ctx, `
-			UPDATE tasks t
-			SET assignee_agent_id = NULL, status = 'queued', done = false, updated_at = now()
-			FROM boards b
-			WHERE b.id = t.board_id
-				AND b.user_id = $1
-				AND t.assignee_agent_id = $2
-				AND NOT t.done
-				AND t.status IN ('queued', 'working')
-		`, userID, agentID); err != nil {
-			return ArchiveConflict{}, err
-		}
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE agent_credentials
-		SET revoked_at = now(), updated_at = now()
-		WHERE agent_id = $1 AND revoked_at IS NULL
-	`, agentID); err != nil {
-		return ArchiveConflict{}, err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE agents
-		SET archived_at = now(), updated_at = now()
-		WHERE owner_user_id = $1 AND id::text = $2
-	`, userID, agentID); err != nil {
-		return ArchiveConflict{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return ArchiveConflict{}, err
-	}
-	return conflict, nil
-}
-
-func (s *Store) RestoreAgent(ctx context.Context, userID string, agentID string) (auth.AgentUser, error) {
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return auth.AgentUser{}, err
-	}
-	defer tx.Rollback(ctx)
-
-	var activeUserID, role, plan, source string
-	err = tx.QueryRow(ctx, `
-		SELECT u.id::text, u.role, COALESCE(e.plan, ''), COALESCE(e.source, '')
-		FROM users u
-		LEFT JOIN entitlements e ON e.user_id = u.id
-		WHERE u.id = $1 AND u.disabled_at IS NULL
-		FOR UPDATE OF u
-	`, userID).Scan(&activeUserID, &role, &plan, &source)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return auth.AgentUser{}, auth.ErrUnauthorized
-	}
-	if err != nil {
-		return auth.AgentUser{}, err
-	}
-	limits := entitlements.Resolve(role, plan, source).Limits
-	var archived bool
-	err = tx.QueryRow(ctx, `
-		SELECT archived_at IS NOT NULL
-		FROM agents
-		WHERE owner_user_id = $1 AND id::text = $2
-		FOR UPDATE
-	`, activeUserID, agentID).Scan(&archived)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return auth.AgentUser{}, auth.ErrAgentNotFound
-	}
-	if err != nil {
-		return auth.AgentUser{}, err
-	}
-	if archived {
-		var activeAgents int
-		if err := tx.QueryRow(ctx, `
-			SELECT count(*) FROM agents
-			WHERE owner_user_id = $1 AND archived_at IS NULL
-		`, activeUserID).Scan(&activeAgents); err != nil {
-			return auth.AgentUser{}, err
-		}
-		if activeAgents >= limits.Agents {
-			return auth.AgentUser{}, ErrRestoreLimit
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE agent_credentials
-			SET revoked_at = COALESCE(revoked_at, now()), updated_at =
-				CASE WHEN revoked_at IS NULL THEN now() ELSE updated_at END
-			WHERE agent_id = $1
-		`, agentID); err != nil {
-			return auth.AgentUser{}, err
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE agents SET archived_at = NULL, updated_at = now()
-			WHERE owner_user_id = $1 AND id::text = $2
-		`, activeUserID, agentID); constraintViolation(err, "agents_owner_active_name_idx") {
-			return auth.AgentUser{}, ErrRestoreNameTaken
-		} else if err != nil {
-			return auth.AgentUser{}, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return auth.AgentUser{}, err
-	}
-	return s.agents.GetAgent(ctx, activeUserID, agentID)
-}
-
 func constraintViolation(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.ConstraintName == constraint
@@ -421,10 +246,10 @@ func (s *Store) workTotals(ctx context.Context, userID string, agentID string) (
 	var totals WorkTotals
 	err := s.db.QueryRow(ctx, `
 		SELECT
-			count(*) FILTER (WHERE t.status = 'queued' AND NOT t.done),
-			count(*) FILTER (WHERE t.status = 'working' AND NOT t.done),
-			count(*) FILTER (WHERE t.status = 'needs_review' AND NOT t.done),
-			count(*) FILTER (WHERE t.done)
+			count(*) FILTER (WHERE t.status = 'queued'),
+			count(*) FILTER (WHERE t.status = 'working'),
+			count(*) FILTER (WHERE t.status = 'needs_review'),
+			count(*) FILTER (WHERE t.status = 'done')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.assignee_agent_id = $2 AND t.kind = 'action'
@@ -437,7 +262,6 @@ func (s *Store) listInitialOpen(ctx context.Context, userID string, agentID stri
 		WHERE b.user_id = $1
 			AND t.assignee_agent_id = $2
 			AND t.kind = 'action'
-			AND NOT t.done
 			AND t.status IN ('queued', 'working', 'needs_review')
 		ORDER BY CASE t.status
 			WHEN 'working' THEN 0
@@ -457,7 +281,7 @@ func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentI
 		WHERE b.user_id = $1
 			AND t.assignee_agent_id = $2
 			AND t.kind = 'action'
-			AND t.done
+			AND t.status = 'done'
 		ORDER BY t.updated_at DESC, t.id
 		LIMIT $3
 	`, userID, agentID, InitialCompletedLimit)
@@ -468,9 +292,9 @@ func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentI
 }
 
 const workSelect = `
-	SELECT t.id::text, t.board_id::text, b.name, t.bucket_id::text, bucket.name,
+	SELECT t.id::text, COALESCE(t.parent_task_id::text, ''), t.board_id::text, b.name, t.bucket_id::text, bucket.name,
 		t.title, '', COALESCE(t.scheduled_date::text, ''), t.kind,
-		t.done, t.status, COALESCE(t.assignee_agent_id::text, ''), t.created_at, t.updated_at
+		t.status, COALESCE(t.assignee_agent_id::text, ''), t.created_at, t.updated_at
 	FROM tasks t
 	JOIN boards b ON b.id = t.board_id
 	JOIN buckets bucket ON bucket.id = t.bucket_id
@@ -482,9 +306,9 @@ func scanWorkItems(rows pgx.Rows) ([]WorkItem, error) {
 	for rows.Next() {
 		var item WorkItem
 		if err := rows.Scan(
-			&item.ID, &item.BoardID, &item.BoardName, &item.BucketID, &item.BucketName,
+			&item.ID, &item.ParentTaskID, &item.BoardID, &item.BoardName, &item.BucketID, &item.BucketName,
 			&item.Title, &item.Description, &item.ScheduledDate, &item.Kind,
-			&item.Done, &item.Status, &item.AssigneeAgentID, &item.CreatedAt, &item.UpdatedAt,
+			&item.Status, &item.AssigneeAgentID, &item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
