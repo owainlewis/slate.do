@@ -602,10 +602,10 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, kind, done, status)
+		INSERT INTO tasks (board_id, bucket_id, title, description, kind, status)
 		VALUES
-			($1, $2, 'é', '🙂', 'action', false, 'queued'),
-			($1, $2, 'abc', '', 'action', true, 'done')
+			($1, $2, 'é', '🙂', 'action', 'queued'),
+			($1, $2, 'abc', '', 'action', 'done')
 	`, boardID, bucketID); err != nil {
 		t.Fatal(err)
 	}
@@ -701,17 +701,16 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	}
 	for _, item := range []struct {
 		status string
-		done   bool
 	}{
 		{status: "queued"},
 		{status: "working"},
 		{status: "needs_review"},
-		{status: "done", done: true},
+		{status: "done"},
 	} {
 		if _, err := db.Exec(ctx, `
-			INSERT INTO tasks (board_id, bucket_id, title, status, done, assignee_agent_id)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, boardID, bucketID, "Count "+item.status, item.status, item.done, agent.ID); err != nil {
+			INSERT INTO tasks (board_id, bucket_id, title, status, assignee_agent_id)
+			VALUES ($1, $2, $3, $4, $5)
+		`, boardID, bucketID, "Count "+item.status, item.status, agent.ID); err != nil {
 			t.Fatal(err)
 		}
 	}

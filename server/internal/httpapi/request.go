@@ -13,6 +13,7 @@ const (
 
 	TaskTitleRunes         = 300
 	TaskDescriptionBytes   = 16 * 1024
+	CardEntryBytes         = 16 * 1024
 	BoardNameRunes         = 100
 	BoardBackgroundRunes   = 100
 	BoardBackgroundKind    = 32

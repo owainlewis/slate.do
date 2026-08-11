@@ -1,20 +1,14 @@
 # slate.do
 
-A minimal interactive operating plan for clear thinking and focused execution.
+A card-first control plane for clear thinking and focused human and agent execution.
 
-Slate helps you choose what to work on, keep active work visible, and hide everything else.
-
-It is built around thinking buckets, simple list items, execution state, and weekly planning.
+Slate captures units of intent as cards, organises them into lists, and shows the same cards as a board, workflow, table, or weekly plan.
 
 ## Product
 
-The product reference is a simple operating plan that protects attention instead of collecting infinite metadata.
+The card is the core unit. A card can be a task, goal, project, idea, decision, or agent prompt. New cards enter Inbox, lists provide context, and every card can move through New, Ready, In Progress, Review, and Done.
 
-Each list holds one simple item type. Every item can move through Ready, Working, Review, and Done.
-
-Limits apply to open list items.
-
-Agents can suggest, update, and execute work, but Slate should make it hard to create clutter.
+Cards can have one level of child cards for shared human and agent work. Agents execute assigned cards through the CLI and return comments or outputs to the card.
 
 ## Docs
 
@@ -29,7 +23,8 @@ Slate now has an admin-only MVP:
 - Go server and static JS frontend.
 - Postgres persistence.
 - Admin sign in with a seeded admin.
-- Boards, goal-led Lists, a four-state Flow view for list items, planned dates, Week and Today views, and theme.
+- Inbox, account-wide cards, Board grouped by list, Flow grouped by status, Table, filters, planned dates, Week, Today, Review, and theme.
+- One level of child cards with independent owner and workflow state.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.
@@ -74,9 +69,9 @@ curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/main/install.sh
 export PATH="$HOME/.local/bin:$PATH"
 export SLATE_API_TOKEN=slate_...
 slate auth status
-slate boards list
-slate lists list --board <board-id>
-slate tasks create --list <list-id> --title "Draft launch note" --description "Write the first version" --date 2026-07-13
+slate tasks create --title "Draft launch note"
+slate tasks create --list <list-id> --title "Research examples"
+slate tasks create --parent <task-id> --title "Human review"
 slate tasks pull
 slate tasks claim <task-id>
 slate tasks status <task-id> needs_review

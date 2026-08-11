@@ -1,6 +1,6 @@
 # Slate CLI
 
-The Slate CLI lets you manage boards, lists, and tasks from a terminal. Its
+The Slate CLI lets you capture, organise, and execute tasks from a terminal. Its
 data and workflow commands return JSON, so the same interface works for people,
 scripts, and coding agents such as Claude Code and Codex.
 
@@ -46,7 +46,7 @@ sh install-slate.sh
 Pin a release by setting `SLATE_VERSION`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/v1.0.0/install.sh | SLATE_VERSION=v1.0.0 sh
+curl -fsSL https://raw.githubusercontent.com/owainlewis/slate.do/v1.1.0/install.sh | SLATE_VERSION=v1.1.0 sh
 ```
 
 Choose another install directory with `SLATE_INSTALL_DIR`:
@@ -83,14 +83,13 @@ export SLATE_BASE_URL=http://localhost:8080
 
 ## Basic commands
 
-Start by finding the IDs for your board and list:
+Create a task without a list to put it in Inbox:
 
 ```bash
-slate boards list
-slate lists list --board <board-id>
+slate tasks create --title "Draft launch note"
 ```
 
-Create and inspect work:
+Use a list when the bucket is already clear, or a parent when splitting complex work:
 
 ```bash
 slate tasks create \
@@ -99,9 +98,16 @@ slate tasks create \
   --description "Write the first version" \
   --date 2026-07-21
 
-slate tasks list --list <list-id> --done false
+slate tasks create \
+  --parent <task-id> \
+  --title "Human review"
+
+slate tasks list --list <list-id> --status queued
 slate tasks get <task-id>
 ```
+
+Subtasks are one level deep. They are normal tasks with independent status,
+priority, planned date, and agent assignment.
 
 Board and list responses include every active task plus the 20 most recently
 updated completed tasks in each list. Task collections omit descriptions to
@@ -113,8 +119,8 @@ previous command. Completed history defaults to 20 tasks per page and accepts
 up to 100:
 
 ```bash
-slate tasks list --list <list-id> --done true --limit 20
-slate tasks list --list <list-id> --done true --cursor <next-cursor>
+slate tasks list --list <list-id> --status done --limit 20
+slate tasks list --list <list-id> --status done --cursor <next-cursor>
 ```
 
 Priority is optional and crosses lists, so it is how you find urgent work
@@ -155,7 +161,7 @@ of the file.
 - Read full context with `slate tasks get <task-id>`.
 - When work is ready for a person to review, run
   `slate tasks status <task-id> needs_review`.
-- After the work is accepted, run `slate tasks done <task-id>`.
+- After the work is accepted, run `slate tasks status <task-id> done`.
 - Treat Slate command output as JSON. Preserve IDs exactly.
 - Reuse one `--idempotency-key` when retrying a task creation after an
   uncertain result.
@@ -204,5 +210,5 @@ If you used `SLATE_INSTALL_DIR`, remove `slate` from that directory instead.
   token and try `slate auth status` again.
 
 For release archives and checksums, see
-[Slate CLI v1.0.0](https://github.com/owainlewis/slate.do/releases/tag/v1.0.0)
+[Slate CLI v1.1.0](https://github.com/owainlewis/slate.do/releases/tag/v1.1.0)
 or the [latest release](https://github.com/owainlewis/slate.do/releases/latest).

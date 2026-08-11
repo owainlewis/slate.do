@@ -10,7 +10,7 @@ const styles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
 const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 const cliGuide = fs.readFileSync(path.join(__dirname, "cli.html"), "utf8");
 const favicon = fs.readFileSync(path.join(__dirname, "favicon.svg"), "utf8");
-const app = { console, Date, window: { addEventListener() {} } };
+const app = { console, Date, URLSearchParams, window: { addEventListener() {} } };
 vm.createContext(app);
 vm.runInContext(source, app, { filename });
 
@@ -107,25 +107,269 @@ test("password reset forms collect email and a secure replacement password", () 
   vm.runInContext(`state.resetToken = ""`, app);
 });
 
-test("sidebar separates board creation and explains the board limit", () => {
+test("sidebar makes cards, boards, and agents the primary control plane", () => {
   vm.runInContext(`
-    state.maxBoards = 10;
-    state.boards = Array.from({ length: 10 }, (_, index) => ({ id: String(index), name: "Board " + index }));
-    state.board = { id: "0", name: "Board 0", buckets: [] };
+    state.boards = [{ id: "content", name: "Content" }];
+    state.workspaceScope = "all";
+  `, app);
+
+  const html = app.appSidebarHTML();
+  for (const label of ["Focus", "All cards", "Boards", "Content", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
+  for (const label of ["Attention", "Inbox", "Today", "Week", "Review", "Plan"]) assert.doesNotMatch(html, new RegExp(`>${label}<`));
+  assert.ok(html.indexOf(">Focus<") < html.indexOf(">Boards<"));
+  assert.match(html, /data-board="content"><span>Content<\/span>/);
+  assert.match(html, /id="new-board"/);
+  assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
+  const settings = app.settingsHTML();
+  for (const label of ["Focus", "All cards", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
+  for (const label of ["Inbox", "Today", "Week", "Review"]) assert.doesNotMatch(settings, new RegExp(`>${label}<`));
+  assert.ok(settings.indexOf(">Focus<") < settings.indexOf(">Boards<"));
+  vm.runInContext(`state.boards = [];`, app);
+});
+
+test("shared-shell routes load one account-wide list index and discard stale responses", async () => {
+  let resolveListIndex;
+  app.pendingListIndex = new Promise(resolve => { resolveListIndex = resolve; });
+  vm.runInContext(`
+    savedListIndexGet = api.get;
+    authVersion = 7;
+    routeVersion = 41;
+    state.me = { id: "owner" };
+    state.workspaceLists = [{ id: "current", boardId: "board-one", name: "Current" }];
+    api.get = async path => {
+      if (path !== "/api/v1/lists") throw new Error("unexpected path " + path);
+      return pendingListIndex;
+    };
+  `, app);
+
+  const loading = app.loadWorkspaceListIndex(41);
+  vm.runInContext(`routeVersion = 42;`, app);
+  resolveListIndex({ lists: [{ id: "stale", boardId: "board-one", name: "Stale" }] });
+
+  assert.equal(await loading, false);
+  assert.equal(vm.runInContext(`state.workspaceLists[0].id`, app), "current");
+  vm.runInContext(`api.get = savedListIndexGet; state.me = null; state.workspaceLists = [];`, app);
+  delete app.pendingListIndex;
+});
+
+test("workspace reloads refresh list metadata and tasks under one route guard", async () => {
+  app.location = { pathname: "/app/tasks", search: "" };
+  vm.runInContext(`
+    savedReloadListIndex = loadWorkspaceListIndex;
+    savedReloadWorkspace = loadWorkspace;
+    savedReloadRender = render;
+    routeVersion = 45;
+    reloadCalls = [];
+    loadWorkspaceListIndex = async version => {
+      reloadCalls.push({ kind: "lists", version });
+      state.workspaceLists = [{ id: "inbox", openCount: 2 }];
+      return true;
+    };
+    loadWorkspace = async (route, version) => {
+      reloadCalls.push({ kind: "tasks", version, scope: route.scope });
+      state.workspaceTasks = [{ id: "task" }];
+      return true;
+    };
+    render = () => { reloadCalls.push({ kind: "render" }); };
+  `, app);
+
+  assert.equal(await app.reload(), true);
+  assert.deepEqual(JSON.parse(vm.runInContext(`JSON.stringify(reloadCalls)`, app)), [
+    { kind: "lists", version: 45 },
+    { kind: "tasks", version: 45, scope: "all" },
+    { kind: "render" },
+  ]);
+  assert.equal(vm.runInContext(`state.workspaceLists[0].openCount`, app), 2);
+
+  vm.runInContext(`
+    loadWorkspaceListIndex = savedReloadListIndex;
+    loadWorkspace = savedReloadWorkspace;
+    render = savedReloadRender;
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+  `, app);
+  delete app.location;
+});
+
+test("New list is bound centrally for shared-shell and settings routes", () => {
+  const shellStart = source.indexOf("function bindAppShell()");
+  const shellEnd = source.indexOf("async function captureInboxTask", shellStart);
+  const controlStart = source.indexOf("function bindWorkspaceListControl()");
+  const controlEnd = source.indexOf("async function captureInboxTask", controlStart);
+  const settingsStart = source.indexOf("async function bindSettings()");
+  const settingsEnd = source.indexOf("function bindAgents()", settingsStart);
+  const workspaceStart = source.indexOf("function bindWorkspace()");
+  const workspaceEnd = source.indexOf("function bindWorkspaceDetail(options = {})", workspaceStart);
+
+  assert.match(source.slice(shellStart, shellEnd), /bindWorkspaceListControl\(\)/);
+  assert.match(source.slice(controlStart, controlEnd), /#new-workspace-list/);
+  assert.match(source.slice(controlStart, controlEnd), /workspaceListDialog = "create"/);
+  assert.match(source.slice(settingsStart, settingsEnd), /bindWorkspaceListControl\(\)/);
+  assert.doesNotMatch(source.slice(workspaceStart, workspaceEnd), /#new-workspace-list/);
+});
+
+test("New list chooses a board with capacity and updates account-wide state immediately", async () => {
+  vm.runInContext(`
+    savedWorkspaceListRender = render;
+    savedWorkspaceListPost = api.post;
+    render = () => {};
+    workspaceListPosts = [];
+    api.post = async (path, input) => {
+      workspaceListPosts.push({ path, input });
+      return { id: "list-created", name: input.name };
+    };
+    authVersion = 8;
+    routeVersion = 51;
+    state.me = { id: "owner" };
+    state.maxListsPerBoard = 2;
+    state.boards = [{ id: "board-full", name: "Full" }, { id: "board-open", name: "Open" }];
+    state.board = { id: "board-full", name: "Full", buckets: [] };
+    state.workspaceLists = [
+      { id: "full-one", boardId: "board-full", name: "One" },
+      { id: "full-two", boardId: "board-full", name: "Two" },
+      { id: "open-one", boardId: "board-open", name: "Existing" },
+    ];
+    state.workspaceListError = "";
+    state.workspaceListPending = false;
+  `, app);
+
+  assert.equal(await app.createWorkspaceList(" Launch plan "), true);
+  const posts = JSON.parse(vm.runInContext(`JSON.stringify(workspaceListPosts)`, app));
+  assert.deepEqual(posts, [{ path: "/api/v1/boards/board-open/buckets", input: { name: "Launch plan" } }]);
+  assert.equal(vm.runInContext(`state.workspaceLists.find(list => list.id === "list-created").boardId`, app), "board-open");
+  assert.equal(vm.runInContext(`assignmentListsForBoard("board-open").some(list => list.id === "list-created")`, app), true);
+  assert.equal(vm.runInContext(`state.workspaceListPending`, app), false);
+
+  vm.runInContext(`
+    render = savedWorkspaceListRender;
+    api.post = savedWorkspaceListPost;
+    state.me = null;
+    state.boards = [];
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+});
+
+test("New list reports exhausted capacity without sending a request", async () => {
+  vm.runInContext(`
+    savedNoCapacityRender = render;
+    savedNoCapacityPost = api.post;
+    render = () => {};
+    noCapacityPosts = 0;
+    api.post = async () => { noCapacityPosts += 1; throw new Error("must not post"); };
+    authVersion = 9;
+    routeVersion = 61;
+    state.me = { id: "owner" };
+    state.maxListsPerBoard = 1;
+    state.boards = [{ id: "board-full", name: "Full" }];
+    state.workspaceLists = [{ id: "only-list", boardId: "board-full", name: "Only" }];
+    state.workspaceListError = "";
+    state.workspaceListPending = false;
+  `, app);
+
+  assert.equal(await app.createWorkspaceList("Blocked"), false);
+  assert.equal(vm.runInContext(`noCapacityPosts`, app), 0);
+  assert.equal(vm.runInContext(`state.workspaceListDialogError`, app), "No room for another list.");
+
+  vm.runInContext(`
+    render = savedNoCapacityRender;
+    api.post = savedNoCapacityPost;
+    state.me = null;
+    state.boards = [];
+    state.workspaceLists = [];
+  `, app);
+});
+
+test("the product no longer promises hard item limits", () => {
+	const landing = app.landingHTML();
+	assert.match(landing, /Lists for clear thinking/);
+	assert.doesNotMatch(landing, /Every list caps|list is full/i);
+});
+
+test("Today and Week keep their planned-date scope when other filters are applied", () => {
+	app.location = { search: "?q=brief&plannedFrom=2030-01-01&plannedTo=2030-01-31" };
+	const today = app.workspaceQuery({ scope: "today" }).toString();
+	const week = app.workspaceQuery({ scope: "week" }).toString();
+	assert.match(today, /q=brief/);
+	assert.doesNotMatch(today, /2030-01/);
+	assert.match(week, /q=brief/);
+	assert.doesNotMatch(week, /2030-01/);
+	delete app.location;
+});
+
+test("Week exposes its calendar and filters without unrelated view tabs", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", displayName: "Owain", theme: "dark" };
+    state.workspaceScope = "week";
+    state.workspaceTasks = [];
+    state.workspaceLoading = false;
+    state.workspaceFiltersOpen = false;
   `, app);
 
   const html = app.appHTML();
-  assert.match(html, /class="nav-sec nav-boards"/);
-  assert.match(html, /class="board-create"/);
-  assert.match(html, /id="new-board" disabled aria-describedby="board-limit"/);
-  assert.match(html, />10 board limit reached</);
+  assert.match(html, /class="workspace-viewbar week-only"/);
+  assert.match(html, /id="workspace-filter-toggle"/);
+  assert.match(html, /class="workspace-week" aria-label="Week calendar"/);
+  assert.match(html, /data-calendar-date=/);
+  assert.doesNotMatch(html, /aria-label="Task view"/);
+  assert.doesNotMatch(html, /data-workspace-view=/);
+  assert.match(styles, /\.workspace-week \[data-calendar-date\]\.drop-into/);
 
-  vm.runInContext(`state.boards = state.boards.slice(0, 2);`, app);
-  const availableHTML = app.appHTML();
-  assert.match(availableHTML, /id="new-board"\s*>/);
-  assert.doesNotMatch(availableHTML, /id="new-board"[^>]*disabled/);
-  assert.doesNotMatch(availableHTML, /board limit reached/);
-  vm.runInContext(`state.maxBoards = 10; state.boards = []; state.board = null;`, app);
+  vm.runInContext(`
+    state.me = null;
+    state.workspaceScope = "all";
+    state.workspaceTasks = [];
+    state.workspaceLoading = false;
+  `, app);
+});
+
+test("Review owns its status scope without showing a conflicting status filter", () => {
+  app.location = { search: "?status=working&q=brief" };
+  vm.runInContext(`state.workspaceScope = "review";`, app);
+  assert.equal(app.workspaceFilterCount(), 1);
+  assert.doesNotMatch(app.workspaceFilterHTML(), /name="status"/);
+  const query = app.workspaceQuery({ scope: "review" }).toString();
+  assert.match(query, /status=needs_review/);
+  assert.doesNotMatch(query, /status=working/);
+  vm.runInContext(`state.workspaceScope = "all";`, app);
+  delete app.location;
+});
+
+test("global scopes include subtasks while Inbox and individual lists remain parent rollups", () => {
+  app.location = { search: "" };
+  for (const scope of ["all", "today", "week", "review"]) {
+    assert.equal(app.workspaceQuery({ scope }).has("topLevel"), false, `${scope} should include subtasks`);
+  }
+  assert.equal(app.workspaceQuery({ scope: "inbox" }).get("topLevel"), "true");
+  assert.equal(app.workspaceQuery({ scope: "list", listId: "youtube" }).get("topLevel"), "true");
+  const paged = app.workspaceQuery({ scope: "all" }, "next-page");
+  assert.equal(paged.get("cursor"), "next-page");
+  assert.equal(paged.has("topLevel"), false);
+  delete app.location;
+});
+
+test("global filters can hide child cards while rollup scopes stay top level", () => {
+  app.location = { search: "?children=hide" };
+  vm.runInContext(`state.workspaceScope = "all";`, app);
+  for (const scope of ["all", "today", "week", "review"]) {
+    assert.equal(app.workspaceQuery({ scope }).get("topLevel"), "true", `${scope} should hide child cards`);
+  }
+  assert.equal(app.workspaceFilterCount(), 1);
+  assert.match(app.workspaceFilterHTML(), /name="children" value="hide" checked/);
+  vm.runInContext(`state.workspaceScope = "inbox";`, app);
+  assert.doesNotMatch(app.workspaceFilterHTML(), /name="children"/);
+  vm.runInContext(`state.workspaceScope = "all";`, app);
+  delete app.location;
+});
+
+test("kanban items use raised card surfaces", () => {
+  for (const selector of [".workspace-flow-card", ".task", ".flow-card"]) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const block = styles.match(new RegExp(`${escaped} \\{([^}]*)\\}`))[1];
+    assert.match(block, /background: var\(--card\)/, selector);
+    assert.match(block, /box-shadow: var\(--card-shadow\)/, selector);
+    assert.match(block, /border-radius: 8px/, selector);
+  }
 });
 
 test("default board creation stays incomplete when either default list fails", async () => {
@@ -266,39 +510,113 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
     state.boards = [{ id: "board", name: "Board" }];
     state.board = { id: "board", name: "Board", maxTasksPerList: 12, buckets: [] };
     state.boardMode = "lists";
+    state.workspaceScope = "all";
+    state.workspaceView = "board";
   `, app);
 
   const html = app.appHTML();
-  assert.doesNotMatch(html, /id="board-title"/);
-  assert.doesNotMatch(html, /aria-label="Board name"/);
-  assert.match(html, /class="week">Week \d+ \([^)]+\)<\/span>/);
-  for (const [mode, label] of [["lists", "Lists"], ["flow", "Flow"], ["calendar", "Week"], ["today", "Today"]]) {
-    assert.match(html, new RegExp(`data-board-mode="${mode}"[^>]*>[\\s\\S]*?<span>${label}</span>`));
+  for (const [view, label] of [["board", "Board"], ["flow", "Flow"], ["table", "Table"]]) {
+    assert.match(html, new RegExp(`id="workspace-tab-${view}"[^>]*data-workspace-view="${view}"[^>]*role="tab"[^>]*aria-controls="workspace-task-panel"[^>]*>[\\s\\S]*?<span>${label}</span>`));
   }
+  assert.match(html, /id="workspace-tab-board"[^>]*tabindex="0"[^>]*aria-selected="true"/);
+  assert.match(html, /id="workspace-task-panel" role="tabpanel" tabindex="0" aria-labelledby="workspace-tab-board"/);
+  assert.match(html, /id="new-task"/);
+  assert.match(html, /id="workspace-filter-toggle"/);
   assert.match(html, /data-set-theme="light"[\s\S]*?<span>Light<\/span>/);
   assert.match(html, /data-set-theme="dark"[\s\S]*?<span>Dark<\/span>/);
   assert.match(html, /class="theme-switch light"[\s\S]*?id="settings"/);
   assert.match(html, /id="settings"[\s\S]*?<span>Settings<\/span>/);
   assert.match(html, /id="logout"[\s\S]*?<span>Sign out<\/span>/);
-  assert.match(html, /data-board-settings="board"[^>]*aria-label="Board settings for Board"/);
-
-  const boardSettings = app.boardSettingsHTML();
-  assert.match(boardSettings, /id="settings-list-limit"[^>]*value="12"/);
-	assert.match(boardSettings, /Maximum active items/);
-	assert.match(boardSettings, /aria-label="Max active items per list"[^>]*max="20"/);
-  assert.doesNotMatch(boardSettings, /data-set-theme=/);
+  assert.doesNotMatch(html, /data-board-settings|Board settings/);
   vm.runInContext(`state.boards = []; state.board = null;`, app);
 });
 
-test("list limits remain scoped to the selected board", () => {
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(app.listLimitUpdate("current-board", "12"))),
-    { next: 12, path: "/api/v1/boards/current-board", input: { maxTasksPerList: 12 } },
-  );
-  assert.equal(app.validateListLimit("0", 20), "Enter a value from 1 to 20.");
-  assert.equal(app.validateListLimit("21", 20), "Enter a value from 1 to 20.");
-  assert.equal(app.validateListLimit("2.5", 20), "Enter a whole number.");
-  assert.equal(app.validateListLimit("20", 20), "");
+test("the card table exposes native headers, cells, and keyboard-operable rows", () => {
+  vm.runInContext(`
+    state.me = { id: "owner", displayName: "Owain" };
+    state.agents = [];
+  `, app);
+  const html = app.workspaceTableHTML([{
+    id: "task-one", title: "Accessible task", listName: "Inbox", status: "queued",
+    priority: "p1", scheduledDate: "2026-08-05", assigneeAgentId: "",
+  }]);
+
+  assert.match(html, /^<table class="workspace-table" aria-label="Cards">/);
+  for (const heading of ["Card", "Location", "Status", "Priority", "Owner", "Planned"]) {
+    assert.match(html, new RegExp(`<th scope="col">${heading}<\\/th>`));
+  }
+  assert.match(html, /<tr class="workspace-table-row" data-task-row>/);
+  assert.doesNotMatch(html, /workspace-completion-toggle|data-toggle-done/);
+  assert.match(html, /<button type="button" class="workspace-table-open" data-open-task="task-one" aria-label="Open card: Accessible task"><strong>Accessible task<\/strong><\/button>/);
+  assert.doesNotMatch(html, /<section class="workspace-table"|<tr[^>]*tabindex=/);
+  vm.runInContext(`state.me = null; state.agents = [];`, app);
+});
+
+test("every global card view identifies child cards with parent context", () => {
+  vm.runInContext(`state.me = { id: "owner", displayName: "Owain" }; state.agents = []; state.workspaceLists = [{ id: "product", name: "Product", boardId: "board" }];`, app);
+  const planned = app.dateKey(app.startOfWeek(new Date()));
+  const subtask = {
+    id: "child", parentTaskId: "parent", parentTaskTitle: "Parent & plan", bucketId: "product", title: "Research", listName: "Product",
+    status: "needs_review", priority: "", scheduledDate: planned, assigneeAgentId: "",
+  };
+  for (const html of [
+    app.workspaceListHTML([subtask]),
+    app.workspaceTableHTML([subtask]),
+    app.workspaceBoardHTML([subtask]),
+    app.workspaceFlowHTML([subtask]),
+    app.workspaceWeekHTML([subtask]),
+  ]) {
+    assert.match(html, /Child of Parent &amp; plan/);
+  }
+  vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
+});
+
+test("Board keeps empty selected and Inbox lists visible", () => {
+  vm.runInContext(`
+    state.workspaceLists = [
+      { id: "inbox", boardId: "board", name: "Inbox", isInbox: true },
+      { id: "planning", boardId: "board", name: "Planning", isInbox: false },
+    ];
+    state.workspaceScope = "list";
+    state.workspaceListID = "planning";
+  `, app);
+  assert.match(app.workspaceBoardHTML([]), /data-kanban-list="planning"/);
+  assert.match(app.workspaceBoardHTML([]), /<h2>Planning<\/h2>/);
+
+  vm.runInContext(`state.workspaceScope = "inbox"; state.workspaceListID = "";`, app);
+  const inbox = app.workspaceBoardHTML([]);
+  assert.match(inbox, /data-kanban-list="inbox"/);
+  assert.doesNotMatch(inbox, /data-kanban-list="planning"/);
+  vm.runInContext(`state.workspaceScope = "all"; state.workspaceLists = [];`, app);
+});
+
+test("subtask detail keeps its list fixed to the parent", () => {
+  vm.runInContext(`
+    state.workspaceLists = [{ id: "list-one", name: "Product", isInbox: false }];
+    state.selectedTask = { id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" };
+    state.selectedSubtasks = [];
+  `, app);
+  const html = vm.runInContext(`workspaceDetailHTML(state.selectedTask)`, app);
+  assert.match(html, /id="workspace-detail-list" disabled aria-describedby="workspace-detail-list-help"/);
+  assert.doesNotMatch(html, /name="bucketId"/);
+  assert.match(html, /Child cards stay with their parent card\./);
+});
+
+test("agent work renders the shared inline task detail with parent context", () => {
+  vm.runInContext(`
+    state.view = "agent-work";
+    state.workspaceLists = [{ id: "list-one", boardId: "board-one", name: "Product" }];
+    state.selectedTask = { id: "parent", bucketId: "list-one", title: "Prepare launch", description: "", status: "working", priority: "p1", assigneeAgentId: "agent-one", scheduledDate: "" };
+    state.selectedSubtasks = [{ id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", status: "done" }];
+  `, app);
+  const html = app.agentDetailHTML();
+  assert.match(html, /class="main workspace-main card-detail-main agent-task-main"/);
+  assert.match(html, /class="workspace-detail" aria-label="Card detail"/);
+  assert.match(html, />Back to agent work<\/span>/);
+  assert.match(html, /1 of 1 done/);
+  assert.match(html, /Review/);
+  assert.doesNotMatch(html, /data-detail-overlay|aria-modal="true"|id="detail-form"/);
+  vm.runInContext(`state.view = "home"; state.selectedTask = null; state.selectedSubtasks = []; state.workspaceLists = [];`, app);
 });
 
 test("completed history pages append to a list and preserve the next cursor", async () => {
@@ -313,18 +631,18 @@ test("completed history pages append to a list and preserve the next cursor", as
     state.me = { id: "owner" };
     state.board = {
       id: "board-one",
-      buckets: [{ id: "list-one", completedNextCursor: "cursor-one", tasks: [{ id: "active", done: false }] }],
+      buckets: [{ id: "list-one", completedNextCursor: "cursor-one", tasks: [{ id: "active", status: "queued" }] }],
     };
     historyRequests = [];
     api.get = async path => {
       historyRequests.push(path);
-      return { tasks: [{ id: "older", bucketId: "list-one", done: true }], nextCursor: "cursor-two" };
+      return { tasks: [{ id: "older", bucketId: "list-one", status: "done" }], nextCursor: "cursor-two" };
     };
   `, app);
 
   await app.loadCompletedHistory("list-one");
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(historyRequests)", app)), [
-    "/api/v1/tasks?bucketId=list-one&done=true&limit=20&cursor=cursor-one",
+    "/api/v1/tasks?bucketId=list-one&status=done&limit=20&cursor=cursor-one",
   ]);
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.board.buckets[0].tasks.map(task => task.id))", app)), ["active", "older"]);
   assert.equal(vm.runInContext("state.board.buckets[0].completedNextCursor", app), "cursor-two");
@@ -339,7 +657,7 @@ test("completed history pages append to a list and preserve the next cursor", as
   `, app);
 });
 
-test("opening a task loads its full description from the exact endpoint", async () => {
+test("opening a task loads its full description and subtasks", async () => {
   vm.runInContext(`
     savedDetailRender = render;
     savedDetailGet = api.get;
@@ -351,13 +669,27 @@ test("opening a task loads its full description from the exact endpoint", async 
     detailRequests = [];
     api.get = async path => {
       detailRequests.push(path);
+      if (path.includes("parentTaskId=") && path.includes("cursor=children-two")) {
+        return { tasks: [{ id: "subtask-two", parentTaskId: "task-one", title: "Review" }] };
+      }
+      if (path.includes("parentTaskId=")) {
+        return { tasks: [{ id: "subtask-one", parentTaskId: "task-one", title: "Research" }], nextCursor: "children-two" };
+      }
+      if (path === "/api/v1/cards/task-one/entries") return { entries: [] };
       return { id: "task-one", bucketId: "list-one", title: "Summary", description: "Full private detail" };
     };
   `, app);
 
   assert.equal(await app.openTaskDetail("task-one"), true);
-  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), ["/api/v1/tasks/task-one"]);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
+    "/api/v1/tasks/task-one",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/cards/task-one/entries",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
+  ]);
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
+  assert.equal(vm.runInContext("state.selectedSubtasks[0].parentTaskId", app), "task-one");
+  assert.equal(vm.runInContext("state.selectedSubtasks.length", app), 2);
 
   vm.runInContext(`
     state.board.buckets[0].tasks = [];
@@ -366,7 +698,13 @@ test("opening a task loads its full description from the exact endpoint", async 
   assert.equal(await app.openTaskDetail("task-one"), true);
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
     "/api/v1/tasks/task-one",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/cards/task-one/entries",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
     "/api/v1/tasks/task-one",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200",
+    "/api/v1/cards/task-one/entries",
+    "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
   ]);
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
 
@@ -379,7 +717,42 @@ test("opening a task loads its full description from the exact endpoint", async 
   `, app);
 });
 
-test("Pro limits prevent obvious list and active-item creation", () => {
+test("loading more tasks cannot append an old list response after navigation", async () => {
+  app.location = { pathname: "/app/lists/list-a", search: "" };
+  vm.runInContext(`
+    savedWorkspaceRender = render;
+    savedWorkspaceGet = api.get;
+    render = () => {};
+    authVersion = 12;
+    routeVersion = 20;
+    state.me = { id: "owner" };
+    state.workspaceTasks = [{ id: "list-a-task" }];
+    state.workspaceNextCursor = "next-page";
+    state.workspaceLoading = false;
+    api.get = () => new Promise(resolve => { resolveOldWorkspacePage = resolve; });
+  `, app);
+
+  const pending = app.loadMoreWorkspaceTasks();
+  vm.runInContext(`
+    routeVersion = 21;
+    state.workspaceTasks = [{ id: "list-b-task" }];
+    state.workspaceNextCursor = "";
+    state.workspaceLoading = false;
+    resolveOldWorkspacePage({ tasks: [{ id: "stale-list-a-task" }], nextCursor: "" });
+  `, app);
+  await pending;
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.workspaceTasks.map(task => task.id))", app)), ["list-b-task"]);
+
+  vm.runInContext(`
+    render = savedWorkspaceRender;
+    api.get = savedWorkspaceGet;
+    state.me = null;
+    state.workspaceTasks = [];
+  `, app);
+  delete app.location;
+});
+
+test("lists never block task creation when their legacy count is reached", () => {
 	vm.runInContext(`
 		state.me = { entitlement: { plan: "pro", source: "manual", limits: { boards: 5, listsPerBoard: 9, activeItemsPerList: 20 } } };
 		state.maxListsPerBoard = 9;
@@ -395,15 +768,15 @@ test("Pro limits prevent obvious list and active-item creation", () => {
 	`, app);
 
 	const html = app.appHTML();
-	assert.match(html, /id="add-list" disabled aria-describedby="list-limit"/);
-	assert.match(html, />9 list Pro limit reached</);
-	assert.match(html, /data-add-task="list-0"[\s\S]*?placeholder="Limit of 20 active items reached" disabled/);
-	assert.match(html, />20 active item limit reached</);
+	const legacyList = app.listHTML(vm.runInContext("state.board.buckets[0]", app));
+	assert.match(legacyList, /data-add-task="list-0"/);
+	assert.match(legacyList, /placeholder="Add item"/);
+	assert.doesNotMatch(legacyList, /disabled|active item limit reached/i);
 	assert.equal(app.accountLimits().boards, 5);
 	vm.runInContext(`state.me = null; state.boards = []; state.board = null;`, app);
 });
 
-test("Free limits and plan names drive customer-facing controls", () => {
+test("account limits still govern credentials without leaking list item limits", () => {
 	vm.runInContext(`
 		state.me = { id: "free-user", entitlement: { plan: "free", source: "free", limits: { boards: 1, listsPerBoard: 5, activeItemsPerList: 20, agents: 1, storedTasks: 500, storedContentBytes: 10485760, apiTokens: 3 } } };
 		state.maxBoards = 1;
@@ -416,7 +789,7 @@ test("Free limits and plan names drive customer-facing controls", () => {
 	`, app);
 
 	const boardHTML = app.appHTML();
-	assert.match(boardHTML, />5 list Free limit reached</);
+	assert.doesNotMatch(boardHTML, /active item limit reached/i);
 	assert.equal(app.accountLimits().boards, 1);
 	assert.equal(app.planLabel(), "Free");
 	assert.match(app.newAgentHTML(true), /Free includes 1 active agent/);
@@ -484,24 +857,35 @@ test("local date keys survive the spring DST boundary", () => {
   assert.equal(app.dateKey(app.addDays(before, 2)), "2026-03-30");
 });
 
-test("every list item is completable", () => {
-  const html = app.taskHTML({ id: "record", title: "Record comparison", kind: "action", status: "queued", scheduledDate: "", done: false });
+test("list cards open without a legacy completion checkbox", () => {
+  const html = app.taskHTML({ id: "record", title: "Record comparison", kind: "action", status: "queued", scheduledDate: "" });
 
-  assert.match(html, /class="task action/);
-  assert.match(html, /data-toggle-done="record"/);
-  assert.doesNotMatch(html, /item-dot/);
+	assert.match(html, /class="task action/);
+	assert.match(html, /data-open-task="record"/);
+	assert.doesNotMatch(html, /data-toggle-done|class="check"/);
+	assert.doesNotMatch(html, /item-dot/);
 });
 
-test("list items show compact state treatment", () => {
-  const ready = app.taskHTML({ id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "", done: false });
-  const working = app.taskHTML({ id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "", done: false });
-  const review = app.taskHTML({ id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "", done: false });
-  const done = app.taskHTML({ id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "", done: true });
+test("subtasks cannot be dragged independently between lists", () => {
+	assert.match(app.taskHTML({ id: "parent", title: "Parent", status: "new" }), /draggable="true"/);
+	assert.match(app.taskHTML({ id: "child", parentTaskId: "parent", title: "Child", status: "new" }), /draggable="false"/);
+});
 
-  assert.doesNotMatch(ready, /state-badge/);
-  assert.match(working, /state-working[^>]*>Working/);
-  assert.match(review, /state-needs_review[^>]*>Review/);
-  assert.match(done, /class="task action done"/);
+test("list cards leave workflow state to Flow", () => {
+	const ready = app.taskHTML({ id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "" });
+	const working = app.taskHTML({ id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "" });
+	const review = app.taskHTML({ id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "" });
+	const done = app.taskHTML({ id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "" });
+
+	for (const html of [ready, working, review, done]) assert.doesNotMatch(html, /state-badge/);
+	assert.match(done, /class="task action status-done"/);
+
+	vm.runInContext(`state.me = { displayName: "Owain" }; state.workspaceLists = [{ id: "list-one", name: "Plan" }];`, app);
+	const item = { id: "working", title: "Working action", bucketId: "list-one", listName: "Plan", status: "working", scheduledDate: "" };
+	for (const html of [app.workspaceListHTML([item]), app.workspaceBoardHTML([item])]) {
+		assert.doesNotMatch(html, /state-badge|In Progress/);
+	}
+	vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
 });
 
 test("agent assignments use safe deterministic bot avatars across directory, task, and detail views", () => {
@@ -515,21 +899,23 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
       id: "board", name: "Board",
       buckets: [{ id: "list", name: "List", tasks: [] }],
     };
+    state.workspaceLists = [{ id: "list", boardId: "board", name: "List" }];
+    state.selectedSubtasks = [];
   `, app);
-  const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", done: false, scheduledDate: "", assigneeAgentId: "agent-one" };
+  const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", scheduledDate: "", assigneeAgentId: "agent-one" };
   const taskHTML = app.taskHTML(assigned);
   assert.match(taskHTML, /class="avatar agent-avatar tone-\d avatar-small/);
   assert.match(taskHTML, /<rect x="5" y="7" width="14" height="11" rx="3"/);
   assert.doesNotMatch(taskHTML, />&lt;B<\/span>/);
   assert.doesNotMatch(taskHTML, /<Research Bot>/);
 
-  const detail = app.detailHTML({ ...assigned, assigneeAgentId: "agent-old" });
-  assert.match(detail, /id="detail-assignee" name="assigneeAgentId"/);
+  const detail = app.workspaceDetailHTML({ ...assigned, assigneeAgentId: "agent-old", description: "", priority: "", scheduledDate: "" });
+  assert.match(detail, /id="workspace-detail-owner" name="assigneeAgentId"/);
   assert.match(detail, /value="agent-one"/);
   assert.match(detail, /value="agent-old" selected disabled>Old Bot \(inactive\)/);
 
   vm.runInContext(`state.agents = [];`, app);
-  const unavailable = app.detailHTML({ ...assigned, assigneeAgentId: "agent-one" });
+  const unavailable = app.workspaceDetailHTML({ ...assigned, assigneeAgentId: "agent-one", description: "", priority: "", scheduledDate: "" });
   assert.match(unavailable, /value="agent-one" selected>Assigned agent unavailable/);
   assert.doesNotMatch(unavailable, /value="" selected>Unassigned/);
 
@@ -537,7 +923,7 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
   const second = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
   assert.equal(first, second);
   assert.match(app.avatarHTML({ id: "stable", displayName: "Research Bot" }, { large: true }), /avatar-large/);
-  vm.runInContext(`state.agents = []; state.boards = []; state.board = null;`, app);
+  vm.runInContext(`state.agents = []; state.boards = []; state.board = null; state.workspaceLists = []; state.selectedSubtasks = [];`, app);
 });
 
 test("account settings contain profile, preferences, and personal API access only", () => {
@@ -634,7 +1020,7 @@ test("agent directory shows credential facts, work counts, archived identities, 
   assert.match(html, />Connected</);
   assert.match(html, />Needs connection</);
   assert.match(html, />Archived</);
-  assert.match(html, /2 ready items · 1 working item · 1 review item/);
+  assert.match(html, /2 open cards · 1 working card · 1 review card/);
   assert.match(html, /href="\/app\/agents\/agent-connected" data-agent-link="agent-connected"/);
   assert.match(html, /No open work assigned/);
   assert.match(html, /<details class="archived-agents">/);
@@ -651,8 +1037,8 @@ test("agent directory shows credential facts, work counts, archived identities, 
 });
 
 test("agent detail presents real grouped task data, bounded history, and distinct states", () => {
-  const workItem = (id, title, status, done = false) => ({
-    id, title, status, done, boardId: "board", boardName: "Business",
+  const workItem = (id, title, status) => ({
+    id, title, status, boardId: "board", boardName: "Business",
     bucketId: "list", bucketName: "Product", updatedAt: "2026-07-28T09:00:00Z",
   });
   vm.runInContext(`
@@ -668,7 +1054,7 @@ test("agent detail presents real grouped task data, bounded history, and distinc
         ready: [workItem("ready", "Ready item", "queued")],
         working: [workItem("working", "Working item", "working")],
         review: [workItem("review", "Review item", "needs_review")],
-        recentlyCompleted: [workItem("done", "Done item", "done", true)],
+        recentlyCompleted: [workItem("done", "Done item", "done")],
         totals: { ready: 51, working: 1, review: 1, completed: 21 },
         openLimit: 50,
         completedLimit: 20,
@@ -699,7 +1085,7 @@ test("agent detail presents real grouped task data, bounded history, and distinc
   vm.runInContext(`
     state.view = "agent-work";
     state.agentWorkPage = {
-      items: ${JSON.stringify([workItem("ready", "Ready item", "queued"), workItem("done", "Done item", "done", true)])},
+      items: ${JSON.stringify([workItem("ready", "Ready item", "queued"), workItem("done", "Done item", "done")])},
       page: 2, pageSize: 50, total: 102, hasPrevious: true, hasNext: true,
     };
   `, app);
@@ -721,6 +1107,236 @@ test("agent detail presents real grouped task data, bounded history, and distinc
     assert.match(app.agentDetailHTML(), new RegExp(text, "i"));
   }
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentWorkPage = null; state.agentDetailLoadState = "idle";`, app);
+});
+
+test("deleting an off-page assigned subtask reconciles agent pagination and status totals", () => {
+  vm.runInContext(`
+    state.agentDetail = {
+      agent: { id: "agent-one" },
+      work: {
+        ready: [], working: [], review: [], recentlyCompleted: [],
+        totals: { ready: 12, working: 3, review: 2, completed: 5 },
+      },
+    };
+    state.agentWorkPage = {
+      items: [{ id: "visible-task", assigneeAgentId: "agent-one", status: "queued" }],
+      page: 1, pageSize: 50, total: 51, hasPrevious: false, hasNext: true,
+    };
+  `, app);
+
+  assert.equal(app.reconcileAgentTaskCaches({
+    id: "off-page-child", parentTaskId: "parent", assigneeAgentId: "agent-one", status: "queued",
+  }, { deleted: true }), true);
+  assert.equal(vm.runInContext("state.agentWorkPage.total", app), 50);
+  assert.equal(vm.runInContext("state.agentWorkPage.hasNext", app), false);
+  assert.equal(vm.runInContext("state.agentDetail.work.totals.ready", app), 11);
+  assert.equal(vm.runInContext("state.agentWorkPage.items.length", app), 1);
+  assert.equal(vm.runInContext("state.agentDetail.work.ready.length", app), 0);
+
+  vm.runInContext(`state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
+test("agent cache reconciliation resolves location labels after a cross-list save", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Campaigns" }];
+    state.workspaceLists = [{ id: "list-new", boardId: "board-two", name: "Launch" }];
+    state.agentDetail = {
+      agent: { id: "agent-one" },
+      work: {
+        ready: [{ id: "task-one", boardId: "board-one", boardName: "Workspace", bucketId: "list-old", bucketName: "Inbox", assigneeAgentId: "agent-one", status: "queued" }],
+        working: [], review: [], recentlyCompleted: [], totals: { ready: 1 },
+      },
+    };
+    state.agentWorkPage = {
+      items: [{ id: "task-one", boardId: "board-one", boardName: "Workspace", bucketId: "list-old", bucketName: "Inbox", assigneeAgentId: "agent-one", status: "queued" }],
+      page: 1, pageSize: 50, total: 1, hasPrevious: false, hasNext: false,
+    };
+  `, app);
+
+  app.reconcileAgentTaskCaches({ id: "task-one", bucketId: "list-new", assigneeAgentId: "agent-one", status: "queued" });
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].bucketName", app), "Launch");
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].boardName", app), "Campaigns");
+  assert.equal(vm.runInContext("state.agentDetail.work.ready[0].bucketName", app), "Launch");
+
+  vm.runInContext(`state.boards = []; state.workspaceLists = []; state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
+test("moving a parent reconciles cached descendant locations", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Campaigns" }];
+    state.workspaceLists = [{ id: "list-new", boardId: "board-two", name: "Launch" }];
+    state.agentDetail = {
+      agent: { id: "agent-one" },
+      work: {
+        ready: [{ id: "child", parentTaskId: "parent", boardId: "board-one", boardName: "Workspace", bucketId: "list-old", bucketName: "Inbox", assigneeAgentId: "agent-one", status: "queued" }],
+        working: [], review: [], recentlyCompleted: [], totals: { ready: 1 },
+      },
+    };
+    state.agentWorkPage = {
+      items: [{ id: "child", parentTaskId: "parent", boardId: "board-one", boardName: "Workspace", bucketId: "list-old", bucketName: "Inbox", assigneeAgentId: "agent-one", status: "queued" }],
+      page: 1, pageSize: 50, total: 1, hasPrevious: false, hasNext: false,
+    };
+  `, app);
+
+  app.reconcileAgentTaskCaches(
+    { id: "parent", bucketId: "list-new", assigneeAgentId: "agent-one", status: "working" },
+    { previousTask: { id: "parent", bucketId: "list-old", assigneeAgentId: "agent-one", status: "working" } },
+  );
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].bucketName", app), "Launch");
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].boardName", app), "Campaigns");
+  assert.equal(vm.runInContext("state.agentDetail.work.ready[0].bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.agentDetail.work.ready[0].listName", app), "Launch");
+
+  vm.runInContext(`state.boards = []; state.workspaceLists = []; state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
+test("moving a parent reconciles an open child detail without losing its draft", () => {
+  vm.runInContext(`
+    savedParentMoveRender = render;
+    parentMoveRenderCount = 0;
+    render = () => { parentMoveRenderCount += 1; };
+    parentMoveListControl = { value: "list-old" };
+    parentMoveContext = { textContent: "YouTube" };
+    globalThis.document = { querySelector: selector => selector === "#workspace-detail-list" ? parentMoveListControl : selector === ".detail-context span" ? parentMoveContext : null };
+    state.boards = [{ id: "board-one", name: "Workspace" }];
+    state.workspaceLists = [
+      { id: "list-old", boardId: "board-one", name: "YouTube" },
+      { id: "list-new", boardId: "board-one", name: "Inbox" },
+    ];
+    state.board = { id: "board-one", buckets: [
+      { id: "list-old", tasks: [{ id: "parent", bucketId: "list-old", status: "working" }] },
+      { id: "list-new", tasks: [] },
+    ] };
+    state.workspaceTasks = [{ id: "child", parentTaskId: "parent", bucketId: "list-old", listName: "YouTube", title: "Child" }];
+    state.selectedSubtasks = [];
+    state.selectedTask = { id: "child", parentTaskId: "parent", bucketId: "list-old", listName: "YouTube", title: "Live child title", description: "Live child brief", status: "queued" };
+    state.taskDetailDrafts = { child: { title: "Live child title", description: "Live child brief", status: "queued", bucketId: "list-old", priority: "p1", assigneeAgentId: "", scheduledDate: "" } };
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+  `, app);
+
+  app.reconcileTaskMutation(
+    { id: "parent", bucketId: "list-new", status: "working" },
+    { id: "parent", bucketId: "list-old", status: "working" },
+  );
+
+  assert.equal(vm.runInContext("state.workspaceTasks[0].bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.workspaceTasks[0].listName", app), "Inbox");
+  assert.equal(vm.runInContext("state.selectedTask.bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.selectedTask.listName", app), "Inbox");
+  assert.equal(vm.runInContext("state.selectedTask.title", app), "Live child title");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.child.bucketId", app), "list-new");
+  assert.equal(vm.runInContext("state.taskDetailDrafts.child.description", app), "Live child brief");
+  assert.equal(vm.runInContext("parentMoveListControl.value", app), "list-new");
+  assert.equal(vm.runInContext("parentMoveContext.textContent", app), "Inbox");
+  assert.equal(vm.runInContext("parentMoveRenderCount", app), 0);
+
+  vm.runInContext(`
+    render = savedParentMoveRender;
+    state.boards = [];
+    state.workspaceLists = [];
+    state.board = null;
+    state.workspaceTasks = [];
+    state.selectedSubtasks = [];
+    state.selectedTask = null;
+    state.taskDetailDrafts = {};
+    delete globalThis.document;
+  `, app);
+});
+
+test("off-page agent mutations reconcile bounded overview totals", () => {
+  vm.runInContext(`
+    state.agentDetail = {
+      agent: { id: "agent-one" },
+      work: {
+        ready: [], working: [], review: [], recentlyCompleted: [],
+        totals: { ready: 51, working: 2, review: 0, completed: 0 },
+      },
+    };
+    state.agentWorkPage = {
+      items: [], page: 1, pageSize: 50, total: 53, hasPrevious: false, hasNext: true,
+    };
+  `, app);
+
+  app.reconcileAgentTaskCaches(
+    { id: "off-page", assigneeAgentId: "agent-one", status: "working" },
+    { previousTask: { id: "off-page", assigneeAgentId: "agent-one", status: "queued" } },
+  );
+  assert.equal(vm.runInContext("state.agentDetail.work.totals.ready", app), 50);
+  assert.equal(vm.runInContext("state.agentDetail.work.totals.working", app), 3);
+  assert.equal(vm.runInContext("state.agentDetail.work.working.length", app), 0, "bounded groups do not grow with off-page tasks");
+  assert.equal(vm.runInContext("state.agentWorkPage.total", app), 53);
+
+  app.reconcileAgentTaskCaches(
+    { id: "off-page", assigneeAgentId: "", status: "working" },
+    { previousTask: { id: "off-page", assigneeAgentId: "agent-one", status: "working" } },
+  );
+  assert.equal(vm.runInContext("state.agentDetail.work.totals.working", app), 2);
+  assert.equal(vm.runInContext("state.agentWorkPage.total", app), 52);
+  assert.equal(vm.runInContext("state.agentWorkPage.hasNext", app), true);
+
+  vm.runInContext(`state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
+test("account-wide lists are immediately available for agent assignment", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Other" }];
+    state.board = { id: "board-one", name: "Workspace", buckets: [{ id: "list-old", boardId: "board-one", name: "Old" }] };
+    state.workspaceLists = [
+      { id: "list-old", boardId: "board-one", name: "Old" },
+      { id: "list-new", boardId: "board-one", name: "Launch plan" },
+      { id: "list-stale", boardId: "board-two", name: "Stale other-board list" },
+    ];
+    state.agentDetail = { agent: { id: "agent-one", displayName: "Builder" } };
+    state.agentAssignBoardID = "board-one";
+    state.agentAssignDraft = null;
+  `, app);
+
+  const refreshed = app.assignWorkHTML();
+  assert.match(refreshed, /value="list-new"[^>]*>Launch plan<\/option>/);
+
+  vm.runInContext(`state.agentAssignBoardID = "board-two";`, app);
+  const switched = app.assignWorkHTML();
+  assert.match(switched, /value="list-stale"[^>]*>Stale other-board list<\/option>/);
+
+  vm.runInContext(`
+    state.boards = [];
+    state.board = null;
+    state.workspaceLists = [];
+    state.agentDetail = null;
+    state.agentAssignBoardID = "";
+    state.agentAssignDraft = null;
+  `, app);
+});
+
+test("task list options disambiguate duplicate board and list names", () => {
+  vm.runInContext(`
+    state.boards = [
+      { id: "board-one", name: "Content" },
+      { id: "board-two", name: "Content" },
+    ];
+    state.workspaceLists = [
+      { id: "list-one", boardId: "board-one", name: "YouTube" },
+      { id: "list-two", boardId: "board-two", name: "YouTube" },
+      { id: "list-three", boardId: "board-two", name: "LinkedIn" },
+    ];
+  `, app);
+
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[0]", app)), "Content / YouTube (list-one)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[1]", app)), "Content / YouTube (list-two)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[2]", app)), "LinkedIn");
+
+  vm.runInContext(`
+    state.boards = [{ id: "board-one", name: "Content" }];
+    state.workspaceLists = [
+      { id: "list-one", boardId: "board-one", name: "YouTube" },
+      { id: "list-two", boardId: "board-one", name: "YouTube" },
+    ];
+  `, app);
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[0]", app)), "YouTube (list-one)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[1]", app)), "YouTube (list-two)");
+
+  vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
 });
 
 test("new-agent route has inline limits and one-time CLI connection instructions", () => {
@@ -781,6 +1397,15 @@ test("agent settings separate identity, credential, and archive lifecycle withou
   assert.doesNotMatch(settings, />Delete</);
 
   vm.runInContext(`
+    state.agentLifecycleConfirm = "archive";
+    state.agentArchiveConflict = { new: 1, ready: 2, working: 1 };
+  `, app);
+  const archiveConflict = app.agentLifecycleConfirmHTML();
+  assert.match(archiveConflict, /Active work is still assigned/);
+  assert.match(archiveConflict, /1 New card, 2 Ready cards, 1 In Progress card must be unassigned/);
+  vm.runInContext(`state.agentLifecycleConfirm = ""; state.agentArchiveConflict = null;`, app);
+
+  vm.runInContext(`
     state.agentCredentialResult = { ownerID: "owner", agentID: "agent-one", token: "slate_agent_once_only" };
   `, app);
   const result = app.agentDetailHTML();
@@ -804,7 +1429,17 @@ test("agent settings separate identity, credential, and archive lifecycle withou
   `, app);
   const archived = app.agentDetailHTML();
   assert.match(archived, /id="restore-agent"/);
+  assert.match(archived, /id="delete-agent"/);
+  assert.match(archived, /Delete permanently/);
+  assert.match(archived, /Historical tasks remain, but their agent assignment is cleared/);
   assert.doesNotMatch(archived, /id="rotate-agent-credential"/);
+
+  vm.runInContext(`state.agentLifecycleConfirm = "delete";`, app);
+  const deletion = app.agentLifecycleConfirmHTML();
+  assert.match(deletion, /Permanently delete this agent/);
+  assert.match(deletion, /This cannot be undone/);
+  assert.match(deletion, /id="confirm-agent-lifecycle"[^>]*>Delete permanently/);
+  assert.match(source, /\/api\/v1\/agents\/\$\{encodeURIComponent\(context\.agentID\)\}\/permanent/);
 
   assert.deepEqual(JSON.parse(JSON.stringify(app.parseRoute("/app/agents/agent-one/settings"))), { name: "agent-settings", agentId: "agent-one" });
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentCredentialResult = null;`, app);
@@ -862,19 +1497,22 @@ test("credential copy failure leaves the token selected for manual copy", async 
   vm.runInContext(`state.credentialCopyError = "";`, app);
 });
 
-test("the board header shows a neutral user icon without their name or generated initials", () => {
+test("the card header stays focused on the workspace and new-card action", () => {
   vm.runInContext(`
     state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
     state.board = { id: "board", name: "Business", maxTasksPerList: 20, buckets: [] };
     state.boards = [{ id: "board", name: "Business" }];
   `, app);
   const html = app.appHTML();
-  const currentUser = html.match(/<span class="current-user">([\s\S]*?)<\/span>\s*<div class="view-switch"/)?.[1] || "";
-  assert.match(currentUser, /class="avatar user-avatar tone-\d avatar-small/);
-  assert.match(currentUser, /<svg class="icon /);
-  assert.doesNotMatch(currentUser, />Owain Lewis</);
-  assert.doesNotMatch(currentUser, />OL<\/span>/);
+  assert.match(html, /class="workspace-title"><h1>All cards<\/h1>/);
+  assert.match(html, /id="new-task"/);
+  assert.doesNotMatch(html, /class="current-user"|>OL<\/span>/);
   vm.runInContext(`state.me = null; state.board = null; state.boards = [];`, app);
+});
+
+test("New card remains available from agent and account settings pages", () => {
+  assert.match(app.agentsHTML(), /id="global-new-task"[^>]*>.*New card/s);
+  assert.match(app.settingsHTML(), /id="global-new-task"[^>]*>.*New card/s);
 });
 
 test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
@@ -1030,17 +1668,237 @@ test("agent detail responses cannot cross routes or accounts", async () => {
   vm.runInContext(`state.me = null; state.agents = [];`, app);
 });
 
+test("an older agent detail refresh cannot overwrite a newer refresh", async () => {
+  let releaseOlderDetail;
+  let releaseOlderWork;
+  app.pendingOlderAgentDetail = new Promise(resolve => { releaseOlderDetail = resolve; });
+  app.pendingOlderAgentWork = new Promise(resolve => { releaseOlderWork = resolve; });
+  vm.runInContext(`
+    savedBoardDeleteRender = render;
+    render = () => {};
+    authVersion = 50;
+    routeVersion = 100;
+    state.me = { id: "owner" };
+    state.agents = [];
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+    let agentDetailRequests = 0;
+    let agentWorkRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/agents/agent-race") {
+        agentDetailRequests += 1;
+        return agentDetailRequests === 1
+          ? pendingOlderAgentDetail
+          : { agent: { id: "agent-race", displayName: "Newest" }, work: { ready: [] } };
+      }
+      if (path === "/api/v1/agents/agent-race/work?page=2&pageSize=50") {
+        agentWorkRequests += 1;
+        return agentWorkRequests === 1
+          ? pendingOlderAgentWork
+          : { items: [{ id: "newest-task" }], total: 1, page: 2, pageSize: 50 };
+      }
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+
+  const older = app.loadAgentDetail("agent-race", {
+    includeWorkPage: true,
+    page: 2,
+    sessionVersion: 50,
+    userID: "owner",
+    expectedRouteVersion: 100,
+  });
+  const newer = app.loadAgentDetail("agent-race", {
+    includeWorkPage: true,
+    page: 2,
+    sessionVersion: 50,
+    userID: "owner",
+    expectedRouteVersion: 100,
+  });
+
+  assert.equal(await newer, true);
+  assert.equal(vm.runInContext("state.agentDetail.agent.displayName", app), "Newest");
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].id", app), "newest-task");
+
+  releaseOlderDetail({ agent: { id: "agent-race", displayName: "Older" }, work: { ready: [] } });
+  releaseOlderWork({ items: [{ id: "older-task" }], total: 1, page: 2, pageSize: 50 });
+  assert.equal(await older, false);
+  assert.equal(vm.runInContext("state.agentDetail.agent.displayName", app), "Newest");
+  assert.equal(vm.runInContext("state.agentWorkPage.items[0].id", app), "newest-task");
+  vm.runInContext(`state.me = null; state.agents = []; state.agentDetail = null; state.agentWorkPage = null;`, app);
+});
+
+test("an older failed agent detail refresh cannot reject after a newer refresh", async () => {
+  let rejectOlderDetail;
+  app.pendingFailedAgentDetail = new Promise((_, reject) => { rejectOlderDetail = reject; });
+  vm.runInContext(`
+    authVersion = 60;
+    routeVersion = 110;
+    state.me = { id: "owner" };
+    state.agents = [];
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+    let failedAgentDetailRequests = 0;
+    api.get = async path => {
+      if (path !== "/api/v1/agents/agent-failure-race") throw new Error("unexpected request " + path);
+      failedAgentDetailRequests += 1;
+      return failedAgentDetailRequests === 1
+        ? pendingFailedAgentDetail
+        : { agent: { id: "agent-failure-race", displayName: "Newest" }, work: { ready: [] } };
+    };
+  `, app);
+
+  const older = app.loadAgentDetail("agent-failure-race", {
+    sessionVersion: 60,
+    userID: "owner",
+    expectedRouteVersion: 110,
+  });
+  const newer = app.loadAgentDetail("agent-failure-race", {
+    sessionVersion: 60,
+    userID: "owner",
+    expectedRouteVersion: 110,
+  });
+
+  assert.equal(await newer, true);
+  rejectOlderDetail(new Error("stale refresh failed"));
+  assert.equal(await older, false);
+  assert.equal(vm.runInContext("state.agentDetail.agent.displayName", app), "Newest");
+  vm.runInContext(`state.me = null; state.agents = []; state.agentDetail = null;`, app);
+});
+
+test("an authenticated-state reset abandons old serialized task mutations", async () => {
+  let releaseOldMutation;
+  app.pendingOldTaskMutation = new Promise(resolve => { releaseOldMutation = resolve; });
+  vm.runInContext(`authVersion = 90;`, app);
+  const oldMutation = app.serializeTaskMutation("task-session-boundary", () => app.pendingOldTaskMutation);
+  await new Promise(resolve => setImmediate(resolve));
+  app.staleQueuedMutationCalled = false;
+  const staleQueuedMutation = app.serializeTaskMutation("task-session-boundary", async () => {
+    app.staleQueuedMutationCalled = true;
+    return "stale queued save ran";
+  });
+  assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), true);
+
+  vm.runInContext(`authVersion += 1;`, app);
+  app.resetAuthenticatedState();
+  assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), false);
+
+  const newMutation = app.serializeTaskMutation("task-session-boundary", async () => "new session saved");
+  assert.equal(await newMutation, "new session saved");
+  releaseOldMutation("old session abandoned");
+  assert.equal(await oldMutation, "old session abandoned");
+  assert.equal(await staleQueuedMutation, null);
+  assert.equal(app.staleQueuedMutationCalled, false);
+  assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), false);
+});
+
+test("an older list-index response cannot overwrite a newer count", async () => {
+  let releaseOlderLists;
+  app.pendingOlderLists = new Promise(resolve => { releaseOlderLists = resolve; });
+  vm.runInContext(`
+    authVersion = 70;
+    routeVersion = 120;
+    workspaceListVersion = 0;
+    workspaceListLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.workspaceLists = [];
+    let listRequests = 0;
+    api.get = async path => {
+      if (path !== "/api/v1/lists") throw new Error("unexpected request " + path);
+      listRequests += 1;
+      return listRequests === 1
+        ? pendingOlderLists
+        : { lists: [{ id: "youtube", name: "YouTube", openCount: 3 }] };
+    };
+  `, app);
+
+  const older = app.loadWorkspaceListIndex(120);
+  const newer = app.loadWorkspaceListIndex(120);
+  assert.equal(await newer, true);
+  assert.equal(vm.runInContext("state.workspaceLists[0].openCount", app), 3);
+
+  releaseOlderLists({ lists: [{ id: "youtube", name: "YouTube", openCount: 2 }] });
+  assert.equal(await older, false);
+  assert.equal(vm.runInContext("state.workspaceLists[0].openCount", app), 3);
+  vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
+});
+
+test("an older failed list-index load cannot reject after a newer load", async () => {
+  let rejectOlderLists;
+  app.pendingFailedLists = new Promise((_, reject) => { rejectOlderLists = reject; });
+  vm.runInContext(`
+    authVersion = 80;
+    routeVersion = 130;
+    workspaceListVersion = 0;
+    workspaceListLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.workspaceLists = [];
+    let failedListRequests = 0;
+    api.get = async path => {
+      if (path !== "/api/v1/lists") throw new Error("unexpected request " + path);
+      failedListRequests += 1;
+      return failedListRequests === 1
+        ? pendingFailedLists
+        : { lists: [{ id: "youtube", name: "YouTube", openCount: 4 }] };
+    };
+  `, app);
+
+  const older = app.loadWorkspaceListIndex(130);
+  const newer = app.loadWorkspaceListIndex(130);
+  assert.equal(await newer, true);
+  rejectOlderLists(new Error("stale list refresh failed"));
+  assert.equal(await older, false);
+  assert.equal(vm.runInContext("state.workspaceLists[0].openCount", app), 4);
+  vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
+});
+
+test("an older workspace response cannot overwrite a newer same-route load", async () => {
+  let releaseOlderTasks;
+  app.pendingOlderTasks = new Promise(resolve => { releaseOlderTasks = resolve; });
+  app.location = { pathname: "/app/review", search: "" };
+  vm.runInContext(`
+    savedWorkspaceGet = api.get;
+    authVersion = 81;
+    routeVersion = 140;
+    workspaceLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+    let workspaceRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/card-review-kinds") return { kinds: { task: "other" } };
+      if (!path.startsWith("/api/v1/tasks?")) throw new Error("unexpected request " + path);
+      workspaceRequests += 1;
+      return workspaceRequests === 1
+        ? pendingOlderTasks
+        : { tasks: [{ id: "task", title: "Current task", status: "needs_review" }] };
+    };
+  `, app);
+
+  const older = app.loadWorkspace({ name: "workspace", scope: "review" }, 140);
+  const newer = app.loadWorkspace({ name: "workspace", scope: "review" }, 140);
+  assert.equal(await newer, true);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].title", app), "Current task");
+
+  releaseOlderTasks({ tasks: [] });
+  assert.equal(await older, null);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].title", app), "Current task");
+  vm.runInContext(`api.get = savedWorkspaceGet; state.me = null; state.workspaceLists = []; state.workspaceTasks = [];`, app);
+  delete app.location;
+  delete app.pendingOlderTasks;
+});
+
 const board = {
   buckets: [
     {
       id: "home",
       name: "Home list",
       tasks: [
-        { id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "", done: false },
-        { id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "2026-07-17", done: false },
-        { id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "", done: false },
-        { id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "", done: true },
-        { id: "reference", title: "Reference item", kind: "item", status: "queued", scheduledDate: "", done: false },
+        { id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "" },
+        { id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "2026-07-17" },
+        { id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "" },
+        { id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "" },
+        { id: "reference", title: "Reference item", kind: "item", status: "queued", scheduledDate: "" },
       ],
     },
     {
@@ -1049,16 +1907,16 @@ const board = {
       openCount: 1,
       limitCount: 20,
       tasks: [
-        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", done: false, priority: "p0" },
+        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", priority: "p0" },
       ],
     },
   ],
 };
 
-test("Flow groups every list item into four fixed states without redundant move controls", () => {
+test("Flow groups every list item into five fixed states without redundant move controls", () => {
   const html = app.flowHTML(board);
 
-  assert.deepEqual([...html.matchAll(/data-flow-status="([^"]+)"/g)].map(match => match[1]), ["queued", "working", "needs_review", "done"]);
+  assert.deepEqual([...html.matchAll(/data-flow-status="([^"]+)"/g)].map(match => match[1]), ["new", "queued", "working", "needs_review", "done"]);
   assert.match(html, /Working action/);
   assert.match(html, /Home list/);
   assert.match(html, /Fri, Jul 17/);
@@ -1116,6 +1974,147 @@ test("dropping a card while filtered lands it against the real task order", () =
   vm.runInContext('state.board = null', app);
 });
 
+test("parent drag positions treat its subtasks as part of one group", () => {
+  vm.runInContext(`state.board = { buckets: [{ id: "home", tasks: [
+    { id: "other" },
+    { id: "parent" },
+    { id: "child-one", parentTaskId: "parent" },
+    { id: "child-two", parentTaskId: "parent" },
+  ] }] }`, app);
+  const listElement = {
+    dataset: { taskList: "home" },
+    querySelectorAll: () => [
+      { dataset: { task: "other" } },
+      { dataset: { task: "child-one" } },
+      { dataset: { task: "child-two" } },
+    ],
+  };
+
+  vm.runInContext('state.priorityFilter = ""', app);
+  assert.equal(app.fullTaskIndex(listElement, 0, "parent"), 0);
+  assert.equal(app.fullTaskIndex(listElement, 1, "parent"), 1);
+  assert.equal(app.fullTaskIndex(listElement, 3, "parent"), 1, "child cards cannot inflate the bottom position");
+
+  vm.runInContext('state.board = null', app);
+});
+
+test("dropping a parent moves its ordered subtask group through the move endpoint", async () => {
+  const requests = [];
+  app.taskMoveRequests = requests;
+  vm.runInContext(`
+    savedTaskMoveRender = render;
+    savedTaskMoveReload = reload;
+    savedTaskMoveRefresh = refreshAfterTaskMutation;
+    savedTaskMovePost = api.post;
+    render = () => {};
+    reload = async () => {};
+    refreshAfterTaskMutation = async () => {};
+    api.post = async (path, input) => {
+      taskMoveRequests.push({ path, input });
+      return { id: "parent", bucketId: "destination", status: "queued" };
+    };
+    state.board = { buckets: [
+      { id: "source", tasks: [
+        { id: "before", bucketId: "source" },
+        { id: "parent", bucketId: "source" },
+        { id: "child-one", parentTaskId: "parent", bucketId: "source" },
+        { id: "child-two", parentTaskId: "parent", bucketId: "source" },
+        { id: "after", bucketId: "source" },
+      ] },
+      { id: "destination", tasks: [{ id: "existing", bucketId: "destination" }] },
+    ] };
+  `, app);
+
+  await app.dropTask("parent", "destination", 1);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{
+    path: "/api/v1/tasks/parent/move",
+    input: { bucketId: "destination", position: 1 },
+  }]);
+  assert.deepEqual(
+    JSON.parse(vm.runInContext("JSON.stringify(state.board.buckets.map(list => list.tasks.map(task => task.id)))", app)),
+    [["before", "after"], ["existing", "parent", "child-one", "child-two"]],
+  );
+
+  vm.runInContext(`
+    render = savedTaskMoveRender;
+    reload = savedTaskMoveReload;
+    refreshAfterTaskMutation = savedTaskMoveRefresh;
+    api.post = savedTaskMovePost;
+    state.board = null;
+  `, app);
+});
+
+test("a completed list drag reconciles a task detail opened after navigation", async () => {
+  const refreshes = [];
+  app.taskMoveRefreshes = refreshes;
+  app.location = { pathname: "/app/boards/board-one", search: "", origin: "http://localhost" };
+  app.movedListControl = { value: "source" };
+  app.document = {
+    querySelector(selector) {
+      if (selector === "#workspace-detail-form") return {
+        querySelector: field => field === '[name="bucketId"]' ? app.movedListControl : null,
+      };
+      return null;
+    },
+  };
+  vm.runInContext(`
+    savedCrossRouteMoveRender = render;
+    savedCrossRouteMoveRefresh = refreshAfterTaskMutation;
+    savedCrossRouteMovePost = api.post;
+    savedCrossRouteMoveAuthVersion = authVersion;
+    savedCrossRouteMoveRouteVersion = routeVersion;
+    render = () => {};
+    refreshAfterTaskMutation = async version => { taskMoveRefreshes.push(version); return true; };
+    authVersion = 9;
+    routeVersion = 12;
+    state.me = { id: "owner" };
+    state.workspaceLists = [
+      { id: "source", boardId: "board-one", name: "Source", openCount: 1 },
+      { id: "destination", boardId: "board-one", name: "Destination", openCount: 0 },
+    ];
+    state.board = { buckets: [
+      { id: "source", tasks: [{ id: "parent", bucketId: "source", status: "queued" }] },
+      { id: "destination", tasks: [] },
+    ] };
+    state.workspaceTasks = [{ id: "parent", bucketId: "source", status: "queued" }];
+    api.post = async () => {
+      await new Promise(resolve => { releaseCrossRouteMove = resolve; });
+      return { id: "parent", bucketId: "destination", status: "queued" };
+    };
+  `, app);
+
+  const moving = app.dropTask("parent", "destination", 0);
+  while (typeof app.releaseCrossRouteMove !== "function") await new Promise(resolve => setImmediate(resolve));
+  app.location.pathname = "/app/agents/agent-research/work";
+  vm.runInContext(`
+    routeVersion = 13;
+    state.view = "agent-work";
+    state.selectedTask = { id: "parent", bucketId: "source", status: "queued" };
+    releaseCrossRouteMove();
+  `, app);
+  await moving;
+
+  assert.equal(vm.runInContext("state.selectedTask.bucketId", app), "destination");
+  assert.equal(app.movedListControl.value, "destination");
+  assert.deepEqual(refreshes, [12]);
+
+  vm.runInContext(`
+    render = savedCrossRouteMoveRender;
+    refreshAfterTaskMutation = savedCrossRouteMoveRefresh;
+    api.post = savedCrossRouteMovePost;
+    authVersion = savedCrossRouteMoveAuthVersion;
+    routeVersion = savedCrossRouteMoveRouteVersion;
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+    state.selectedTask = null;
+  `, app);
+  delete app.location;
+  delete app.document;
+});
+
 test("adding an item is blocked while a filter is active", () => {
   vm.runInContext('state.priorityFilter = "p0"', app);
   const filtered = app.listHTML(board.buckets[1]);
@@ -1143,6 +2142,23 @@ test("priority options offer None plus the three levels", () => {
   assert.match(html, /value="p2"/);
 });
 
+test("card assignment offers active agents and preserves an inactive current assignment", () => {
+  vm.runInContext(`state.agents = [
+    { id: "active", displayName: "Active agent" },
+    { id: "archived", displayName: "Archived agent", archivedAt: "2026-08-11T10:00:00Z" },
+    { id: "deleted", displayName: "Deleted agent", deletedAt: "2026-08-11T10:00:00Z" }
+  ]`, app);
+
+  const available = app.agentOptionsHTML();
+  assert.match(available, />No agent</);
+  assert.match(available, /value="active"/);
+  assert.doesNotMatch(available, /value="archived"|value="deleted"/);
+
+  const selected = app.agentOptionsHTML("archived");
+  assert.match(selected, /value="archived" selected disabled>Archived agent \(inactive\)</);
+  vm.runInContext("state.agents = []", app);
+});
+
 test("Flow filters cards to one selected list", () => {
   vm.runInContext('state.flowListId = "youtube"', app);
   const html = app.flowHTML(board);
@@ -1155,46 +2171,55 @@ test("Flow filters cards to one selected list", () => {
 });
 
 test("detail exposes state without a type control", () => {
-  vm.runInContext(`state.board = ${JSON.stringify(board)}`, app);
-  const actionHTML = app.detailHTML(board.buckets[0].tasks[1]);
+  vm.runInContext(`
+    state.workspaceLists = [{ id: "inbox", name: "Home list" }];
+    state.selectedSubtasks = [];
+  `, app);
+  const actionHTML = app.workspaceDetailHTML({ ...board.buckets[0].tasks[1], description: "", priority: "", assigneeAgentId: "" });
 
   assert.match(actionHTML, /name="status"/);
-  assert.match(actionHTML, /value="working" selected>Working/);
+  assert.match(actionHTML, /value="working" selected>In Progress/);
   assert.doesNotMatch(actionHTML, /name="kind"/);
 });
 
-test("detail presents a focused, accessible editor with clear actions", () => {
-  vm.runInContext(`state.board = ${JSON.stringify(board)}`, app);
-  const html = app.detailHTML(board.buckets[0].tasks[1]);
+test("detail presents one contextual accessible card editor with clear actions", () => {
+  vm.runInContext(`
+    state.view = "home";
+    state.workspaceLists = [{ id: "inbox", name: "Home list" }];
+    state.selectedSubtasks = [];
+  `, app);
+  const html = app.workspaceDetailHTML({ ...board.buckets[0].tasks[1], description: "", priority: "", assigneeAgentId: "" });
 
-  assert.match(html, /role="dialog" aria-modal="true"/);
+  assert.match(html, /class="workspace-detail" aria-label="Card detail"/);
+  assert.doesNotMatch(html, /role="dialog"|aria-modal="true"|detail-overlay/);
   assert.match(html, /class="detail-title"/);
   assert.match(html, /class="detail-description"/);
   assert.match(html, /class="detail-properties"/);
   assert.match(html, />Save changes</);
-  assert.match(html, /data-close-detail>Cancel</);
-  assert.match(html, />Delete item</);
+  assert.match(html, /data-close-detail/);
+  assert.match(html, />Back to cards<\/span>/);
+  assert.match(html, />Delete card</);
   assert.match(html, /Home list/);
+  assert.match(html, /<label for="workspace-detail-owner">Agent<\/label>/);
+  assert.doesNotMatch(html, /Act with an agent|Choose an agent as owner|workspace-agent-action/);
+  assert.doesNotMatch(html, /aria-label="Close card"/);
 });
 
-test("detail offers a board, list, and position move flow", () => {
+test("detail can move a parent task between account-wide lists", () => {
   vm.runInContext(`
-    state.boards = [{ id: "board", name: "Current" }, { id: "other", name: "Other" }];
-    state.board = { id: "board", name: "Current", buckets: [{ id: "list", name: "Inbox", openCount: 1, limitCount: 20, tasks: [{ id: "task", bucketId: "list", title: "Move me", kind: "action", status: "queued", done: false }] }] };
+    state.boards = [{ id: "board", name: "Home" }, { id: "other", name: "Campaigns" }];
+    state.workspaceLists = [
+      { id: "list", boardId: "board", name: "Inbox", isInbox: true },
+      { id: "other-list", boardId: "other", name: "Inbox", isInbox: true },
+    ];
+    state.selectedSubtasks = [];
   `, app);
-  const task = vm.runInContext("state.board.buckets[0].tasks[0]", app);
-  const html = app.detailHTML(task);
-
-  assert.match(html, /id="open-move"[^>]*>[^<]*<span>Current \/ Inbox<\/span><b>Move…<\/b>/);
-  assert.match(html, /id="move-board"/);
-  assert.match(html, /id="move-list"/);
-  assert.match(html, /id="move-position"/);
-  assert.match(html, /id="move-item"[^>]*>Move item<\/button>/);
-
-  const fullBoard = vm.runInContext(`({ id: "full", buckets: [{ id: "full-list", name: "Full", openCount: 20, limitCount: 20, tasks: [] }] })`, app);
-  assert.match(app.moveListOptionsHTML(fullBoard, task), /value="full-list"[^>]*disabled[^>]*>Full \(20\/20 full\)<\/option>/);
-  const reference = vm.runInContext(`({ ...state.board.buckets[0].tasks[0], kind: "reference" })`, app);
-  assert.doesNotMatch(app.moveListOptionsHTML(fullBoard, reference), /disabled/);
+  const html = app.workspaceDetailHTML({ id: "task", bucketId: "list", title: "Move me", description: "", status: "queued", priority: "", assigneeAgentId: "", scheduledDate: "" });
+  assert.match(html, /id="workspace-detail-list" name="bucketId"/);
+  assert.match(html, /value="list" selected>Home \/ Inbox<\/option>/);
+  assert.match(html, /value="other-list" >Campaigns \/ Inbox<\/option>|value="other-list">Campaigns \/ Inbox<\/option>/);
+  assert.doesNotMatch(html, /id="move-panel"|id="move-position"/);
+  vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
 });
 
 test("footer reports live Working and Review counts", () => {
@@ -1234,6 +2259,8 @@ test("switching accounts clears old account data and loads only the new account'
     state.settings = true;
     state.tokens = [{ id: "token-a" }];
     state.newToken = "secret-token-a";
+    state.newTaskRecovery = { task: { id: "secret-a", title: "Account A card" }, message: "Could not open", pending: false };
+    state.newTaskCapturePending = true;
     state.goalErrors = { "list-a": "old error" };
     state.flowListId = "list-a";
     state.weekStart = "2026-07-20";
@@ -1263,6 +2290,8 @@ test("switching accounts clears old account data and loads only the new account'
       settingsPage: state.settingsPage,
       tokens: state.tokens,
       newToken: state.newToken,
+      newTaskRecovery: state.newTaskRecovery,
+      newTaskCapturePending: state.newTaskCapturePending,
       goalErrors: state.goalErrors,
       flowListId: state.flowListId,
       weekStart: state.weekStart,
@@ -1276,6 +2305,8 @@ test("switching accounts clears old account data and loads only the new account'
       settingsPage: "profile",
       tokens: [],
       newToken: "",
+      newTaskRecovery: null,
+      newTaskCapturePending: false,
       goalErrors: {},
       flowListId: "",
       weekStart: "",
@@ -1369,8 +2400,9 @@ test("a delayed board deletion from an old account cannot create data in the new
   vm.runInContext(`
     authVersion = 50;
     state.me = { id: "account-a" };
-    state.boards = [{ id: "board-a", name: "Account A board" }];
+    state.boards = [{ id: "board-a", name: "Account A board" }, { id: "board-survivor", name: "Survivor" }];
     state.board = { id: "board-a", name: "Account A board", buckets: [] };
+    state.workspaceLists = [{ id: "surviving-inbox", boardId: "board-survivor", isInbox: true }];
     api.del = async path => {
       if (path !== "/api/v1/boards/board-a") throw new Error("unexpected delete for " + path);
       await oldDeleteResponse;
@@ -1391,6 +2423,7 @@ test("a delayed board deletion from an old account cannot create data in the new
   assert.equal(vm.runInContext("state.me.id", app), "account-b");
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.boards)", app)), []);
   assert.equal(vm.runInContext("state.board", app), null);
+  vm.runInContext(`render = savedBoardDeleteRender;`, app);
 });
 
 test("API responses from an old session cannot resume mutation continuations", async () => {
@@ -1404,7 +2437,7 @@ test("API responses from an old session cannot resume mutation continuations", a
   };
   vm.runInContext(`authVersion = 60; state.me = { id: "account-a" };`, app);
 
-  const oldMutation = vm.runInContext(`api.request("/api/v1/tasks/task-a", { method: "PATCH", body: '{"done":true}' })`, app).then(() => { continued = true; });
+  const oldMutation = vm.runInContext(`api.request("/api/v1/tasks/task-a/status", { method: "PATCH", body: '{"status":"done"}' })`, app).then(() => { continued = true; });
   app.beginAuthenticatedSession({ id: "account-b", theme: "light" });
   app.releaseOldMutation();
   await Promise.race([oldMutation, new Promise(resolve => setTimeout(resolve, 20))]);
@@ -1453,9 +2486,9 @@ test("one theme holds when switching between boards", () => {
     state.board = { id: "light-board", name: "Light board", backgroundValue: "light", buckets: [] };
   `, app);
 
-  assert.match(app.appHTML(), /class="shell theme-dark"/);
+  assert.match(app.appHTML(), /class="shell task-shell theme-dark"/);
   vm.runInContext(`state.board = { id: "other-board", name: "Other board", backgroundValue: "charcoal", buckets: [] }`, app);
-  assert.match(app.appHTML(), /class="shell theme-dark"/);
+  assert.match(app.appHTML(), /class="shell task-shell theme-dark"/);
   assert.match(app.appHTML(), /class="theme-switch dark"/);
   assert.match(app.appHTML(), /data-set-theme="dark"[^>]*class="on"/);
 });
@@ -1645,15 +2678,15 @@ test("counts use readable singular and plural labels", () => {
   assert.equal(app.formatCount(2, "open action", "open actions"), "2 open actions");
 });
 
-test("single-column list drops use vertical position", () => {
+test("horizontal list drops use pointer x position", () => {
   const rects = [
-    { top: 0, bottom: 100, left: 0, width: 300, height: 100 },
-    { top: 120, bottom: 220, left: 0, width: 300, height: 100 },
+    { left: 0, width: 300 },
+    { left: 320, width: 300 },
   ];
 
-  assert.equal(app.bucketDropIndexForRects(rects, 280, 20, true), 0);
-  assert.equal(app.bucketDropIndexForRects(rects, 20, 90, true), 1);
-  assert.equal(app.bucketDropIndexForRects(rects, 280, 210, true), 2);
+  assert.equal(app.bucketDropIndexForRects(rects, 20), 0);
+  assert.equal(app.bucketDropIndexForRects(rects, 280), 1);
+  assert.equal(app.bucketDropIndexForRects(rects, 640), 2);
 });
 
 // Each router test gets its own module instance so history and auth state
@@ -1718,7 +2751,13 @@ test("routes parse into the surface they name", () => {
 
   assert.deepEqual(route("/"), { name: "home" });
   assert.deepEqual(route("/login"), { name: "login" });
-  assert.deepEqual(route("/app"), { name: "app" });
+  assert.deepEqual(route("/app"), { name: "workspace", scope: "all", redirect: true });
+  assert.deepEqual(route("/app/tasks"), { name: "workspace", scope: "all" });
+  assert.deepEqual(route("/app/inbox"), { name: "workspace", scope: "inbox" });
+  assert.deepEqual(route("/app/today"), { name: "workspace", scope: "today" });
+  assert.deepEqual(route("/app/week"), { name: "workspace", scope: "week" });
+  assert.deepEqual(route("/app/review"), { name: "workspace", scope: "review" });
+  assert.deepEqual(route("/app/lists/list-one"), { name: "workspace", scope: "list", listId: "list-one" });
   assert.deepEqual(route("/app/settings"), { name: "settings", settingsPage: "profile", redirect: true });
   for (const page of ["profile", "preferences", "api"]) {
     assert.deepEqual(route(`/app/settings/${page}`), { name: "settings", settingsPage: page });
@@ -1732,13 +2771,13 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/early-access"), { name: "early-access" });
   assert.deepEqual(route("/reset-password"), { name: "reset-password" });
   assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1" });
-  assert.deepEqual(route("/app/boards/board_1/settings"), { name: "board-settings", boardId: "board_1" });
+  assert.deepEqual(route("/app/boards/board_1/settings"), { name: "board", boardId: "board_1", redirect: true });
   assert.deepEqual(route("/app/boards/a%20b"), { name: "board", boardId: "a b" });
-  assert.deepEqual(route("/app/boards/a%20b/settings"), { name: "board-settings", boardId: "a b" });
+  assert.deepEqual(route("/app/boards/a%20b/settings"), { name: "board", boardId: "a b", redirect: true });
   assert.deepEqual(route("/app/boards/%ED%A0%80"), { name: "not-found" });
 
   // Trailing slashes, queries, and fragments never change which route is named.
-  assert.deepEqual(route("/app/"), { name: "app" });
+  assert.deepEqual(route("/app/"), { name: "workspace", scope: "all", redirect: true });
   assert.deepEqual(route("/login?next=/app"), { name: "login" });
   assert.deepEqual(route("/app/settings#token"), { name: "settings", settingsPage: "profile", redirect: true });
 
@@ -1791,7 +2830,7 @@ test("logging in returns to the requested route, defaulting to the app", async (
 
   const plain = router({ url: "/login", signedIn: true, boards: [{ id: "board_1" }] });
   await plain.apply();
-  assert.equal(plain.url(), "/app/boards/board_1");
+  assert.equal(plain.url(), "/app/tasks?view=table");
 });
 
 test("a rejected next target falls back to the app rather than leaving the origin", async () => {
@@ -1799,44 +2838,44 @@ test("a rejected next target falls back to the app rather than leaving the origi
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks?view=table");
 });
 
-test("/app resolves to the first board, or stays put when there are none", async () => {
+test("/app resolves to the All cards table", async () => {
   const withBoards = router({ url: "/app", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await withBoards.apply();
-  assert.equal(withBoards.url(), "/app/boards/board_1");
+  assert.equal(withBoards.url(), "/app/tasks?view=table");
   assert.equal(withBoards.board(), "board_1");
   assert.equal(withBoards.depth(), 1, "resolving /app must not add a history entry");
 
   const empty = router({ url: "/app", signedIn: true, boards: [] });
   await empty.apply();
-  assert.equal(empty.url(), "/app");
+  assert.equal(empty.url(), "/app/tasks?view=table");
   assert.equal(empty.view(), "app");
   assert.equal(empty.board(), null);
 });
 
-test("the brand link goes to the board when signed in, and to the landing page when not", async () => {
+test("the brand link goes to All cards when signed in, and home when signed out", async () => {
   const onBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await onBoard.apply();
   await onBoard.home();
-  assert.equal(onBoard.url(), "/app/boards/board_2", "the brand must not drop a signed-in user onto the landing page");
+  assert.equal(onBoard.url(), "/app/tasks?view=table", "the brand must not drop a signed-in user onto the landing page");
 
   const noBoardLoaded = router({ url: "/app/settings/profile", signedIn: true, boards: [{ id: "board_1" }] });
   await noBoardLoaded.apply();
   await noBoardLoaded.home();
-  assert.equal(noBoardLoaded.url(), "/app/boards/board_1", "settings falls back to the first board");
+  assert.equal(noBoardLoaded.url(), "/app/tasks?view=table");
 
   const staleBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await staleBoard.apply();
   vm.runInContext(`state.boards = [{ id: "board_1" }];`, staleBoard.context);
   await staleBoard.home();
-  assert.equal(staleBoard.url(), "/app/boards/board_1", "a removed cached board falls back to the first available board");
+  assert.equal(staleBoard.url(), "/app/tasks?view=table");
 
   const noBoards = router({ url: "/app", signedIn: true, boards: [] });
   await noBoards.apply();
   await noBoards.home();
-  assert.equal(noBoards.url(), "/app");
+  assert.equal(noBoards.url(), "/app/tasks?view=table");
 
   const signedOut = router({ url: "/login" });
   await signedOut.apply();
@@ -1848,7 +2887,7 @@ test("a board deep link loads that board, and an unknown id is not found", async
   const it = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await it.apply();
   assert.equal(it.board(), "board_2");
-  assert.equal(it.view(), "app");
+  assert.equal(it.view(), "board");
 
   const missing = router({ url: "/app/boards/board_9", signedIn: true, boards: [{ id: "board_1" }] });
   await missing.apply();
@@ -1857,15 +2896,16 @@ test("a board deep link loads that board, and an unknown id is not found", async
   assert.equal(missing.board(), null);
 });
 
-test("a missing exact-board settings route owns its error and keeps its URL", async () => {
+test("legacy board settings URLs return to the board", async () => {
+  const existing = router({ url: "/app/boards/board_1/settings", signedIn: true, boards: [{ id: "board_1" }] });
+  await existing.apply();
+  assert.equal(existing.url(), "/app/boards/board_1");
+  assert.equal(existing.view(), "board");
+
   const missing = router({ url: "/app/boards/missing/settings", signedIn: true, boards: [{ id: "board_1" }] });
-
   await missing.apply();
-
-  assert.equal(missing.view(), "route-error");
-  assert.equal(missing.routeError(), "board-settings");
-  assert.equal(missing.error(), "This board does not exist or is no longer available to you.");
-  assert.equal(missing.url(), "/app/boards/missing/settings");
+  assert.equal(missing.view(), "not-found");
+  assert.equal(missing.url(), "/app/boards/missing");
   assert.equal(missing.board(), null);
 });
 
@@ -1895,7 +2935,7 @@ test("a failed board-list navigation renders an error for the requested URL and 
 
   assert.equal(it.url(), "/app/boards/board_2");
   assert.equal(it.depth(), depth + 1, "retry must not add another history entry");
-  assert.equal(it.view(), "app");
+  assert.equal(it.view(), "board");
   assert.equal(it.board(), "board_2");
   assert.equal(it.error(), "");
 });
@@ -1920,28 +2960,14 @@ test("a failed board-detail navigation renders an error for that board without r
   assert.equal(it.error(), "Board could not be loaded");
 });
 
-test("failed board-settings and token loads render route-owned errors at the requested page", async () => {
-  const boardFailure = router({ url: "/", signedIn: true });
-  vm.runInContext(`
-    api.get = async path => {
-      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
-      throw new Error("Settings board could not be loaded");
-    };
-  `, boardFailure.context);
-
-  await assert.doesNotReject(boardFailure.go("/app/boards/board_1/settings"));
-
-  assert.equal(boardFailure.url(), "/app/boards/board_1/settings");
-  assert.equal(boardFailure.view(), "route-error");
-  assert.equal(boardFailure.routeError(), "board-settings");
-  assert.equal(boardFailure.error(), "Settings board could not be loaded");
-
+test("failed token loads render route-owned errors at the requested page", async () => {
   const tokenFailure = router({ url: "/app/boards/board_1", signedIn: true, boards: [{ id: "board_1" }] });
   await tokenFailure.apply();
   tokenFailure.context.loadTokens = tokenFailure.context.realLoadTokens;
   vm.runInContext(`
     api.get = async path => {
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/api-tokens") throw new Error("Tokens could not be loaded");
       throw new Error("unexpected request: " + path);
     };
@@ -1983,6 +3009,8 @@ test("a stale board response cannot overwrite newer route navigation", async () 
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
       if (path === "/api/v1/boards/board_1") return boardOneResponse;
       if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      if (path === "/api/v1/lists") return { lists: [] };
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
       throw new Error("unexpected request: " + path);
     };
   `, it.context);
@@ -1995,7 +3023,7 @@ test("a stale board response cannot overwrite newer route navigation", async () 
 
   assert.equal(it.url(), "/app/boards/board_2");
   assert.equal(it.board(), "board_2");
-  assert.equal(it.view(), "app");
+  assert.equal(it.view(), "board");
 });
 
 test("a stale board-list response cannot overwrite newer route navigation", async () => {
@@ -2007,6 +3035,7 @@ test("a stale board-list response cannot overwrite newer route navigation", asyn
     api.get = async path => {
       if (path === "/api/v1/boards" && ++boardListRequests === 1) return oldBoardListResponse;
       if (path === "/api/v1/boards") return { boards: [{ id: "board_2" }] };
+      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
       throw new Error("unexpected request: " + path);
     };
@@ -2024,28 +3053,52 @@ test("a stale board-list response cannot overwrite newer route navigation", asyn
   assert.equal(it.url(), "/app/boards/board_2");
 });
 
-test("a stale board-settings load cannot overwrite newer board navigation", async () => {
+test("a stale workspace response cannot render Not Found over newer navigation", async () => {
   const it = router({ url: "/", signedIn: true });
-  let releaseSettingsBoard;
-  it.context.settingsBoardResponse = new Promise(resolve => { releaseSettingsBoard = resolve; });
+  let releaseOldLists;
+  it.context.oldListsResponse = new Promise(resolve => { releaseOldLists = resolve; });
   vm.runInContext(`
+    let listRequests = 0;
     api.get = async path => {
-      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
-      if (path === "/api/v1/boards/board_1") return settingsBoardResponse;
-      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
+      if (path === "/api/v1/agents") return { agents: [] };
+      if (path === "/api/v1/lists" && ++listRequests === 1) return oldListsResponse;
+      if (path === "/api/v1/lists") return { lists: [{ id: "list-current", name: "Current" }] };
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
       throw new Error("unexpected request: " + path);
     };
   `, it.context);
 
-  const staleSettings = it.go("/app/boards/board_1/settings");
+  const staleNavigation = it.go("/app/lists/list-missing");
   await new Promise(resolve => setImmediate(resolve));
-  await it.go("/app/boards/board_2");
-  releaseSettingsBoard({ id: "board_1", name: "Board one", buckets: [] });
-  await staleSettings;
+  await it.go("/app/tasks");
+  releaseOldLists({ lists: [] });
+  await staleNavigation;
 
-  assert.equal(it.board(), "board_2");
-  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.url(), "/app/tasks");
   assert.equal(it.view(), "app");
+  assert.equal(vm.runInContext("state.workspaceScope", it.context), "all");
+  assert.notEqual(it.rendered.at(-1), "not-found");
+});
+
+test("a current workspace request for a missing list renders Not Found", async () => {
+  const it = router({ url: "/app/lists/list-missing", signedIn: true });
+  vm.runInContext(`
+    api.get = async path => {
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
+      if (path === "/api/v1/agents") return { agents: [] };
+      if (path === "/api/v1/lists") return { lists: [{ id: "list-current", name: "Current" }] };
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
+      throw new Error("unexpected request: " + path);
+    };
+  `, it.context);
+
+  await it.apply();
+
+  assert.equal(it.url(), "/app/lists/list-missing");
+  assert.equal(it.view(), "not-found");
 });
 
 test("a stale settings token response cannot overwrite newer settings data", async () => {
@@ -2057,6 +3110,7 @@ test("a stale settings token response cannot overwrite newer settings data", asy
     let tokenRequests = 0;
     api.get = async path => {
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
       if (path === "/api/v1/api-tokens" && ++tokenRequests === 1) return oldTokensResponse;
       if (path === "/api/v1/api-tokens") return { tokens: [{ id: "new" }] };
@@ -2086,6 +3140,7 @@ test("a stale agent response cannot overwrite newer route data", async () => {
     let agentRequests = 0;
     api.get = async path => {
       if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
+      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/agents" && ++agentRequests === 1) return oldAgentsResponse;
       if (path === "/api/v1/agents") return { agents: [{ id: "new" }] };
       if (path.startsWith("/api/v1/boards/")) {
@@ -2114,7 +3169,7 @@ test("back and forward move between landing, boards, and settings", async () => 
   assert.equal(it.view(), "home");
 
   await it.go("/app");
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks?view=table");
   await it.go("/app/boards/board_2");
   assert.equal(it.board(), "board_2");
   await it.go("/app/settings/profile");
@@ -2122,20 +3177,20 @@ test("back and forward move between landing, boards, and settings", async () => 
 
   await it.back();
   assert.equal(it.url(), "/app/boards/board_2");
-  assert.equal(it.view(), "app");
+  assert.equal(it.view(), "board");
   await it.back();
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks?view=table");
   await it.back();
   assert.equal(it.url(), "/");
   assert.equal(it.view(), "home");
 });
 
-test("selecting the same board twice does not stack history entries", async () => {
-  const it = router({ url: "/app/boards/board_1", signedIn: true, boards: [{ id: "board_1" }] });
+test("selecting all tasks twice does not stack history entries", async () => {
+  const it = router({ url: "/app/tasks", signedIn: true, boards: [{ id: "board_1" }] });
   await it.apply();
   const depth = it.depth();
 
-  await it.go("/app/boards/board_1");
+  await it.go("/app/tasks");
 
   assert.equal(it.depth(), depth);
 });
@@ -2145,7 +3200,7 @@ test("an authenticated visit to early access is sent to the app", async () => {
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks?view=table");
 });
 
 test("the landing page stays public while signed in", async () => {

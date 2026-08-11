@@ -1,9 +1,13 @@
 package boards
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	KindAction        = "action"
+	StatusNew         = "new"
 	StatusQueued      = "queued"
 	StatusWorking     = "working"
 	StatusNeedsReview = "needs_review"
@@ -41,23 +45,41 @@ type Bucket struct {
 	UpdatedAt           time.Time `json:"updatedAt"`
 	Tasks               []Task    `json:"tasks,omitempty"`
 	CompletedNextCursor string    `json:"completedNextCursor,omitempty"`
+	BoardName           string    `json:"boardName,omitempty"`
 }
 
 type Task struct {
-	ID              string    `json:"id"`
-	BoardID         string    `json:"boardId"`
-	BucketID        string    `json:"bucketId"`
-	Title           string    `json:"title"`
-	Description     string    `json:"description,omitempty"`
-	ScheduledDate   string    `json:"scheduledDate"`
-	Kind            string    `json:"kind"`
-	Done            bool      `json:"done"`
-	Status          string    `json:"status"`
-	Priority        string    `json:"priority"`
-	AssigneeAgentID string    `json:"assigneeAgentId,omitempty"`
-	SortOrder       int       `json:"sortOrder"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID                string    `json:"id"`
+	BoardID           string    `json:"boardId"`
+	BucketID          string    `json:"bucketId"`
+	Title             string    `json:"title"`
+	Description       string    `json:"description,omitempty"`
+	ScheduledDate     string    `json:"scheduledDate"`
+	Kind              string    `json:"kind"`
+	Status            string    `json:"status"`
+	Priority          string    `json:"priority"`
+	AssigneeAgentID   string    `json:"assigneeAgentId,omitempty"`
+	AssigneeAgentName string    `json:"assigneeAgentName,omitempty"`
+	ParentTaskID      string    `json:"parentTaskId,omitempty"`
+	ParentTaskTitle   string    `json:"parentTaskTitle,omitempty"`
+	BucketName        string    `json:"listName,omitempty"`
+	BoardName         string    `json:"boardName,omitempty"`
+	SortOrder         int       `json:"sortOrder"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+// MarshalJSON keeps the released done field available during the status
+// rollout while ensuring status remains the sole completion model.
+func (task Task) MarshalJSON() ([]byte, error) {
+	type taskJSON Task
+	return json.Marshal(struct {
+		taskJSON
+		Done bool `json:"done"`
+	}{
+		taskJSON: taskJSON(task),
+		Done:     task.Status == StatusDone,
+	})
 }
 
 type CreateBoardInput struct {
@@ -97,6 +119,7 @@ type CreateTaskInput struct {
 	Kind            string `json:"kind"`
 	OverrideLimit   bool   `json:"overrideLimit"`
 	AssigneeAgentID string `json:"assigneeAgentId"`
+	ParentTaskID    string `json:"parentTaskId"`
 	IdempotencyKey  string `json:"-"`
 }
 
@@ -106,8 +129,8 @@ type UpdateTaskInput struct {
 	ScheduledDate   *string `json:"scheduledDate"`
 	Kind            *string `json:"kind"`
 	BucketID        *string `json:"bucketId"`
-	Done            *bool   `json:"done"`
 	Status          *string `json:"status"`
+	Done            *bool   `json:"done"`
 	Priority        *string `json:"priority"`
 	AssigneeAgentID *string `json:"assigneeAgentId"`
 	SortOrder       *int    `json:"sortOrder"`
@@ -122,15 +145,43 @@ type TaskFilter struct {
 	BoardID         string
 	BucketID        string
 	Status          string
-	Priority        string
 	Done            *bool
+	Priority        string
 	Limit           int
 	Cursor          string
 	ActionsOnly     bool
 	AssigneeAgentID string
+	Unassigned      bool
+	Query           string
+	ScheduledFrom   string
+	ScheduledTo     string
+	ParentTaskID    string
+	TopLevelOnly    bool
+	InboxOnly       bool
 }
 
 type TaskPage struct {
 	Tasks      []Task `json:"tasks"`
 	NextCursor string `json:"nextCursor,omitempty"`
 }
+
+type CardEntry struct {
+	ID               string    `json:"id"`
+	TaskID           string    `json:"cardId"`
+	Kind             string    `json:"kind"`
+	Body             string    `json:"body"`
+	AuthorKind       string    `json:"authorKind"`
+	AuthorID         string    `json:"authorId"`
+	AuthorName       string    `json:"authorName"`
+	CreatedAt        time.Time `json:"createdAt"`
+	CardStatus       string    `json:"cardStatus,omitempty"`
+	CardReviewReason string    `json:"cardReviewReason,omitempty"`
+}
+
+type CreateCardEntryInput struct {
+	Kind           string `json:"kind"`
+	Body           string `json:"body"`
+	IdempotencyKey string `json:"-"`
+}
+
+const MaxCardEntries = 200

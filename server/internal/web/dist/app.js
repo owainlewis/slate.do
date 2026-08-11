@@ -10,6 +10,8 @@ const ICON_PATHS = {
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   rows: '<path d="M8.5 6h11.5M8.5 12h11.5M8.5 18h11.5"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
   kanban: '<rect x="4" y="4.5" width="6.4" height="15" rx="1.6"/><rect x="13.6" y="4.5" width="6.4" height="10" rx="1.6"/>',
+  columns: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M9 5v14M15 5v14"/>',
+  filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
   calendar: '<rect x="4" y="5.5" width="16" height="14.5" rx="2"/><path d="M4 10.5h16M8.5 3.5v4M15.5 3.5v4"/>',
   sun: '<circle cx="12" cy="12" r="3.6"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6L18 18M18 6l-1.4 1.4M7.4 16.6L6 18"/>',
   moon: '<path d="M20 13.2A7.8 7.8 0 0 1 10.8 4a7.8 7.8 0 1 0 9.2 9.2z"/>',
@@ -32,12 +34,13 @@ function icon(name, cls = "") {
 const api = {
   async request(path, options = {}) {
     const sessionVersion = authVersion;
+    const { headers = {}, ...requestOptions } = options;
     let res;
     try {
       res = await fetch(path, {
         credentials: "include",
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options,
+        ...requestOptions,
+        headers: { "Content-Type": "application/json", ...headers },
       });
     } catch (err) {
       if (sessionVersion !== authVersion) return new Promise(() => {});
@@ -63,7 +66,7 @@ const api = {
     return data;
   },
   get(path) { return this.request(path); },
-  post(path, body) { return this.request(path, { method: "POST", body: JSON.stringify(body || {}) }); },
+  post(path, body, options = {}) { return this.request(path, { ...options, method: "POST", body: JSON.stringify(body || {}) }); },
   patch(path, body) { return this.request(path, { method: "PATCH", body: JSON.stringify(body || {}) }); },
   del(path) { return this.request(path, { method: "DELETE" }); },
 };
@@ -87,18 +90,6 @@ function utf8Length(value) {
   return bytes;
 }
 
-function listLimitUpdate(boardId, value) {
-  const next = Number(value);
-  return { next, path: `/api/v1/boards/${boardId}`, input: { maxTasksPerList: next } };
-}
-
-function validateListLimit(value, maximum = accountLimits().activeItemsPerList) {
-  const next = Number(value);
-  if (!Number.isInteger(next)) return "Enter a whole number.";
-  if (next < 1 || next > maximum) return `Enter a value from 1 to ${maximum}.`;
-  return "";
-}
-
 const goalSaveChains = new Map();
 let themeSaveChain = Promise.resolve();
 let themeChangeVersion = 0;
@@ -113,7 +104,25 @@ const state = {
   maxListsPerBoard: 9,
   board: null,
   renamingBoardId: "",
+  boardCreatePending: false,
   selectedTask: null,
+  selectedSubtasks: [],
+  selectedEntries: [],
+  workspaceReviewKinds: {},
+  cardEntryDraft: "",
+  cardEntryKind: "comment",
+  cardEntryPending: false,
+  cardEntryError: "",
+  cardEntryAttemptKey: "",
+  taskDetailDrafts: {},
+  taskMutationError: null,
+  subtaskDraft: "",
+  subtaskCreateAttempt: null,
+  subtaskPending: false,
+  subtaskError: "",
+  newTaskRecovery: null,
+  newTaskCapturePending: false,
+  newTaskCaptureAttemptKey: "",
   settings: false,
   settingsPage: "profile",
   view: "home",
@@ -146,6 +155,8 @@ const state = {
   agentAssignBoardID: "",
   agentAssignDraft: null,
   agentTaskFocusID: "",
+  agentTaskMutationError: "",
+  agentTaskRefreshError: "",
   agentLifecycleNotice: "",
   agentLifecycleError: "",
   agentLifecyclePending: "",
@@ -156,6 +167,23 @@ const state = {
   flowListId: "",
   priorityFilter: "",
   weekStart: "",
+  workspaceLists: [],
+  workspaceListError: "",
+  workspaceListPending: false,
+  workspaceListDialog: "",
+  workspaceListDialogListID: "",
+  workspaceListDialogName: "",
+  workspaceListDialogBoardID: "",
+  workspaceListDialogError: "",
+  workspaceTasks: [],
+  workspaceScope: "all",
+  workspaceListID: "",
+  workspaceView: "board",
+  workspaceNextCursor: "",
+  workspaceLoading: false,
+  workspaceRefreshOnDetailClose: false,
+  agentRefreshOnDetailClose: "",
+  workspaceFiltersOpen: false,
   theme: "",
   moveNotice: null,
   routeError: null,
@@ -171,8 +199,9 @@ const DEFAULT_MAX_BOARDS = 5;
 const DEFAULT_MAX_LISTS_PER_BOARD = 9;
 const DEFAULT_MAX_AGENTS = 5;
 const FLOW_STATES = [
+  { value: "new", label: "New" },
   { value: "queued", label: "Ready" },
-  { value: "working", label: "Working" },
+  { value: "working", label: "In Progress" },
   { value: "needs_review", label: "Review" },
   { value: "done", label: "Done" },
 ];
@@ -185,6 +214,11 @@ const PRIORITIES = [
 const HOME_PATH = "/";
 const LOGIN_PATH = "/login";
 const APP_PATH = "/app";
+const TASKS_PATH = "/app/tasks";
+const INBOX_PATH = "/app/inbox";
+const TODAY_PATH = "/app/today";
+const REVIEW_PATH = "/app/review";
+const WEEK_PATH = "/app/week";
 const SETTINGS_PATH = "/app/settings";
 const SETTINGS_PAGES = [
   { id: "profile", label: "Profile", icon: "user", title: "Profile", description: "Your identity across Slate." },
@@ -200,8 +234,8 @@ function boardPath(id) {
   return `/app/boards/${encodeURIComponent(id)}`;
 }
 
-function boardSettingsPath(id) {
-  return `${boardPath(id)}/settings`;
+function listPath(id) {
+  return `/app/lists/${encodeURIComponent(id)}`;
 }
 
 function settingsPath(page = "profile") {
@@ -240,7 +274,20 @@ function parseRoute(pathname) {
   if (path === LOGIN_PATH) return { name: "login" };
   if (path === EARLY_ACCESS_PATH) return { name: "early-access" };
   if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
-  if (path === APP_PATH) return { name: "app" };
+  if (path === APP_PATH) return { name: "workspace", scope: "all", redirect: true };
+  if (path === TASKS_PATH) return { name: "workspace", scope: "all" };
+  if (path === INBOX_PATH) return { name: "workspace", scope: "inbox" };
+  if (path === TODAY_PATH) return { name: "workspace", scope: "today" };
+  if (path === REVIEW_PATH) return { name: "workspace", scope: "review" };
+  if (path === WEEK_PATH) return { name: "workspace", scope: "week" };
+  const list = /^\/app\/lists\/([^/]+)$/.exec(path);
+  if (list) {
+    try {
+      return { name: "workspace", scope: "list", listId: decodeURIComponent(list[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
   if (path === SETTINGS_PATH) return { name: "settings", settingsPage: "profile", redirect: true };
   if (path === `${SETTINGS_PATH}/agents`) return { name: "agents", redirect: true };
   if (path === AGENTS_PATH) return { name: "agents" };
@@ -276,7 +323,7 @@ function parseRoute(pathname) {
   const boardSettings = /^\/app\/boards\/([^/]+)\/settings$/.exec(path);
   if (boardSettings) {
     try {
-      return { name: "board-settings", boardId: decodeURIComponent(boardSettings[1]) };
+      return { name: "board", boardId: decodeURIComponent(boardSettings[1]), redirect: true };
     } catch {
       return { name: "not-found" };
     }
@@ -293,7 +340,7 @@ function parseRoute(pathname) {
 }
 
 function isProtectedRoute(name) {
-  return name === "app" || name === "board" || name === "board-settings" || name === "settings"
+  return name === "workspace" || name === "board" || name === "settings"
     || name === "agents" || name === "agent-new" || name === "agent-detail" || name === "agent-work" || name === "agent-settings";
 }
 
@@ -337,6 +384,30 @@ function navigate(path, options = {}) {
 }
 
 let routeVersion = 0;
+let taskDetailVersion = 0;
+let workspaceViewActivationVersion = 0;
+let workspaceListVersion = 0;
+let workspaceListLoadVersion = 0;
+let workspaceLoadVersion = 0;
+const agentDetailLoadVersions = new Map();
+const taskMutationTurns = new Map();
+
+async function serializeTaskMutation(taskID, mutation) {
+  const sessionVersion = authVersion;
+  const queued = taskMutationTurns.has(taskID);
+  const previous = taskMutationTurns.get(taskID) || Promise.resolve();
+  let release;
+  const turn = new Promise(resolve => { release = resolve; });
+  taskMutationTurns.set(taskID, turn);
+  await previous.catch(() => {});
+  try {
+    if (sessionVersion !== authVersion) return null;
+    return await mutation({ queued });
+  } finally {
+    release();
+    if (taskMutationTurns.get(taskID) === turn) taskMutationTurns.delete(taskID);
+  }
+}
 
 function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   if (err?.status !== 401 || !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return false;
@@ -346,13 +417,30 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.agentsLoadError = "";
   state.agentDetail = null;
   state.agentWorkPage = null;
+  taskDetailVersion += 1;
   state.selectedTask = null;
+  state.selectedSubtasks = [];
+  state.selectedEntries = [];
+  state.cardEntryDraft = "";
+  state.cardEntryKind = "comment";
+  state.cardEntryPending = false;
+  state.cardEntryError = "";
+  state.taskDetailDrafts = {};
+  state.subtaskDraft = "";
+  state.subtaskCreateAttempt = null;
+  state.subtaskPending = false;
+  state.subtaskError = "";
+  state.newTaskRecovery = null;
+  state.newTaskCapturePending = false;
+  state.newTaskCaptureAttemptKey = "";
   state.agentAssignOpen = false;
   state.agentAssignError = "";
   state.agentAssignNotice = "";
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentTaskMutationError = "";
+  state.agentTaskRefreshError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -381,6 +469,8 @@ function prepareAgentRoute(route) {
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentTaskMutationError = "";
+  state.agentTaskRefreshError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -396,8 +486,29 @@ function prepareAgentRoute(route) {
 async function applyRoute() {
   const version = ++routeVersion;
   const route = parseRoute(location.pathname);
-  if (route.name !== "board" && !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) state.selectedTask = null;
+  if (state.agentRefreshOnDetailClose && state.agentRefreshOnDetailClose !== route.agentId) {
+    state.agentRefreshOnDetailClose = "";
+  }
+  if (route.name !== "board" && !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) {
+    taskDetailVersion += 1;
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    state.selectedEntries = [];
+    state.cardEntryDraft = "";
+    state.cardEntryKind = "comment";
+    state.cardEntryPending = false;
+    state.cardEntryError = "";
+    state.cardEntryAttemptKey = "";
+    state.taskDetailDrafts = {};
+    state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
+    state.subtaskPending = false;
+    state.subtaskError = "";
+  }
   state.error = "";
+  state.taskMutationError = null;
+  state.workspaceRefreshOnDetailClose = false;
+  state.workspaceListError = "";
   state.settingsNotice = "";
   state.settingsPending = "";
   state.routeError = null;
@@ -415,13 +526,21 @@ async function applyRoute() {
   }
   if (!state.me) return navigate(loginPathFor(currentLocationPath()), { replace: true });
   if (route.redirect) {
-    return route.name === "agents"
+    return route.name === "workspace"
+      ? navigate(`${TASKS_PATH}?view=table`, { replace: true })
+      : route.name === "agents"
       ? navigate(AGENTS_PATH, { replace: true })
+      : route.name === "board"
+      ? navigate(boardPath(route.boardId), { replace: true })
       : navigate(settingsPath(route.settingsPage), { replace: true });
   }
   if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) prepareAgentRoute(route);
   try {
-    if (!await loadBoardList(version)) return;
+    const [boardsLoaded, listsLoaded] = await Promise.all([
+      loadBoardList(version),
+      loadWorkspaceListIndex(version),
+    ]);
+    if (!boardsLoaded || !listsLoaded) return;
     if (routeVersion !== version) return;
     if (route.name === "agents" || route.name === "agent-new") {
       state.settings = false;
@@ -467,6 +586,7 @@ async function applyRoute() {
         render();
         return;
       }
+      state.agentRefreshOnDetailClose = "";
       state.agentDetailLoadState = "ready";
       render();
       return;
@@ -474,25 +594,21 @@ async function applyRoute() {
     await loadAgents(true, authVersion, state.me?.id, version);
     if (routeVersion !== version) return;
 
-    if (route.name === "app") {
-      const first = state.boards[0]?.id;
-      if (first) return navigate(boardPath(first), { replace: true });
-      state.board = null;
+    if (route.name === "workspace") {
+      if (!state.board && state.boards[0]?.id && !await loadBoard(state.boards[0].id, authVersion, version)) return;
+      const workspaceLoaded = await loadWorkspace(route, version);
+      if (routeVersion !== version) return;
+      if (workspaceLoaded === null) return;
+      if (!workspaceLoaded) return showRoute("not-found");
       return showRoute("app");
     }
-    if (route.name === "board" || route.name === "board-settings") {
+    if (route.name === "board") {
       if (!state.boards.some(board => board.id === route.boardId)) {
-        if (route.name === "board-settings") {
-          state.error = "This board does not exist or is no longer available to you.";
-          state.routeError = route;
-          return showRoute("route-error");
-        }
         return showRoute("not-found");
       }
       if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
       if (routeVersion !== version) return;
-      if (route.name === "board-settings") return showRoute("board-settings");
-      return showRoute("app");
+      return showRoute("board");
     }
     if (route.settingsPage === "api" && !await loadTokens(authVersion, state.me?.id, version)) return;
     if (routeVersion !== version) return;
@@ -550,6 +666,27 @@ async function loadBoardList(expectedRouteVersion) {
   return true;
 }
 
+async function loadWorkspaceListIndex(expectedRouteVersion) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const expectedListVersion = workspaceListVersion;
+  const loadVersion = ++workspaceListLoadVersion;
+  const loadIsCurrent = () => loadVersion === workspaceListLoadVersion
+    && sessionIsCurrent(sessionVersion, userID)
+    && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
+  let data;
+  try {
+    data = await api.get("/api/v1/lists");
+  } catch (err) {
+    if (!loadIsCurrent()) return false;
+    throw err;
+  }
+  if (!loadIsCurrent()) return false;
+  if (expectedListVersion !== workspaceListVersion) return true;
+  state.workspaceLists = data.lists || [];
+  return true;
+}
+
 async function loadBoards(selectId, expectedRouteVersion) {
   const sessionVersion = authVersion;
   if (!await loadBoardList(expectedRouteVersion)) return false;
@@ -564,8 +701,109 @@ async function loadBoards(selectId, expectedRouteVersion) {
   return true;
 }
 
+function workspaceQuery(route, cursor = "") {
+  const current = new URLSearchParams(location.search);
+  const query = new URLSearchParams({ limit: "200" });
+  if (["inbox", "list"].includes(route.scope)) query.set("topLevel", "true");
+  if (current.get("children") === "hide") query.set("topLevel", "true");
+  if (route.scope === "list" && route.listId) query.set("bucketId", route.listId);
+  if (route.scope === "inbox") query.set("inbox", "true");
+  if (route.scope === "review") query.set("status", "needs_review");
+  if (route.scope === "today") {
+    const today = dateKey(new Date());
+    query.set("plannedFrom", today);
+    query.set("plannedTo", today);
+  }
+  if (route.scope === "week") {
+    const start = startOfWeek(new Date());
+    query.set("plannedFrom", dateKey(start));
+    query.set("plannedTo", dateKey(addDays(start, 6)));
+  }
+  for (const name of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
+    const routeOwnsFilter = (name === "status" && route.scope === "review")
+      || (["plannedFrom", "plannedTo"].includes(name) && ["today", "week"].includes(route.scope));
+    if (current.get(name) && !routeOwnsFilter) query.set(name, current.get(name));
+  }
+  if (cursor) query.set("cursor", cursor);
+  return query;
+}
+
+async function loadWorkspace(route, expectedRouteVersion) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const loadVersion = ++workspaceLoadVersion;
+  const loadIsCurrent = () => loadVersion === workspaceLoadVersion
+    && sessionIsCurrent(sessionVersion, userID)
+    && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
+  state.workspaceLoading = true;
+  if (route.scope === "list" && !state.workspaceLists.some(list => list.id === route.listId)) {
+    state.workspaceLoading = false;
+    return false;
+  }
+  let taskData;
+  try {
+    taskData = await api.get(`/api/v1/tasks?${workspaceQuery(route)}`);
+  } catch (err) {
+    if (!loadIsCurrent()) return null;
+    state.workspaceLoading = false;
+    throw err;
+  }
+  if (!loadIsCurrent()) return null;
+  state.workspaceTasks = taskData.tasks || [];
+  state.workspaceReviewKinds = {};
+  if (route.scope === "review") {
+    let reviewData;
+    try {
+      reviewData = await api.get("/api/v1/card-review-kinds");
+    } catch (err) {
+      if (!loadIsCurrent()) return null;
+      state.workspaceLoading = false;
+      throw err;
+    }
+    if (!loadIsCurrent()) return null;
+    state.workspaceReviewKinds = reviewData.kinds || {};
+  }
+  state.workspaceNextCursor = taskData.nextCursor || "";
+  state.workspaceScope = route.scope || "all";
+  state.workspaceListID = route.listId || "";
+  const requestedView = new URLSearchParams(location.search).get("view");
+  if (route.scope !== "week" && ["board", "flow", "table"].includes(requestedView)) state.workspaceView = requestedView;
+  const requestedGroup = new URLSearchParams(location.search).get("group");
+  if (requestedView === "flow" && requestedGroup === "list") state.workspaceView = "board";
+  state.workspaceLoading = false;
+  return true;
+}
+
+async function loadMoreWorkspaceTasks() {
+  if (!state.workspaceNextCursor || state.workspaceLoading) return;
+  const route = parseRoute(location.pathname);
+  if (route.name !== "workspace") return;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const version = routeVersion;
+  const cursor = state.workspaceNextCursor;
+  const query = workspaceQuery(route, cursor).toString();
+  state.workspaceLoading = true;
+  render();
+  try {
+    const data = await api.get(`/api/v1/tasks?${query}`);
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    const known = new Set(state.workspaceTasks.map(task => task.id));
+    state.workspaceTasks = [...state.workspaceTasks, ...(data.tasks || []).filter(task => !known.has(task.id))];
+    state.workspaceNextCursor = data.nextCursor || "";
+    state.error = "";
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+    state.error = err.message;
+  }
+  if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
+  state.workspaceLoading = false;
+  render();
+}
+
 function resetAuthenticatedState() {
   goalSaveChains.clear();
+  taskMutationTurns.clear();
   themeSaveChain = Promise.resolve();
   themeChangeVersion += 1;
   state.me = null;
@@ -574,7 +812,25 @@ function resetAuthenticatedState() {
   state.maxListsPerBoard = DEFAULT_MAX_LISTS_PER_BOARD;
   state.board = null;
   state.renamingBoardId = "";
+  state.boardCreatePending = false;
+  taskDetailVersion += 1;
   state.selectedTask = null;
+  state.selectedSubtasks = [];
+  state.selectedEntries = [];
+  state.workspaceReviewKinds = {};
+  state.cardEntryDraft = "";
+  state.cardEntryKind = "comment";
+  state.cardEntryPending = false;
+  state.cardEntryError = "";
+  state.taskDetailDrafts = {};
+  state.taskMutationError = null;
+  state.subtaskDraft = "";
+  state.subtaskCreateAttempt = null;
+  state.subtaskPending = false;
+  state.subtaskError = "";
+  state.newTaskRecovery = null;
+  state.newTaskCapturePending = false;
+  state.newTaskCaptureAttemptKey = "";
   state.settings = false;
   state.settingsPage = "profile";
   state.error = "";
@@ -605,6 +861,8 @@ function resetAuthenticatedState() {
   state.agentAssignBoardID = "";
   state.agentAssignDraft = null;
   state.agentTaskFocusID = "";
+  state.agentTaskMutationError = "";
+  state.agentTaskRefreshError = "";
   state.agentLifecycleNotice = "";
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
@@ -615,6 +873,23 @@ function resetAuthenticatedState() {
   state.flowListId = "";
   state.priorityFilter = "";
   state.weekStart = "";
+  state.workspaceLists = [];
+  state.workspaceListError = "";
+  state.workspaceListPending = false;
+  state.workspaceListDialog = "";
+  state.workspaceListDialogListID = "";
+  state.workspaceListDialogName = "";
+  state.workspaceListDialogBoardID = "";
+  state.workspaceListDialogError = "";
+  state.workspaceTasks = [];
+  state.workspaceScope = "all";
+  state.workspaceListID = "";
+  state.workspaceView = "board";
+  state.workspaceNextCursor = "";
+  state.workspaceLoading = false;
+  state.workspaceRefreshOnDetailClose = false;
+  state.agentRefreshOnDetailClose = "";
+  state.workspaceFiltersOpen = false;
   state.theme = "";
   state.routeError = null;
 }
@@ -680,12 +955,158 @@ async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion)
   }
   const changedBoard = previousBoardID && previousBoardID !== board.id;
   state.board = board;
+  synchronizeWorkspaceListsForBoard(board);
   if (!(board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
   // A filter carried onto another board can render every column empty, which
   // reads as a broken board rather than an active filter.
   if (changedBoard) state.priorityFilter = "";
   state.selectedTask = state.selectedTask ? findTask(state.selectedTask.id) : null;
   return true;
+}
+
+function synchronizeWorkspaceListsForBoard(board) {
+  if (!board?.id) return;
+  const lists = (board.buckets || []).map(list => ({
+    ...list,
+    boardId: list.boardId || board.id,
+    boardName: list.boardName || board.name || "",
+  }));
+  const firstBoardListIndex = state.workspaceLists.findIndex(list => list.boardId === board.id);
+  const retained = state.workspaceLists.filter(list => list.boardId !== board.id);
+  const insertionIndex = firstBoardListIndex < 0
+    ? retained.length
+    : state.workspaceLists.slice(0, firstBoardListIndex).filter(list => list.boardId !== board.id).length;
+  retained.splice(insertionIndex, 0, ...lists);
+  state.workspaceLists = retained;
+}
+
+function workspaceListCount(boardID) {
+  return state.workspaceLists.filter(list => list.boardId === boardID).length;
+}
+
+function boardWithWorkspaceListCapacity() {
+  const limit = Number(state.maxListsPerBoard);
+  if (!Number.isFinite(limit) || limit < 1) return null;
+  return state.boards.find(board => workspaceListCount(board.id) < limit) || null;
+}
+
+async function createWorkspaceList(name) {
+  if (state.workspaceListPending) return false;
+  name = String(name || "").trim();
+  if (!name) return false;
+  state.workspaceListDialogName = name;
+  const requestedBoard = state.boards.find(item => item.id === state.workspaceListDialogBoardID);
+  const board = requestedBoard
+    ? workspaceListCount(requestedBoard.id) < state.maxListsPerBoard ? requestedBoard : null
+    : boardWithWorkspaceListCapacity();
+  state.workspaceListDialogBoardID = board?.id || "";
+  if (!board) {
+    state.workspaceListDialogError = "No room for another list.";
+    render();
+    return false;
+  }
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const routeAtStart = parseRoute(globalThis.location?.pathname || "");
+  const routeVersionAtStart = routeVersion;
+  state.workspaceListPending = true;
+  state.workspaceListError = "";
+  render();
+  globalThis.document?.querySelector?.(".workspace-list-dialog")?.focus();
+  try {
+    const created = await api.post(`/api/v1/boards/${board.id}/buckets`, { name });
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    const list = {
+      ...created,
+      boardId: created.boardId || board.id,
+      boardName: created.boardName || board.name || "",
+      name: created.name || name,
+      isInbox: Boolean(created.isInbox),
+      openCount: Number(created.openCount || 0),
+    };
+    workspaceListVersion += 1;
+    state.workspaceLists = [...state.workspaceLists.filter(item => item.id !== list.id), list];
+    if (state.board?.id === board.id) {
+      state.board = {
+        ...state.board,
+        buckets: [...(state.board.buckets || []).filter(item => item.id !== list.id), list],
+      };
+      synchronizeWorkspaceListsForBoard(state.board);
+    }
+    state.workspaceListPending = false;
+    state.workspaceListError = "";
+    state.workspaceListDialog = "";
+    state.workspaceListDialogName = "";
+    state.workspaceListDialogBoardID = "";
+    state.workspaceListDialogError = "";
+    if (routeVersionAtStart !== routeVersion) return true;
+    if (routeAtStart.name === "workspace") await navigate(listPath(list.id));
+    else render();
+    return true;
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    state.workspaceListPending = false;
+    state.workspaceListDialogError = err.message;
+    if (routeVersionAtStart !== routeVersion) {
+      state.workspaceListDialog = "";
+      state.workspaceListDialogListID = "";
+      state.workspaceListDialogName = "";
+      state.workspaceListDialogBoardID = "";
+      return false;
+    }
+    render();
+    globalThis.document?.querySelector?.("#workspace-list-name")?.focus();
+    return false;
+  }
+}
+
+async function deleteWorkspaceList(listID) {
+  if (state.workspaceListPending) return false;
+  const list = state.workspaceLists.find(item => item.id === listID);
+  if (!list || list.isInbox) return false;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const routeAtStart = parseRoute(globalThis.location?.pathname || "");
+  const routeVersionAtStart = routeVersion;
+  state.workspaceListPending = true;
+  state.workspaceListDialogError = "";
+  render();
+  globalThis.document?.querySelector?.(".workspace-list-dialog")?.focus();
+  try {
+    await api.del(`/api/v1/buckets/${encodeURIComponent(listID)}`);
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    workspaceListVersion += 1;
+    state.workspaceLists = state.workspaceLists.filter(item => item.id !== listID);
+    state.workspaceTasks = state.workspaceTasks.filter(task => task.bucketId !== listID);
+    if (state.board?.id === list.boardId) {
+      state.board = { ...state.board, buckets: (state.board.buckets || []).filter(item => item.id !== listID) };
+    }
+    state.workspaceListPending = false;
+    state.workspaceListDialog = "";
+    state.workspaceListDialogListID = "";
+    state.workspaceListDialogName = "";
+    state.workspaceListDialogBoardID = "";
+    state.workspaceListDialogError = "";
+    if (routeVersionAtStart !== routeVersion) return true;
+    if (routeAtStart.name === "workspace") await navigate(TASKS_PATH);
+    else if (routeAtStart.name === "board") await reload();
+    else render();
+    return true;
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    state.workspaceListPending = false;
+    state.workspaceListDialogError = err.message;
+    if (routeVersionAtStart !== routeVersion) {
+      state.workspaceListDialog = "";
+      state.workspaceListDialogListID = "";
+      state.workspaceListDialogName = "";
+      state.workspaceListDialogBoardID = "";
+      return false;
+    }
+    render();
+    globalThis.document?.querySelector?.("#confirm-workspace-list-dialog")?.focus();
+    return false;
+  }
 }
 
 async function loadCompletedHistory(listID, trigger) {
@@ -700,7 +1121,7 @@ async function loadCompletedHistory(listID, trigger) {
     trigger.textContent = "Loading…";
   }
   try {
-    const page = await api.get(`/api/v1/tasks?bucketId=${encodeURIComponent(listID)}&done=true&limit=20&cursor=${encodeURIComponent(list.completedNextCursor)}`);
+    const page = await api.get(`/api/v1/tasks?bucketId=${encodeURIComponent(listID)}&status=done&limit=20&cursor=${encodeURIComponent(list.completedNextCursor)}`);
     if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || state.board?.id !== boardID) return;
     const known = new Set((list.tasks || []).map(task => task.id));
     list.tasks = [...(list.tasks || []), ...(page.tasks || []).filter(task => !known.has(task.id))];
@@ -715,25 +1136,72 @@ async function loadCompletedHistory(listID, trigger) {
   }
 }
 
-async function openTaskDetail(taskID, trigger) {
+async function loadAllSubtasks(taskID, isCurrent) {
+  const tasks = [];
+  const known = new Set();
+  let cursor = "";
+  do {
+    const query = new URLSearchParams({ parentTaskId: taskID, limit: "200" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await api.get(`/api/v1/tasks?${query}`);
+    if (!isCurrent()) return null;
+    for (const task of page.tasks || []) {
+      if (known.has(task.id)) continue;
+      known.add(task.id);
+      tasks.push(task);
+    }
+    cursor = page.nextCursor || "";
+  } while (cursor);
+  return tasks;
+}
+
+async function openTaskDetail(taskID, trigger, options = {}) {
+  const movingWithinTaskChain = Boolean(state.selectedTask);
+  const detailVersion = ++taskDetailVersion;
+  state.subtaskPending = false;
+  if (!movingWithinTaskChain) {
+    state.taskDetailDrafts = {};
+    state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
+    state.subtaskError = "";
+  }
   const summary = findTask(taskID) || {};
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   const version = routeVersion;
+  const isCurrent = () => sessionIsCurrent(sessionVersion, userID) && version === routeVersion && detailVersion === taskDetailVersion;
   if (trigger) trigger.disabled = true;
   try {
-    const detail = await api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}`);
-    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return false;
-    state.selectedTask = { ...summary, ...detail };
+    const [detail, subtasks, entryPage] = await Promise.all([
+      api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}`),
+      loadAllSubtasks(taskID, isCurrent),
+      api.get(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`),
+    ]);
+    if (!isCurrent() || subtasks === null) return false;
+    state.selectedTask = { ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) };
+    state.selectedSubtasks = subtasks;
+    state.selectedEntries = entryPage.entries || [];
+    state.cardEntryDraft = "";
+    state.cardEntryKind = "comment";
+    state.cardEntryPending = false;
+    state.cardEntryError = "";
+    state.cardEntryAttemptKey = "";
     state.error = "";
     render();
+    focusOpenedTaskDetail();
     return true;
   } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return false;
-    state.error = err.message;
+    if (!isCurrent()) return false;
+    if (options.handleError?.(err)) return false;
+    if (options.onError) options.onError(err);
+    else state.error = err.message;
     render();
     return false;
   }
+}
+
+function focusOpenedTaskDetail() {
+  globalThis.document?.querySelector?.("[data-close-detail]")?.focus();
 }
 
 function render() {
@@ -784,12 +1252,6 @@ function render() {
     bindSettings();
     return;
   }
-  if (state.view === "board-settings") {
-    syncPath(boardSettingsPath(state.board.id));
-    root.innerHTML = boardSettingsHTML();
-    bindBoardSettings();
-    return;
-  }
   if (state.view === "agents" || state.view === "agent-new") {
     syncPath(state.view === "agent-new" ? NEW_AGENT_PATH : AGENTS_PATH);
     root.innerHTML = agentsHTML();
@@ -805,9 +1267,13 @@ function render() {
     bindAgentDetail();
     return;
   }
-  // Whenever a board is on screen its id belongs in the URL, however it was selected.
+  if (parseRoute(location.pathname).name === "workspace") {
+    root.innerHTML = appHTML();
+    bindApp();
+    return;
+  }
   syncPath(state.board ? boardPath(state.board.id) : APP_PATH);
-  root.innerHTML = appHTML();
+  root.innerHTML = boardHTML();
   bindApp();
 }
 
@@ -842,8 +1308,6 @@ function routeErrorHTML() {
   const settingsPage = SETTINGS_PAGES.find(page => page.id === state.routeError?.settingsPage);
   const target = settingsPage
     ? `${settingsPage.title} settings`
-    : state.routeError?.name === "board-settings"
-      ? "board settings"
     : state.routeError?.name === "settings"
       ? "settings"
       : state.routeError?.name === "board"
@@ -994,13 +1458,13 @@ function landingHTML() {
             <button class="tour-tab" type="button" data-tour="week" role="tab" aria-selected="false">Week</button>
           </div>
           <div class="tour-frame" data-reveal>
-            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: three goal-led lists of work, each with a hard cap on open items">
-            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Flow view: work moving through Ready, Working, Review, and Done">
-            <img class="tour-img" data-tour-img="week" src="/app-week.jpg" alt="Slate Week view: tasks laid out across the days of the week">
+            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: flexible contexts containing cards">
+            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Flow view: cards grouped by status">
+            <img class="tour-img" data-tour-img="week" src="/app-week.jpg" alt="Slate Week view: cards laid out across the days of the week">
           </div>
           <p class="preview-caption" data-reveal>
-            <span class="tour-caption on" data-tour-caption="lists">A few lists, each with a hard cap on open work.</span>
-            <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same four states.</span>
+            <span class="tour-caption on" data-tour-caption="lists">Use a list as a project, goal, area, or any context that helps you think.</span>
+            <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same five states.</span>
             <span class="tour-caption" data-tour-caption="week">See the week before you're already in it.</span>
           </p>
         </section>
@@ -1009,13 +1473,13 @@ function landingHTML() {
           <p class="principles-sub" data-reveal style="--d:0">You do not get more done by taking on more. You get more done by being clear about what matters, then giving the rest to agents that can run it in parallel.</p>
           <div class="principle" data-reveal style="--d:0">
             <span class="principle-num">01</span>
-            <h3>Limits, not lists</h3>
-            <p>Every list caps its open actions. When a list is full, something has to finish before anything new begins.</p>
+            <h3>Lists for clear thinking</h3>
+            <p>Put work into the buckets that match how you think. Switch the view when you need to plan, execute, or review it.</p>
           </div>
           <div class="principle" data-reveal style="--d:1">
             <span class="principle-num">02</span>
             <h3>One shared state</h3>
-            <p>Every item is completable and moves through the same four states. You and your agents are always reading the same truth.</p>
+            <p>Every card carries its prompt, conversation, output, and state. You and your agents are always reading the same truth.</p>
           </div>
           <div class="principle" data-reveal style="--d:2">
             <span class="principle-num">03</span>
@@ -1059,45 +1523,308 @@ function landingHTML() {
 }
 
 function appHTML() {
-  const board = state.board;
   const theme = currentTheme();
-  const lists = board?.buckets || [];
-  const listsMode = state.boardMode === "lists";
-  const flowMode = state.boardMode === "flow";
-  const calendarMode = state.boardMode === "calendar";
-  const todayMode = state.boardMode === "today";
-  const headerDays = calendarMode ? weekDays() : daysInWeek(new Date());
-  const boardLimitReached = state.boards.length >= state.maxBoards;
-  const listLimitReached = lists.length >= state.maxListsPerBoard;
-  return `
-    <section class="shell theme-${theme}">
-      ${appSidebarHTML({ theme, boardLimitReached })}
-      <div class="main">
-        <header class="topbar">
-          <span class="week">${formatWeekHeading(headerDays)}</span>
-          <div class="top-actions">
-            <span class="current-user">${userAvatarHTML(state.me, { small: true })}</span>
-            <div class="view-switch" aria-label="Board view">
-              <button data-board-mode="lists" aria-pressed="${listsMode}" class="${listsMode ? "on" : ""}" title="Lists">${icon("rows")}<span>Lists</span></button>
-              <button data-board-mode="flow" aria-pressed="${flowMode}" class="${flowMode ? "on" : ""}" title="Flow">${icon("kanban")}<span>Flow</span></button>
-              <button data-board-mode="calendar" aria-pressed="${calendarMode}" class="${calendarMode ? "on" : ""}" title="Week">${icon("calendar")}<span>Week</span></button>
-              <button data-board-mode="today" aria-pressed="${todayMode}" class="${todayMode ? "on" : ""}" title="Today">${icon("sun")}<span>Today</span></button>
-            </div>
-      <button class="icon-btn icon-label ${listsMode ? "" : "add-list-placeholder"}" id="add-list" ${listsMode ? (listLimitReached ? 'disabled aria-describedby="list-limit"' : "") : 'aria-hidden="true" tabindex="-1" disabled'}>${icon("plus")}<span>New list</span></button>
-      ${listsMode && listLimitReached ? `<span class="board-limit" id="list-limit">${state.maxListsPerBoard} list ${planLabel()} limit reached</span>` : ""}
-          </div>
-        </header>
-        ${statusErrorHTML(state.error)}
-        ${statusNoticeHTML(state.moveNotice)}
-        ${listsMode ? priorityToolbarHTML() : ""}
-        ${flowMode ? flowHTML(board) : calendarMode ? calendarHTML(board) : todayMode ? todayHTML(board) : `<div class="grid">${lists.map(listHTML).join("")}</div>`}
-        ${footerHTML(board, todayMode)}
+  const tasks = workspaceScopedTasks();
+  const list = state.workspaceLists.find(item => item.id === state.workspaceListID);
+  const title = state.workspaceScope === "inbox" ? "Inbox"
+    : state.workspaceScope === "today" ? "Today"
+      : state.workspaceScope === "week" ? "Week"
+        : state.workspaceScope === "review" ? "Review"
+          : state.workspaceScope === "list" ? list?.name || "List" : "All cards";
+  const subtitle = state.workspaceScope === "inbox" ? "New cards waiting for context."
+    : state.workspaceScope === "today" ? "The cards that deserve your attention today."
+      : state.workspaceScope === "week" ? "Cards planned across this week."
+        : state.workspaceScope === "review" ? "Work waiting for your judgment."
+          : state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
+  const overview = `
+    <header class="workspace-topbar">
+      <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
+      <div class="workspace-topbar-actions">
+        ${state.workspaceScope === "list" && list && !list.isInbox ? `<button class="plain-btn danger-text" id="delete-workspace-list" type="button" data-list-id="${escapeAttr(list.id)}">${icon("trash")}<span>Delete list</span></button>` : ""}
+        <button class="primary" id="new-task" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New card"}</span></button>
       </div>
-      ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
+    </header>
+    ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskMutationError?.message)}
+    ${statusNoticeHTML(state.moveNotice)}
+    <div class="workspace-viewbar ${["week", "review"].includes(state.workspaceScope) ? "week-only" : ""}">
+      ${["week", "review"].includes(state.workspaceScope) ? "" : `<div class="workspace-tabs" role="tablist" aria-label="Card view">
+        ${[
+          { value: "board", label: "Board", icon: "kanban" },
+          { value: "flow", label: "Flow", icon: "columns" },
+          { value: "table", label: "Table", icon: "rows" },
+        ].map(view => `<button type="button" id="workspace-tab-${view.value}" data-workspace-view="${view.value}" class="${state.workspaceView === view.value ? "on" : ""}" role="tab" tabindex="${state.workspaceView === view.value ? "0" : "-1"}" aria-selected="${state.workspaceView === view.value}" aria-controls="workspace-task-panel">${icon(view.icon)}<span>${view.label}</span></button>`).join("")}
+      </div>`}
+      <div class="workspace-view-actions">
+        <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
+      </div>
+    </div>
+    ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
+    <div class="workspace-content" ${state.workspaceScope === "week" ? "" : `id="workspace-task-panel" role="tabpanel" tabindex="0" aria-labelledby="workspace-tab-${state.workspaceView}"`}>
+      ${state.workspaceLoading ? `<div class="workspace-empty">Loading cards…</div>`
+        : state.workspaceScope === "week" ? workspaceWeekHTML(tasks)
+          : state.workspaceScope === "review" ? workspaceReviewHTML(tasks)
+          : state.workspaceView === "board" ? workspaceBoardHTML(tasks)
+            : state.workspaceView === "flow" ? workspaceFlowHTML(tasks)
+            : workspaceTableHTML(tasks)}
+    </div>
+    ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more cards"}</button>` : ""}`;
+  return `
+    <section class="shell task-shell theme-${theme}">
+      ${appSidebarHTML({ theme, showNewTask: false })}
+      <div class="main workspace-main ${state.selectedTask ? "card-detail-main" : ""}">
+        ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : overview}
+      </div>
     </section>`;
 }
 
-function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, boardLimitReached = state.boards.length >= state.maxBoards } = {}) {
+function boardSurfaceTasks(board = state.board) {
+  return (board?.buckets || []).flatMap(list => (list.tasks || []).map(task => ({
+    ...task,
+    boardId: task.boardId || board.id,
+    boardName: task.boardName || board.name,
+    bucketId: task.bucketId || list.id,
+    listName: task.listName || list.name,
+  })));
+}
+
+function boardHTML() {
+  const board = state.board;
+  const theme = currentTheme();
+  const lists = board?.buckets || [];
+  const boardMode = ["lists", "flow", "table", "calendar"].includes(state.boardMode) ? state.boardMode : "lists";
+  const listLimitReached = lists.length >= state.maxListsPerBoard;
+  const openCards = boardSurfaceTasks(board).filter(task => task.status !== "done").length;
+  const overview = `
+    <div class="main board-main">
+      <header class="topbar board-topbar">
+        <div class="board-heading"><div><h1>${escapeHTML(board?.name || "Board")}</h1><span>${openCards}</span></div><p>Lists keep related cards together.</p></div>
+        <div class="top-actions">
+          <div class="view-switch" aria-label="Board view">
+            <button data-board-mode="lists" aria-pressed="${boardMode === "lists"}" class="${boardMode === "lists" ? "on" : ""}" title="Board">${icon("kanban")}<span>Board</span></button>
+            <button data-board-mode="flow" aria-pressed="${boardMode === "flow"}" class="${boardMode === "flow" ? "on" : ""}" title="Flow">${icon("columns")}<span>Flow</span></button>
+            <button data-board-mode="table" aria-pressed="${boardMode === "table"}" class="${boardMode === "table" ? "on" : ""}" title="Table">${icon("rows")}<span>Table</span></button>
+            <button data-board-mode="calendar" aria-pressed="${boardMode === "calendar"}" class="${boardMode === "calendar" ? "on" : ""}" title="Calendar">${icon("calendar")}<span>Calendar</span></button>
+          </div>
+          ${boardMode === "lists" ? `<button class="secondary" id="add-list" ${listLimitReached ? "disabled" : ""}>${icon("plus")}<span>New list</span></button>` : ""}
+        </div>
+      </header>
+      ${statusErrorHTML(state.error || state.taskMutationError?.message)}
+      ${statusNoticeHTML(state.moveNotice)}
+      ${boardMode === "lists" ? `<div class="grid">${lists.map(listHTML).join("")}</div>`
+        : boardMode === "flow" ? flowHTML(board)
+          : boardMode === "table" ? `<div class="board-table-view">${workspaceTableHTML(boardSurfaceTasks(board))}</div>`
+            : calendarHTML(board)}
+      ${footerHTML(board, false)}
+    </div>`;
+  return `
+    <section class="shell theme-${theme}">
+      ${appSidebarHTML({ theme, showNewTask: false })}
+      ${state.selectedTask ? `<div class="main workspace-main card-detail-main">${workspaceDetailHTML(state.selectedTask)}</div>` : overview}
+    </section>`;
+}
+
+function workspaceScopedTasks() {
+  if (state.workspaceScope !== "inbox") return state.workspaceTasks;
+  const inboxIDs = new Set(state.workspaceLists.filter(list => list.isInbox).map(list => list.id));
+  return state.workspaceTasks.filter(task => inboxIDs.has(task.bucketId));
+}
+
+function workspaceFilterCount() {
+  const query = new URLSearchParams(globalThis.location?.search || "");
+  const names = ["q", "priority", "assigneeAgentId"];
+  if (state.workspaceScope !== "review") names.push("status");
+  if (!["today", "week"].includes(state.workspaceScope)) names.push("plannedFrom", "plannedTo");
+  if (!["inbox", "list"].includes(state.workspaceScope)) names.push("children");
+  return names.filter(name => query.get(name)).length;
+}
+
+function workspaceFilterHTML() {
+  const query = new URLSearchParams(globalThis.location?.search || "");
+  const agentOptions = state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
+  return `<form class="workspace-filters" id="workspace-filters">
+    <label class="workspace-search"><span>Search</span><input name="q" value="${escapeAttr(query.get("q") || "")}" placeholder="Search cards…"></label>
+    ${state.workspaceScope === "review" ? "" : `<label><span>Status</span><select name="status"><option value="">Any status</option>${FLOW_STATES.map(item => `<option value="${item.value}" ${query.get("status") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>`}
+    <label><span>Priority</span><select name="priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
+    <label><span>Owner</span><select name="assigneeAgentId"><option value="">Anyone</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
+    ${["inbox", "list"].includes(state.workspaceScope) ? "" : `<fieldset class="workspace-child-filter"><legend>Child cards</legend><label class="workspace-checkbox"><input type="checkbox" name="children" value="hide" ${query.get("children") === "hide" ? "checked" : ""}><span>Hide child cards</span></label></fieldset>`}
+    ${["today", "week"].includes(state.workspaceScope) ? "" : `<label><span>From</span><input type="date" name="plannedFrom" value="${escapeAttr(query.get("plannedFrom") || "")}"></label>
+    <label><span>To</span><input type="date" name="plannedTo" value="${escapeAttr(query.get("plannedTo") || "")}"></label>`}
+    <button class="secondary" type="submit">Apply</button><button class="plain-btn" id="clear-workspace-filters" type="button">Clear</button>
+  </form>`;
+}
+
+function workspaceTaskOwner(task) {
+  return task.assigneeAgentName || state.agents.find(agent => agent.id === task.assigneeAgentId)?.displayName || state.me?.displayName || "You";
+}
+
+function workspaceTaskContext(task, includeOwner = false) {
+  const context = [];
+  if (task.parentTaskId) context.push(`Child of ${task.parentTaskTitle || "parent card"}`);
+  context.push(task.listName || "Inbox");
+  if (includeOwner) context.push(workspaceTaskOwner(task));
+  return context.join(" · ");
+}
+
+function workspaceListHTML(tasks) {
+  if (!tasks.length) return `<div class="workspace-empty">Nothing here yet.</div>`;
+  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><span class="workspace-card-mark"></span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></span>${taskPriorityBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
+}
+
+function workspaceTableHTML(tasks) {
+  return `<table class="workspace-table" aria-label="Cards">
+    <colgroup><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
+    <thead><tr class="workspace-table-head"><th scope="col">Card</th><th scope="col">Location</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
+    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Child of ${escapeHTML(task.parentTaskTitle || "parent card")}</small>` : ""}</button></td><td>${escapeHTML([task.boardName, task.listName || "Inbox"].filter(Boolean).join(" / "))}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="6"><div class="workspace-empty">No cards match these filters.</div></td></tr>`}</tbody>
+  </table>`;
+}
+
+function workspaceBoardHTML(tasks) {
+  const visibleListIDs = new Set(tasks.map(task => task.bucketId));
+  let groups = state.workspaceLists.filter(list => visibleListIDs.has(list.id)
+    || state.workspaceScope === "all"
+    || (state.workspaceScope === "list" && list.id === state.workspaceListID)
+    || (state.workspaceScope === "inbox" && list.isInbox))
+    .map(list => ({ value: list.id, label: workspaceListLabel(list) }));
+  if (state.workspaceScope === "list") {
+    groups = groups.filter(group => group.value === state.workspaceListID);
+  }
+  const card = task => {
+    const parent = task.parentTaskId ? `Child of ${task.parentTaskTitle || "parent card"} · ` : "";
+    return `<article class="workspace-flow-card" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(`${parent}${workspaceTaskOwner(task)}`)}</small></button></article>`;
+  };
+  return `<section class="workspace-flow grouped-by-list">${groups.map(group => {
+    const items = tasks.filter(task => task.bucketId === group.value);
+    return `<section class="workspace-flow-column" data-kanban-list="${escapeAttr(group.value)}"><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag cards here</p>`}</div></section>`;
+  }).join("")}</section>`;
+}
+
+function workspaceFlowHTML(tasks) {
+  const card = task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task, true))}</small></button></article>`;
+  return `<section class="workspace-flow grouped-by-status">${FLOW_STATES.map(group => {
+    const items = tasks.filter(task => task.status === group.value);
+    return `<section class="workspace-flow-column" data-flow-status="${escapeAttr(group.value)}"><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag cards here</p>`}</div></section>`;
+  }).join("")}</section>`;
+}
+
+function workspaceReviewHTML(tasks) {
+  if (!tasks.length) return `<div class="workspace-empty">Nothing needs your attention.</div>`;
+  const outputs = tasks.filter(task => state.workspaceReviewKinds[task.id] === "output");
+  const other = tasks.filter(task => state.workspaceReviewKinds[task.id] !== "output");
+  const group = (title, description, items) => `<section class="workspace-review-group"><header><div><h2>${title}</h2><p>${description}</p></div><span>${items.length}</span></header>${items.length ? workspaceListHTML(items) : `<div class="workspace-review-empty">Nothing here.</div>`}</section>`;
+  return `<div class="workspace-review">${group("Outputs", "Deliverables waiting for your judgment.", outputs)}${other.length ? group("Other review", "Cards placed in Review without an output.", other) : ""}</div>`;
+}
+
+function workspaceWeekHTML(tasks) {
+  const start = startOfWeek(new Date());
+  return `<section class="workspace-week" aria-label="Week calendar">${Array.from({ length: 7 }, (_, index) => addDays(start, index)).map(day => {
+    const key = dateKey(day);
+    const items = tasks.filter(task => task.scheduledDate === key);
+    return `<section data-calendar-date="${key}"><header><span>${day.toLocaleDateString(undefined, { weekday: "short" })}</span><b>${day.getDate()}</b></header>${items.map(task => `<button draggable="true" data-task="${task.id}" data-open-task="${task.id}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></button>`).join("") || `<p>Nothing planned</p>`}</section>`;
+  }).join("")}</section>`;
+}
+
+function taskDetailBackLabel() {
+  if (["agent-detail", "agent-work", "agent-settings"].includes(state.view)) return "Back to agent work";
+  return parseRoute(globalThis.location?.pathname || APP_PATH).name === "board" ? "Back to board" : "Back to cards";
+}
+
+function workspaceListDialogHTML() {
+  if (!state.workspaceListDialog) return "";
+  const deletingList = state.workspaceListDialog === "delete";
+  const deletingBoard = state.workspaceListDialog === "delete-board";
+  const deleting = deletingList || deletingBoard;
+  const list = state.workspaceLists.find(item => item.id === state.workspaceListDialogListID);
+  const board = state.boards.find(item => item.id === state.workspaceListDialogBoardID);
+  if (deletingList && (!list || list.isInbox)) return "";
+  if (deletingBoard && !board) return "";
+  const targetName = deletingBoard ? board.name : list?.name;
+  return `<div class="detail-overlay workspace-list-dialog-overlay">
+    <section class="agent-lifecycle-dialog workspace-list-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-list-dialog-title" tabindex="-1">
+      <header>
+        <span class="agent-state-icon">${icon(deleting ? "trash" : "plus")}</span>
+        <div><h2 id="workspace-list-dialog-title">${deleting ? `Delete ${escapeHTML(targetName)}?` : "New list"}</h2><p>${deletingBoard ? "Every list and card on this board will be permanently deleted. This cannot be undone." : deletingList ? "Cards in this list will also be permanently deleted. This cannot be undone." : "Lists are flexible containers for related cards."}</p></div>
+      </header>
+      <form id="workspace-list-dialog-form">
+        ${deleting ? "" : `<label class="workspace-list-dialog-field"><span>Name</span><input id="workspace-list-name" name="name" value="${escapeAttr(state.workspaceListDialogName)}" maxlength="100" autocomplete="off" required ${state.workspaceListPending ? "disabled" : ""}></label>`}
+        <p class="status-error" role="alert">${escapeHTML(state.workspaceListDialogError)}</p>
+        <footer><button class="secondary" id="cancel-workspace-list-dialog" type="button" ${state.workspaceListPending ? "disabled" : ""}>Cancel</button><button class="${deleting ? "danger" : "primary"}" id="confirm-workspace-list-dialog" type="submit" ${state.workspaceListPending ? "disabled" : ""}>${state.workspaceListPending ? (deleting ? "Deleting…" : "Creating…") : (deletingBoard ? "Delete board" : deletingList ? "Delete list" : "Create list")}</button></footer>
+      </form>
+    </section>
+  </div>`;
+}
+
+function workspaceListLabel(list) {
+  const name = list.isInbox ? "Inbox" : list.name;
+  const duplicates = state.workspaceLists.filter(item => (item.isInbox ? "Inbox" : item.name) === name);
+  if (duplicates.length < 2) return name;
+  const duplicateBoardIDs = new Set(duplicates.map(item => item.boardId).filter(Boolean));
+  const board = state.boards.find(candidate => candidate.id === list.boardId);
+  const qualified = duplicateBoardIDs.size > 1 && board?.name ? `${board.name} / ${name}` : name;
+  const sameQualified = duplicates.filter(item => {
+    const itemBoard = state.boards.find(candidate => candidate.id === item.boardId);
+    const itemQualified = duplicateBoardIDs.size > 1 && itemBoard?.name ? `${itemBoard.name} / ${name}` : name;
+    return itemQualified === qualified;
+  });
+  return sameQualified.length > 1 ? `${qualified} (${list.id})` : qualified;
+}
+
+function workspaceDetailHTML(task) {
+  const list = state.workspaceLists.find(item => item.id === task.bucketId);
+  const completed = state.selectedSubtasks.filter(item => item.status === "done").length;
+  const latestOutput = [...state.selectedEntries].reverse().find(entry => entry.kind === "output");
+  const entries = state.selectedEntries.map(entry => `<article class="card-entry card-entry-${entry.kind}">
+    <header><span class="card-entry-author ${entry.authorKind === "agent" ? "agent" : ""}">${entry.authorKind === "agent" ? icon("bot") : icon("user")}<strong>${escapeHTML(entry.authorName)}</strong></span><time>${new Date(entry.createdAt).toLocaleString()}</time></header>
+    <p>${escapeHTML(entry.body).replace(/\n/g, "<br>")}</p>
+    <footer>${entry.kind === "output" ? `<span class="card-entry-kind">Output</span>` : ""}</footer>
+  </article>`).join("");
+  const subtaskSection = task.parentTaskId ? `<button class="workspace-parent-link" type="button" data-open-parent>${icon("chevronLeft")}<span>Back to parent card</span></button>` : `
+    <section class="workspace-subtasks" aria-labelledby="subtasks-heading">
+      <header><div><h3 id="subtasks-heading">Child cards</h3><span>${completed} of ${state.selectedSubtasks.length} done</span></div></header>
+      ${state.selectedSubtasks.length ? `<div class="workspace-subtask-list">
+        ${state.selectedSubtasks.map(item => `<div class="workspace-subtask-row"><button class="workspace-subtask-open" type="button" data-open-task="${item.id}"><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button></div>`).join("")}
+      </div>` : `<p class="workspace-subtask-empty">Use child cards only when this intent needs smaller pieces.</p>`}
+      <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a child card" aria-label="Child card title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add child"}</span></button></div>
+      <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
+    </section>`;
+  return `<section class="workspace-detail" aria-label="Card detail" data-detail-surface tabindex="-1">
+      <header class="detail-head"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Child card" : "Card"}</b></div></header>
+      <form id="workspace-detail-form" class="workspace-detail-form">
+        <div class="workspace-detail-main">
+          <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
+          <label class="workspace-brief-label" for="workspace-detail-description">Prompt and context</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…">${escapeHTML(task.description || "")}</textarea>
+          ${latestOutput ? `<section class="card-latest-output"><header>${icon("bot")}<div><span>Latest output</span><strong>${escapeHTML(latestOutput.authorName)}</strong></div></header><p>${escapeHTML(latestOutput.body).replace(/\n/g, "<br>")}</p></section>` : ""}
+          <section class="card-conversation" aria-labelledby="card-conversation-heading">
+            <header><div><h3 id="card-conversation-heading">Conversation</h3><span>${state.selectedEntries.length}</span></div></header>
+            ${entries ? `<div class="card-entry-list">${entries}</div>` : `<p class="card-conversation-empty">Comments and agent outputs will appear here.</p>`}
+            <div class="card-entry-composer">
+              <div class="card-entry-tabs" role="group" aria-label="Entry type"><button type="button" data-entry-kind="comment" class="${state.cardEntryKind === "comment" ? "on" : ""}">Comment</button><button type="button" data-entry-kind="output" class="${state.cardEntryKind === "output" ? "on" : ""}">Output</button></div>
+              <textarea id="card-entry-body" placeholder="${state.cardEntryKind === "output" ? "Add the result, links, or deliverable…" : "Add feedback, context, or a question…"}" ${state.cardEntryPending ? "disabled" : ""}>${escapeHTML(state.cardEntryDraft)}</textarea>
+              <footer><span>${state.cardEntryKind === "output" ? "Outputs move the card to Review." : "Comments stay with the card."}</span><button class="primary" id="add-card-entry" type="button" ${state.cardEntryPending ? "disabled" : ""}>${state.cardEntryPending ? "Adding…" : `Add ${state.cardEntryKind}`}</button></footer>
+              <p class="error card-entry-error" role="alert">${escapeHTML(state.cardEntryError)}</p>
+            </div>
+          </section>
+          ${task.parentTaskId ? "" : subtaskSection}
+          <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
+        </div>
+        <aside class="workspace-detail-properties" aria-label="Card properties">
+          <h2>Properties</h2>
+          ${task.parentTaskId ? `<div class="workspace-parent-context"><span>Part of a parent card</span>${subtaskSection}</div>` : ""}
+          <div class="detail-properties">
+            <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
+            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Child cards stay with their parent card.</small>` : ""}</div>
+            <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
+            <div class="field"><label for="workspace-detail-owner">Agent</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
+            <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
+          </div>
+        </aside>
+        <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete card</button><div><button class="primary" type="submit">Save changes</button></div></footer>
+      </form>
+    </section>`;
+}
+
+function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNewTask = true } = {}) {
+  const route = parseRoute(globalThis.location?.pathname || APP_PATH);
+  const workspaceOn = name => route.name === "workspace" && state.workspaceScope === name;
   return `
     <aside class="sidebar">
       <div class="sidebar-head">
@@ -1105,19 +1832,19 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, boardLi
         <button class="icon-btn sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar-content" aria-expanded="false">${icon("menu")}</button>
       </div>
       <div class="sidebar-content" id="sidebar-content">
-        <section class="nav-sec nav-boards">
-          <h3>Boards</h3>
-          <div class="pages">
-            ${state.boards.map(boardRowHTML).join("")}
-          </div>
-          <div class="board-create">
-            <button class="plain-btn icon-label" id="new-board" ${boardLimitReached ? 'disabled aria-describedby="board-limit"' : ""}>${icon("plus")}<span>New board</span></button>
-            ${boardLimitReached ? `<p class="board-limit" id="board-limit">${state.maxBoards} board limit reached</p>` : ""}
+        ${showNewTask ? globalNewTaskButtonHTML() : ""}
+        ${newTaskRecoveryNoticeHTML()}
+        <section class="nav-sec workspace-nav">
+          <h3>Focus</h3>
+          <div class="pages task-nav-pages">
+            <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}?view=table">${icon("rows")}<span>All cards</span></a>
           </div>
         </section>
+        ${boardsNavigationHTML()}
         <section class="nav-sec nav-collaborators">
-          <h3>Collaborators</h3>
-          <a class="plain-btn icon-label nav-link ${agentsCurrent ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent ? 'aria-current="page"' : ""}>${icon("bot")}<span>Agents</span></a>
+          <h3>Agents</h3>
+          <a class="plain-btn icon-label nav-link ${agentsCurrent && !route.agentId ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent && !route.agentId ? 'aria-current="page"' : ""}>${icon("bot")}<span>All agents</span></a>
+          ${state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).map(agent => `<a class="nav-link agent-nav-link ${route.agentId === agent.id ? "on" : ""}" href="${agentPath(agent.id)}">${avatarHTML(agent, { small: true, decorative: true })}<span>${escapeHTML(agent.displayName)}</span></a>`).join("")}
         </section>
         <section class="nav-sec nav-sec-footer">
           ${themeSwitchHTML(theme)}
@@ -1125,7 +1852,100 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, boardLi
           <button class="plain-btn icon-label" id="logout">${icon("signOut")}<span>Sign out</span></button>
         </section>
       </div>
-    </aside>`;
+    </aside>${workspaceListDialogHTML()}`;
+}
+
+function boardsNavigationHTML() {
+  const boardLimitReached = state.boards.length >= state.maxBoards;
+  return `
+    <section class="nav-sec nav-boards">
+      <div class="nav-section-title"><h3>Boards</h3><button class="plain-btn" id="new-board" type="button" aria-label="New board" ${boardLimitReached || state.boardCreatePending ? "disabled" : ""}>${icon("plus")}</button></div>
+      <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
+      <div class="pages">${state.boards.map(boardRowHTML).join("")}</div>
+      ${boardLimitReached ? `<p class="board-limit">${state.maxBoards} board limit reached</p>` : ""}
+    </section>`;
+}
+
+function syncWorkspaceListError() {
+  document.querySelectorAll("[data-workspace-list-error]").forEach(element => {
+    element.textContent = state.workspaceListError;
+    element.hidden = !state.workspaceListError;
+  });
+}
+
+async function refreshCurrentWorkspaceListMetadata() {
+  const currentRoute = parseRoute(location.pathname);
+  const settingsMounted = state.settings
+    && state.settingsPage === currentRoute.settingsPage
+    && Boolean(globalThis.document?.querySelector?.(".settings-page"));
+  const workspaceMounted = state.view === "app" && Boolean(globalThis.document?.querySelector?.(".task-shell"));
+  const agentsMounted = state.view === currentRoute.name && Boolean(globalThis.document?.querySelector?.(".agents-shell"));
+  const agentSettingsMounted = state.view === "agent-settings"
+    && state.agentDetailLoadState === "ready"
+    && state.agentDetail?.agent?.id === currentRoute.agentId
+    && Boolean(globalThis.document?.querySelector?.(".agents-shell"));
+  const routeNeedsCompletion = (currentRoute.name === "settings" && !settingsMounted)
+    || (currentRoute.name === "workspace" && !workspaceMounted)
+    || (["agents", "agent-new"].includes(currentRoute.name) && !agentsMounted)
+    || (currentRoute.name === "agent-settings" && !agentSettingsMounted);
+  if (routeNeedsCompletion) {
+    await applyRoute();
+    const completedRoute = parseRoute(location.pathname);
+    if (completedRoute.name === "settings") {
+      return state.settings
+        && state.settingsPage === completedRoute.settingsPage
+        && Boolean(globalThis.document?.querySelector?.(".settings-page"));
+    }
+    if (completedRoute.name === "workspace") return state.view === "app" && Boolean(globalThis.document?.querySelector?.(".task-shell"));
+    if (["agents", "agent-new"].includes(completedRoute.name)) {
+      return state.view === completedRoute.name && Boolean(globalThis.document?.querySelector?.(".agents-shell"));
+    }
+    if (completedRoute.name === "agent-settings") {
+      return state.view === "agent-settings"
+        && state.agentDetailLoadState === "ready"
+        && state.agentDetail?.agent?.id === completedRoute.agentId
+        && Boolean(globalThis.document?.querySelector?.(".agents-shell"));
+    }
+    return false;
+  }
+  const version = routeVersion;
+  try {
+    if (!await loadWorkspaceListIndex(version) || version !== routeVersion) return false;
+    state.workspaceListError = "";
+    syncWorkspaceListError();
+    return true;
+  } catch (err) {
+    if (version !== routeVersion) return false;
+    state.workspaceListError = err.message;
+    syncWorkspaceListError();
+    return false;
+  }
+}
+
+function syncAgentTaskMutationError() {
+  document.querySelectorAll("[data-agent-task-mutation-error]").forEach(element => {
+    element.textContent = state.agentTaskMutationError;
+    element.hidden = !state.agentTaskMutationError;
+  });
+}
+
+function syncTaskDetailError() {
+  const element = document.querySelector(".detail-error");
+  if (element) element.textContent = state.error;
+}
+
+function clearResolvedAgentTaskRefreshError() {
+  const message = state.agentTaskRefreshError;
+  state.agentTaskRefreshError = "";
+  if (!message) return;
+  if (state.agentTaskMutationError === message) {
+    state.agentTaskMutationError = "";
+    syncAgentTaskMutationError();
+  }
+  if (state.error === message) {
+    state.error = "";
+    syncTaskDetailError();
+  }
 }
 
 function themeSwitchHTML(theme) {
@@ -1133,11 +1953,31 @@ function themeSwitchHTML(theme) {
     <div class="theme-switch ${theme}" role="group" aria-label="Theme">
       <span class="theme-switch-thumb" aria-hidden="true"></span>
       ${themes.map(item => `<button type="button" data-set-theme="${item.id}" class="${theme === item.id ? "on" : ""}" aria-pressed="${theme === item.id}" title="${item.label} theme">${icon(item.id === "dark" ? "moon" : "sun")}<span>${item.label}</span></button>`).join("")}
-    </div>`;
+  </div>`;
+}
+
+function globalNewTaskButtonHTML() {
+  return `<button class="primary sidebar-new-task" id="global-new-task" type="button" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New card"}</span></button>`;
+}
+
+function newTaskCaptureBlocked() {
+  return state.newTaskCapturePending || Boolean(state.newTaskRecovery);
+}
+
+function newTaskRecoveryNoticeHTML() {
+  const recovery = state.newTaskRecovery;
+  if (!recovery) return "";
+  return `<section class="status-notice new-task-recovery" role="alert" aria-label="Created card recovery"><span><strong>Card created.</strong> Slate saved ${escapeHTML(recovery.task.title)} in Inbox, but could not open it: ${escapeHTML(recovery.message)}</span><button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open card"}</button></section>`;
+}
+
+function bindNewTaskRecoveryActions() {
+  document.querySelector("#retry-created-task")?.addEventListener("click", recoverCreatedTask);
 }
 
 function boardRowHTML(board) {
-  const current = board.id === state.board?.id;
+  const route = parseRoute(globalThis.location?.pathname || APP_PATH);
+  const current = route.name === "board" && board.id === state.board?.id;
+  const deletable = boardCanBeDeleted(board.id);
   if (board.id === state.renamingBoardId) {
     return `
       <div class="board-row board-row-editing ${current ? "on" : ""}">
@@ -1155,9 +1995,8 @@ function boardRowHTML(board) {
     <div class="board-row ${current ? "on" : ""}">
       <button class="board-select" data-board="${board.id}"><span>${escapeHTML(board.name)}</span></button>
       <div class="board-actions">
-        <button data-board-settings="${board.id}" aria-label="Board settings for ${escapeAttr(board.name)}" title="Board settings">${icon("gear")}</button>
         <button data-start-rename-board="${board.id}" aria-label="Rename ${escapeAttr(board.name)}" title="Rename board">${icon("pencil")}</button>
-        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="Delete board">${icon("trash")}</button>
+        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="${deletable ? "Delete board" : "Move or create another Inbox before deleting this board"}" ${deletable ? "" : "disabled"}>${icon("trash")}</button>
       </div>
     </div>`;
 }
@@ -1184,25 +2023,20 @@ function emptyListMessage() {
 }
 
 function listHTML(list) {
-  const over = list.openCount > list.limitCount ? "over-limit" : "";
   const tasks = (list.tasks || []).filter(priorityMatches);
-  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-  const activeLimitReached = (list.openCount || 0) >= activeLimit;
   // New items carry no priority, so adding one under a filter would create it
   // and immediately hide it. Block the form instead of failing silently.
-  const addBlocked = activeLimitReached || Boolean(state.priorityFilter);
-  const addPlaceholder = activeLimitReached
-    ? `Limit of ${activeLimit} active items reached`
-    : state.priorityFilter
+  const addBlocked = Boolean(state.priorityFilter);
+  const addPlaceholder = state.priorityFilter
       ? "Clear the filter to add items"
       : "Add item";
   return `
-    <section class="bucket ${over}" data-bucket="${list.id}" draggable="true">
+    <section class="bucket" data-bucket="${list.id}" draggable="true">
       <div class="bucket-head">
-        <input data-bucket-name="${list.id}" aria-label="List name" value="${escapeAttr(list.name)}">
-        <span class="count" title="Open items / limit">${list.openCount}/${list.limitCount}</span>
+        <input data-bucket-name="${list.id}" aria-label="List name" title="Rename list" value="${escapeAttr(list.name)}">
+        <span class="count" title="Open items">${list.openCount}</span>
         <div class="bucket-menu">
-          <button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list">${icon("trash")}</button>
+          ${list.isInbox ? "" : `<button class="icon-btn" data-delete-bucket="${list.id}" title="Delete list" aria-label="Delete ${escapeAttr(list.name)}">${icon("trash")}</button>`}
         </div>
       </div>
       <input class="bucket-goal" data-bucket-goal="${list.id}" value="${escapeAttr(list.goal || "")}" placeholder="Add a goal" aria-label="Goal for ${escapeAttr(list.name)}">
@@ -1212,10 +2046,9 @@ function listHTML(list) {
       </ul>
     ${list.completedNextCursor ? `<button class="secondary completed-history" type="button" data-load-completed="${list.id}">Load older completed</button>` : ""}
     <form class="add-task" data-add-task="${list.id}">
-    <button class="add-icon" type="submit" title="Add item" ${addBlocked ? "disabled" : ""} ${activeLimitReached ? 'aria-describedby="item-limit-' + list.id + '"' : ""}>${icon("plus")}</button>
-    <input name="title" placeholder="${addPlaceholder}" ${addBlocked ? "disabled" : ""} ${activeLimitReached ? 'aria-describedby="item-limit-' + list.id + '"' : ""}>
+    <button class="add-icon" type="submit" title="Add item" ${addBlocked ? "disabled" : ""}>${icon("plus")}</button>
+    <input name="title" placeholder="${addPlaceholder}" ${addBlocked ? "disabled" : ""}>
   </form>
-  ${activeLimitReached ? `<p class="board-limit" id="item-limit-${list.id}">${activeLimit} active item limit reached</p>` : ""}
   </section>`;
 }
 
@@ -1268,19 +2101,13 @@ function taskAssigneeHTML(task, showName = false) {
 
 function taskHTML(task) {
   return `
-    <li class="task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
+    <li class="task action status-${task.status || "new"}" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}">
       <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
-        <div class="task-title">${escapeHTML(task.title)}${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}</div>
+        <div class="task-title">${escapeHTML(task.title)}${taskPriorityBadgeHTML(task)}</div>
         ${task.scheduledDate ? `<span class="task-date">${formatTaskDate(task.scheduledDate)}</span>` : ""}
       </button>
       ${taskAssigneeHTML(task)}
     </li>`;
-}
-
-function taskStateBadgeHTML(task) {
-  if (task.status === "queued" || task.status === "done") return "";
-  return `<span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span>`;
 }
 
 function taskPriorityBadgeHTML(task) {
@@ -1329,7 +2156,7 @@ function flowColumnHTML(flowState, items) {
 function flowCardHTML(item) {
   const { task, list } = item;
   return `
-    <li class="flow-card ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
+    <li class="flow-card status-${task.status || "new"}" draggable="true" data-task="${task.id}">
       <button class="task-open flow-card-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <span class="flow-card-title">${escapeHTML(task.title)}</span>
         <span class="flow-card-meta"><span>${escapeHTML(list.name)}</span>${task.scheduledDate ? `<span>${formatTaskDate(task.scheduledDate)}</span>` : ""}${taskAssigneeHTML(task, true)}</span>
@@ -1341,7 +2168,7 @@ function calendarHTML(board) {
   const days = weekDays();
   const tasks = allTasks(board);
   return `
-    <section class="week-calendar">
+    <section class="week-calendar" aria-label="Board calendar">
       <div class="calendar-toolbar">
         <button class="icon-btn" id="previous-week" title="Previous week">${icon("chevronLeft")}</button>
         <button class="plain-btn" id="current-week">This week</button>
@@ -1374,8 +2201,7 @@ function calendarDayHTML(day, tasks) {
 function calendarTaskHTML(item) {
   const { task, list } = item;
   return `
-    <li class="task calendar-task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
+    <li class="task calendar-task action status-${task.status || "new"}" draggable="true" data-task="${task.id}">
       <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <div class="task-title">${escapeHTML(task.title)}</div>
         <span class="task-list-name">${escapeHTML(list.name)}</span>
@@ -1396,78 +2222,18 @@ function todayHTML(board) {
     </section>`;
 }
 
-function detailHTML(task) {
-  const list = state.board.buckets.find(item => item.id === task.bucketId);
-  return `
-    <div class="detail-overlay" data-detail-overlay>
-      <section class="detail" role="dialog" aria-modal="true" aria-labelledby="detail-heading">
-        <header class="detail-head">
-          <div class="detail-context"><span>${escapeHTML(list?.name || "Item")}</span><span aria-hidden="true">/</span><b id="detail-heading">Edit item</b></div>
-          <button class="detail-close" type="button" data-close-detail aria-label="Close editor" title="Close">${icon("x")}</button>
-        </header>
-        <form id="detail-form">
-          <div class="detail-body">
-            <label class="sr-only" for="detail-title">Title</label>
-            <input class="detail-title" id="detail-title" name="title" type="text" value="${escapeAttr(task.title)}" placeholder="Item title" autocomplete="off" required>
-            <label class="sr-only" for="detail-description">Description</label>
-            <textarea class="detail-description" id="detail-description" name="description" placeholder="Add a description…">${escapeHTML(task.description || "")}</textarea>
-            <div class="detail-properties" aria-label="Item properties">
-              <div class="field"><label for="detail-status">State</label><select id="detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
-              <div class="field"><label for="detail-priority">Priority</label><select id="detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
-              <div class="field"><label for="detail-assignee">Agent</label><select id="detail-assignee" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
-              <div class="field"><label>Location</label><button class="location-button" id="open-move" type="button"><span>${escapeHTML(state.board.name)} / ${escapeHTML(list?.name || "List")}</span><b>Move…</b></button></div>
-              <div class="field"><label for="detail-date">Plan for</label><input id="detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
-            </div>
-            <section class="move-panel" id="move-panel" aria-labelledby="move-heading" hidden>
-              <div class="move-panel-head"><div><span>Change location</span><h3 id="move-heading">Move item</h3></div><button class="detail-close" id="close-move" type="button" aria-label="Close move options">${icon("x")}</button></div>
-              <div class="move-fields">
-                <div class="field"><label for="move-board">Board</label><select id="move-board">${state.boards.map(board => `<option value="${board.id}" ${board.id === state.board.id ? "selected" : ""}>${escapeHTML(board.name)}</option>`).join("")}</select></div>
-                <div class="field"><label for="move-list">List</label><select id="move-list">${moveListOptionsHTML(state.board, task)}</select></div>
-                <div class="field"><label for="move-position">Position</label><select id="move-position">${movePositionOptionsHTML(list, task)}</select></div>
-              </div>
-              <div class="move-panel-actions"><button class="primary" id="move-item" type="button">Move item</button></div>
-            </section>
-            <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
-          </div>
-          <footer class="detail-actions">
-            <button class="danger" type="button" id="delete-task">Delete item</button>
-            <div>
-              <button class="secondary" type="button" data-close-detail>Cancel</button>
-              <button class="primary" type="submit">Save changes</button>
-            </div>
-          </footer>
-        </form>
-      </section>
-    </div>`;
-}
-
 function agentOptionsHTML(selectedID = "") {
   const selectedExists = state.agents.some(agent => agent.id === selectedID);
   return [
-    `<option value="" ${selectedID ? "" : "selected"}>Unassigned</option>`,
+    `<option value="" ${selectedID ? "" : "selected"}>No agent</option>`,
     ...state.agents
-      .filter(agent => !agent.deletedAt || agent.id === selectedID)
-      .map(agent => `<option value="${escapeAttr(agent.id)}" ${agent.id === selectedID ? "selected" : ""} ${agent.deletedAt ? "disabled" : ""}>${escapeHTML(agent.displayName)}${agent.deletedAt ? " (inactive)" : ""}</option>`),
+      .filter(agent => (!agent.archivedAt && !agent.deletedAt) || agent.id === selectedID)
+      .map(agent => {
+        const inactive = agent.archivedAt || agent.deletedAt;
+        return `<option value="${escapeAttr(agent.id)}" ${agent.id === selectedID ? "selected" : ""} ${inactive ? "disabled" : ""}>${escapeHTML(agent.displayName)}${inactive ? " (inactive)" : ""}</option>`;
+      }),
     selectedID && !selectedExists ? `<option value="${escapeAttr(selectedID)}" selected>Assigned agent unavailable</option>` : "",
   ].join("");
-}
-
-function moveListOptionsHTML(board, task, selectedID = task.bucketId) {
-  return (board?.buckets || []).map(list => {
-    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-    const full = task.kind === "action" && !task.done && list.id !== task.bucketId && (list.openCount || 0) >= limit;
-    return `<option value="${list.id}" ${list.id === selectedID ? "selected" : ""} ${full ? "disabled" : ""}>${escapeHTML(list.name)}${full ? ` (${list.openCount}/${limit} full)` : ""}</option>`;
-  }).join("");
-}
-
-function movePositionOptionsHTML(list, task) {
-  const listTasks = list?.tasks || [];
-  const tasks = listTasks.filter(item => item.id !== task.id);
-  const currentIndex = list?.id === task.bucketId ? Math.max(0, listTasks.findIndex(item => item.id === task.id)) : tasks.length;
-  return Array.from({ length: tasks.length + 1 }, (_, index) => {
-    const suffix = index === 0 ? " (top)" : index === tasks.length ? " (bottom)" : "";
-    return `<option value="${index}" ${index === currentIndex ? "selected" : ""}>${index + 1}${suffix}</option>`;
-  }).join("");
 }
 
 function statusOptionsHTML(selected) {
@@ -1475,7 +2241,7 @@ function statusOptionsHTML(selected) {
 }
 
 function statusLabel(status) {
-  return FLOW_STATES.find(item => item.value === status)?.label || "Ready";
+  return FLOW_STATES.find(item => item.value === status)?.label || "New";
 }
 
 function footerHTML(board, todayMode) {
@@ -1514,6 +2280,7 @@ function agentsHTML() {
             ${!onNew && active.length ? `<a class="primary agents-new-action ${limitReached ? "disabled" : ""}" href="${NEW_AGENT_PATH}" id="new-agent-link" ${limitReached ? 'aria-disabled="true" aria-describedby="agents-limit"' : ""}>${icon("plus")}<span>New agent</span></a>` : ""}
           </header>
           ${statusErrorHTML(state.error)}
+          ${state.agentLifecycleNotice && !onNew ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentLifecycleNotice)}</p>` : ""}
           ${state.agentsLoadState === "loading" ? agentsLoadingHTML() : ""}
           ${state.agentsLoadState === "error" ? agentsErrorHTML() : ""}
           ${state.agentsLoadState === "ready" && onNew ? newAgentHTML(limitReached) : ""}
@@ -1574,9 +2341,9 @@ function agentRowHTML(agent) {
   const counts = agent.workCounts || {};
   const assigned = Number(counts.ready || 0) + Number(counts.working || 0) + Number(counts.review || 0);
   const countParts = [
-    counts.ready ? formatCount(counts.ready, "ready item", "ready items") : "",
-    counts.working ? formatCount(counts.working, "working item", "working items") : "",
-    counts.review ? formatCount(counts.review, "review item", "review items") : "",
+    counts.ready ? formatCount(counts.ready, "open card", "open cards") : "",
+    counts.working ? formatCount(counts.working, "working card", "working cards") : "",
+    counts.review ? formatCount(counts.review, "review card", "review cards") : "",
   ].filter(Boolean);
   const archived = stateLabel === "Archived";
   return `
@@ -1618,13 +2385,12 @@ function agentDetailHTML() {
   return `
     <section class="shell agents-shell theme-${theme}">
       ${appSidebarHTML({ theme, agentsCurrent: true })}
-      <main class="agents-main">
-        <div class="agents-wrap agent-detail-wrap">
+      <main class="${state.selectedTask ? "main workspace-main card-detail-main agent-task-main" : "agents-main"}">
+        ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : `<div class="agents-wrap agent-detail-wrap">
           <a class="back-link" href="${AGENTS_PATH}" id="agent-detail-back">${icon("chevronLeft")}<span>Agents</span></a>
           ${agentDetailBodyHTML()}
-        </div>
+        </div>`}
       </main>
-      ${state.selectedTask ? detailHTML(state.selectedTask) : ""}
       ${state.agentAssignOpen ? assignWorkHTML() : ""}
       ${state.agentLifecycleConfirm ? agentLifecycleConfirmHTML() : ""}
     </section>`;
@@ -1695,6 +2461,7 @@ function agentDetailBodyHTML() {
         <p>This agent cannot connect or receive new work. Its assigned task history stays available.</p>
       </section>` : ""}
     ${state.agentAssignNotice ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentAssignNotice)}</p>` : ""}
+    <p class="status-error" role="alert" data-agent-task-mutation-error ${state.agentTaskMutationError ? "" : "hidden"}>${escapeHTML(state.agentTaskMutationError)}</p>
     <section id="agent-panel-overview" class="agent-tab-panel" role="tabpanel" aria-labelledby="agent-tab-overview" tabindex="0" ${current === "overview" ? "" : "hidden"}>
       ${current === "overview" ? agentOverviewHTML(agent) : ""}
     </section>
@@ -1734,7 +2501,12 @@ function agentSettingsHTML(agent) {
       <header><div><p class="eyebrow">Lifecycle</p><h2 id="agent-lifecycle-heading">${archived ? "Restore identity" : "Archive agent"}</h2></div>${icon("archive")}</header>
       <p>${archived ? "Restore this identity as Needs connection. Historical assignments remain attached." : "Archiving removes this agent from assignment choices and revokes every credential. Review and Done history remains attached."}</p>
       <div class="agent-settings-actions"><button class="${archived ? "secondary" : "danger"}" id="${archived ? "restore-agent" : "archive-agent"}" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>${archived ? "Restore agent" : "Archive agent"}</button></div>
-    </section>`;
+    </section>
+    ${archived ? `<section class="agent-settings-card agent-danger-zone" aria-labelledby="agent-delete-heading">
+      <header><div><p class="eyebrow">Danger zone</p><h2 id="agent-delete-heading">Permanently delete agent</h2></div>${icon("trash")}</header>
+      <p>Delete this identity and every credential. Historical tasks remain, but their agent assignment is cleared. This cannot be undone.</p>
+      <div class="agent-settings-actions"><button class="danger" id="delete-agent" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>Delete permanently</button></div>
+    </section>` : ""}`;
 }
 
 function agentRotationResultHTML(agent, result) {
@@ -1755,6 +2527,13 @@ function agentLifecycleConfirmHTML() {
   const action = state.agentLifecycleConfirm;
   const pending = Boolean(state.agentLifecyclePending);
   const conflict = state.agentArchiveConflict;
+  const conflictSummary = conflict
+    ? [
+      formatCount(conflict.new, "New card", "New cards"),
+      formatCount(conflict.ready, "Ready card", "Ready cards"),
+      formatCount(conflict.working, "In Progress card", "In Progress cards"),
+    ].filter((label, index) => [conflict.new, conflict.ready, conflict.working][index] > 0).join(", ")
+    : "";
   const config = {
     rotate: {
       title: agentConnectionState(agent) === "Connected" ? "Rotate credential?" : "Create credential?",
@@ -1769,10 +2548,10 @@ function agentLifecycleConfirmHTML() {
       confirm: "Revoke credential",
     },
     archive: {
-      title: conflict ? "Open work is still assigned." : "Archive this agent?",
+      title: conflict ? "Active work is still assigned." : "Archive this agent?",
       body: conflict
-        ? `${formatCount(conflict.ready, "Ready item", "Ready items")} and ${formatCount(conflict.working, "Working item", "Working items")} must be unassigned. Review and Done history will remain attached.`
-        : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for Ready and Working work.",
+        ? `${conflictSummary} must be unassigned. Review and Done history will remain attached.`
+        : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for New, Ready, and In Progress cards.",
       confirm: conflict ? "Unassign open work and archive" : "Archive agent",
     },
     restore: {
@@ -1780,11 +2559,16 @@ function agentLifecycleConfirmHTML() {
       body: "It will return as Needs connection and use one active agent slot. Existing credentials stay revoked.",
       confirm: "Restore agent",
     },
+    delete: {
+      title: "Permanently delete this agent?",
+      body: "This cannot be undone. The identity and every credential will be deleted. Historical tasks will remain, but their agent assignment will be cleared.",
+      confirm: "Delete permanently",
+    },
   }[action];
   return `
     <div class="detail-overlay agent-lifecycle-overlay">
       <section class="agent-lifecycle-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-lifecycle-confirm-heading" ${pending ? 'aria-busy="true"' : ""}>
-        <header><span class="agent-state-icon">${icon(action === "rotate" ? "key" : action === "restore" ? "bot" : "archive")}</span><div><h2 id="agent-lifecycle-confirm-heading">${escapeHTML(config.title)}</h2><p>${escapeHTML(config.body)}</p></div></header>
+        <header><span class="agent-state-icon">${icon(action === "rotate" ? "key" : action === "restore" ? "bot" : action === "delete" ? "trash" : "archive")}</span><div><h2 id="agent-lifecycle-confirm-heading">${escapeHTML(config.title)}</h2><p>${escapeHTML(config.body)}</p></div></header>
         ${pending ? '<p class="agent-lifecycle-pending" id="agent-lifecycle-pending" role="status" tabindex="-1">Working… Keep this page open.</p>' : ""}
         ${state.agentLifecycleError ? `<p class="status-error" role="alert">${escapeHTML(state.agentLifecycleError)}</p>` : ""}
         <footer><button class="secondary" id="cancel-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>Cancel</button><button class="${action === "rotate" || action === "restore" ? "primary" : "danger"}" id="confirm-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>${pending ? "Working…" : escapeHTML(config.confirm)}</button></footer>
@@ -1810,7 +2594,7 @@ function agentOverviewHTML(agent) {
         <div class="agent-no-current">${icon("inboxTray")}<p>${escapeHTML(agent.displayName)} has no active work.</p></div>`}
     </section>
     <div class="agent-work-groups">
-      ${agentWorkSectionHTML("Ready", "Work assigned and ready to pick up.", work.ready, work.totals?.ready, "queued")}
+      ${agentWorkSectionHTML("Ready", "Cards assigned and ready to pick up.", work.ready, work.totals?.ready, "queued")}
       ${agentWorkSectionHTML("Review", "Work waiting for human review.", work.review, work.totals?.review, "needs_review")}
       ${agentWorkSectionHTML("Recently completed", "Current completed tasks, sorted by their latest update. This is not run history.", work.recentlyCompleted, work.totals?.completed, "done")}
     </div>
@@ -1852,8 +2636,9 @@ function agentWorkPageHTML(agent) {
     return `<section class="agents-state agent-detail-state"><h2>Work couldn’t be loaded.</h2><button class="secondary" id="retry-agent-detail" type="button">Try again</button></section>`;
   }
   const groups = [
+    ["New", "new"],
     ["Ready", "queued"],
-    ["Working", "working"],
+    ["In Progress", "working"],
     ["Review", "needs_review"],
     ["Completed", "done"],
   ];
@@ -1864,7 +2649,7 @@ function agentWorkPageHTML(agent) {
         <span>${Number(page.total || 0)}</span>
       </header>
       ${page.items?.length ? groups.map(([label, status]) => {
-        const items = page.items.filter(item => status === "done" ? item.done || item.status === "done" : !item.done && item.status === status);
+        const items = page.items.filter(item => item.status === status);
         return items.length ? `<section class="agent-page-group"><h3>${label}</h3><div class="agent-work-list">${items.map(agentWorkItemHTML).join("")}</div></section>` : "";
       }).join("") : `<div class="agents-empty agent-work-page-empty"><span class="agent-state-icon">${icon("inboxTray")}</span><h2>No assigned work.</h2><p>${escapeHTML(agent.displayName)} has no current or completed task data.</p></div>`}
       ${page.total ? `
@@ -1880,12 +2665,8 @@ function assignWorkHTML() {
   const agent = state.agentDetail.agent;
   const draft = state.agentAssignDraft || {};
   const selectedBoardID = state.agentAssignBoardID || state.board?.id || state.boards[0]?.id || "";
-  const selectedBoard = state.board?.id === selectedBoardID ? state.board : null;
-  const lists = selectedBoard?.buckets || [];
-  const availableLists = lists.filter(list => {
-    const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-    return (list.openCount || 0) < limit;
-  });
+  const lists = assignmentListsForBoard(selectedBoardID);
+  const availableLists = lists;
   return `
     <div class="detail-overlay" data-assign-overlay>
       <section class="detail assign-work-dialog" role="dialog" aria-modal="true" aria-labelledby="assign-work-heading">
@@ -1902,11 +2683,7 @@ function assignWorkHTML() {
             <textarea class="detail-description" id="assign-description" name="description" placeholder="Add a description…">${escapeHTML(draft.description || "")}</textarea>
             <div class="detail-properties" aria-label="Item properties">
               <div class="field"><label for="assign-board">Board</label><select id="assign-board" name="boardId">${state.boards.map(board => `<option value="${escapeAttr(board.id)}" ${board.id === selectedBoardID ? "selected" : ""}>${escapeHTML(board.name)}</option>`).join("")}</select></div>
-              <div class="field"><label for="assign-list">List</label><select id="assign-list" name="bucketId" ${availableLists.length ? "" : "disabled"}>${lists.map(list => {
-                const limit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-                const full = (list.openCount || 0) >= limit;
-                return `<option value="${escapeAttr(list.id)}" ${list.id === draft.bucketId ? "selected" : ""} ${full ? "disabled" : ""}>${escapeHTML(list.name)}${full ? ` (${list.openCount}/${limit} full)` : ""}</option>`;
-              }).join("") || '<option value="">No available lists</option>'}</select></div>
+              <div class="field"><label for="assign-list">List</label><select id="assign-list" name="bucketId" ${availableLists.length ? "" : "disabled"}>${lists.map(list => `<option value="${escapeAttr(list.id)}" ${list.id === draft.bucketId ? "selected" : ""}>${escapeHTML(list.name)}</option>`).join("") || '<option value="">No available lists</option>'}</select></div>
               <div class="field"><label for="assign-date">Plan for</label><input id="assign-date" name="scheduledDate" type="date" value="${escapeAttr(draft.scheduledDate || "")}"></div>
             </div>
             <p class="error detail-error" id="assign-error" role="alert">${escapeHTML(state.agentAssignError)}</p>
@@ -1921,6 +2698,11 @@ function assignWorkHTML() {
         </form>
       </section>
     </div>`;
+}
+
+function assignmentListsForBoard(boardID) {
+  if (!boardID) return [];
+  return state.workspaceLists.filter(list => list.boardId === boardID);
 }
 
 function formatUpdatedAt(value) {
@@ -2112,6 +2894,15 @@ function settingsHTML() {
     <section class="settings-page theme-${theme}">
       <aside class="sidebar settings-sidebar">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
+        ${globalNewTaskButtonHTML()}
+        ${newTaskRecoveryNoticeHTML()}
+        <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Focus">
+          <h3>Focus</h3>
+          <div class="pages task-nav-pages">
+            <a class="nav-link" href="${TASKS_PATH}?view=table">${icon("rows")}<span>All cards</span></a>
+          </div>
+        </section>
+        ${boardsNavigationHTML()}
         <p class="settings-sidebar-title">Account settings</p>
         <nav class="settings-nav" aria-label="Settings">
           ${SETTINGS_PAGES.map(item => `<a class="page-row icon-label settings-nav-link ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" ${item.id === page.id ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${item.label}</span></a>`).join("")}
@@ -2133,60 +2924,7 @@ function settingsHTML() {
           ${content}
         </section>
       </main>
-    </section>`;
-}
-
-function boardSettingsHTML() {
-  const theme = currentTheme();
-  const board = state.board;
-  const maximum = accountLimits().activeItemsPerList;
-  return `
-    <section class="settings-page board-settings-page theme-${theme}">
-      <aside class="sidebar settings-sidebar board-settings-sidebar">
-        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-        <p class="settings-sidebar-title">Board settings</p>
-        <div class="board-settings-context">
-          ${icon("rows")}
-          <span>${escapeHTML(board.name)}</span>
-        </div>
-        <section class="settings-actions" aria-label="Board actions">
-          <button class="plain-btn icon-label" id="back-to-board">${icon("chevronLeft")}<span>Back to board</span></button>
-          <a class="plain-btn icon-label settings-account-link" href="${settingsPath()}" id="account-settings-link">${icon("user")}<span>Account settings</span></a>
-        </section>
-      </aside>
-      <main class="settings-main">
-        <section class="settings-panel">
-          <div class="settings-head board-settings-head">
-            <div>
-              <p>Board settings</p>
-              <h1>${escapeHTML(board.name)}</h1>
-              <p class="settings-description">Configuration here applies only to this board.</p>
-            </div>
-          </div>
-          <section class="settings-section" aria-labelledby="work-limits-heading">
-            <div class="settings-section-head">
-              <h2 id="work-limits-heading">Work limits</h2>
-              <p>Keep active work focused across every list on ${escapeHTML(board.name)}.</p>
-            </div>
-            <form id="board-limit-form" class="settings-card" novalidate>
-              <div class="settings-row">
-                <label class="settings-row-copy" for="settings-list-limit">
-                  <strong>Maximum active items</strong>
-                  <span>The number of open items allowed in each list. ${planLabel()} supports 1 to ${maximum}.</span>
-                </label>
-                <div class="settings-field-wrap settings-limit">
-                  <input id="settings-list-limit" aria-label="Max active items per list" type="number" inputmode="numeric" min="1" max="${maximum}" value="${board.maxTasksPerList || DEFAULT_LIST_LIMIT}" aria-describedby="settings-list-limit-error">
-                  <p class="field-error" id="settings-list-limit-error" role="alert"></p>
-                </div>
-              </div>
-              <div class="settings-card-actions">
-                ${settingsStatusHTML()}
-                <button class="primary settings-submit" type="submit" ${state.settingsPending === "board" ? "disabled" : ""}>${state.settingsPending === "board" ? "Saving…" : "Save limit"}</button>
-              </div>
-            </form>
-          </section>
-        </section>
-      </main>
+      ${workspaceListDialogHTML()}
     </section>`;
 }
 
@@ -2322,8 +3060,845 @@ function bindLanding() {
   revealEls.forEach(el => io.observe(el));
 }
 
+function bindWorkspace() {
+  document.onkeydown = null;
+  document.querySelectorAll("[data-open-task]").forEach(element => {
+    element.onclick = () => openTaskDetail(element.dataset.openTask, element);
+    if (!["BUTTON", "A"].includes(element.tagName)) element.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      element.click();
+    });
+  });
+  document.querySelectorAll("[data-task-row]").forEach(row => row.addEventListener("click", event => {
+    if (event.target.closest("button, a")) return;
+    row.querySelector("[data-open-task]")?.click();
+  }));
+  const viewTabs = [...document.querySelectorAll("[data-workspace-view]")];
+  const activateView = async element => {
+    const view = element.dataset.workspaceView;
+    const activationVersion = ++workspaceViewActivationVersion;
+    const query = new URLSearchParams(location.search);
+    query.set("view", view);
+    query.delete("group");
+    await navigate(`${location.pathname}?${query}`);
+    if (activationVersion !== workspaceViewActivationVersion) return;
+    document.querySelector(`[data-workspace-view="${view}"][aria-selected="true"]`)?.focus();
+  };
+  viewTabs.forEach((element, index) => {
+    element.onclick = () => activateView(element);
+    element.addEventListener("keydown", event => {
+      let targetIndex;
+      if (event.key === "ArrowRight") targetIndex = (index + 1) % viewTabs.length;
+      else if (event.key === "ArrowLeft") targetIndex = (index - 1 + viewTabs.length) % viewTabs.length;
+      else if (event.key === "Home") targetIndex = 0;
+      else if (event.key === "End") targetIndex = viewTabs.length - 1;
+      else return;
+      event.preventDefault();
+      activateView(viewTabs[targetIndex]);
+    });
+  });
+  document.querySelector("#workspace-filter-toggle")?.addEventListener("click", () => {
+    state.workspaceFiltersOpen = !state.workspaceFiltersOpen;
+    render();
+  });
+  document.querySelector("#workspace-filters")?.addEventListener("submit", event => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const query = new URLSearchParams();
+    if (state.workspaceScope !== "week" && state.workspaceView !== "table") query.set("view", state.workspaceView);
+    for (const name of ["q", "status", "priority", "assigneeAgentId", "children", "plannedFrom", "plannedTo"]) {
+      const value = String(data.get(name) || "").trim();
+      if (value) query.set(name, value);
+    }
+    navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
+  });
+  document.querySelector("#clear-workspace-filters")?.addEventListener("click", () => {
+    const query = new URLSearchParams();
+    if (state.workspaceScope !== "week" && state.workspaceView !== "table") query.set("view", state.workspaceView);
+    navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
+  });
+  document.querySelector("#new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
+  document.querySelector("#workspace-load-more")?.addEventListener("click", loadMoreWorkspaceTasks);
+  bindDrag();
+  bindWorkspaceDetail();
+}
+
+function agentWorkGroupForTask(task) {
+  if (task.status === "done") return "recentlyCompleted";
+  if (task.status === "working") return "working";
+  if (task.status === "needs_review") return "review";
+  if (task.status === "queued") return "ready";
+  return "";
+}
+
+function taskWithResolvedLocation(task) {
+  const list = state.workspaceLists.find(item => item.id === task.bucketId);
+  if (!list) return task;
+  const boardID = list.boardId || task.boardId;
+  const board = state.boards.find(item => item.id === boardID);
+  return {
+    ...task,
+    boardId: boardID,
+    boardName: board?.name || task.boardName,
+    bucketName: list.name,
+  };
+}
+
+function reconcileAgentTaskCaches(task, { deleted = false, previousTask = null } = {}) {
+  task = taskWithResolvedLocation(task);
+  previousTask = previousTask ? taskWithResolvedLocation(previousTask) : null;
+  const workPage = state.agentWorkPage;
+  const agentID = state.agentDetail?.agent?.id;
+  const pageIndex = workPage?.items?.findIndex(item => item.id === task.id) ?? -1;
+  const isAssigned = task.assigneeAgentId === agentID;
+  const wasAssigned = previousTask ? previousTask.assigneeAgentId === agentID : isAssigned;
+  let changed = false;
+  const decrementPageTotal = () => {
+    workPage.total = Math.max(0, Number(workPage.total || 0) - 1);
+    workPage.hasNext = Number(workPage.page || 1) * Number(workPage.pageSize || 50) < workPage.total;
+  };
+  if (pageIndex >= 0) {
+    changed = true;
+    const remainsAssigned = !deleted && isAssigned;
+    workPage.items = remainsAssigned
+      ? workPage.items.map(item => item.id === task.id ? { ...item, ...task } : item)
+      : workPage.items.filter(item => item.id !== task.id);
+    if (!remainsAssigned && !deleted) decrementPageTotal();
+  }
+  if (workPage && deleted && (wasAssigned || pageIndex >= 0)) {
+    changed = true;
+    decrementPageTotal();
+  }
+  if (workPage && pageIndex < 0 && previousTask && !deleted && wasAssigned !== isAssigned) {
+    changed = true;
+    workPage.total = Math.max(0, Number(workPage.total || 0) + (isAssigned ? 1 : -1));
+    workPage.hasNext = Number(workPage.page || 1) * Number(workPage.pageSize || 50) < workPage.total;
+  }
+
+  const groups = ["ready", "working", "review", "recentlyCompleted"];
+  const work = state.agentDetail?.work;
+  const parentMoved = !task.parentTaskId && previousTask && previousTask.bucketId !== task.bucketId;
+  const childLocation = parentMoved ? {
+    boardId: task.boardId,
+    boardName: task.boardName,
+    bucketId: task.bucketId,
+    bucketName: task.bucketName,
+    listName: task.bucketName,
+  } : null;
+  const moveChildren = items => (items || []).map(item => {
+    if (!childLocation || item.parentTaskId !== task.id) return item;
+    changed = true;
+    return { ...item, ...childLocation };
+  });
+  if (workPage) workPage.items = moveChildren(workPage.items);
+  if (!work) return changed;
+  const previousGroup = groups.find(group => (work[group] || []).some(item => item.id === task.id));
+  const previousItem = previousGroup ? work[previousGroup].find(item => item.id === task.id) : null;
+  changed ||= Boolean(previousGroup);
+  work.totals ||= {};
+  for (const group of groups) work[group] = (work[group] || []).filter(item => item.id !== task.id);
+  const totalKey = group => group === "recentlyCompleted" ? "completed" : group;
+  if (deleted) {
+    const countedGroup = previousGroup || (wasAssigned ? agentWorkGroupForTask(task) : "");
+    if (countedGroup) {
+      changed = true;
+      const key = totalKey(countedGroup);
+      work.totals[key] = Math.max(0, Number(work.totals[key] || 0) - 1);
+    }
+    return changed;
+  }
+
+  const previousCountedGroup = previousGroup || (previousTask && wasAssigned ? agentWorkGroupForTask(previousTask) : "");
+  const nextGroup = isAssigned ? agentWorkGroupForTask(task) : "";
+  if (previousGroup && nextGroup) work[nextGroup] = [{ ...previousItem, ...task }, ...work[nextGroup]];
+  if (previousCountedGroup && previousCountedGroup !== nextGroup) {
+    changed = true;
+    const key = totalKey(previousCountedGroup);
+    work.totals[key] = Math.max(0, Number(work.totals[key] || 0) - 1);
+  }
+  if (nextGroup && previousCountedGroup !== nextGroup) {
+    changed = true;
+    const key = totalKey(nextGroup);
+    work.totals[key] = Number(work.totals[key] || 0) + 1;
+  }
+
+  for (const group of groups) work[group] = moveChildren(work[group]);
+  return changed;
+}
+
+function taskDraftFromCurrentForm(task) {
+  const form = globalThis.document?.querySelector?.("#workspace-detail-form");
+  if (!form) return null;
+  const value = name => String((form.querySelector?.(`[name="${name}"]`) || form.elements?.namedItem?.(name))?.value || "");
+  return {
+    title: value("title"),
+    description: value("description"),
+    status: value("status") || task.status || "new",
+    bucketId: task.parentTaskId ? task.bucketId : value("bucketId"),
+    priority: value("priority"),
+    assigneeAgentId: value("assigneeAgentId"),
+    scheduledDate: value("scheduledDate"),
+  };
+}
+
+function preserveCurrentTaskDraft() {
+  if (!state.selectedTask) return false;
+  const draft = taskDraftFromCurrentForm(state.selectedTask);
+  if (!draft) return false;
+  state.taskDetailDrafts[state.selectedTask.id] = draft;
+  state.selectedTask = { ...state.selectedTask, ...draft };
+  return true;
+}
+
+function captureTaskDetailFocus() {
+  const documentRef = globalThis.document;
+  if (!documentRef) return null;
+  const active = documentRef.activeElement;
+  if (!active || !documentRef.querySelector("[data-detail-surface]")?.contains(active)) return null;
+  return {
+    id: active.id,
+    ariaLabel: active.getAttribute("aria-label"),
+    openTask: active.dataset?.openTask,
+  };
+}
+
+function restoreTaskDetailFocus(focus) {
+  const documentRef = globalThis.document;
+  if (!focus || !documentRef) return;
+  const element = focus.id ? documentRef.getElementById(focus.id)
+    : focus.openTask ? documentRef.querySelector(`[data-open-task="${focus.openTask}"]`)
+      : focus.ariaLabel ? [...documentRef.querySelectorAll("[aria-label]")].find(item => item.getAttribute("aria-label") === focus.ariaLabel) : null;
+  element?.focus();
+}
+
+function renderPreservingCurrentTaskDetail() {
+  const focus = captureTaskDetailFocus();
+  preserveCurrentTaskDraft();
+  render();
+  restoreTaskDetailFocus(focus);
+}
+
+function bindWorkspaceDetail(options = {}) {
+  if (!state.selectedTask) return;
+  const refresh = options.refresh || reload;
+  const handleError = err => options.handleError?.(err) || false;
+  const boundSessionVersion = authVersion;
+  const boundUserID = state.me?.id;
+  const boundRouteVersion = routeVersion;
+  const boundRoute = parseRoute(location.pathname);
+  const boundAgentID = ["agent-detail", "agent-work", "agent-settings"].includes(boundRoute.name)
+    ? state.agentDetail?.agent?.id || ""
+    : "";
+  const boundContextIsCurrent = () => {
+    if (!sessionIsCurrent(boundSessionVersion, boundUserID)) return false;
+    const currentRoute = parseRoute(location.pathname);
+    const sameAgentContext = boundAgentID
+      && ["agent-detail", "agent-work", "agent-settings"].includes(currentRoute.name)
+      && currentRoute.agentId === boundAgentID;
+    return boundRouteVersion === routeVersion || sameAgentContext;
+  };
+  const reportBackgroundMutationFailure = (action, taskTitle, err) => {
+    if (!boundContextIsCurrent()) return false;
+    if (handleError(err)) return true;
+    const message = `Couldn’t ${action} “${taskTitle}”: ${err.message}`;
+    const focus = state.selectedTask ? captureDetailFocus() : null;
+    if (state.selectedTask) preserveTaskDraft();
+    if (["agent-detail", "agent-work", "agent-settings"].includes(state.view)) {
+      state.agentTaskMutationError = message;
+      if (state.selectedTask) state.error = message;
+    } else state.error = message;
+    if (state.view === "agent-settings" && !state.selectedTask) {
+      syncAgentTaskMutationError();
+      return true;
+    }
+    render();
+    restoreDetailFocus(focus);
+    return true;
+  };
+  const reconcileLoadedTask = (task, { deleted = false, deferAgentRender = false, previousTask = null } = {}) => {
+    if (!boundContextIsCurrent()) return false;
+    const reconcile = items => (items || []).flatMap(item => item.id !== task.id ? [item] : deleted ? [] : [{ ...item, ...task }]);
+    state.workspaceTasks = reconcile(state.workspaceTasks);
+    state.selectedSubtasks = reconcile(state.selectedSubtasks);
+
+    const movedParent = !deleted && previousTask && !task.parentTaskId && previousTask.bucketId !== task.bucketId;
+    if (movedParent) {
+      const location = taskWithResolvedLocation(task);
+      const moveChildren = items => (items || []).map(item => item.parentTaskId === task.id ? {
+        ...item,
+        boardId: location.boardId,
+        bucketId: location.bucketId,
+        listName: location.bucketName,
+      } : item);
+      state.workspaceTasks = moveChildren(state.workspaceTasks);
+      state.selectedSubtasks = moveChildren(state.selectedSubtasks);
+      if (state.selectedTask?.parentTaskId === task.id) {
+        state.selectedTask = moveChildren([state.selectedTask])[0];
+      }
+    }
+
+    const agentCacheChanged = reconcileAgentTaskCaches(task, { deleted, previousTask });
+
+    if (!deferAgentRender && agentCacheChanged && !state.selectedTask && ["agent-detail", "agent-work"].includes(state.view)) {
+      const focusedTaskID = document.activeElement?.dataset?.openAgentTask || task.id;
+      state.agentTaskFocusID = focusedTaskID;
+      render();
+    }
+    return agentCacheChanged;
+  };
+  const taskDraftFromForm = taskDraftFromCurrentForm;
+  const preserveTaskDraft = preserveCurrentTaskDraft;
+  const reconcileReopenedTaskDetail = updated => {
+    if (state.selectedTask?.id !== updated.id) return;
+    const baseline = { ...state.selectedTask };
+    const live = taskDraftFromForm(baseline);
+    const merged = { ...baseline, ...updated };
+    if (!live) {
+      state.selectedTask = merged;
+      return;
+    }
+    const form = document.querySelector("#workspace-detail-form");
+    const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
+    for (const field of fields) {
+      if (String(live[field] || "") !== String(baseline[field] || "")) {
+        merged[field] = live[field];
+        continue;
+      }
+      if (!(field in updated)) continue;
+      const control = form?.querySelector(`[name="${field}"]`);
+      if (control && "value" in control) control.value = String(updated[field] || "");
+    }
+    state.selectedTask = merged;
+    state.taskDetailDrafts[updated.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
+  };
+  const captureDetailFocus = captureTaskDetailFocus;
+  const restoreDetailFocus = restoreTaskDetailFocus;
+  const refreshAfterSubtaskMutation = async focus => {
+    let latestFocus = focus;
+    try {
+      if (boundAgentID) preserveTaskDraft();
+      const refreshed = await refresh({
+        preserveTaskDetail: Boolean(boundAgentID),
+        beforeTaskDetailRender: () => {
+          latestFocus = captureDetailFocus() || latestFocus;
+          preserveTaskDraft();
+        },
+        afterTaskDetailRender: () => restoreDetailFocus(latestFocus),
+      });
+      if (refreshed !== false) restoreDetailFocus(latestFocus);
+      return refreshed;
+    } catch (err) {
+      if (!boundContextIsCurrent()) return false;
+      if (handleError(err)) return false;
+      latestFocus = captureDetailFocus() || latestFocus;
+      preserveTaskDraft();
+      state.error = `The card was updated, but this view couldn’t be refreshed: ${err.message}`;
+      render();
+      restoreDetailFocus(latestFocus);
+      return false;
+    }
+  };
+  const refreshAfterCommittedMutation = async (action, focus) => {
+    try {
+      const refreshed = await refresh();
+      if (refreshed !== false) restoreDetailFocus(focus);
+      return refreshed;
+    } catch (err) {
+      if (!boundContextIsCurrent()) return false;
+      if (handleError(err)) return false;
+      state.error = `The task was ${action}, but this view couldn’t be refreshed: ${err.message}`;
+      render();
+      restoreDetailFocus(focus);
+      return false;
+    }
+  };
+  const refreshCurrentAgentSurface = async () => {
+    if (!boundAgentID || !["agent-detail", "agent-work", "agent-settings"].includes(state.view) || !boundContextIsCurrent()) return false;
+    const refreshRouteVersion = routeVersion;
+    const refreshView = state.view;
+    if (refreshView === "agent-settings") {
+      const routeWasLoading = state.agentDetailLoadState === "loading";
+      try {
+        const [detailResult, listResult] = await Promise.allSettled([
+          routeWasLoading ? loadAgentDetail(boundAgentID, {
+            sessionVersion: boundSessionVersion,
+            userID: boundUserID,
+            expectedRouteVersion: refreshRouteVersion,
+          }) : Promise.resolve(true),
+          loadWorkspaceListIndex(refreshRouteVersion),
+        ]);
+        if (!boundContextIsCurrent() || state.view !== refreshView) return false;
+        if (detailResult.status === "rejected") throw detailResult.reason;
+        if (!detailResult.value) return false;
+        if (listResult.status === "fulfilled" && !listResult.value) return false;
+        const completeRouteLoad = routeWasLoading && state.agentDetailLoadState === "loading";
+        if (completeRouteLoad) state.agentDetailLoadState = "ready";
+        state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
+        syncWorkspaceListError();
+        if (completeRouteLoad) render();
+        return true;
+      } catch (err) {
+        if (!boundContextIsCurrent() || state.view !== refreshView) return false;
+        if (handleError(err)) return false;
+        if (routeWasLoading && state.agentDetailLoadState === "loading") {
+          state.agentDetail = null;
+          state.agentDetailLoadState = err.status === 404 ? "not-found" : err.status === 401 || err.status === 403 ? "unauthorized" : "error";
+          state.agentDetailError = err.message;
+          render();
+          return false;
+        }
+        state.workspaceListError = err.message;
+        syncWorkspaceListError();
+        return false;
+      }
+    }
+    const routeWasLoading = state.agentDetailLoadState === "loading";
+    try {
+      const [detailResult, listResult] = await Promise.allSettled([
+        loadAgentDetail(boundAgentID, {
+          includeWorkPage: refreshView === "agent-work",
+          page: workPageFromLocation(),
+          sessionVersion: boundSessionVersion,
+          userID: boundUserID,
+          expectedRouteVersion: refreshRouteVersion,
+        }),
+        loadWorkspaceListIndex(refreshRouteVersion),
+      ]);
+      if (!boundContextIsCurrent() || state.view !== refreshView) return false;
+      if (detailResult.status === "rejected") throw detailResult.reason;
+      if (!detailResult.value) return false;
+      state.agentDetailLoadState = "ready";
+      state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
+      syncWorkspaceListError();
+      clearResolvedAgentTaskRefreshError();
+      if (state.selectedTask) return true;
+      const agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || "";
+      const agentControlFocusID = agentTaskFocusID ? "" : document.activeElement?.id || "";
+      if (agentTaskFocusID) state.agentTaskFocusID = agentTaskFocusID;
+      render();
+      if (agentControlFocusID) document.getElementById(agentControlFocusID)?.focus();
+      return true;
+    } catch (err) {
+      if (!boundContextIsCurrent() || state.view !== refreshView) return false;
+      if (handleError(err)) return false;
+      if (routeWasLoading && state.agentDetailLoadState === "loading") {
+        state.agentDetail = null;
+        state.agentDetailLoadState = err.status === 404 ? "not-found" : err.status === 401 || err.status === 403 ? "unauthorized" : "error";
+        state.agentDetailError = err.message;
+        render();
+        return false;
+      }
+      state.agentTaskRefreshError = `The card was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      state.agentTaskMutationError = state.agentTaskRefreshError;
+      if (state.selectedTask) {
+        state.error = state.agentTaskMutationError;
+        syncTaskDetailError();
+      } else render();
+      return false;
+    }
+  };
+  const refreshCurrentTaskSurface = async () => {
+    const currentRoute = parseRoute(location.pathname);
+    if (currentRoute.name === "workspace") {
+      const mounted = state.view === "app" && Boolean(globalThis.document?.querySelector?.(".task-shell"));
+      return mounted ? refreshAfterTaskMutation(boundRouteVersion) : refreshCurrentWorkspaceListMetadata();
+    }
+    if (boundAgentID && currentRoute.agentId === boundAgentID) return refreshCurrentAgentSurface();
+    if (["settings", "agents", "agent-new", "agent-settings"].includes(currentRoute.name)) return refreshCurrentWorkspaceListMetadata();
+    if (!["agent-detail", "agent-work"].includes(currentRoute.name)) return true;
+    let focus = captureDetailFocus();
+    return refreshAgentSurface({
+      preserveTaskDetail: true,
+      beforeTaskDetailRender: () => {
+        focus = captureDetailFocus() || focus;
+        preserveTaskDraft();
+      },
+      afterTaskDetailRender: () => restoreDetailFocus(focus),
+    });
+  };
+  const close = async () => {
+    const currentRoute = parseRoute(location.pathname);
+    const closedTaskID = state.selectedTask?.id || "";
+    const refreshWorkspace = state.workspaceRefreshOnDetailClose && currentRoute.name === "workspace";
+    const refreshAgent = state.agentRefreshOnDetailClose === currentRoute.agentId
+      && ["agent-detail", "agent-work"].includes(currentRoute.name);
+    taskDetailVersion += 1;
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    state.selectedEntries = [];
+    state.cardEntryDraft = "";
+    state.cardEntryKind = "comment";
+    state.cardEntryPending = false;
+    state.cardEntryError = "";
+    state.cardEntryAttemptKey = "";
+    state.taskDetailDrafts = {};
+    state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
+    state.subtaskPending = false;
+    state.subtaskError = "";
+    if (refreshWorkspace) {
+      state.workspaceRefreshOnDetailClose = false;
+      state.workspaceLoading = true;
+      render();
+      try {
+        await reload();
+        document.querySelector(`[data-open-task="${CSS.escape(closedTaskID)}"]`)?.focus();
+      } catch (err) {
+        if (handleError(err)) return;
+        state.workspaceLoading = false;
+        state.error = err.message;
+        renderPreservingCurrentTaskDetail();
+      }
+      return;
+    }
+    if (refreshAgent) {
+      state.agentRefreshOnDetailClose = "";
+      state.agentTaskFocusID = closedTaskID;
+      render();
+      let detailFocus = captureDetailFocus();
+      let agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || closedTaskID;
+      await refreshAgentSurface({
+        preserveTaskDetail: true,
+        beforeTaskDetailRender: () => {
+          if (state.selectedTask) {
+            detailFocus = captureDetailFocus() || detailFocus;
+            preserveTaskDraft();
+            return;
+          }
+          agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || agentTaskFocusID;
+          state.agentTaskFocusID = agentTaskFocusID;
+        },
+        afterTaskDetailRender: () => restoreDetailFocus(detailFocus),
+      });
+      return;
+    }
+    render();
+    document.querySelector(`[data-open-task="${CSS.escape(closedTaskID)}"]`)?.focus();
+  };
+  document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
+  document.onkeydown = event => { if (event.key === "Escape") close(); };
+  document.querySelectorAll("[data-entry-kind]").forEach(element => element.addEventListener("click", () => {
+    preserveTaskDraft();
+    state.cardEntryDraft = document.querySelector("#card-entry-body")?.value || state.cardEntryDraft;
+    const nextKind = element.dataset.entryKind;
+    if (state.cardEntryKind !== nextKind) state.cardEntryAttemptKey = "";
+    state.cardEntryKind = nextKind;
+    render();
+    document.querySelector("#card-entry-body")?.focus();
+  }));
+  document.querySelector("#card-entry-body")?.addEventListener("input", event => {
+    if (state.cardEntryDraft !== event.currentTarget.value) state.cardEntryAttemptKey = "";
+    state.cardEntryDraft = event.currentTarget.value;
+  });
+  document.querySelector("#add-card-entry")?.addEventListener("click", async () => {
+    const taskID = state.selectedTask?.id;
+    const body = document.querySelector("#card-entry-body")?.value.trim() || "";
+    if (!taskID || !body || state.cardEntryPending) return;
+    const detailVersion = taskDetailVersion;
+    preserveTaskDraft();
+    state.cardEntryDraft = body;
+    state.cardEntryAttemptKey ||= newClientRequestKey();
+    state.cardEntryPending = true;
+    state.cardEntryError = "";
+    render();
+    try {
+      const entry = await api.post(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`, {
+        kind: state.cardEntryKind,
+        body,
+      }, { headers: { "Idempotency-Key": state.cardEntryAttemptKey } });
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        const currentRoute = parseRoute(location.pathname);
+        const currentAgentSurface = boundAgentID
+          && ["agent-detail", "agent-work"].includes(currentRoute.name)
+          && currentRoute.agentId === boundAgentID;
+        if (entry.kind === "output" && (boundRouteVersion === routeVersion || currentAgentSurface)) {
+          await refreshCurrentTaskSurface();
+        }
+        return;
+      }
+      state.selectedEntries = [...state.selectedEntries, entry];
+      state.cardEntryDraft = "";
+      state.cardEntryAttemptKey = "";
+      state.cardEntryPending = false;
+      if (entry.kind === "output") {
+        const status = entry.cardStatus || "needs_review";
+        const reviewReason = entry.cardReviewReason || (status === "needs_review" ? "output" : "");
+        state.selectedTask = { ...state.selectedTask, status, reviewReason };
+        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, status, reviewReason } : item);
+        const currentRoute = parseRoute(location.pathname);
+        if (boundAgentID && ["agent-detail", "agent-work"].includes(currentRoute.name) && currentRoute.agentId === boundAgentID) {
+          state.agentRefreshOnDetailClose = boundAgentID;
+        } else {
+          state.workspaceRefreshOnDetailClose = true;
+        }
+      }
+      render();
+      document.querySelector("#card-entry-body")?.focus();
+    } catch (err) {
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
+      if (handleError(err)) return;
+      state.cardEntryPending = false;
+      state.cardEntryError = err.message;
+      render();
+      document.querySelector("#card-entry-body")?.focus();
+    }
+  });
+  document.querySelector("[data-open-parent]")?.addEventListener("click", event => {
+    preserveTaskDraft();
+    state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
+    state.subtaskError = "";
+    openTaskDetail(state.selectedTask.parentTaskId, event.currentTarget);
+  });
+  document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = () => {
+    preserveTaskDraft();
+    state.subtaskDraft = "";
+    state.subtaskCreateAttempt = null;
+    state.subtaskError = "";
+    openTaskDetail(element.dataset.openTask, element);
+  });
+  const subtaskControl = document.querySelector("#add-subtask");
+  const addSubtask = async () => {
+    if (!subtaskControl || state.subtaskPending) return;
+    const input = subtaskControl.querySelector('input[name="title"]');
+    const title = input.value.trim();
+    if (!title) return;
+    const parentID = state.selectedTask.id;
+    const detailVersion = taskDetailVersion;
+    preserveTaskDraft();
+    state.subtaskDraft = title;
+    state.subtaskPending = true;
+    state.subtaskError = "";
+    const idempotencyKey = subtaskCreateIdempotencyKey(parentID, title);
+    const attemptIsCurrent = () => state.subtaskCreateAttempt?.key === idempotencyKey;
+    input.readOnly = true;
+    const addButton = subtaskControl.querySelector("button");
+    addButton.disabled = true;
+    addButton.querySelector("span").textContent = "Adding…";
+    try {
+      const created = await api.post(
+        `/api/v1/tasks/${parentID}/subtasks`,
+        { title, kind: "action" },
+        { headers: { "Idempotency-Key": idempotencyKey } },
+      );
+      reconcileLoadedTask(created);
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        await refreshCurrentTaskSurface();
+        if (state.selectedTask?.id === parentID) {
+          const focus = captureDetailFocus();
+          preserveTaskDraft();
+          state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
+          if (attemptIsCurrent()) {
+            state.subtaskPending = false;
+            state.subtaskDraft = "";
+            state.subtaskCreateAttempt = null;
+          }
+          await refreshAfterSubtaskMutation(focus);
+        }
+        return;
+      }
+      if (attemptIsCurrent()) {
+        state.subtaskPending = false;
+        state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
+      }
+      state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
+      await refreshAfterSubtaskMutation({ openTask: created.id });
+    } catch (err) {
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+        reportBackgroundMutationFailure("add child card", title, err);
+        return;
+      }
+      if (!attemptIsCurrent()) {
+        reportBackgroundMutationFailure("add child card", title, err);
+        return;
+      }
+      if (handleError(err)) return;
+      state.subtaskPending = false;
+      state.subtaskError = err.message;
+      render();
+      document.querySelector('#add-subtask input[name="title"]')?.focus();
+    }
+  };
+  subtaskControl?.querySelector("button")?.addEventListener("click", addSubtask);
+  subtaskControl?.querySelector("input")?.addEventListener("input", event => {
+    if (event.currentTarget.value !== state.subtaskDraft) state.subtaskCreateAttempt = null;
+    state.subtaskDraft = event.currentTarget.value;
+  });
+  subtaskControl?.querySelector("input")?.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addSubtask();
+    }
+  });
+  document.querySelector("#delete-task")?.addEventListener("click", async () => {
+    if (!confirm("Delete this card and its child cards?")) return;
+    const taskID = state.selectedTask.id;
+    const taskTitle = state.selectedTask.title;
+    const parentTaskID = state.selectedTask.parentTaskId || "";
+    const deletedTasks = parentTaskID
+      ? [{ ...state.selectedTask }]
+      : [{ ...state.selectedTask }, ...state.selectedSubtasks.filter(item => item.parentTaskId === taskID).map(item => ({ ...item }))];
+    const detailVersion = taskDetailVersion;
+    state.agentTaskMutationError = "";
+    state.agentTaskRefreshError = "";
+    preserveTaskDraft();
+    try {
+      const deleted = await serializeTaskMutation(taskID, () => api.del(`/api/v1/tasks/${taskID}`));
+      if (!deleted) return;
+      const agentCacheChanged = deletedTasks.reduce((changed, task) => reconcileLoadedTask(task, { deleted: true, deferAgentRender: true }) || changed, false);
+      if (agentCacheChanged && !state.selectedTask && ["agent-detail", "agent-work"].includes(state.view)) {
+        state.agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || taskID;
+        render();
+      }
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        state.workspaceTasks = state.workspaceTasks.filter(item => item.id !== taskID);
+        state.selectedSubtasks = state.selectedSubtasks.filter(item => item.id !== taskID);
+        await refreshCurrentTaskSurface();
+        const selectedTaskID = state.selectedTask?.id || "";
+        const selectedTaskWasDeleted = selectedTaskID === taskID || state.selectedTask?.parentTaskId === taskID;
+        if (selectedTaskWasDeleted) {
+          taskDetailVersion += 1;
+          for (const task of deletedTasks) delete state.taskDetailDrafts[task.id];
+          delete state.taskDetailDrafts[selectedTaskID];
+          state.selectedTask = null;
+          state.selectedSubtasks = [];
+          state.subtaskDraft = "";
+          state.subtaskCreateAttempt = null;
+          state.subtaskPending = false;
+          state.subtaskError = "";
+          state.agentTaskFocusID = taskID;
+          render();
+          return;
+        }
+        if (state.selectedTask?.id !== taskID) return;
+        delete state.taskDetailDrafts[taskID];
+        state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
+        state.subtaskPending = false;
+        state.subtaskError = "";
+        if (parentTaskID) {
+          await openTaskDetail(parentTaskID);
+          await refreshAfterSubtaskMutation();
+          return;
+        }
+        taskDetailVersion += 1;
+        state.selectedTask = null;
+        state.selectedSubtasks = [];
+        state.taskDetailDrafts = {};
+        await refreshAfterCommittedMutation("deleted");
+        return;
+      }
+      if (parentTaskID) {
+        delete state.taskDetailDrafts[taskID];
+        state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
+        state.subtaskPending = false;
+        state.subtaskError = "";
+        await openTaskDetail(parentTaskID);
+        await refreshAfterSubtaskMutation();
+        return;
+      }
+      taskDetailVersion += 1;
+      state.selectedTask = null;
+      state.selectedSubtasks = [];
+      state.taskDetailDrafts = {};
+      state.subtaskDraft = "";
+      state.subtaskCreateAttempt = null;
+      state.subtaskPending = false;
+      state.subtaskError = "";
+      await refreshAfterCommittedMutation("deleted");
+    } catch (err) {
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        reportBackgroundMutationFailure("delete", taskTitle, err);
+        return;
+      }
+      if (handleError(err)) return;
+      state.error = err.message;
+      render();
+    }
+  });
+  document.querySelector("#workspace-detail-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const controls = [...event.currentTarget.querySelectorAll("input, textarea, select, button")];
+    const form = new FormData(event.currentTarget);
+    const taskID = state.selectedTask.id;
+    const taskTitle = String(form.get("title") || state.selectedTask.title);
+    const parentTaskID = state.selectedTask.parentTaskId || "";
+    const previousTask = { ...state.selectedTask };
+    const detailVersion = taskDetailVersion;
+    state.agentTaskMutationError = "";
+    state.agentTaskRefreshError = "";
+    preserveTaskDraft();
+    const submit = event.currentTarget.querySelector('button[type="submit"]');
+    controls.forEach(control => { control.disabled = true; });
+    submit.textContent = "Saving…";
+    try {
+      const input = {
+        title: form.get("title"), description: form.get("description"), status: form.get("status"),
+        priority: form.get("priority"), assigneeAgentId: form.get("assigneeAgentId"),
+        scheduledDate: form.get("scheduledDate"),
+      };
+      if (!parentTaskID) input.bucketId = form.get("bucketId");
+      const updated = await serializeTaskMutation(taskID, async ({ queued }) => {
+        if (!queued) return api.patch(`/api/v1/tasks/${taskID}/status`, input);
+        const current = await api.get(`/api/v1/tasks/${taskID}`);
+        const rebased = { status: current.status };
+        for (const field of ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
+          if (!(field in input)) continue;
+          const previousValue = String(previousTask[field] || "");
+          if (String(input[field] || "") !== previousValue) rebased[field] = input[field];
+        }
+        return api.patch(`/api/v1/tasks/${taskID}/status`, rebased);
+      });
+      if (!updated) return;
+      reconcileLoadedTask(updated, { previousTask });
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
+        state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
+        reconcileReopenedTaskDetail(updated);
+        await refreshCurrentTaskSurface();
+        return;
+      }
+      if (parentTaskID) {
+        delete state.taskDetailDrafts[taskID];
+        state.subtaskDraft = "";
+        state.subtaskCreateAttempt = null;
+        state.subtaskPending = false;
+        state.subtaskError = "";
+        await openTaskDetail(parentTaskID);
+        await refreshAfterSubtaskMutation();
+        return;
+      }
+      taskDetailVersion += 1;
+      state.selectedTask = null;
+      state.selectedSubtasks = [];
+      state.taskDetailDrafts = {};
+      state.subtaskDraft = "";
+      state.subtaskCreateAttempt = null;
+      state.subtaskPending = false;
+      state.subtaskError = "";
+      await refreshAfterCommittedMutation("saved");
+    } catch (err) {
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+        reportBackgroundMutationFailure("save", taskTitle, err);
+        return;
+      }
+      if (handleError(err)) return;
+      state.error = err.message;
+      render();
+    }
+  });
+  document.querySelector("#workspace-detail-title")?.focus();
+}
+
 function bindApp() {
   bindAppShell();
+  if (parseRoute(location.pathname).name === "workspace") {
+    bindWorkspace();
+    return;
+  }
   document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
     const notice = state.moveNotice;
     if (!notice) return;
@@ -2356,18 +3931,7 @@ function bindApp() {
     state.weekStart = dateKey(addDays(startOfWeek(new Date()), 7));
     render();
   });
-  const addListButton = document.querySelector("#add-list");
-  if (addListButton) addListButton.onclick = async () => {
-    if ((state.board.buckets || []).length >= state.maxListsPerBoard) return;
-    let list;
-    await runMutation(
-      async () => { list = await api.post(`/api/v1/boards/${state.board.id}/buckets`, { name: "New list" }); },
-      async () => loadBoards(state.board.id),
-    );
-    render();
-    if (list) document.querySelector(`[data-bucket="${list.id}"] input[data-bucket-name]`)?.focus();
-  };
-  document.querySelectorAll("[data-bucket-name]").forEach(el => el.addEventListener("change", async e => { await api.patch(`/api/v1/buckets/${el.dataset.bucketName}`, { name: e.target.value }); await reload(); }));
+  document.querySelectorAll("[data-bucket-name]").forEach(element => element.addEventListener("change", () => renameWorkspaceList(element)));
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
     const id = el.dataset.bucketGoal;
@@ -2395,7 +3959,6 @@ function bindApp() {
       });
     }, 300);
   }));
-  document.querySelectorAll("[data-delete-bucket]").forEach(el => el.onclick = async () => { if (confirm("Delete this list and its items?")) { await api.del(`/api/v1/buckets/${el.dataset.deleteBucket}`); await reload(); } });
   document.querySelectorAll("[data-add-task]").forEach(form => {
     form.addEventListener("submit", addTask);
     form.querySelector('input[name="title"]').addEventListener("keydown", event => {
@@ -2406,17 +3969,127 @@ function bindApp() {
   });
   document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => openTaskDetail(el.dataset.openTask, el));
   document.querySelectorAll("[data-load-completed]").forEach(el => el.onclick = () => loadCompletedHistory(el.dataset.loadCompleted, el));
-  document.querySelectorAll("[data-toggle-done]").forEach(el => el.onclick = async event => {
-    event.stopPropagation();
-    const task = findTask(el.dataset.toggleDone);
-    await runMutation(() => api.patch(`/api/v1/tasks/${task.id}`, { done: !task.done }), reload);
-  });
   bindDrag();
-  bindDetail();
+  bindWorkspaceDetail();
+}
+
+function clearTaskMutationError(taskID) {
+  const ownedError = state.taskMutationError?.taskID === taskID ? state.taskMutationError.message : "";
+  if (ownedError) state.taskMutationError = null;
+  if (ownedError && state.error === ownedError) {
+    state.error = "";
+    if (state.selectedTask) syncTaskDetailError();
+  }
+}
+
+async function refreshAfterTaskMutation(startedRouteVersion) {
+  const currentRoute = parseRoute(location.pathname);
+  if (currentRoute.name === "workspace") {
+    if (state.view !== "app" || !globalThis.document?.querySelector?.(".task-shell")) return refreshCurrentWorkspaceListMetadata();
+    if (state.selectedTask) {
+      state.workspaceRefreshOnDetailClose = true;
+      return;
+    }
+  } else if (["agent-detail", "agent-work"].includes(currentRoute.name)) {
+    if (state.selectedTask) {
+      state.agentRefreshOnDetailClose = currentRoute.agentId;
+      return true;
+    }
+    let focus = captureTaskDetailFocus();
+    return refreshAgentSurface({
+      preserveTaskDetail: true,
+      beforeTaskDetailRender: () => {
+        focus = captureTaskDetailFocus() || focus;
+        preserveCurrentTaskDraft();
+      },
+      afterTaskDetailRender: () => restoreTaskDetailFocus(focus),
+    });
+  } else if (["settings", "agents", "agent-new", "agent-settings"].includes(currentRoute.name)) {
+    return refreshCurrentWorkspaceListMetadata();
+  } else if (state.selectedTask || startedRouteVersion !== routeVersion) {
+    return true;
+  }
+  const refreshRouteVersion = routeVersion;
+  try {
+    return await reload();
+  } catch (err) {
+    if (refreshRouteVersion !== routeVersion) return false;
+    state.workspaceLoading = false;
+    state.error = `The card was updated, but this view couldn’t be refreshed: ${err.message}`;
+    renderPreservingCurrentTaskDetail();
+    return false;
+  }
+}
+
+function reconcileTaskMutation(updated, previousTask) {
+  const reconciled = { ...updated };
+  const merge = items => (items || []).map(item => item.id === reconciled.id ? { ...item, ...reconciled } : item);
+  state.workspaceTasks = merge(state.workspaceTasks);
+  state.selectedSubtasks = merge(state.selectedSubtasks);
+  for (const list of state.board?.buckets || []) list.tasks = merge(list.tasks);
+  reconcileAgentTaskCaches(reconciled, { previousTask });
+
+  const movedParent = !reconciled.parentTaskId && previousTask && previousTask.bucketId !== reconciled.bucketId;
+  if (movedParent) {
+    const location = taskWithResolvedLocation(reconciled);
+    const moveChildren = items => (items || []).map(item => item.parentTaskId === reconciled.id ? {
+      ...item,
+      boardId: location.boardId,
+      boardName: location.boardName,
+      bucketId: location.bucketId,
+      bucketName: location.bucketName,
+      listName: location.bucketName,
+    } : item);
+    state.workspaceTasks = moveChildren(state.workspaceTasks);
+    state.selectedSubtasks = moveChildren(state.selectedSubtasks);
+    if (state.selectedTask?.parentTaskId === reconciled.id) {
+      const draft = taskDraftFromCurrentForm(state.selectedTask) || state.taskDetailDrafts[state.selectedTask.id] || {};
+      state.selectedTask = { ...moveChildren([state.selectedTask])[0], ...draft, bucketId: location.bucketId };
+      state.taskDetailDrafts[state.selectedTask.id] = { ...draft, bucketId: location.bucketId };
+      const listControl = globalThis.document?.querySelector?.("#workspace-detail-list");
+      if (listControl) listControl.value = location.bucketId;
+      const context = globalThis.document?.querySelector?.(".detail-context span");
+      if (context) context.textContent = location.bucketName || "Inbox";
+    }
+  }
+
+  if (previousTask.status !== reconciled.status && (previousTask.status === "done" || reconciled.status === "done")) {
+    const list = state.workspaceLists.find(item => item.id === (reconciled.bucketId || previousTask.bucketId));
+    if (list) list.openCount = Math.max(0, Number(list.openCount || 0) + (reconciled.status === "done" ? -1 : 1));
+  }
+
+  if (state.selectedTask?.id !== reconciled.id) return;
+  const baseline = state.selectedTask;
+  const live = taskDraftFromCurrentForm(baseline);
+  const statusControl = globalThis.document?.querySelector?.('#workspace-detail-form [name="status"]');
+  const liveStatus = live?.status || statusControl?.value || baseline.status;
+  const statusWasEdited = Boolean(statusControl) && liveStatus !== baseline.status;
+  const merged = { ...baseline, ...reconciled };
+  const form = globalThis.document?.querySelector?.("#workspace-detail-form");
+  for (const field of ["title", "description", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
+    if (live && String(live[field] || "") !== String(baseline[field] || "")) {
+      merged[field] = live[field];
+      continue;
+    }
+    if (!(field in reconciled)) continue;
+    const control = form?.querySelector?.(`[name="${field}"]`);
+    if (control && "value" in control) control.value = String(reconciled[field] || "");
+  }
+  merged.status = statusWasEdited ? liveStatus : reconciled.status;
+  state.selectedTask = merged;
+  if (statusControl && !statusWasEdited) statusControl.value = reconciled.status;
+  const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
+  state.taskDetailDrafts[reconciled.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
 }
 
 function bindAppShell() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  document.querySelectorAll(".task-nav-pages a, .agent-nav-link").forEach(el => el.addEventListener("click", event => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const target = new URL(el.href, location.origin);
+    navigate(`${target.pathname}${target.search}`);
+  }));
   const sidebar = document.querySelector(".sidebar");
   const sidebarToggle = document.querySelector("#sidebar-toggle");
   sidebarToggle.onclick = () => {
@@ -2425,10 +4098,23 @@ function bindAppShell() {
     sidebarToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
   };
   bindThemeControls();
+  bindNewTaskRecoveryActions();
+  bindGlobalNewTask();
+  bindWorkspaceListControl();
+  bindBoardNavigationControls(sidebar);
+  document.querySelector("#agents-nav")?.addEventListener("click", event => {
+    event.preventDefault();
+    navigate(AGENTS_PATH);
+  });
+  document.querySelector("#settings").onclick = openSettings;
+  document.querySelector("#logout").onclick = logout;
+  return sidebar;
+}
+
+function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar")) {
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
-  document.querySelectorAll("[data-board-settings]").forEach(el => el.onclick = () => navigate(boardSettingsPath(el.dataset.boardSettings)));
   document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
-    const keepSidebarOpen = sidebar.classList.contains("open");
+    const keepSidebarOpen = sidebar?.classList.contains("open");
     state.renamingBoardId = el.dataset.startRenameBoard;
     renderKeepingSidebarOpen(keepSidebarOpen);
     const input = document.querySelector(`[data-rename-board="${state.renamingBoardId}"] input[name="name"]`);
@@ -2436,20 +4122,277 @@ function bindAppShell() {
     input?.select();
   });
   document.querySelectorAll("[data-rename-board]").forEach(form => bindBoardRename(form));
-  document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = async () => deleteBoard(el.dataset.deleteBoard));
-  document.querySelector("#agents-nav")?.addEventListener("click", event => {
-    event.preventDefault();
-    navigate(AGENTS_PATH);
-  });
-  document.querySelector("#settings").onclick = openSettings;
-  document.querySelector("#logout").onclick = logout;
-  document.querySelector("#new-board").onclick = async () => {
-    if (state.boards.length >= state.maxBoards) return;
-    const result = await createDefaultBoard();
-    if (result.complete) navigate(boardPath(result.board.id));
+  document.querySelectorAll("[data-delete-board]").forEach(el => el.onclick = () => openBoardDeleteDialog(el.dataset.deleteBoard));
+  const newBoardButton = document.querySelector("#new-board");
+  if (newBoardButton) newBoardButton.onclick = async () => {
+    if (state.boardCreatePending || state.boards.length >= state.maxBoards) return;
+    const sessionVersion = authVersion;
+    const userID = state.me?.id;
+    const startedRouteVersion = routeVersion;
+    state.boardCreatePending = true;
+    render();
+    let result;
+    try {
+      result = await createDefaultBoard();
+    } catch (err) {
+      if (sessionIsCurrent(sessionVersion, userID)) state.error = err.message;
+    }
+    if (!sessionIsCurrent(sessionVersion, userID)) return;
+    state.boardCreatePending = false;
+    if (startedRouteVersion !== routeVersion) {
+      const currentButton = document.querySelector("#new-board");
+      if (currentButton) currentButton.disabled = state.boards.length >= state.maxBoards;
+      return;
+    }
+    if (result?.complete) navigate(boardPath(result.board.id));
     else render();
   };
-  return sidebar;
+}
+
+async function renameWorkspaceList(element) {
+  const id = element.dataset.bucketName;
+  const list = state.board?.buckets?.find(item => item.id === id);
+  if (!list) return false;
+  const name = element.value.trim();
+  const expectedRouteVersion = routeVersion;
+  if (!name) {
+    state.error = "List name is required.";
+    render();
+    document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
+    return false;
+  }
+  if (name === list.name) {
+    element.value = name;
+    return true;
+  }
+  element.disabled = true;
+  try {
+    const updated = await api.patch(`/api/v1/buckets/${id}`, { name });
+    if (expectedRouteVersion !== routeVersion) return false;
+    const nextName = updated.name || name;
+    const rename = item => item.id === id ? {
+      ...item,
+      ...updated,
+      name: nextName,
+      tasks: (item.tasks || []).map(task => ({ ...task, listName: nextName, bucketName: nextName })),
+    } : item;
+    state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
+    state.workspaceLists = state.workspaceLists.map(rename);
+    state.error = "";
+    render();
+    document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
+    return true;
+  } catch (err) {
+    if (expectedRouteVersion !== routeVersion) return false;
+    state.error = err.message;
+    render();
+    const restored = document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`);
+    restored?.focus();
+    restored?.select();
+    return false;
+  }
+}
+
+function bindWorkspaceListControl() {
+  document.querySelector("#add-list")?.addEventListener("click", () => {
+    if (!state.board || workspaceListCount(state.board.id) >= state.maxListsPerBoard) return;
+    state.workspaceListError = "";
+    state.workspaceListDialog = "create";
+    state.workspaceListDialogListID = "";
+    state.workspaceListDialogName = "";
+    state.workspaceListDialogBoardID = state.board.id;
+    state.workspaceListDialogError = "";
+    render();
+    document.querySelector("#workspace-list-name")?.focus();
+  });
+  document.querySelector("#new-workspace-list")?.addEventListener("click", () => {
+    const board = boardWithWorkspaceListCapacity();
+    if (!board) {
+      state.workspaceListError = state.boards.length
+        ? "Every board has reached the list limit for your plan."
+        : "Create a board before adding a list.";
+      render();
+      return;
+    }
+    state.workspaceListError = "";
+    state.workspaceListDialog = "create";
+    state.workspaceListDialogListID = "";
+    state.workspaceListDialogName = "";
+    state.workspaceListDialogBoardID = board.id;
+    state.workspaceListDialogError = "";
+    render();
+    document.querySelector("#workspace-list-name")?.focus();
+  });
+  document.querySelector("#delete-workspace-list")?.addEventListener("click", event => openWorkspaceListDeleteDialog(event.currentTarget.dataset.listId));
+  document.querySelectorAll("[data-delete-bucket]").forEach(element => {
+    element.onclick = () => openWorkspaceListDeleteDialog(element.dataset.deleteBucket);
+  });
+  bindWorkspaceListDialog();
+}
+
+function openWorkspaceListDeleteDialog(listID) {
+  const list = state.workspaceLists.find(item => item.id === listID);
+  if (!list || list.isInbox) return;
+  state.workspaceListDialog = "delete";
+  state.workspaceListDialogListID = listID;
+  state.workspaceListDialogName = "";
+  state.workspaceListDialogBoardID = "";
+  state.workspaceListDialogError = "";
+  render();
+  document.querySelector("#confirm-workspace-list-dialog")?.focus();
+}
+
+function openBoardDeleteDialog(boardID) {
+  if (!state.boards.some(item => item.id === boardID) || !boardCanBeDeleted(boardID)) return;
+  state.workspaceListDialog = "delete-board";
+  state.workspaceListDialogListID = "";
+  state.workspaceListDialogName = "";
+  state.workspaceListDialogBoardID = boardID;
+  state.workspaceListDialogError = "";
+  render();
+  document.querySelector("#confirm-workspace-list-dialog")?.focus();
+}
+
+function bindWorkspaceListDialog() {
+  const overlay = document.querySelector(".workspace-list-dialog-overlay");
+  const form = document.querySelector("#workspace-list-dialog-form");
+  if (!overlay || !form) return;
+  const close = () => {
+    if (state.workspaceListPending) return;
+    const deletingList = state.workspaceListDialog === "delete";
+    const deletingBoard = state.workspaceListDialog === "delete-board";
+    const listID = state.workspaceListDialogListID;
+    const boardID = state.workspaceListDialogBoardID;
+    state.workspaceListDialog = "";
+    state.workspaceListDialogListID = "";
+    state.workspaceListDialogName = "";
+    state.workspaceListDialogBoardID = "";
+    state.workspaceListDialogError = "";
+    render();
+    const createTrigger = parseRoute(location.pathname).name === "board" ? "#add-list" : "#new-workspace-list";
+    const focusTarget = deletingBoard
+      ? `[data-delete-board="${CSS.escape(boardID)}"]`
+      : deletingList ? `[data-list-id="${CSS.escape(listID)}"], [data-delete-bucket="${CSS.escape(listID)}"]` : createTrigger;
+    document.querySelector(focusTarget)?.focus();
+  };
+  document.querySelector("#cancel-workspace-list-dialog")?.addEventListener("click", close);
+  document.querySelector("#workspace-list-name")?.addEventListener("input", event => {
+    state.workspaceListDialogName = event.currentTarget.value;
+  });
+  overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
+  overlay.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = [...overlay.querySelectorAll("input:not(:disabled), select:not(:disabled), button:not(:disabled)")];
+    if (!controls.length) {
+      event.preventDefault();
+      overlay.querySelector(".workspace-list-dialog")?.focus();
+      return;
+    }
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (state.workspaceListDialog === "delete-board") {
+      await deleteBoard(state.workspaceListDialogBoardID);
+      return;
+    }
+    if (state.workspaceListDialog === "delete") {
+      await deleteWorkspaceList(state.workspaceListDialogListID);
+      return;
+    }
+    const data = new FormData(form);
+    state.workspaceListDialogName = String(data.get("name") || "");
+    await createWorkspaceList(data.get("name"));
+  });
+}
+
+async function captureInboxTask(button) {
+  if (newTaskCaptureBlocked()) return false;
+  state.newTaskCapturePending = true;
+  state.error = "";
+  render();
+  let task;
+  state.newTaskCaptureAttemptKey ||= newClientRequestKey();
+  try {
+    task = await api.post(
+      "/api/v1/tasks",
+      { title: "Untitled card", description: "", kind: "action" },
+      { headers: { "Idempotency-Key": state.newTaskCaptureAttemptKey } },
+    );
+  } catch (err) {
+    state.newTaskCapturePending = false;
+    state.error = err.message;
+    render();
+    return false;
+  }
+
+  state.newTaskCapturePending = false;
+  state.newTaskCaptureAttemptKey = "";
+  state.newTaskRecovery = { task, message: "The Inbox could not be refreshed.", pending: false };
+  try {
+    if (parseRoute(location.pathname).name === "workspace") {
+      if (!await reload()) throw new Error(state.error || "The Inbox could not be refreshed.");
+    } else {
+      await navigate(INBOX_PATH);
+      if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
+        throw new Error(state.error || "The Inbox could not be loaded.");
+      }
+    }
+    let detailError;
+    const opened = await openTaskDetail(task.id, null, { onError: err => { detailError = err; } });
+    if (!opened) throw detailError || new Error("The card could not be loaded.");
+    state.newTaskRecovery = null;
+    render();
+    focusOpenedTaskDetail();
+    return true;
+  } catch (err) {
+    state.error = "";
+    state.newTaskRecovery = { task, message: err.message || "The card could not be opened.", pending: false };
+    render();
+    return false;
+  }
+}
+
+async function recoverCreatedTask() {
+  const recovery = state.newTaskRecovery;
+  if (!recovery || recovery.pending || state.newTaskCapturePending) return false;
+  state.newTaskRecovery = { ...recovery, pending: true };
+  render();
+  try {
+    await navigate(INBOX_PATH);
+    if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
+      throw new Error(state.error || "The Inbox could not be loaded.");
+    }
+    let detailError;
+    const opened = await openTaskDetail(recovery.task.id, null, { onError: err => { detailError = err; } });
+    if (!opened) throw detailError || new Error("The card could not be loaded.");
+    state.newTaskRecovery = null;
+    render();
+    focusOpenedTaskDetail();
+    return true;
+  } catch (err) {
+    state.error = "";
+    state.newTaskRecovery = { ...recovery, message: err.message || "The card could not be opened.", pending: false };
+    render();
+    return false;
+  }
+}
+
+function bindGlobalNewTask() {
+  document.querySelector("#global-new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
 }
 
 function bindThemeControls() {
@@ -2539,292 +4482,111 @@ async function renameBoard(id, name) {
 
 async function deleteBoard(id) {
   const board = state.boards.find(item => item.id === id);
-  if (!board || !confirm(`Delete "${board.name}" and all its lists and items?`)) return;
+  if (!board || !boardCanBeDeleted(id) || state.workspaceListPending) return false;
   const sessionVersion = authVersion;
   const userID = state.me?.id;
-  await api.del(`/api/v1/boards/${id}`);
-  if (!sessionIsCurrent(sessionVersion, userID)) return;
-  state.selectedTask = null;
-  state.board = null;
-  if (!await loadBoards()) return;
-  if (!sessionIsCurrent(sessionVersion, userID)) return;
-  if (!state.board) {
-    const next = await api.post("/api/v1/boards", { name: "Today", maxTasksPerList: DEFAULT_LIST_LIMIT, backgroundKind: "theme", backgroundValue: currentTheme() });
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
-    await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Inbox", isInbox: true });
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
-    await api.post(`/api/v1/boards/${next.id}/buckets`, { name: "Focus" });
-    if (!sessionIsCurrent(sessionVersion, userID)) return;
-    if (!await loadBoards(next.id)) return;
-  }
-  if (!sessionIsCurrent(sessionVersion, userID)) return;
+  const startedRouteVersion = routeVersion;
+  const routeIsCurrent = () => startedRouteVersion === routeVersion;
+  const clearCommittedDialog = ({ remove = false } = {}) => {
+    if (state.workspaceListDialog !== "delete-board" || state.workspaceListDialogBoardID !== id) return;
+    state.workspaceListPending = false;
+    state.workspaceListDialog = "";
+    state.workspaceListDialogBoardID = "";
+    state.workspaceListDialogError = "";
+    if (remove) globalThis.document?.querySelector?.(".workspace-list-dialog-overlay")?.remove();
+  };
+  state.workspaceListPending = true;
+  state.workspaceListDialogError = "";
   render();
-}
-
-function bindDetail(options = {}) {
-  if (!state.selectedTask) return;
-  const refresh = options.refresh || reload;
-  const overlay = document.querySelector("[data-detail-overlay]");
-  const formElement = document.querySelector("#detail-form");
-  const submitButton = formElement.querySelector('button[type="submit"]');
-  const taskID = state.selectedTask.id;
-  const bucketID = state.selectedTask.bucketId;
-  let detailBusy = false;
-  const detailInput = () => {
-    const form = new FormData(formElement);
-    return {
-      title: form.get("title"),
-      description: form.get("description"),
-      scheduledDate: form.get("scheduledDate"),
-      status: form.get("status"),
-      priority: form.get("priority"),
-      assigneeAgentId: form.get("assigneeAgentId"),
-    };
-  };
-  let savedDetail = JSON.stringify(detailInput());
-  const savePendingChanges = async () => {
-    const input = detailInput();
-    const serialized = JSON.stringify(input);
-    if (serialized === savedDetail) return;
-    await api.patch(`/api/v1/tasks/${taskID}/status`, input);
-    savedDetail = serialized;
-  };
-  const focusAfterDetail = (preferredTaskID = taskID) => {
-    const triggers = [...document.querySelectorAll("[data-open-task]")];
-    const trigger = triggers.find(element => element.dataset.openTask === preferredTaskID);
-    const addInput = document.querySelector(`[data-add-task="${bucketID}"] input[name="title"]`);
-    const activeView = document.querySelector('[data-board-mode][aria-pressed="true"]');
-    const selectedBoard = document.querySelector(`[data-board="${state.board?.id}"]`);
-    const fallback = options.fallbackSelector ? document.querySelector(options.fallbackSelector) : null;
-    // An edit can hide the item behind the active filter. Falling back to the
-    // first card on the board would move focus to an unrelated list, so stay
-    // in the item's own list instead.
-    if (!trigger && state.priorityFilter) {
-      (fallback || addInput || activeView || selectedBoard)?.focus();
-      return;
+  globalThis.document?.querySelector?.(".workspace-list-dialog")?.focus();
+  try {
+    await api.del(`/api/v1/boards/${id}`);
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    if (!routeIsCurrent()) {
+      clearCommittedDialog({ remove: true });
+      return false;
     }
-    (trigger || triggers[0] || fallback || addInput || activeView || selectedBoard)?.focus();
-  };
-  const setDetailBusy = busy => {
-    detailBusy = busy;
-    document.querySelectorAll("[data-close-detail], #delete-task, #detail-form button, #detail-form select").forEach(element => { element.disabled = busy; });
-  };
-  const closeDetail = () => {
-    if (detailBusy) return;
-    state.selectedTask = null;
-    state.error = "";
+    state.workspaceListPending = false;
+    state.workspaceListDialogError = err.message;
     render();
-    focusAfterDetail();
-  };
-  document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = closeDetail);
-  overlay.addEventListener("click", event => { if (event.target === overlay) closeDetail(); });
-  overlay.addEventListener("keydown", event => {
-    if (event.key === "Escape") closeDetail();
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      if (!detailBusy && !moveController.isLoading()) formElement.requestSubmit();
+    globalThis.document?.querySelector?.("#confirm-workspace-list-dialog")?.focus();
+    return false;
+  }
+  if (!sessionIsCurrent(sessionVersion, userID)) return false;
+  const deletedListIDs = new Set(state.workspaceLists.filter(list => list.boardId === id).map(list => list.id));
+  const belongsToDeletedBoard = task => task.boardId === id || deletedListIDs.has(task.bucketId);
+  const cachedAgentTasks = [
+    ...(state.agentWorkPage?.items || []),
+    ...["ready", "working", "review", "recentlyCompleted"].flatMap(group => state.agentDetail?.work?.[group] || []),
+  ].filter(belongsToDeletedBoard);
+  const reconciledAgentTaskIDs = new Set();
+  for (const task of cachedAgentTasks) {
+    if (reconciledAgentTaskIDs.has(task.id)) continue;
+    reconciledAgentTaskIDs.add(task.id);
+    reconcileAgentTaskCaches(task, { deleted: true });
+  }
+  const deletedTasks = [...state.workspaceTasks, ...state.selectedSubtasks].filter(belongsToDeletedBoard);
+  workspaceListVersion += 1;
+  state.boards = state.boards.filter(board => board.id !== id);
+  state.workspaceLists = state.workspaceLists.filter(list => list.boardId !== id);
+  state.workspaceTasks = state.workspaceTasks.filter(task => !belongsToDeletedBoard(task));
+  state.selectedSubtasks = state.selectedSubtasks.filter(task => !belongsToDeletedBoard(task));
+  for (const task of [...deletedTasks, ...cachedAgentTasks]) {
+    delete state.workspaceReviewKinds[task.id];
+    delete state.taskDetailDrafts[task.id];
+  }
+  clearCommittedDialog({ remove: !routeIsCurrent() });
+  if (state.selectedTask && belongsToDeletedBoard(state.selectedTask)) state.selectedTask = null;
+  if (state.board?.id === id) state.board = null;
+  if (!routeIsCurrent()) {
+    const currentRoute = parseRoute(location.pathname);
+    if (currentRoute.name === "board" && currentRoute.boardId === id) {
+      await navigate(TASKS_PATH, { replace: true });
     }
-    if (event.key === "Tab") {
-      const focusable = [...overlay.querySelectorAll("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)")];
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-  });
-  document.querySelector("#detail-title").focus();
-  const moveController = bindMovePanel({
-    taskID,
-    task: state.selectedTask,
-    setDetailBusy,
-    savePendingChanges,
-    submitButton,
-    afterMove: options.afterMove,
-    handleError: options.handleError,
-  });
-  document.querySelector("#delete-task").onclick = async () => {
-    if (!confirm("Delete this item?")) return;
-    const visibleTaskIDs = [...document.querySelectorAll("[data-open-task]")].map(element => element.dataset.openTask);
-    const taskIndex = visibleTaskIDs.indexOf(taskID);
-    const nextTaskID = visibleTaskIDs[taskIndex + 1] || visibleTaskIDs[taskIndex - 1] || "";
-    setDetailBusy(true);
-    try {
-      await api.del(`/api/v1/tasks/${taskID}`);
-      state.selectedTask = null;
-      state.error = "";
-      await refresh();
-      focusAfterDetail(nextTaskID);
-    } catch (err) {
-      if (options.handleError?.(err)) return;
-      state.error = err.message;
-      formElement.querySelector(".detail-error").textContent = err.message;
-      setDetailBusy(false);
-    }
-  };
-  formElement.addEventListener("submit", async event => {
-    event.preventDefault();
-    if (detailBusy || moveController.isLoading()) return;
-    const submit = submitButton;
-    if (moveController.hasPendingMove()) {
-      await moveController.move({ button: submit, idleText: "Save changes" });
-      return;
-    }
-    const input = detailInput();
-    setDetailBusy(true);
-    submit.textContent = "Saving…";
-    try {
-      await api.patch(`/api/v1/tasks/${taskID}/status`, input);
-      state.error = "";
-      state.selectedTask = null;
-      await refresh();
-      focusAfterDetail();
-    } catch (err) {
-      if (options.handleError?.(err)) return;
-      state.error = err.message;
-      const error = formElement.querySelector(".detail-error");
-      error.textContent = err.message;
-      setDetailBusy(false);
-      submit.textContent = "Save changes";
-    }
-  });
-}
-
-function bindMovePanel({ taskID, task, setDetailBusy, savePendingChanges, submitButton, afterMove, handleError }) {
-  const panel = document.querySelector("#move-panel");
-  const boardSelect = document.querySelector("#move-board");
-  const listSelect = document.querySelector("#move-list");
-  const positionSelect = document.querySelector("#move-position");
-  const moveButton = document.querySelector("#move-item");
-  const loadedBoards = new Map([[state.board.id, state.board]]);
-  const sourceBoardID = state.board.id;
-  const sourceList = state.board.buckets.find(list => list.id === task.bucketId);
-  const sourcePosition = Math.max(0, (sourceList?.tasks || []).findIndex(item => item.id === task.id));
-  let destinationLoading = false;
-  const showError = message => {
-    state.error = message;
-    document.querySelector(".detail-error").textContent = message;
-  };
-  const isLoading = () => destinationLoading;
-  const selectedList = () => loadedBoards.get(boardSelect.value)?.buckets?.find(list => list.id === listSelect.value);
-  const hasPendingMove = () => (
-    boardSelect.value !== sourceBoardID
-    || listSelect.value !== task.bucketId
-    || Number(positionSelect.value) !== sourcePosition
-  );
-  const refreshPositions = () => {
-    const available = selectedList() && !listSelect.selectedOptions[0]?.disabled;
-    positionSelect.innerHTML = available ? movePositionOptionsHTML(selectedList(), task) : "";
-    positionSelect.disabled = !available;
-    moveButton.disabled = !available;
-  };
-  const refreshLists = (board, selectedID = "") => {
-    listSelect.innerHTML = moveListOptionsHTML(board, task, selectedID);
-    const firstAvailable = [...listSelect.options].find(option => !option.disabled);
-    if (!listSelect.selectedOptions[0] || listSelect.selectedOptions[0].disabled) {
-      listSelect.value = firstAvailable?.value || "";
-    }
-    listSelect.disabled = !firstAvailable;
-    refreshPositions();
-  };
-
-  document.querySelector("#open-move").onclick = () => {
-    panel.hidden = false;
-    boardSelect.focus();
-  };
-  document.querySelector("#close-move").onclick = () => {
-    panel.hidden = true;
-    document.querySelector("#open-move").focus();
-  };
-  boardSelect.onchange = async () => {
-    const destinationBoardID = boardSelect.value;
-    try {
-      destinationLoading = true;
-      submitButton.disabled = true;
-      boardSelect.disabled = true;
-      listSelect.disabled = true;
-      positionSelect.disabled = true;
-      moveButton.disabled = true;
-      listSelect.innerHTML = '<option value="">Loading lists…</option>';
-      positionSelect.innerHTML = "";
-      let board = loadedBoards.get(destinationBoardID);
-      if (!board) {
-        board = await api.get(`/api/v1/boards/${destinationBoardID}`);
-        loadedBoards.set(board.id, board);
-      }
-      state.error = "";
-      document.querySelector(".detail-error").textContent = "";
-      refreshLists(board, destinationBoardID === sourceBoardID ? task.bucketId : "");
-    } catch (err) {
-      if (handleError?.(err)) return;
-      showError(err.message);
-    } finally {
-      destinationLoading = false;
-      submitButton.disabled = false;
-      boardSelect.disabled = false;
-    }
-  };
-  listSelect.onchange = refreshPositions;
-  const move = async ({ button = moveButton, idleText = "Move item" } = {}) => {
-    const destinationBoard = loadedBoards.get(boardSelect.value);
-    const destinationList = selectedList();
-    if (!destinationBoard || !destinationList) {
-      showError("Choose a destination list before moving this item.");
-      return;
-    }
-    button.textContent = "Saving…";
-    const savePromise = savePendingChanges();
-    setDetailBusy(true);
-    let moved;
-    try {
-      await savePromise;
-      button.textContent = "Moving…";
-      moved = await api.post(`/api/v1/tasks/${taskID}/move`, {
-        bucketId: destinationList.id,
-        position: Number(positionSelect.value),
+    return true;
+  }
+  try {
+    if (!await loadBoards(undefined, startedRouteVersion)) return false;
+    if (!await loadAgents(false, sessionVersion, userID, startedRouteVersion)) return false;
+    const route = parseRoute(location.pathname);
+    if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) {
+      const loaded = await loadAgentDetail(route.agentId, {
+        includeWorkPage: route.name === "agent-work",
+        page: route.name === "agent-work" ? workPageFromLocation() : 1,
+        sessionVersion,
+        userID,
+        expectedRouteVersion: startedRouteVersion,
       });
-    } catch (err) {
-      if (handleError?.(err)) return;
-      showError(err.message);
-      setDetailBusy(false);
-      button.textContent = idleText;
-      return;
+      if (!loaded) return false;
     }
-
-    if (sourceList) {
-      sourceList.tasks = (sourceList.tasks || []).filter(item => item.id !== taskID);
-      if (task.kind === "action" && !task.done) sourceList.openCount = Math.max(0, (sourceList.openCount || 0) - 1);
-    }
-    state.selectedTask = null;
-    if (afterMove) {
-      state.agentTaskFocusID = moved.id;
-      state.error = "";
-      await afterMove(moved, destinationBoard, destinationList);
-      return;
-    }
-    state.moveNotice = {
-      message: `Moved to ${destinationBoard.name} / ${destinationList.name}`,
-      boardId: moved.boardId,
-      taskId: moved.id,
-    };
-    state.error = "";
-    try {
-      await loadBoards(sourceBoardID);
-    } catch {
-      state.error = "The item was moved, but this board could not be refreshed.";
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+    const message = `The board was deleted, but Slate could not refresh all views: ${err.message}`;
+    state.error = message;
+    if (["agent-detail", "agent-work", "agent-settings"].includes(parseRoute(location.pathname).name)) {
+      state.agentTaskRefreshError = message;
+      state.agentTaskMutationError = message;
     }
     render();
-  };
-  moveButton.onclick = () => move();
-  return { hasPendingMove, isLoading, move };
+    return true;
+  }
+  if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+  if (!state.board) return false;
+  render();
+  return true;
+}
+
+function boardCanBeDeleted(boardID) {
+  return state.workspaceLists.some(list => list.isInbox && list.boardId !== boardID);
 }
 
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindNewTaskRecoveryActions();
+  bindGlobalNewTask();
+  bindWorkspaceListControl();
+  bindBoardNavigationControls(document.querySelector(".settings-sidebar"));
   document.querySelectorAll(".settings-nav-link").forEach(el => el.onclick = event => {
     event.preventDefault();
     navigate(el.getAttribute("href"));
@@ -2964,51 +4726,6 @@ async function bindSettings() {
   });
 }
 
-function bindBoardSettings() {
-  document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
-  document.querySelector("#back-to-board").onclick = () => navigate(boardPath(state.board.id));
-  document.querySelector("#account-settings-link").onclick = event => {
-    event.preventDefault();
-    navigate(settingsPath());
-  };
-  const form = document.querySelector("#board-limit-form");
-  form.addEventListener("submit", async event => {
-    event.preventDefault();
-    const input = document.querySelector("#settings-list-limit");
-    const error = document.querySelector("#settings-list-limit-error");
-    const validation = validateListLimit(input.value);
-    error.textContent = validation;
-    input.toggleAttribute("aria-invalid", Boolean(validation));
-    if (validation) {
-      input.focus();
-      return;
-    }
-    const version = routeVersion;
-    const sessionVersion = authVersion;
-    const userID = state.me?.id;
-    const boardID = state.board.id;
-    const update = listLimitUpdate(boardID, input.value);
-    state.settingsPending = "board";
-    state.settingsNotice = "";
-    state.error = "";
-    const submit = form.querySelector('button[type="submit"]');
-    submit.disabled = true;
-    submit.textContent = "Saving…";
-    try {
-      const updated = await api.patch(update.path, update.input);
-      if (!boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) return;
-      state.board = { ...state.board, ...updated, buckets: state.board.buckets };
-      state.boards = state.boards.map(board => board.id === boardID ? { ...board, ...updated } : board);
-      state.settingsNotice = "Board limit saved.";
-    } catch (err) {
-      if (!boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) return;
-      state.error = err.message;
-    }
-    state.settingsPending = "";
-    if (boardSettingsMutationIsCurrent(sessionVersion, userID, version, boardID)) render();
-  });
-}
-
 function bindAgents() {
   bindAppShell();
   const follow = (selector, path) => {
@@ -3135,10 +4852,8 @@ function bindAgentDetail() {
   bindAssignWork();
   bindAgentLifecycle();
   if (state.selectedTask) {
-    bindDetail({
+    bindWorkspaceDetail({
       refresh: refreshAgentSurface,
-      afterMove: refreshAgentSurface,
-      fallbackSelector: "#assign-work, [data-agent-tab]",
       handleError: handleAgentUnauthorized,
     });
   } else if (state.agentTaskFocusID) {
@@ -3215,6 +4930,7 @@ function bindAgentLifecycle() {
   document.querySelector("#revoke-agent-credential")?.addEventListener("click", () => openConfirm("revoke"));
   document.querySelector("#archive-agent")?.addEventListener("click", () => openConfirm("archive"));
   document.querySelector("#restore-agent")?.addEventListener("click", () => openConfirm("restore"));
+  document.querySelector("#delete-agent")?.addEventListener("click", () => openConfirm("delete"));
   document.querySelector("#finish-lifecycle-credential")?.addEventListener("click", () => {
     clearAgentLifecycleCredential();
     state.agentLifecycleNotice = "Credential saved. Slate cannot show it again.";
@@ -3249,7 +4965,7 @@ function bindAgentLifecycleDialog() {
     state.agentArchiveConflict = null;
     state.agentLifecycleError = "";
     render();
-    document.querySelector(`#${action === "rotate" ? "rotate-agent-credential" : action === "revoke" ? "revoke-agent-credential" : action === "restore" ? "restore-agent" : "archive-agent"}`)?.focus();
+    document.querySelector(`#${action === "rotate" ? "rotate-agent-credential" : action === "revoke" ? "revoke-agent-credential" : action === "restore" ? "restore-agent" : action === "delete" ? "delete-agent" : "archive-agent"}`)?.focus();
   };
   document.querySelector("#cancel-agent-lifecycle")?.addEventListener("click", cancel);
   overlay.addEventListener("click", event => { if (event.target === overlay) cancel(); });
@@ -3301,6 +5017,19 @@ async function runAgentLifecycleMutation() {
       };
       updateAgentCache(state.agentDetail.agent);
       state.agentLifecycleNotice = "Credential revoked. Assigned work is unchanged.";
+    } else if (action === "delete") {
+      await api.del(`/api/v1/agents/${encodeURIComponent(context.agentID)}/permanent`);
+      if (!agentMutationIsCurrent(context)) return;
+      state.agents = state.agents.filter(agent => agent.id !== context.agentID);
+      state.agentDetail = null;
+      state.agentWorkPage = null;
+      state.agentDetailLoadState = "idle";
+      state.agentLifecycleConfirm = "";
+      state.agentArchiveConflict = null;
+      state.agentLifecyclePending = "";
+      state.agentLifecycleNotice = "Agent permanently deleted.";
+      await navigate(AGENTS_PATH);
+      return;
     } else if (action === "archive") {
       const force = Boolean(state.agentArchiveConflict);
       await api.post(`/api/v1/agents/${encodeURIComponent(context.agentID)}/archive`, { unassignOpenWork: force });
@@ -3341,6 +5070,7 @@ async function runAgentLifecycleMutation() {
     state.agentLifecyclePending = "";
     if (action === "archive" && err.status === 409 && err.code === "agent_open_work") {
       state.agentArchiveConflict = {
+        new: Number(err.data?.conflict?.new || 0),
         ready: Number(err.data?.conflict?.ready || 0),
         working: Number(err.data?.conflict?.working || 0),
       };
@@ -3409,10 +5139,22 @@ async function rotateAgentCredential(context) {
 }
 
 function newAgentRotationKey() {
+  return newClientRequestKey();
+}
+
+function newClientRequestKey() {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
   const values = new Uint8Array(24);
   globalThis.crypto.getRandomValues(values);
   return [...values].map(value => value.toString(16).padStart(2, "0")).join("");
+}
+
+function subtaskCreateIdempotencyKey(parentID, title) {
+  const previous = state.subtaskCreateAttempt;
+  if (previous?.parentID === parentID && previous.title === title) return previous.key;
+  const key = newClientRequestKey();
+  state.subtaskCreateAttempt = { parentID, title, key };
+  return key;
 }
 
 function agentMutationContext() {
@@ -3603,49 +5345,59 @@ function agentWorkItems() {
 async function openAgentTask(element) {
   const item = agentWorkItems().find(work => work.id === element.dataset.openAgentTask);
   if (!item) return;
-  const version = routeVersion;
-  const sessionVersion = authVersion;
-  const userID = state.me?.id;
   state.agentTaskFocusID = item.id;
-  element.disabled = true;
-  try {
-    if (state.board?.id !== item.boardId || !state.board?.buckets) {
-      if (!await loadBoard(item.boardId, sessionVersion, version)) return;
-    }
-    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
-    const detail = await api.get(`/api/v1/tasks/${encodeURIComponent(item.id)}`);
-    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
-    state.selectedTask = { ...(findTask(item.id) || {}), ...item, ...detail };
-    state.error = "";
-    render();
-  } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
-    if (handleAgentUnauthorized(err)) return;
-    state.agentAssignNotice = `Item couldn’t be opened: ${err.message}`;
-    render();
+  state.agentTaskMutationError = "";
+  state.agentTaskRefreshError = "";
+  const opened = await openTaskDetail(item.id, element, {
+    handleError: handleAgentUnauthorized,
+    onError: err => { state.agentAssignNotice = `Item couldn’t be opened: ${err.message}`; },
+  });
+  if (!opened && state.agentTaskFocusID === item.id) {
     document.querySelector(`[data-open-agent-task="${CSS.escape(item.id)}"]`)?.focus();
   }
 }
 
-async function refreshAgentSurface() {
+async function refreshAgentSurface(options = {}) {
   const route = parseRoute(location.pathname);
   if (!["agent-detail", "agent-work", "agent-settings"].includes(route.name)) return;
   const version = routeVersion;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
   try {
-    const loaded = await loadAgentDetail(route.agentId, {
-      includeWorkPage: route.name === "agent-work",
-      page: workPageFromLocation(),
-      sessionVersion: authVersion,
-      userID: state.me?.id,
-      expectedRouteVersion: version,
-    });
-    if (!loaded || version !== routeVersion) return false;
+    const [detailResult, listResult] = await Promise.allSettled([
+      loadAgentDetail(route.agentId, {
+        includeWorkPage: route.name === "agent-work",
+        page: workPageFromLocation(),
+        sessionVersion,
+        userID,
+        expectedRouteVersion: version,
+      }),
+      loadWorkspaceListIndex(version),
+    ]);
+    if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return false;
+    if (detailResult.status === "rejected") throw detailResult.reason;
+    if (!detailResult.value) return false;
     state.agentDetailLoadState = "ready";
+    state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
+    clearResolvedAgentTaskRefreshError();
+    options.beforeTaskDetailRender?.();
     render();
+    options.afterTaskDetailRender?.();
     return true;
   } catch (err) {
     if (version !== routeVersion) return false;
     if (handleAgentUnauthorized(err, route)) return false;
+    if (options.preserveTaskDetail && state.selectedTask) {
+      const message = `The card was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      options.beforeTaskDetailRender?.();
+      state.agentDetailLoadState = "ready";
+      state.agentTaskRefreshError = message;
+      state.agentTaskMutationError = message;
+      state.error = message;
+      render();
+      options.afterTaskDetailRender?.();
+      return false;
+    }
     state.selectedTask = null;
     state.agentDetail = null;
     state.agentWorkPage = null;
@@ -3697,8 +5449,7 @@ function openSettings() {
 }
 
 function closeSettings() {
-  const boardID = state.board?.id || state.boards[0]?.id;
-  return navigate(boardID ? boardPath(boardID) : APP_PATH);
+  return navigate(APP_PATH);
 }
 
 function showLogin() {
@@ -3712,9 +5463,7 @@ function openApp() {
 
 function goHome() {
   if (!state.me || state.view === "logging-out" || state.view === "logout-error") return navigate(HOME_PATH);
-  const currentBoardID = state.board?.id;
-  const boardID = state.boards.some(board => board.id === currentBoardID) ? currentBoardID : state.boards[0]?.id;
-  return navigate(boardID ? boardPath(boardID) : APP_PATH);
+  return navigate(APP_PATH);
 }
 
 async function addTask(event) {
@@ -3723,8 +5472,6 @@ async function addTask(event) {
   const title = new FormData(form).get("title").trim();
   if (!title) return;
   const list = state.board.buckets.find(b => b.id === form.dataset.addTask);
-  const activeLimit = Math.min(list.limitCount || DEFAULT_LIST_LIMIT, accountLimits().activeItemsPerList);
-  if ((list.openCount || 0) >= activeLimit) return;
   await runMutation(() => api.post(`/api/v1/buckets/${list.id}/tasks`, { title }), reload);
 }
 
@@ -3797,7 +5544,7 @@ function bindDrag() {
       await dropBucket(id, index);
     });
   }
-  document.querySelectorAll(".calendar-day[data-calendar-date]").forEach(day => {
+  document.querySelectorAll(".calendar-day[data-calendar-date], .workspace-week [data-calendar-date]").forEach(day => {
     day.addEventListener("dragover", event => {
       if (drag?.type !== "task") return;
       event.preventDefault();
@@ -3810,7 +5557,7 @@ function bindDrag() {
       const id = drag.id;
       drag = null;
       clearDropMarks();
-      await runMutation(() => api.patch(`/api/v1/tasks/${id}`, { scheduledDate: day.dataset.calendarDate }), reload);
+      await updateTaskScheduledDate(id, day.dataset.calendarDate);
     });
   });
   document.querySelectorAll("[data-flow-status]").forEach(column => {
@@ -3830,23 +5577,128 @@ function bindDrag() {
       await updateTaskStatus(id, column.dataset.flowStatus);
     });
   });
+  document.querySelectorAll("[data-kanban-list]").forEach(column => {
+    column.addEventListener("dragover", event => {
+      if (drag?.type !== "task") return;
+      event.preventDefault();
+      column.classList.add("over");
+    });
+    column.addEventListener("dragleave", () => column.classList.remove("over"));
+    column.addEventListener("drop", async event => {
+      if (drag?.type !== "task") return;
+      event.preventDefault();
+      const id = drag.id;
+      drag = null;
+      clearDropMarks();
+      column.classList.remove("over");
+      await moveWorkspaceTaskToList(id, column.dataset.kanbanList);
+    });
+  });
+}
+
+async function moveWorkspaceTaskToList(id, bucketID) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const startedRouteVersion = routeVersion;
+  let previousTask = findTask(id);
+  if (!previousTask || previousTask.parentTaskId || previousTask.bucketId === bucketID) return false;
+  let moved;
+  try {
+    moved = await serializeTaskMutation(id, async ({ queued }) => {
+      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(id)}`);
+      return api.post(`/api/v1/tasks/${encodeURIComponent(id)}/move`, { bucketId: bucketID, position: 0 });
+    });
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+    state.error = err.message;
+    render();
+    return false;
+  }
+  if (!moved || !sessionIsCurrent(sessionVersion, userID)) return false;
+  reconcileTaskMutation(moved, previousTask);
+  clearTaskMutationError(id);
+  await refreshAfterTaskMutation(startedRouteVersion);
+  return true;
 }
 
 async function updateTaskStatus(id, status) {
-  await runMutation(
-    () => api.patch(`/api/v1/tasks/${id}/status`, { status }),
-    reload,
-  );
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const startedRouteVersion = routeVersion;
+  let previousTask = findTask(id);
+  let updated;
+  try {
+    updated = await serializeTaskMutation(id, async ({ queued }) => {
+      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(id)}`);
+      return api.patch(`/api/v1/tasks/${encodeURIComponent(id)}/status`, { status });
+    });
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+    state.taskMutationError = { taskID: id, message: err.message };
+    if (state.selectedTask?.id === id) {
+      state.error = err.message;
+      syncTaskDetailError();
+      return false;
+    }
+    if (state.selectedTask) return false;
+    state.error = err.message;
+    render();
+    return false;
+  }
+  if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
+  reconcileTaskMutation(updated, previousTask);
+  clearTaskMutationError(id);
+  await refreshAfterTaskMutation(startedRouteVersion);
+  return true;
+}
+
+async function updateTaskScheduledDate(id, scheduledDate) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const startedRouteVersion = routeVersion;
+  let previousTask = findTask(id);
+  let updated;
+  try {
+    updated = await serializeTaskMutation(id, async ({ queued }) => {
+      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(id)}`);
+      return api.patch(`/api/v1/tasks/${encodeURIComponent(id)}`, { scheduledDate });
+    });
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
+    state.taskMutationError = { taskID: id, message: err.message };
+    if (state.selectedTask?.id === id) {
+      state.error = err.message;
+      syncTaskDetailError();
+      return false;
+    }
+    if (state.selectedTask) return false;
+    state.error = err.message;
+    render();
+    return false;
+  }
+  if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
+  reconcileTaskMutation(updated, previousTask);
+  clearTaskMutationError(id);
+  await refreshAfterTaskMutation(startedRouteVersion);
+  return true;
 }
 
 async function runMutation(request, refresh) {
+  const sessionVersion = authVersion;
+  const startedRouteVersion = routeVersion;
+  const contextIsCurrent = () => sessionVersion === authVersion && startedRouteVersion === routeVersion;
   try {
-    await request();
+    const result = await request();
+    if (result === null) return false;
+    if (!contextIsCurrent()) return false;
     state.error = "";
   } catch (err) {
+    if (!contextIsCurrent()) return false;
     state.error = err.message;
   }
+  if (!contextIsCurrent()) return false;
   await refresh();
+  return true;
 }
 
 function reorderedTaskIDs(ids, movingID, targetID, afterTarget = false) {
@@ -3861,7 +5713,8 @@ function reorderedTaskIDs(ids, movingID, targetID, afterTarget = false) {
 }
 
 function taskDropIndex(list, y) {
-  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")];
+  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")]
+    .filter(item => !isDraggedTaskChild(item.dataset.task));
   for (let i = 0; i < items.length; i++) {
     const rect = items[i].getBoundingClientRect();
     if (y < rect.top + rect.height / 2) return i;
@@ -3873,10 +5726,12 @@ function taskDropIndex(list, y) {
 // array. While a priority filter hides cards those two disagree, so translate
 // the visible position into a real one by anchoring on the card dropped before.
 function fullTaskIndex(listElement, visibleIndex, draggingID) {
-  if (!state.priorityFilter) return visibleIndex;
   const bucket = state.board?.buckets?.find(b => b.id === listElement.dataset.taskList);
-  const remaining = (bucket?.tasks || []).filter(task => task.id !== draggingID);
-  const visibleIDs = [...listElement.querySelectorAll("[data-task]:not(.dragging)")].map(el => el.dataset.task);
+  const remaining = (bucket?.tasks || []).filter(task => task.id !== draggingID && task.parentTaskId !== draggingID);
+  if (!state.priorityFilter) return Math.min(visibleIndex, remaining.length);
+  const visibleIDs = [...listElement.querySelectorAll("[data-task]:not(.dragging)")]
+    .map(el => el.dataset.task)
+    .filter(id => id !== draggingID && findTask(id)?.parentTaskId !== draggingID);
   if (visibleIndex >= visibleIDs.length) return remaining.length;
   const anchor = remaining.findIndex(task => task.id === visibleIDs[visibleIndex]);
   return anchor < 0 ? remaining.length : anchor;
@@ -3884,7 +5739,8 @@ function fullTaskIndex(listElement, visibleIndex, draggingID) {
 
 function markTaskDrop(list, y) {
   clearDropMarks();
-  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")];
+  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")]
+    .filter(item => !isDraggedTaskChild(item.dataset.task));
   if (!items.length) {
     list.classList.add("drop-into");
     return;
@@ -3894,20 +5750,20 @@ function markTaskDrop(list, y) {
   else items[items.length - 1].classList.add("drop-after");
 }
 
+function isDraggedTaskChild(taskID) {
+  return drag?.type === "task" && findTask(taskID)?.parentTaskId === drag.id;
+}
+
 function bucketDropIndex(event) {
   const buckets = [...document.querySelectorAll(".grid [data-bucket]:not(.dragging)")];
   const rects = buckets.map(bucket => bucket.getBoundingClientRect());
-  return bucketDropIndexForRects(rects, event.clientX, event.clientY, window.matchMedia("(max-width: 900px)").matches);
+  return bucketDropIndexForRects(rects, event.clientX);
 }
 
-function bucketDropIndexForRects(rects, x, y, singleColumn) {
+function bucketDropIndexForRects(rects, x) {
   for (let i = 0; i < rects.length; i++) {
     const rect = rects[i];
-    if (singleColumn) {
-      if (y < rect.top + rect.height / 2) return i;
-      continue;
-    }
-    if (y < rect.top || (y <= rect.bottom && x < rect.left + rect.width / 2)) return i;
+    if (x < rect.left + rect.width / 2) return i;
   }
   return rects.length;
 }
@@ -3928,24 +5784,43 @@ function clearDropMarks() {
 }
 
 async function dropTask(taskId, bucketId, index) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const startedRouteVersion = routeVersion;
+  const contextIsCurrent = () => sessionVersion === authVersion && startedRouteVersion === routeVersion;
   const task = findTask(taskId);
   const target = state.board.buckets.find(b => b.id === bucketId);
   if (!task || !target) return;
-  const moved = task.bucketId !== bucketId;
-  const from = state.board.buckets.find(b => b.id === task.bucketId);
-  if (from) from.tasks = (from.tasks || []).filter(t => t.id !== taskId);
-  task.bucketId = bucketId;
+  let previousTask = { ...task };
+  const children = state.board.buckets.flatMap(list => list.tasks || []).filter(item => item.parentTaskId === taskId);
+  const taskGroup = [task, ...children];
+  const taskGroupIDs = new Set(taskGroup.map(item => item.id));
+  for (const list of state.board.buckets) {
+    list.tasks = (list.tasks || []).filter(item => !taskGroupIDs.has(item.id));
+  }
+  for (const item of taskGroup) item.bucketId = bucketId;
   target.tasks = target.tasks || [];
-  target.tasks.splice(index, 0, task);
+  target.tasks.splice(Math.min(index, target.tasks.length), 0, ...taskGroup);
   state.error = "";
   render();
+  let moved;
   try {
-    if (moved) await api.patch(`/api/v1/tasks/${taskId}`, { bucketId });
-    await api.post(`/api/v1/buckets/${bucketId}/reorder-tasks`, { ids: target.tasks.map(t => t.id) });
+    moved = await serializeTaskMutation(taskId, async ({ queued }) => {
+      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(taskId)}`);
+      return api.post(`/api/v1/tasks/${encodeURIComponent(taskId)}/move`, { bucketId, position: index });
+    });
+    if (moved === null) return;
   } catch (err) {
+    if (!contextIsCurrent()) return;
     state.error = err.message;
+    await reload();
+    return false;
   }
-  await reload();
+  if (!moved || !sessionIsCurrent(sessionVersion, userID)) return false;
+  reconcileTaskMutation(moved, previousTask);
+  clearTaskMutationError(taskId);
+  await refreshAfterTaskMutation(startedRouteVersion);
+  return true;
 }
 
 async function dropBucket(bucketId, index) {
@@ -4009,16 +5884,6 @@ function settingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion,
     && (expectedRouteVersion === undefined || settingsRouteIsCurrent(expectedRouteVersion, expectedPage));
 }
 
-function boardSettingsMutationIsCurrent(sessionVersion, userID, expectedRouteVersion, boardID) {
-  const route = parseRoute(location.pathname);
-  return sessionIsCurrent(sessionVersion, userID)
-    && expectedRouteVersion === routeVersion
-    && state.view === "board-settings"
-    && route.name === "board-settings"
-    && route.boardId === boardID
-    && state.board?.id === boardID;
-}
-
 function agentRouteIsCurrent(expectedRouteVersion, expectedView) {
   return expectedRouteVersion === routeVersion && state.view === expectedView;
 }
@@ -4057,12 +5922,24 @@ async function loadAgentDetail(agentID, options = {}) {
   const sessionVersion = options.sessionVersion ?? authVersion;
   const userID = options.userID ?? state.me?.id;
   const expectedRouteVersion = options.expectedRouteVersion;
+  const loadVersion = (agentDetailLoadVersions.get(agentID) || 0) + 1;
+  agentDetailLoadVersions.set(agentID, loadVersion);
+  const loadIsCurrent = () => agentDetailLoadVersions.get(agentID) === loadVersion
+    && sessionIsCurrent(sessionVersion, userID)
+    && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
   const requests = [api.get(`/api/v1/agents/${encodeURIComponent(agentID)}`)];
   if (options.includeWorkPage) {
     requests.push(api.get(`/api/v1/agents/${encodeURIComponent(agentID)}/work?page=${options.page || 1}&pageSize=50`));
   }
-  const [detail, workPage] = await Promise.all(requests);
-  if (!sessionIsCurrent(sessionVersion, userID) || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+  let detail;
+  let workPage;
+  try {
+    [detail, workPage] = await Promise.all(requests);
+  } catch (err) {
+    if (!loadIsCurrent()) return false;
+    throw err;
+  }
+  if (!loadIsCurrent()) return false;
   state.agentDetail = detail;
   state.agentWorkPage = options.includeWorkPage ? workPage : null;
   const index = state.agents.findIndex(agent => agent.id === detail.agent.id);
@@ -4126,11 +6003,25 @@ async function createAPIToken(name, expectedRouteVersion) {
 }
 
 async function reload() {
-  await loadBoards(state.board.id);
-  render();
+  const route = parseRoute(location.pathname);
+  const expectedRouteVersion = routeVersion;
+  if (route.name === "workspace") {
+    const [listsLoaded, workspaceLoaded] = await Promise.all([
+      loadWorkspaceListIndex(expectedRouteVersion),
+      loadWorkspace(route, expectedRouteVersion),
+    ]);
+    if (!listsLoaded || !workspaceLoaded || expectedRouteVersion !== routeVersion) return false;
+    state.workspaceRefreshOnDetailClose = false;
+  } else {
+    if (!await loadBoards(state.board?.id, expectedRouteVersion) || expectedRouteVersion !== routeVersion) return false;
+  }
+  renderPreservingCurrentTaskDetail();
+  return true;
 }
 
 function findTask(id) {
+  const workspaceTask = state.workspaceTasks.find(task => task.id === id) || state.selectedSubtasks.find(task => task.id === id);
+  if (workspaceTask) return workspaceTask;
   for (const list of state.board?.buckets || []) {
     const task = (list.tasks || []).find(t => t.id === id);
     if (task) return task;
@@ -4232,11 +6123,11 @@ function openTaskCount(board) {
 
 function todayActionCount(board) {
   const today = dateKey(new Date());
-  return allTasks(board).filter(item => !item.task.done && item.task.scheduledDate === today).length;
+  return allTasks(board).filter(item => item.task.status !== "done" && item.task.scheduledDate === today).length;
 }
 
 function statusCounts(board) {
-  const counts = { queued: 0, working: 0, needs_review: 0, done: 0 };
+  const counts = { new: 0, queued: 0, working: 0, needs_review: 0, done: 0 };
   for (const { task } of allTasks(board)) {
     if (Object.hasOwn(counts, task.status)) counts[task.status] += 1;
   }

@@ -1,265 +1,156 @@
 # Slate PRD
 
-Status: Draft v1.
+Status: Card-first control plane.
 
 ## Summary
 
-Slate is a minimal interactive operating plan for thinking clearly and executing deliberately.
+Slate is an agent control plane that helps people clarify intent, focus attention, and run all of their work with human and AI collaborators.
 
-It is based on buckets.
+The card is the core unit of intent. Lists give cards useful context without forcing every card to be a task, goal, or project. A list can itself represent a project, goal, area, or workflow. Agents receive cards as prompts and return comments or outputs to the same card.
 
-A bucket is a simple list with a name, a goal, and a small set of items.
+## Product principles
 
-Slate helps the user think clearly by grouping work into visible buckets and keeping each bucket small.
+- Capture intent before deciding its structure.
+- Keep one source of truth for human and agent work.
+- Let cards stay generic. Do not require a task, goal, or project type.
+- Let lists carry context such as a project, goal, area, or category.
+- Keep properties small and visible.
+- Keep human judgment in Slate and agent execution available through the CLI.
+- Prefer one level of child cards over deep project trees.
+- Show agent contributions as comments and outputs, not runtime logs.
 
-## Product Principle
+## Core workflow
 
-Simplicity is the product.
+1. A human, agent, or integration creates a card in Inbox.
+2. The card is refined with enough prompt and context to act on.
+3. The card can stay in Inbox or move to a list that gives it meaning.
+4. A human owns the card directly, or assigns it to an agent.
+5. Work moves through New, Ready, In Progress, Review, and Done.
+6. The agent can comment or return an output on the card.
+7. Complex intent can be split into one level of child cards.
 
-Slate should use the simplest thing that works. Every feature must protect clarity. If a feature makes the board feel heavier, it should be removed, delayed, or hidden.
+## Core model
 
-The app should feel calm enough to use every day.
+### Card
 
-## Product Bet
-
-Most productivity tools collect information and turn it into noise.
-
-Slate should help the user choose work.
-
-The main behavior should be:
-
-- Capture list items quickly.
-- Put items into clear buckets.
-- Limit each bucket.
-- Add dates to surface selected items in Week and Today.
-- Let a human or agent pick up any queued item.
-- Review agent work without adding ownership complexity.
-
-## Audience
-
-The first user is a solo builder or manager working with agents.
-
-Slate should also work for creators, founders, operators, and small teams who want a clear planning surface without a full project management system.
-
-## Positioning
-
-Slate is not a traditional kanban app.
-
-Slate is not a second brain.
-
-Slate is not a project management suite.
-
-Slate is a small visual surface for deciding what gets attention.
-
-It is inspired by:
-
-- TeuxDeux for simple lists.
-- Trello for visual buckets.
-- Plain to-do lists for speed and clarity.
-
-## Core Model
-
-Slate has boards.
-
-A board has buckets.
-
-A bucket has items.
-
-An item has a title and an execution state. Items stay flat inside a bucket. Separate buckets provide structure without nested lists.
+A card is a generic unit of intent. It can represent an action, goal, project, idea, decision, email to triage, planned content, or any other thing worth directing attention toward.
 
 Core fields:
 
 - `id`
 - `title`
-- `description`
-- `scheduledDate`
-- `boardId`
-- `bucketId`
-- `done`
+- `description` as prompt and context
+- `listId`
 - `status`
+- `priority`
+- `scheduledDate`
+- `assigneeAgentId`
+- `parentCardId`
+- timestamps
 
-## Buckets
+The current database and legacy API retain task field names for compatibility. Card API aliases expose the product language to new integrations.
 
-Buckets are the main thinking tool.
+### List
 
-Examples:
+A list is a named context for cards. Examples include Build AI Systems Course, YouTube, Growth, Personal, Waiting, or an August revenue goal.
 
-- High priority
-- Medium priority
-- Low priority
-- Inbox
-- Waiting
-- Writing
-- Product
-- Personal
+Lists can have a short purpose. They do not impose a specific semantic type or reject cards based on item count. Focus comes from views, filters, priority, dates, and status.
 
-The app should not force one bucket style. Users should be able to bucket by priority, project, energy, time, person, or status.
+### Board
 
-Each bucket can state its goal in one sentence.
+A board is a spatial view of related lists and cards. Its columns are the real, user-defined lists. Moving a card across a board changes its list, not its workflow status.
 
-## Active item limits
+The current database retains board ownership for compatibility. The primary UI treats lists as account-wide contexts and does not ask users to manage that storage detail.
 
-Every list should have a visible Max active items per list setting.
+### Child card
 
-Example:
+A card can contain one level of child cards. Each child has its own status, priority, planned date, and owner, but stays in the same list as its parent. A child cannot contain another child.
 
-```text
-Product 3/5
-```
+The parent card shows progress and a compact child-card list. Deleting a parent deletes its children.
 
-The limit is not decoration. It is part of the product.
+### Conversation entry
 
-When the limit is full, the user should finish or move an item before creating another.
+A conversation entry belongs to a card and is one of:
 
-The default and Pro hard maximum are 20 active items per list. A board can choose a lower working limit, but no input or override can exceed 20.
+- Comment: feedback, context, or a question.
+- Output: a result, link, deliverable, or summary returned by a human or agent.
 
-## List Items
+An output moves the card to Review. The latest output is pinned in card detail while the full conversation remains visible.
 
-An item should look like one clean, completable line in the bucket.
+### Agent
 
-List item display should include:
+An agent is a named external collaborator with a scoped credential. Cards can be assigned to agents. An agent token can only read and change that agent's assigned cards.
 
-- Title.
-- Planned date when set.
+Agents use the CLI or card API to pull, claim, update, comment, add outputs, request review, and complete assigned work. Slate shows the result and conversation, not model selection, retries, or execution logs.
 
-The full task detail view should include:
+## Navigation
 
-- Title.
-- Description.
-- Date.
-- Workflow state.
-- List.
+The signed-in app opens to Today and keeps three levels visible:
 
-## Agents
+- Attention: Inbox, Today, Review.
+- Plan: Week, All cards.
+- Context: user-defined Lists and Agents.
 
-List items can optionally be assigned to a named agent identity.
+New card creates one card in Inbox and opens it for editing.
 
-An account owner creates an agent identity and receives its token once. An agent's queued-task feed contains only work assigned to that identity.
+## Views
 
-A valid account API token can still pull any queued task. Claiming a task changes its internal workflow status to `working`.
+Every view reads and edits the same card records:
 
-Example CLI flow:
+- Board: show user-defined lists as columns and move cards between them.
+- Flow: show New, Ready, In Progress, Review, and Done as columns without changing a card's list.
+- Table: card, list, status, priority, owner, and planned date.
+- Week: planned cards grouped Monday through Sunday.
 
-```bash
-SLATE_API_TOKEN=...
-slate tasks pull
-```
+Opening a card uses a right drawer so its list remains visible as context. Card detail contains Prompt and context, Act with agent, latest Output, Conversation, Child cards, and Properties.
 
-The API returns open queued tasks.
+Review separates outputs waiting for judgment from cards manually placed in Review.
 
-Example query:
+## Workflow status
 
-```text
-account or agent token is valid
-done = false
-status = "queued"
-assignee = authenticated agent when using an agent token
-```
+- `new`, labelled New
+- `queued`, labelled Ready
+- `working`, labelled In Progress
+- `needs_review`, labelled Review
+- `done`, labelled Done
 
-This keeps agent collaboration simple.
+The existing status values stay stable for existing clients. `new` is added as the capture state.
 
-## Workflow Status
+## Compatibility
 
-Use a small status set:
+Existing board, list, task, agent, and CLI routes remain supported. New integrations can use `/api/v1/cards` aliases and `/api/v1/cards/{id}/entries`. The implementation can continue using task names internally until changing them has clear product value.
 
-- `queued`
-- `working`
-- `needs_review`
-- `done`
+## Scope
 
-Do not add complex workflow states in v1.
+Included:
 
-## API Principle
+- Account-wide card workspace with Today as the default.
+- Inbox capture and generic cards.
+- Lists as flexible context, with backend board ownership hidden from primary UI.
+- Board, Flow, Table, Review, Today, and Week views.
+- Filters, priorities, planned dates, and fixed workflow status.
+- One level of child cards.
+- Named agent identities, assignment, scoped tokens, and CLI execution.
+- Human and agent comments and outputs.
+- Compatibility for existing board, list, task, and CLI clients.
 
-The API should be boring and clear.
+Not included:
 
-Core agent operations:
+- Required goal, project, or task types.
+- Deeply nested card trees.
+- Custom workflow builders.
+- Team roles and permissions.
+- Agent runtime logs, model controls, retries, or embedded chat.
+- Notifications, calendar sync, or rich labels.
 
-- Pull queued tasks.
-- Claim or mark a task as working.
-- Update the task description with useful context or results.
-- Mark a task as needs review.
-- Mark a task as done.
-
-The API supports either an account token or a lightweight named agent identity with its own revocable token.
-
-## MVP
-
-The first app version should include:
-
-- Boards.
-- Buckets.
-- Bucket limits.
-- Create, rename, reorder, and delete buckets.
-- Create, edit, move, complete, and delete items.
-- Item detail panel.
-- Title and description.
-- Optional planned date and Monday-to-Sunday calendar view.
-- Today view for dated items.
-- Flow view with Ready, Working, Review, and Done columns for list items.
-- Workflow status controls for human and agent coordination.
-- Local persistence or simple database persistence.
-- Global workspace API token.
-- Named agent identities, per-agent tokens, and optional assignment.
-- CLI pull for queued tasks.
-
-Out of scope:
-
-- User roles.
-- Team permissions.
-- Nested items.
-- Comments.
-- Rich labels.
-- Calendar sync.
-- Automation builder.
-- Reports.
-- Notifications.
-
-## UX Principles
-
-- The board is the interface.
-- Keep list items compact.
-- Avoid dashboards.
-- Keep items flat and use buckets for structure.
-- Avoid heavy metadata.
-- Prefer text over configuration.
-- Make limits visible.
-- Make overload obvious.
-- Show the fixed item state in the detail panel without adding ownership or workflow configuration.
-- Make capture fast.
-- Make review calm.
-
-## Initial Prototype
-
-The first static prototype is:
-
-- `list-app-mockup.html`
-
-It shows:
-
-- Sidebar boards.
-- List grid.
-- Responsive list grid.
-- Item add flow.
-- Item drag flow.
-- Detail panel.
-- Title and description.
-- Planned date.
-- Weekly calendar view.
-
-## Success Criteria
+## Success criteria
 
 Slate is working when:
 
-- The user can see active work at a glance.
-- Buckets stay small.
-- The user knows what matters this week.
-- Agents can find queued work.
-- Agent work can be reviewed without clutter.
-- The product feels lighter than Trello, Notion, GitHub Issues, or a normal task app.
-
-## Open Questions
-
-- Should the default bucket limit be 3 or 5?
-- Should Inbox have a limit?
-- Should the CLI be part of v1 or come right after the web app?
+- Any intent can be captured without deciding whether it is a task, goal, or project.
+- A list can represent a project or goal without requiring a separate object type.
+- A human can move between cards, flow, table, and time views without duplicating data.
+- A card is useful as an agent prompt and keeps the agent's feedback and output attached.
+- A complex card can be divided between a human and agents while progress stays visible.
+- An agent can access only assigned cards and return work for review.
+- The interface clarifies and focuses human attention instead of exposing agent machinery.

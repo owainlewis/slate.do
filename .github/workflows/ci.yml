@@ -44,4 +44,5 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: just test-ci
-      - run: sh scripts/build-cli-release.sh v0.0.0 "$RUNNER_TEMP/slate-release"
+      - name: Verify CLI release artifacts
+        run: sh scripts/test-cli-release.sh

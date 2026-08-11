@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidStatus(t *testing.T) {
-	for _, status := range []string{StatusQueued, StatusWorking, StatusNeedsReview, StatusDone} {
+	for _, status := range []string{StatusNew, StatusQueued, StatusWorking, StatusNeedsReview, StatusDone} {
 		if !validStatus(status) {
 			t.Fatalf("%s should be valid", status)
 		}
@@ -18,16 +18,13 @@ func TestValidStatus(t *testing.T) {
 }
 
 func TestApplyTaskStatusAllowsEveryHumanTransition(t *testing.T) {
-	for _, status := range []string{StatusQueued, StatusWorking, StatusNeedsReview, StatusDone} {
+	for _, status := range []string{StatusNew, StatusQueued, StatusWorking, StatusNeedsReview, StatusDone} {
 		task := Task{Kind: KindAction, Status: StatusQueued}
 		if err := applyTaskStatus(&task, status, true); err != nil {
 			t.Fatalf("apply %q: %v", status, err)
 		}
 		if task.Status != status {
 			t.Fatalf("status = %q, want %q", task.Status, status)
-		}
-		if task.Done != (status == StatusDone) {
-			t.Fatalf("done = %v for %q", task.Done, status)
 		}
 	}
 }
@@ -69,6 +66,13 @@ func TestValidKind(t *testing.T) {
 	}
 }
 
+func TestPrepareTaskCreateRejectsMalformedParentID(t *testing.T) {
+	_, err := prepareTaskCreate(CreateTaskInput{Title: "Child", ParentTaskID: "not-a-uuid"}, "inbox")
+	if !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("error = %v, want ErrInvalidData", err)
+	}
+}
+
 func TestValidPriority(t *testing.T) {
 	for _, priority := range []string{PriorityNone, PriorityP0, PriorityP1, PriorityP2} {
 		if !validPriority(priority) {
@@ -92,13 +96,86 @@ func TestTaskFilterFromQueryIncludesPriority(t *testing.T) {
 }
 
 func TestTaskFilterFromQueryIncludesBoardAndList(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId=board-1&bucketId=list-1&status=done&done=true&limit=12&cursor=next-page", nil)
+	const boardID = "11111111-1111-4111-8111-111111111111"
+	const bucketID = "22222222-2222-4222-8222-222222222222"
+	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId="+boardID+"&bucketId="+bucketID+"&status=done&limit=12&cursor=next-page", nil)
 	filter, err := taskFilterFromQuery(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filter.BoardID != "board-1" || filter.BucketID != "list-1" || filter.Status != "done" || filter.Done == nil || !*filter.Done || filter.Limit != 12 || filter.Cursor != "next-page" {
+	if filter.BoardID != boardID || filter.BucketID != bucketID || filter.Status != "done" || filter.Limit != 12 || filter.Cursor != "next-page" {
 		t.Fatalf("filter = %#v", filter)
+	}
+}
+
+func TestTaskFilterFromQueryMapsLegacyDone(t *testing.T) {
+	doneRequest := httptest.NewRequest("GET", "/api/v1/tasks?done=true", nil)
+	doneFilter, err := taskFilterFromQuery(doneRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doneFilter.Status != StatusDone || doneFilter.Done == nil || !*doneFilter.Done {
+		t.Fatalf("done filter = %#v", doneFilter)
+	}
+
+	openRequest := httptest.NewRequest("GET", "/api/v1/tasks?done=false", nil)
+	openFilter, err := taskFilterFromQuery(openRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openFilter.Status != "" || openFilter.Done == nil || *openFilter.Done {
+		t.Fatalf("open filter = %#v", openFilter)
+	}
+	mixedRequest := httptest.NewRequest("GET", "/api/v1/tasks?status=working&done=true", nil)
+	mixedFilter, err := taskFilterFromQuery(mixedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mixedFilter.Status != StatusWorking || mixedFilter.Done == nil || !*mixedFilter.Done {
+		t.Fatalf("mixed filter = %#v", mixedFilter)
+	}
+
+	invalidRequest := httptest.NewRequest("GET", "/api/v1/tasks?done=maybe", nil)
+	if _, err := taskFilterFromQuery(invalidRequest); err == nil {
+		t.Fatal("invalid legacy done filter was accepted")
+	}
+
+	statusScope := taskCursorScope("user-one", TaskFilter{Status: StatusDone})
+	if legacyScope := taskCursorScope("user-one", doneFilter); legacyScope != statusScope {
+		t.Fatalf("done=true scope = %q, want status=done scope %q", legacyScope, statusScope)
+	}
+	if mixedScope := taskCursorScope("user-one", mixedFilter); mixedScope == taskCursorScope("user-one", TaskFilter{Status: StatusWorking}) {
+		t.Fatal("mixed legacy filter reused the status-only cursor scope")
+	}
+}
+
+func TestTaskFilterFromQueryIncludesWorkspaceFilters(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	req := httptest.NewRequest("GET", "/api/v1/tasks?q=video&assigneeAgentId=unassigned&plannedFrom=2026-08-01&plannedTo=2026-08-31&parentTaskId="+id+"&topLevel=true&inbox=true", nil)
+	filter, err := taskFilterFromQuery(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filter.Query != "video" || !filter.Unassigned || filter.ScheduledFrom != "2026-08-01" || filter.ScheduledTo != "2026-08-31" || filter.ParentTaskID != id || !filter.TopLevelOnly || !filter.InboxOnly {
+		t.Fatalf("filter = %#v", filter)
+	}
+}
+
+func TestTaskFilterRejectsInvalidWorkspaceFilters(t *testing.T) {
+	for _, query := range []string{"boardId=not-an-id", "bucketId=not-an-id", "assigneeAgentId=not-an-id", "parentTaskId=not-an-id", "plannedFrom=tomorrow", "plannedTo=2026-13-01", "topLevel=maybe", "inbox=maybe"} {
+		req := httptest.NewRequest("GET", "/api/v1/tasks?"+query, nil)
+		if _, err := taskFilterFromQuery(req); err == nil {
+			t.Fatalf("query %q was accepted", query)
+		}
+	}
+}
+
+func TestTaskPageRejectsMalformedLocationIDsBeforeDatabaseAccess(t *testing.T) {
+	store := NewStore(nil)
+	for _, filter := range []TaskFilter{{BoardID: "not-an-id"}, {BucketID: "not-an-id"}} {
+		if _, err := store.ListTaskPage(t.Context(), "user", filter); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("filter %#v error = %v, want ErrInvalidData", filter, err)
+		}
 	}
 }
 

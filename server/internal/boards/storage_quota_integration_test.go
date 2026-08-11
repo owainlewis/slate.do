@@ -301,14 +301,14 @@ func TestStoredContentQuotaExactLimitEditLifecycleAndConcurrentWrites(t *testing
 	assertQuotaError(t, err, StoredContentLimitCode, limit, limit)
 
 	// State and location changes remain available while usage is exactly full.
-	done := true
-	completed, err := store.UpdateTask(ctx, userID, exact.ID, UpdateTaskInput{Done: &done})
-	if err != nil || !completed.Done {
+	done := StatusDone
+	completed, err := store.UpdateTask(ctx, userID, exact.ID, UpdateTaskInput{Status: &done})
+	if err != nil || completed.Status != StatusDone {
 		t.Fatalf("complete at limit: task=%#v err=%v", completed, err)
 	}
-	done = false
-	reopened, err := store.UpdateTask(ctx, userID, exact.ID, UpdateTaskInput{Done: &done})
-	if err != nil || reopened.Done {
+	queued := StatusQueued
+	reopened, err := store.UpdateTask(ctx, userID, exact.ID, UpdateTaskInput{Status: &queued})
+	if err != nil || reopened.Status != StatusQueued {
 		t.Fatalf("reopen at limit: task=%#v err=%v", reopened, err)
 	}
 	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination", LimitCount: 20})
@@ -368,13 +368,13 @@ func TestOverLimitAccountCanReadCompleteReduceAndDelete(t *testing.T) {
 		t.Fatalf("read while over limit: tasks=%d err=%v", len(listed), err)
 	}
 
-	done := false
-	reopened, err := store.UpdateTask(ctx, userID, listed[0].ID, UpdateTaskInput{Done: &done})
-	if err != nil || reopened.Done {
+	queued := StatusQueued
+	reopened, err := store.UpdateTask(ctx, userID, listed[0].ID, UpdateTaskInput{Status: &queued})
+	if err != nil || reopened.Status != StatusQueued {
 		t.Fatalf("reopen while over limit: task=%#v err=%v", reopened, err)
 	}
-	done = true
-	if _, err := store.UpdateTask(ctx, userID, listed[0].ID, UpdateTaskInput{Done: &done}); err != nil {
+	done := StatusDone
+	if _, err := store.UpdateTask(ctx, userID, listed[0].ID, UpdateTaskInput{Status: &done}); err != nil {
 		t.Fatalf("complete while over limit: %v", err)
 	}
 
@@ -419,9 +419,161 @@ func TestDeletingBucketsAndBoardsReleasesCascadeTaskUsage(t *testing.T) {
 	assertStorageUsage(t, ctx, db, userID, 0, 0)
 }
 
+func TestDeletingAParentContainerReleasesMovedSubtaskUsage(t *testing.T) {
+	for _, deletion := range []string{"same-list", "cross-list", "cross-board"} {
+		t.Run(deletion, func(t *testing.T) {
+			db := openIntegrationDB(t)
+			ctx := context.Background()
+			store := NewStore(db)
+			userID, sourceBoard, source := createProQuotaAccount(t, ctx, db, store)
+			t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+			parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "parent", Description: "source", OverrideLimit: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "child", Description: "moved", OverrideLimit: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertStorageUsage(t, ctx, db, userID, 2, taskContentBytes(parent)+taskContentBytes(child))
+
+			if deletion != "same-list" {
+				destinationBoard := sourceBoard
+				if deletion == "cross-board" {
+					destinationBoard, err = store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Destination board"})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				destination, err := store.CreateBucket(ctx, userID, destinationBoard.ID, CreateBucketInput{Name: "Destination", LimitCount: 20})
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Preserve coverage for invalid data written before the parent/list
+				// invariant was enforced at the store boundary.
+				if _, err := db.Exec(ctx, `
+					UPDATE tasks
+					SET board_id = $2, bucket_id = $3, updated_at = now()
+					WHERE id = $1
+				`, child.ID, destination.BoardID, destination.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if deletion == "cross-board" {
+				err = store.DeleteBoard(ctx, userID, sourceBoard.ID)
+			} else {
+				err = store.DeleteBucket(ctx, userID, source.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertStoredUsageMatchesTasks(t, ctx, db, userID)
+			assertStorageUsage(t, ctx, db, userID, 0, 0)
+		})
+	}
+}
+
+func TestMovingAParentWhileDeletingItsContainerKeepsUsageExact(t *testing.T) {
+	for _, deletion := range []string{"list", "board"} {
+		t.Run(deletion, func(t *testing.T) {
+			db := openIntegrationDB(t)
+			ctx := context.Background()
+			store := NewStore(db)
+			for iteration := 0; iteration < 5; iteration++ {
+				userID, sourceBoard, source := createProQuotaAccount(t, ctx, db, store)
+				destinationBoard := sourceBoard
+				var err error
+				if deletion == "board" {
+					destinationBoard, err = store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Destination board"})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				destination, err := store.CreateBucket(ctx, userID, destinationBoard.ID, CreateBucketInput{Name: "Destination", LimitCount: 20})
+				if err != nil {
+					t.Fatal(err)
+				}
+				parent, err := store.CreateTask(ctx, userID, source.ID, CreateTaskInput{Title: "parent", OverrideLimit: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "child", OverrideLimit: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				start := make(chan struct{})
+				results := make(chan error, 2)
+				go func() {
+					<-start
+					position := 0
+					_, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position})
+					results <- err
+				}()
+				go func() {
+					<-start
+					if deletion == "board" {
+						results <- store.DeleteBoard(ctx, userID, sourceBoard.ID)
+						return
+					}
+					results <- store.DeleteBucket(ctx, userID, source.ID)
+				}()
+				close(start)
+				for call := 0; call < 2; call++ {
+					err := <-results
+					if err != nil && !errors.Is(err, ErrNotFound) {
+						t.Fatalf("iteration %d %s race: %v", iteration, deletion, err)
+					}
+				}
+				assertStoredUsageMatchesTasks(t, ctx, db, userID)
+				if _, err := db.Exec(ctx, "DELETE FROM users WHERE id = $1", userID); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func assertStoredUsageMatchesTasks(t *testing.T, ctx context.Context, db *database.Pool, userID string) {
+	t.Helper()
+	var tasks, contentBytes int64
+	if err := db.QueryRow(ctx, `
+		SELECT count(t.id)::bigint, COALESCE(sum(t.storage_bytes), 0)::bigint
+		FROM tasks t
+		JOIN boards b ON b.id = t.board_id
+		WHERE b.user_id = $1
+	`, userID).Scan(&tasks, &contentBytes); err != nil {
+		t.Fatal(err)
+	}
+	assertStorageUsage(t, ctx, db, userID, tasks, contentBytes)
+}
+
 func createFreeQuotaAccount(t *testing.T, ctx context.Context, db *database.Pool, store *Store) (string, Board, Bucket) {
 	t.Helper()
-	userID := createFreeIntegrationUser(t, ctx, db)
+	// Build the fixture with pro resource limits, then downgrade it. Other test
+	// packages apply migrations against the same database in parallel; an Inbox
+	// migration can otherwise create the free account's only board between the
+	// user insert and this explicit board creation.
+	userID := createIntegrationUser(t, ctx, db)
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Quota"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Tasks", LimitCount: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "DELETE FROM entitlements WHERE user_id = $1", userID); err != nil {
+		t.Fatal(err)
+	}
+	return userID, board, bucket
+}
+
+func createProQuotaAccount(t *testing.T, ctx context.Context, db *database.Pool, store *Store) (string, Board, Bucket) {
+	t.Helper()
+	userID := createIntegrationUser(t, ctx, db)
 	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Quota"})
 	if err != nil {
 		t.Fatal(err)
@@ -444,8 +596,8 @@ func seedCompletedTasks(t *testing.T, ctx context.Context, db *database.Pool, bu
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, kind, done, status, sort_order)
-		SELECT b.board_id, b.id, $3, '', 'action', true, 'done', generated
+		INSERT INTO tasks (board_id, bucket_id, title, description, kind, status, sort_order)
+		SELECT b.board_id, b.id, $3, '', 'action', 'done', generated
 		FROM buckets b CROSS JOIN generate_series(1, $2::integer) AS generated
 		WHERE b.id = $1
 	`, bucketID, count, title); err != nil {

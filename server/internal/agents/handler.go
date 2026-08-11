@@ -25,6 +25,7 @@ type detailStore interface {
 	RevokeCredential(context.Context, string, string) error
 	ArchiveAgent(context.Context, string, string, bool) (ArchiveConflict, error)
 	RestoreAgent(context.Context, string, string) (auth.AgentUser, error)
+	DeleteAgent(context.Context, string, string) error
 }
 
 type Handler struct {
@@ -204,7 +205,7 @@ func (h *Handler) Archive(w http.ResponseWriter, r *http.Request, user auth.User
 			Conflict ArchiveConflict `json:"conflict"`
 		}{
 			Code:     "agent_open_work",
-			Error:    "Ready and Working work must be unassigned before this agent can be archived.",
+			Error:    "New, Ready, and In Progress work must be unassigned before this agent can be archived.",
 			Conflict: conflict.Counts,
 		})
 	case err != nil:
@@ -235,6 +236,23 @@ func (h *Handler) Restore(w http.ResponseWriter, r *http.Request, user auth.User
 		writeInternalError(w, err, "agent could not be restored")
 	default:
 		writeJSON(w, http.StatusOK, agent)
+	}
+}
+
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validateMutation(w, r) {
+		return
+	}
+	err := h.store.DeleteAgent(r.Context(), user.ID, agentID(r))
+	switch {
+	case errors.Is(err, auth.ErrAgentNotFound):
+		writeError(w, http.StatusNotFound, "agent not found")
+	case errors.Is(err, ErrDeleteRequiresArchive):
+		writeCodedError(w, http.StatusConflict, "agent_not_archived", "Archive this agent before permanently deleting it.")
+	case err != nil:
+		writeInternalError(w, err, "agent could not be deleted")
+	default:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }
 
