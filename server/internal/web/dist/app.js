@@ -3209,6 +3209,45 @@ function removeLoadedTaskFamily(taskID, tasks) {
   state.subtaskError = "";
 }
 
+function captureContextDeleteDetail() {
+  if (!state.selectedTask) return null;
+  preserveCurrentTaskDraft();
+  return {
+    path: currentLocationPath(),
+    task: { ...state.selectedTask },
+    subtasks: state.selectedSubtasks.map(item => ({ ...item })),
+    entries: state.selectedEntries.map(item => ({ ...item })),
+    drafts: Object.fromEntries(Object.entries(state.taskDetailDrafts).map(([id, draft]) => [id, { ...draft }])),
+    cardEntryDraft: state.cardEntryDraft,
+    cardEntryKind: state.cardEntryKind,
+    subtaskDraft: state.subtaskDraft,
+    focus: captureTaskDetailFocus(),
+  };
+}
+
+function restoreContextDeleteDetail(snapshot, deletedIDs, expectedRouteVersion) {
+  if (!snapshot || deletedIDs.has(snapshot.task.id) || expectedRouteVersion !== routeVersion
+    || snapshot.path !== currentLocationPath() || state.routeError) return false;
+  const summary = findTask(snapshot.task.id);
+  if (!summary) return false;
+  state.taskDetailDrafts = Object.fromEntries(Object.entries(snapshot.drafts).filter(([id]) => !deletedIDs.has(id)));
+  const draft = state.taskDetailDrafts[snapshot.task.id] || {};
+  state.selectedTask = { ...snapshot.task, ...summary, ...draft };
+  state.selectedSubtasks = snapshot.subtasks.filter(item => !deletedIDs.has(item.id));
+  state.selectedEntries = snapshot.entries;
+  state.cardEntryDraft = snapshot.cardEntryDraft;
+  state.cardEntryKind = snapshot.cardEntryKind;
+  state.cardEntryPending = false;
+  state.cardEntryError = "";
+  state.subtaskDraft = snapshot.subtaskDraft;
+  state.subtaskCreateAttempt = null;
+  state.subtaskPending = false;
+  state.subtaskError = "";
+  render();
+  restoreTaskDetailFocus(snapshot.focus);
+  return true;
+}
+
 async function deleteCardFromContext(taskID) {
   const task = findTask(taskID);
   if (!task || !confirm(`Delete “${task.title}” and its child cards?`)) return false;
@@ -3220,16 +3259,25 @@ async function deleteCardFromContext(taskID) {
     if (!deleted || !sessionIsCurrent(sessionVersion, userID)) return false;
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID)) return false;
-    state.error = `Couldn’t delete “${task.title}”: ${err.message}`;
+    const message = `Couldn’t delete “${task.title}”: ${err.message}`;
+    if (["agent-detail", "agent-work"].includes(state.view)) {
+      state.agentTaskMutationError = message;
+      if (state.selectedTask) state.error = message;
+    } else state.error = message;
     render();
     document.querySelector(`[data-task="${CSS.escape(taskID)}"] [data-open-task], [data-task="${CSS.escape(taskID)}"]`)?.focus();
     return false;
   }
 
   const deletedTasks = new Map([...family, ...loadedTaskFamily(taskID)].map(item => [item.id, item]));
+  const deletedIDs = new Set([taskID, ...deletedTasks.keys()]);
+  const detailSnapshot = captureContextDeleteDetail();
   removeLoadedTaskFamily(taskID, [...deletedTasks.values()]);
   state.error = "";
-  await applyRoute();
+  const refresh = applyRoute();
+  const refreshRouteVersion = routeVersion;
+  await refresh;
+  restoreContextDeleteDetail(detailSnapshot, deletedIDs, refreshRouteVersion);
   return true;
 }
 
