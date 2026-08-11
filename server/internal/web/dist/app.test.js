@@ -113,12 +113,17 @@ test("sidebar makes cards, boards, and agents the primary control plane", () => 
     state.workspaceScope = "all";
   `, app);
 
-  const html = app.appHTML();
-  for (const label of ["Attention", "Inbox", "Today", "Review", "Plan", "Week", "All cards", "Boards", "Content", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
-  assert.ok(html.indexOf(">Boards<") < html.indexOf(">Attention<"));
+  const html = app.appSidebarHTML();
+  for (const label of ["Focus", "Today", "Week", "Boards", "Content", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
+  for (const label of ["Attention", "Inbox", "Review", "Plan", "All cards"]) assert.doesNotMatch(html, new RegExp(`>${label}<`));
+  assert.ok(html.indexOf(">Focus<") < html.indexOf(">Boards<"));
   assert.match(html, /data-board="content"><span>Content<\/span>/);
   assert.match(html, /id="new-board"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
+  const settings = app.settingsHTML();
+  for (const label of ["Focus", "Today", "Week", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
+  for (const label of ["Inbox", "Review", "All cards"]) assert.doesNotMatch(settings, new RegExp(`>${label}<`));
+  assert.ok(settings.indexOf(">Focus<") < settings.indexOf(">Boards<"));
   vm.runInContext(`state.boards = [];`, app);
 });
 
@@ -533,7 +538,7 @@ test("the card table exposes native headers, cells, and keyboard-operable rows",
   `, app);
   const html = app.workspaceTableHTML([{
     id: "task-one", title: "Accessible task", listName: "Inbox", status: "queued",
-    priority: "p1", scheduledDate: "2026-08-05", done: false, assigneeAgentId: "",
+    priority: "p1", scheduledDate: "2026-08-05", assigneeAgentId: "",
   }]);
 
   assert.match(html, /^<table class="workspace-table" aria-label="Cards">/);
@@ -552,7 +557,7 @@ test("every global card view identifies child cards with parent context", () => 
   const planned = app.dateKey(app.startOfWeek(new Date()));
   const subtask = {
     id: "child", parentTaskId: "parent", parentTaskTitle: "Parent & plan", bucketId: "product", title: "Research", listName: "Product",
-    status: "needs_review", priority: "", scheduledDate: planned, done: false, assigneeAgentId: "",
+    status: "needs_review", priority: "", scheduledDate: planned, assigneeAgentId: "",
   };
   for (const html of [
     app.workspaceListHTML([subtask]),
@@ -602,7 +607,7 @@ test("agent work renders the shared inline task detail with parent context", () 
     state.view = "agent-work";
     state.workspaceLists = [{ id: "list-one", boardId: "board-one", name: "Product" }];
     state.selectedTask = { id: "parent", bucketId: "list-one", title: "Prepare launch", description: "", status: "working", priority: "p1", assigneeAgentId: "agent-one", scheduledDate: "" };
-    state.selectedSubtasks = [{ id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", status: "done", done: true }];
+    state.selectedSubtasks = [{ id: "child", parentTaskId: "parent", bucketId: "list-one", title: "Review", status: "done" }];
   `, app);
   const html = app.agentDetailHTML();
   assert.match(html, /class="main workspace-main card-detail-main agent-task-main"/);
@@ -626,18 +631,18 @@ test("completed history pages append to a list and preserve the next cursor", as
     state.me = { id: "owner" };
     state.board = {
       id: "board-one",
-      buckets: [{ id: "list-one", completedNextCursor: "cursor-one", tasks: [{ id: "active", done: false }] }],
+      buckets: [{ id: "list-one", completedNextCursor: "cursor-one", tasks: [{ id: "active", status: "queued" }] }],
     };
     historyRequests = [];
     api.get = async path => {
       historyRequests.push(path);
-      return { tasks: [{ id: "older", bucketId: "list-one", done: true }], nextCursor: "cursor-two" };
+      return { tasks: [{ id: "older", bucketId: "list-one", status: "done" }], nextCursor: "cursor-two" };
     };
   `, app);
 
   await app.loadCompletedHistory("list-one");
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(historyRequests)", app)), [
-    "/api/v1/tasks?bucketId=list-one&done=true&limit=20&cursor=cursor-one",
+    "/api/v1/tasks?bucketId=list-one&status=done&limit=20&cursor=cursor-one",
   ]);
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(state.board.buckets[0].tasks.map(task => task.id))", app)), ["active", "older"]);
   assert.equal(vm.runInContext("state.board.buckets[0].completedNextCursor", app), "cursor-two");
@@ -852,29 +857,30 @@ test("local date keys survive the spring DST boundary", () => {
   assert.equal(app.dateKey(app.addDays(before, 2)), "2026-03-30");
 });
 
-test("every list item is completable", () => {
-  const html = app.taskHTML({ id: "record", title: "Record comparison", kind: "action", status: "queued", scheduledDate: "", done: false });
+test("list cards open without a legacy completion checkbox", () => {
+  const html = app.taskHTML({ id: "record", title: "Record comparison", kind: "action", status: "queued", scheduledDate: "" });
 
-  assert.match(html, /class="task action/);
-  assert.match(html, /data-toggle-done="record"/);
-  assert.doesNotMatch(html, /item-dot/);
+	assert.match(html, /class="task action/);
+	assert.match(html, /data-open-task="record"/);
+	assert.doesNotMatch(html, /data-toggle-done|class="check"/);
+	assert.doesNotMatch(html, /item-dot/);
 });
 
 test("subtasks cannot be dragged independently between lists", () => {
-  assert.match(app.taskHTML({ id: "parent", title: "Parent", done: false }), /draggable="true"/);
-  assert.match(app.taskHTML({ id: "child", parentTaskId: "parent", title: "Child", done: false }), /draggable="false"/);
+	assert.match(app.taskHTML({ id: "parent", title: "Parent", status: "new" }), /draggable="true"/);
+	assert.match(app.taskHTML({ id: "child", parentTaskId: "parent", title: "Child", status: "new" }), /draggable="false"/);
 });
 
 test("list items show compact state treatment", () => {
-  const ready = app.taskHTML({ id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "", done: false });
-  const working = app.taskHTML({ id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "", done: false });
-  const review = app.taskHTML({ id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "", done: false });
-  const done = app.taskHTML({ id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "", done: true });
+	const ready = app.taskHTML({ id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "" });
+	const working = app.taskHTML({ id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "" });
+	const review = app.taskHTML({ id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "" });
+	const done = app.taskHTML({ id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "" });
 
   assert.doesNotMatch(ready, /state-badge/);
   assert.match(working, /state-working[^>]*>In Progress/);
   assert.match(review, /state-needs_review[^>]*>Review/);
-  assert.match(done, /class="task action done"/);
+	assert.match(done, /class="task action status-done"/);
 });
 
 test("agent assignments use safe deterministic bot avatars across directory, task, and detail views", () => {
@@ -891,7 +897,7 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
     state.workspaceLists = [{ id: "list", boardId: "board", name: "List" }];
     state.selectedSubtasks = [];
   `, app);
-  const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", done: false, scheduledDate: "", assigneeAgentId: "agent-one" };
+  const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", scheduledDate: "", assigneeAgentId: "agent-one" };
   const taskHTML = app.taskHTML(assigned);
   assert.match(taskHTML, /class="avatar agent-avatar tone-\d avatar-small/);
   assert.match(taskHTML, /<rect x="5" y="7" width="14" height="11" rx="3"/);
@@ -1026,8 +1032,8 @@ test("agent directory shows credential facts, work counts, archived identities, 
 });
 
 test("agent detail presents real grouped task data, bounded history, and distinct states", () => {
-  const workItem = (id, title, status, done = false) => ({
-    id, title, status, done, boardId: "board", boardName: "Business",
+  const workItem = (id, title, status) => ({
+    id, title, status, boardId: "board", boardName: "Business",
     bucketId: "list", bucketName: "Product", updatedAt: "2026-07-28T09:00:00Z",
   });
   vm.runInContext(`
@@ -1043,7 +1049,7 @@ test("agent detail presents real grouped task data, bounded history, and distinc
         ready: [workItem("ready", "Ready item", "queued")],
         working: [workItem("working", "Working item", "working")],
         review: [workItem("review", "Review item", "needs_review")],
-        recentlyCompleted: [workItem("done", "Done item", "done", true)],
+        recentlyCompleted: [workItem("done", "Done item", "done")],
         totals: { ready: 51, working: 1, review: 1, completed: 21 },
         openLimit: 50,
         completedLimit: 20,
@@ -1074,7 +1080,7 @@ test("agent detail presents real grouped task data, bounded history, and distinc
   vm.runInContext(`
     state.view = "agent-work";
     state.agentWorkPage = {
-      items: ${JSON.stringify([workItem("ready", "Ready item", "queued"), workItem("done", "Done item", "done", true)])},
+      items: ${JSON.stringify([workItem("ready", "Ready item", "queued"), workItem("done", "Done item", "done")])},
       page: 2, pageSize: 50, total: 102, hasPrevious: true, hasNext: true,
     };
   `, app);
@@ -1114,7 +1120,7 @@ test("deleting an off-page assigned subtask reconciles agent pagination and stat
   `, app);
 
   assert.equal(app.reconcileAgentTaskCaches({
-    id: "off-page-child", parentTaskId: "parent", assigneeAgentId: "agent-one", status: "queued", done: false,
+    id: "off-page-child", parentTaskId: "parent", assigneeAgentId: "agent-one", status: "queued",
   }, { deleted: true }), true);
   assert.equal(vm.runInContext("state.agentWorkPage.total", app), 50);
   assert.equal(vm.runInContext("state.agentWorkPage.hasNext", app), false);
@@ -1204,9 +1210,9 @@ test("moving a parent reconciles an open child detail without losing its draft",
     state.agentWorkPage = null;
   `, app);
 
-  app.reconcileTaskCompletion(
-    { id: "parent", bucketId: "list-new", status: "working", done: false },
-    { id: "parent", bucketId: "list-old", status: "working", done: false },
+  app.reconcileTaskMutation(
+    { id: "parent", bucketId: "list-new", status: "working" },
+    { id: "parent", bucketId: "list-old", status: "working" },
   );
 
   assert.equal(vm.runInContext("state.workspaceTasks[0].bucketId", app), "list-new");
@@ -1248,8 +1254,8 @@ test("off-page agent mutations reconcile bounded overview totals", () => {
   `, app);
 
   app.reconcileAgentTaskCaches(
-    { id: "off-page", assigneeAgentId: "agent-one", status: "working", done: false },
-    { previousTask: { id: "off-page", assigneeAgentId: "agent-one", status: "queued", done: false } },
+    { id: "off-page", assigneeAgentId: "agent-one", status: "working" },
+    { previousTask: { id: "off-page", assigneeAgentId: "agent-one", status: "queued" } },
   );
   assert.equal(vm.runInContext("state.agentDetail.work.totals.ready", app), 50);
   assert.equal(vm.runInContext("state.agentDetail.work.totals.working", app), 3);
@@ -1257,8 +1263,8 @@ test("off-page agent mutations reconcile bounded overview totals", () => {
   assert.equal(vm.runInContext("state.agentWorkPage.total", app), 53);
 
   app.reconcileAgentTaskCaches(
-    { id: "off-page", assigneeAgentId: "", status: "working", done: false },
-    { previousTask: { id: "off-page", assigneeAgentId: "agent-one", status: "working", done: false } },
+    { id: "off-page", assigneeAgentId: "", status: "working" },
+    { previousTask: { id: "off-page", assigneeAgentId: "agent-one", status: "working" } },
   );
   assert.equal(vm.runInContext("state.agentDetail.work.totals.working", app), 2);
   assert.equal(vm.runInContext("state.agentWorkPage.total", app), 52);
@@ -1755,123 +1761,6 @@ test("an older failed agent detail refresh cannot reject after a newer refresh",
   vm.runInContext(`state.me = null; state.agents = []; state.agentDetail = null;`, app);
 });
 
-test("a queued completion toggle inverts the latest committed task state", async () => {
-  let releasePendingSave;
-  app.pendingCompletionSave = new Promise(resolve => { releasePendingSave = resolve; });
-  vm.runInContext(`
-    authVersion = 89;
-    savedCompletionGet = api.get;
-    savedCompletionPatch = api.patch;
-    completionRequests = [];
-    api.get = async path => {
-      completionRequests.push({ method: "GET", path });
-      return { id: "task-completion-race", done: true };
-    };
-    api.patch = async (path, input) => {
-      completionRequests.push({ method: "PATCH", path, input });
-      return { id: "task-completion-race", done: input.done };
-    };
-  `, app);
-  const pendingSave = app.serializeTaskMutation("task-completion-race", () => app.pendingCompletionSave);
-  await new Promise(resolve => setImmediate(resolve));
-
-  const queuedToggle = app.toggleTaskCompletion({ id: "task-completion-race", done: false });
-  releasePendingSave({ id: "task-completion-race", done: true });
-  await pendingSave;
-  const result = await queuedToggle;
-
-  assert.equal(result.done, false);
-  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(completionRequests)", app)), [
-    { method: "GET", path: "/api/v1/tasks/task-completion-race" },
-    { method: "PATCH", path: "/api/v1/tasks/task-completion-race", input: { done: false } },
-  ]);
-  vm.runInContext(`
-    api.get = savedCompletionGet;
-    api.patch = savedCompletionPatch;
-    taskMutationTurns.clear();
-  `, app);
-  delete app.pendingCompletionSave;
-});
-
-test("a completed toggle reconciles a reopened detail before its next save", async () => {
-  let releaseCompletion;
-  app.pendingCompletionResponse = new Promise(resolve => { releaseCompletion = resolve; });
-  app.reopenedStatusControl = { value: "queued" };
-  app.document = { querySelector: () => app.reopenedStatusControl };
-  vm.runInContext(`
-    authVersion = 90;
-    savedReopenedCompletionPatch = api.patch;
-    state.selectedTask = null;
-    state.workspaceTasks = [{ id: "task-reopened-completion", status: "queued", done: false }];
-    state.selectedSubtasks = [];
-    state.taskDetailDrafts = {};
-    state.agentDetail = null;
-    state.agentWorkPage = null;
-    state.board = null;
-    api.patch = async () => pendingCompletionResponse;
-  `, app);
-
-  const completion = app.toggleTaskCompletion({ id: "task-reopened-completion", status: "queued", done: false });
-  await new Promise(resolve => setImmediate(resolve));
-  vm.runInContext(`
-    state.selectedTask = { id: "task-reopened-completion", title: "Reopened task", status: "queued", done: false };
-  `, app);
-  releaseCompletion({ id: "task-reopened-completion", title: "Reopened task", status: "done", done: true });
-  await completion;
-
-  assert.equal(vm.runInContext("state.selectedTask.status", app), "done");
-  assert.equal(vm.runInContext("state.selectedTask.done", app), true);
-  assert.equal(vm.runInContext("state.workspaceTasks[0].status", app), "done");
-  assert.equal(app.reopenedStatusControl.value, "done");
-  vm.runInContext(`
-    api.patch = savedReopenedCompletionPatch;
-    state.selectedTask = null;
-    state.workspaceTasks = [];
-    taskMutationTurns.clear();
-  `, app);
-  delete app.pendingCompletionResponse;
-  delete app.reopenedStatusControl;
-  delete app.document;
-});
-
-test("an old-session completion response cannot reconcile into a new account", async () => {
-  let releaseOldCompletion;
-  app.pendingOldCompletion = new Promise(resolve => { releaseOldCompletion = resolve; });
-  vm.runInContext(`
-    authVersion = 91;
-    savedOldSessionCompletionPatch = api.patch;
-    state.me = { id: "old-owner" };
-    state.workspaceTasks = [{ id: "shared-task-id", title: "Old account task", status: "queued", done: false }];
-    state.selectedSubtasks = [];
-    state.selectedTask = null;
-    state.agentDetail = null;
-    state.agentWorkPage = null;
-    state.board = null;
-    api.patch = async () => pendingOldCompletion;
-  `, app);
-
-  const oldCompletion = app.toggleTaskCompletion({ id: "shared-task-id", title: "Old account task", status: "queued", done: false });
-  await new Promise(resolve => setImmediate(resolve));
-  vm.runInContext(`authVersion += 1;`, app);
-  app.resetAuthenticatedState();
-  vm.runInContext(`
-    state.me = { id: "new-owner" };
-    state.workspaceTasks = [{ id: "shared-task-id", title: "New account task", status: "queued", done: false }];
-  `, app);
-  releaseOldCompletion({ id: "shared-task-id", title: "Old account task", status: "done", done: true });
-  await oldCompletion;
-
-  assert.equal(vm.runInContext("state.workspaceTasks[0].title", app), "New account task");
-  assert.equal(vm.runInContext("state.workspaceTasks[0].done", app), false);
-  vm.runInContext(`
-    api.patch = savedOldSessionCompletionPatch;
-    state.me = null;
-    state.workspaceTasks = [];
-    taskMutationTurns.clear();
-  `, app);
-  delete app.pendingOldCompletion;
-});
-
 test("an authenticated-state reset abandons old serialized task mutations", async () => {
   let releaseOldMutation;
   app.pendingOldTaskMutation = new Promise(resolve => { releaseOldMutation = resolve; });
@@ -2000,11 +1889,11 @@ const board = {
       id: "home",
       name: "Home list",
       tasks: [
-        { id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "", done: false },
-        { id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "2026-07-17", done: false },
-        { id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "", done: false },
-        { id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "", done: true },
-        { id: "reference", title: "Reference item", kind: "item", status: "queued", scheduledDate: "", done: false },
+        { id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "" },
+        { id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "2026-07-17" },
+        { id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "" },
+        { id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "" },
+        { id: "reference", title: "Reference item", kind: "item", status: "queued", scheduledDate: "" },
       ],
     },
     {
@@ -2013,7 +1902,7 @@ const board = {
       openCount: 1,
       limitCount: 20,
       tasks: [
-        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", done: false, priority: "p0" },
+        { id: "script", title: "Write video script", kind: "action", status: "queued", scheduledDate: "", priority: "p0" },
       ],
     },
   ],
@@ -2117,7 +2006,7 @@ test("dropping a parent moves its ordered subtask group through the move endpoin
     refreshAfterTaskMutation = async () => {};
     api.post = async (path, input) => {
       taskMoveRequests.push({ path, input });
-      return { id: "parent", bucketId: "destination", status: "queued", done: false };
+      return { id: "parent", bucketId: "destination", status: "queued" };
     };
     state.board = { buckets: [
       { id: "source", tasks: [
@@ -2180,13 +2069,13 @@ test("a completed list drag reconciles a task detail opened after navigation", a
       { id: "destination", boardId: "board-one", name: "Destination", openCount: 0 },
     ];
     state.board = { buckets: [
-      { id: "source", tasks: [{ id: "parent", bucketId: "source", status: "queued", done: false }] },
+      { id: "source", tasks: [{ id: "parent", bucketId: "source", status: "queued" }] },
       { id: "destination", tasks: [] },
     ] };
-    state.workspaceTasks = [{ id: "parent", bucketId: "source", status: "queued", done: false }];
+    state.workspaceTasks = [{ id: "parent", bucketId: "source", status: "queued" }];
     api.post = async () => {
       await new Promise(resolve => { releaseCrossRouteMove = resolve; });
-      return { id: "parent", bucketId: "destination", status: "queued", done: false };
+      return { id: "parent", bucketId: "destination", status: "queued" };
     };
   `, app);
 
@@ -2196,7 +2085,7 @@ test("a completed list drag reconciles a task detail opened after navigation", a
   vm.runInContext(`
     routeVersion = 13;
     state.view = "agent-work";
-    state.selectedTask = { id: "parent", bucketId: "source", status: "queued", done: false };
+    state.selectedTask = { id: "parent", bucketId: "source", status: "queued" };
     releaseCrossRouteMove();
   `, app);
   await moving;
@@ -2524,7 +2413,7 @@ test("API responses from an old session cannot resume mutation continuations", a
   };
   vm.runInContext(`authVersion = 60; state.me = { id: "account-a" };`, app);
 
-  const oldMutation = vm.runInContext(`api.request("/api/v1/tasks/task-a", { method: "PATCH", body: '{"done":true}' })`, app).then(() => { continued = true; });
+  const oldMutation = vm.runInContext(`api.request("/api/v1/tasks/task-a/status", { method: "PATCH", body: '{"status":"done"}' })`, app).then(() => { continued = true; });
   app.beginAuthenticatedSession({ id: "account-b", theme: "light" });
   app.releaseOldMutation();
   await Promise.race([oldMutation, new Promise(resolve => setTimeout(resolve, 20))]);

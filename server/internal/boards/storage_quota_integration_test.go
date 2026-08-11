@@ -301,14 +301,14 @@ func TestStoredContentQuotaExactLimitEditLifecycleAndConcurrentWrites(t *testing
 	assertQuotaError(t, err, StoredContentLimitCode, limit, limit)
 
 	// State and location changes remain available while usage is exactly full.
-	done := true
-	completed, err := store.UpdateTask(ctx, userID, exact.ID, UpdateTaskInput{Done: &done})
-	if err != nil || !completed.Done {
+	done := StatusDone
+	completed, err := store.UpdateTask(ctx, userID, exact.ID, UpdateTaskInput{Status: &done})
+	if err != nil || completed.Status != StatusDone {
 		t.Fatalf("complete at limit: task=%#v err=%v", completed, err)
 	}
-	done = false
-	reopened, err := store.UpdateTask(ctx, userID, exact.ID, UpdateTaskInput{Done: &done})
-	if err != nil || reopened.Done {
+	queued := StatusQueued
+	reopened, err := store.UpdateTask(ctx, userID, exact.ID, UpdateTaskInput{Status: &queued})
+	if err != nil || reopened.Status != StatusQueued {
 		t.Fatalf("reopen at limit: task=%#v err=%v", reopened, err)
 	}
 	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination", LimitCount: 20})
@@ -368,13 +368,13 @@ func TestOverLimitAccountCanReadCompleteReduceAndDelete(t *testing.T) {
 		t.Fatalf("read while over limit: tasks=%d err=%v", len(listed), err)
 	}
 
-	done := false
-	reopened, err := store.UpdateTask(ctx, userID, listed[0].ID, UpdateTaskInput{Done: &done})
-	if err != nil || reopened.Done {
+	queued := StatusQueued
+	reopened, err := store.UpdateTask(ctx, userID, listed[0].ID, UpdateTaskInput{Status: &queued})
+	if err != nil || reopened.Status != StatusQueued {
 		t.Fatalf("reopen while over limit: task=%#v err=%v", reopened, err)
 	}
-	done = true
-	if _, err := store.UpdateTask(ctx, userID, listed[0].ID, UpdateTaskInput{Done: &done}); err != nil {
+	done := StatusDone
+	if _, err := store.UpdateTask(ctx, userID, listed[0].ID, UpdateTaskInput{Status: &done}); err != nil {
 		t.Fatalf("complete while over limit: %v", err)
 	}
 
@@ -596,8 +596,8 @@ func seedCompletedTasks(t *testing.T, ctx context.Context, db *database.Pool, bu
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, kind, done, status, sort_order)
-		SELECT b.board_id, b.id, $3, '', 'action', true, 'done', generated
+		INSERT INTO tasks (board_id, bucket_id, title, description, kind, status, sort_order)
+		SELECT b.board_id, b.id, $3, '', 'action', 'done', generated
 		FROM buckets b CROSS JOIN generate_series(1, $2::integer) AS generated
 		WHERE b.id = $1
 	`, bucketID, count, title); err != nil {

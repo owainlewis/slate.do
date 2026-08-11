@@ -115,7 +115,7 @@ const state = {
   cardEntryError: "",
   cardEntryAttemptKey: "",
   taskDetailDrafts: {},
-  taskCompletionError: null,
+  taskMutationError: null,
   subtaskDraft: "",
   subtaskCreateAttempt: null,
   subtaskPending: false,
@@ -504,7 +504,7 @@ async function applyRoute() {
     state.subtaskError = "";
   }
   state.error = "";
-  state.taskCompletionError = null;
+  state.taskMutationError = null;
   state.workspaceRefreshOnDetailClose = false;
   state.workspaceListError = "";
   state.settingsNotice = "";
@@ -821,7 +821,7 @@ function resetAuthenticatedState() {
   state.cardEntryPending = false;
   state.cardEntryError = "";
   state.taskDetailDrafts = {};
-  state.taskCompletionError = null;
+  state.taskMutationError = null;
   state.subtaskDraft = "";
   state.subtaskCreateAttempt = null;
   state.subtaskPending = false;
@@ -1118,7 +1118,7 @@ async function loadCompletedHistory(listID, trigger) {
     trigger.textContent = "Loading…";
   }
   try {
-    const page = await api.get(`/api/v1/tasks?bucketId=${encodeURIComponent(listID)}&done=true&limit=20&cursor=${encodeURIComponent(list.completedNextCursor)}`);
+    const page = await api.get(`/api/v1/tasks?bucketId=${encodeURIComponent(listID)}&status=done&limit=20&cursor=${encodeURIComponent(list.completedNextCursor)}`);
     if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || state.board?.id !== boardID) return;
     const known = new Set((list.tasks || []).map(task => task.id));
     list.tasks = [...(list.tasks || []), ...(page.tasks || []).filter(task => !known.has(task.id))];
@@ -1541,7 +1541,7 @@ function appHTML() {
         <button class="primary" id="new-task" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New card"}</span></button>
       </div>
     </header>
-    ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskCompletionError?.message)}
+    ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskMutationError?.message)}
     ${statusNoticeHTML(state.moveNotice)}
     <div class="workspace-viewbar ${["week", "review"].includes(state.workspaceScope) ? "week-only" : ""}">
       ${["week", "review"].includes(state.workspaceScope) ? "" : `<div class="workspace-tabs" role="tablist" aria-label="Card view">
@@ -1589,7 +1589,7 @@ function boardHTML() {
   const lists = board?.buckets || [];
   const boardMode = state.boardMode !== "flow";
   const listLimitReached = lists.length >= state.maxListsPerBoard;
-  const openCards = boardSurfaceTasks(board).filter(task => !task.done).length;
+  const openCards = boardSurfaceTasks(board).filter(task => task.status !== "done").length;
   const overview = `
     <div class="main board-main">
       <header class="topbar board-topbar">
@@ -1602,7 +1602,7 @@ function boardHTML() {
           <button class="secondary" id="add-list" ${boardMode && !listLimitReached ? "" : "disabled"}>${icon("plus")}<span>New list</span></button>
         </div>
       </header>
-      ${statusErrorHTML(state.error || state.taskCompletionError?.message)}
+      ${statusErrorHTML(state.error || state.taskMutationError?.message)}
       ${statusNoticeHTML(state.moveNotice)}
       ${boardMode ? `<div class="grid">${lists.map(listHTML).join("")}</div>` : flowHTML(board)}
       ${footerHTML(board, false)}
@@ -1761,7 +1761,7 @@ function workspaceListLabel(list) {
 
 function workspaceDetailHTML(task) {
   const list = state.workspaceLists.find(item => item.id === task.bucketId);
-  const completed = state.selectedSubtasks.filter(item => item.done).length;
+  const completed = state.selectedSubtasks.filter(item => item.status === "done").length;
   const latestOutput = [...state.selectedEntries].reverse().find(entry => entry.kind === "output");
   const entries = state.selectedEntries.map(entry => `<article class="card-entry card-entry-${entry.kind}">
     <header><span class="card-entry-author ${entry.authorKind === "agent" ? "agent" : ""}">${entry.authorKind === "agent" ? icon("bot") : icon("user")}<strong>${escapeHTML(entry.authorName)}</strong></span><time>${new Date(entry.createdAt).toLocaleString()}</time></header>
@@ -1772,7 +1772,7 @@ function workspaceDetailHTML(task) {
     <section class="workspace-subtasks" aria-labelledby="subtasks-heading">
       <header><div><h3 id="subtasks-heading">Child cards</h3><span>${completed} of ${state.selectedSubtasks.length} done</span></div></header>
       ${state.selectedSubtasks.length ? `<div class="workspace-subtask-list">
-        ${state.selectedSubtasks.map(item => `<div class="workspace-subtask-row"><button class="workspace-subtask-toggle" type="button" data-toggle-subtask="${item.id}" aria-label="Mark ${escapeAttr(item.title)} ${item.done ? "not complete" : "complete"}"><span class="workspace-check ${item.done ? "done" : ""}">${item.done ? icon("check") : ""}</span></button><button class="workspace-subtask-open" type="button" data-open-task="${item.id}"><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button></div>`).join("")}
+        ${state.selectedSubtasks.map(item => `<div class="workspace-subtask-row"><button class="workspace-subtask-open" type="button" data-open-task="${item.id}"><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button></div>`).join("")}
       </div>` : `<p class="workspace-subtask-empty">Use child cards only when this intent needs smaller pieces.</p>`}
       <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a child card" aria-label="Child card title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add child"}</span></button></div>
       <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
@@ -1817,7 +1817,6 @@ function workspaceDetailHTML(task) {
 function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNewTask = true } = {}) {
   const route = parseRoute(globalThis.location?.pathname || APP_PATH);
   const workspaceOn = name => route.name === "workspace" && state.workspaceScope === name;
-  const inboxCount = state.workspaceLists.filter(list => list.isInbox).reduce((total, list) => total + (list.openCount || 0), 0);
   return `
     <aside class="sidebar">
       <div class="sidebar-head">
@@ -1827,22 +1826,14 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
       <div class="sidebar-content" id="sidebar-content">
         ${showNewTask ? globalNewTaskButtonHTML() : ""}
         ${newTaskRecoveryNoticeHTML()}
-        ${boardsNavigationHTML()}
         <section class="nav-sec workspace-nav">
-          <h3>Attention</h3>
+          <h3>Focus</h3>
           <div class="pages task-nav-pages">
-            <a class="nav-link ${workspaceOn("inbox") ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
             <a class="nav-link ${workspaceOn("today") ? "on" : ""}" href="${TODAY_PATH}">${icon("sun")}<span>Today</span></a>
-            <a class="nav-link ${workspaceOn("review") ? "on" : ""}" href="${REVIEW_PATH}">${icon("check")}<span>Review</span></a>
-          </div>
-        </section>
-        <section class="nav-sec workspace-nav workspace-plan-nav">
-          <h3>Plan</h3>
-          <div class="pages task-nav-pages">
             <a class="nav-link ${workspaceOn("week") ? "on" : ""}" href="${WEEK_PATH}">${icon("calendar")}<span>Week</span></a>
-            <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("rows")}<span>All cards</span></a>
           </div>
         </section>
+        ${boardsNavigationHTML()}
         <section class="nav-sec nav-collaborators">
           <h3>Agents</h3>
           <a class="plain-btn icon-label nav-link ${agentsCurrent && !route.agentId ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent && !route.agentId ? 'aria-current="page"' : ""}>${icon("bot")}<span>All agents</span></a>
@@ -1866,15 +1857,6 @@ function boardsNavigationHTML() {
       <div class="pages">${state.boards.map(boardRowHTML).join("")}</div>
       ${boardLimitReached ? `<p class="board-limit">${state.maxBoards} board limit reached</p>` : ""}
     </section>`;
-}
-
-function syncWorkspaceSidebarCounts() {
-  const counts = new Map(state.workspaceLists.filter(list => !list.isInbox).map(list => [list.id, Number(list.openCount || 0)]));
-  counts.set("inbox", state.workspaceLists.filter(list => list.isInbox).reduce((total, list) => total + Number(list.openCount || 0), 0));
-  document.querySelectorAll("[data-workspace-count]").forEach(element => {
-    const count = counts.get(element.dataset.workspaceCount) || 0;
-    element.textContent = count || "";
-  });
 }
 
 function syncWorkspaceListError() {
@@ -1923,7 +1905,6 @@ async function refreshCurrentWorkspaceListMetadata() {
   try {
     if (!await loadWorkspaceListIndex(version) || version !== routeVersion) return false;
     state.workspaceListError = "";
-    syncWorkspaceSidebarCounts();
     syncWorkspaceListError();
     return true;
   } catch (err) {
@@ -2113,8 +2094,7 @@ function taskAssigneeHTML(task, showName = false) {
 
 function taskHTML(task) {
   return `
-    <li class="task action ${task.done ? "done" : ""}" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}">
-      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
+    <li class="task action status-${task.status || "new"}" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}">
       <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <div class="task-title">${escapeHTML(task.title)}${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}</div>
         ${task.scheduledDate ? `<span class="task-date">${formatTaskDate(task.scheduledDate)}</span>` : ""}
@@ -2174,7 +2154,7 @@ function flowColumnHTML(flowState, items) {
 function flowCardHTML(item) {
   const { task, list } = item;
   return `
-    <li class="flow-card ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
+    <li class="flow-card status-${task.status || "new"}" draggable="true" data-task="${task.id}">
       <button class="task-open flow-card-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <span class="flow-card-title">${escapeHTML(task.title)}</span>
         <span class="flow-card-meta"><span>${escapeHTML(list.name)}</span>${task.scheduledDate ? `<span>${formatTaskDate(task.scheduledDate)}</span>` : ""}${taskAssigneeHTML(task, true)}</span>
@@ -2219,8 +2199,7 @@ function calendarDayHTML(day, tasks) {
 function calendarTaskHTML(item) {
   const { task, list } = item;
   return `
-    <li class="task calendar-task action ${task.done ? "done" : ""}" draggable="true" data-task="${task.id}">
-      <button class="check" data-toggle-done="${task.id}" aria-pressed="${task.done}" aria-label="${task.done ? "Mark incomplete" : "Mark complete"}">${icon("check")}</button>
+    <li class="task calendar-task action status-${task.status || "new"}" draggable="true" data-task="${task.id}">
       <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
         <div class="task-title">${escapeHTML(task.title)}</div>
         <span class="task-list-name">${escapeHTML(list.name)}</span>
@@ -2665,7 +2644,7 @@ function agentWorkPageHTML(agent) {
         <span>${Number(page.total || 0)}</span>
       </header>
       ${page.items?.length ? groups.map(([label, status]) => {
-        const items = page.items.filter(item => status === "done" ? item.done || item.status === "done" : !item.done && item.status === status);
+        const items = page.items.filter(item => item.status === status);
         return items.length ? `<section class="agent-page-group"><h3>${label}</h3><div class="agent-work-list">${items.map(agentWorkItemHTML).join("")}</div></section>` : "";
       }).join("") : `<div class="agents-empty agent-work-page-empty"><span class="agent-state-icon">${icon("inboxTray")}</span><h2>No assigned work.</h2><p>${escapeHTML(agent.displayName)} has no current or completed task data.</p></div>`}
       ${page.total ? `
@@ -2790,7 +2769,6 @@ function agentConnectionResultHTML(result) {
 function settingsHTML() {
   const theme = currentTheme();
   const page = SETTINGS_PAGES.find(item => item.id === state.settingsPage) || SETTINGS_PAGES[0];
-  const inboxCount = state.workspaceLists.filter(list => list.isInbox).reduce((total, list) => total + Number(list.openCount || 0), 0);
   let content = "";
   if (page.id === "profile") {
     content = `
@@ -2913,10 +2891,11 @@ function settingsHTML() {
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         ${globalNewTaskButtonHTML()}
         ${newTaskRecoveryNoticeHTML()}
-        <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Workspace">
+        <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Focus">
+          <h3>Focus</h3>
           <div class="pages task-nav-pages">
-            <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span><b data-workspace-count="inbox">${inboxCount || ""}</b></a>
-            <a class="nav-link" href="${TASKS_PATH}">${icon("rows")}<span>All cards</span></a>
+            <a class="nav-link" href="${TODAY_PATH}">${icon("sun")}<span>Today</span></a>
+            <a class="nav-link" href="${WEEK_PATH}">${icon("calendar")}<span>Week</span></a>
           </div>
         </section>
         ${boardsNavigationHTML()}
@@ -3091,7 +3070,6 @@ function bindWorkspace() {
     if (event.target.closest("button, a")) return;
     row.querySelector("[data-open-task]")?.click();
   }));
-  bindTaskCompletionToggles();
   const viewTabs = [...document.querySelectorAll("[data-workspace-view]")];
   const activateView = async element => {
     const view = element.dataset.workspaceView;
@@ -3143,7 +3121,7 @@ function bindWorkspace() {
 }
 
 function agentWorkGroupForTask(task) {
-  if (task.done || task.status === "done") return "recentlyCompleted";
+  if (task.status === "done") return "recentlyCompleted";
   if (task.status === "working") return "working";
   if (task.status === "needs_review") return "review";
   if (task.status === "queued") return "ready";
@@ -3278,7 +3256,6 @@ function captureTaskDetailFocus() {
     id: active.id,
     ariaLabel: active.getAttribute("aria-label"),
     openTask: active.dataset?.openTask,
-    toggleSubtask: active.dataset?.toggleSubtask,
   };
 }
 
@@ -3287,8 +3264,7 @@ function restoreTaskDetailFocus(focus) {
   if (!focus || !documentRef) return;
   const element = focus.id ? documentRef.getElementById(focus.id)
     : focus.openTask ? documentRef.querySelector(`[data-open-task="${focus.openTask}"]`)
-      : focus.toggleSubtask ? documentRef.querySelector(`[data-toggle-subtask="${focus.toggleSubtask}"]`)
-        : focus.ariaLabel ? [...documentRef.querySelectorAll("[aria-label]")].find(item => item.getAttribute("aria-label") === focus.ariaLabel) : null;
+      : focus.ariaLabel ? [...documentRef.querySelectorAll("[aria-label]")].find(item => item.getAttribute("aria-label") === focus.ariaLabel) : null;
   element?.focus();
 }
 
@@ -3455,7 +3431,6 @@ function bindWorkspaceDetail(options = {}) {
         const completeRouteLoad = routeWasLoading && state.agentDetailLoadState === "loading";
         if (completeRouteLoad) state.agentDetailLoadState = "ready";
         state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
-        syncWorkspaceSidebarCounts();
         syncWorkspaceListError();
         if (completeRouteLoad) render();
         return true;
@@ -3491,7 +3466,6 @@ function bindWorkspaceDetail(options = {}) {
       if (!detailResult.value) return false;
       state.agentDetailLoadState = "ready";
       state.workspaceListError = listResult.status === "rejected" ? listResult.reason?.message || "Lists could not be refreshed." : "";
-      syncWorkspaceSidebarCounts();
       syncWorkspaceListError();
       clearResolvedAgentTaskRefreshError();
       if (state.selectedTask) return true;
@@ -3648,10 +3622,9 @@ function bindWorkspaceDetail(options = {}) {
       state.cardEntryPending = false;
       if (entry.kind === "output") {
         const status = entry.cardStatus || "needs_review";
-        const done = typeof entry.cardDone === "boolean" ? entry.cardDone : status === "done";
         const reviewReason = entry.cardReviewReason || (status === "needs_review" ? "output" : "");
-        state.selectedTask = { ...state.selectedTask, status, done, reviewReason };
-        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, status, done, reviewReason } : item);
+        state.selectedTask = { ...state.selectedTask, status, reviewReason };
+        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, status, reviewReason } : item);
         const currentRoute = parseRoute(location.pathname);
         if (boundAgentID && ["agent-detail", "agent-work"].includes(currentRoute.name) && currentRoute.agentId === boundAgentID) {
           state.agentRefreshOnDetailClose = boundAgentID;
@@ -3683,50 +3656,6 @@ function bindWorkspaceDetail(options = {}) {
     state.subtaskCreateAttempt = null;
     state.subtaskError = "";
     openTaskDetail(element.dataset.openTask, element);
-  });
-  document.querySelectorAll("[data-toggle-subtask]").forEach(element => element.onclick = async () => {
-    if (state.subtaskPending) return;
-    const parentID = state.selectedTask.id;
-    const detailVersion = taskDetailVersion;
-    const subtask = state.selectedSubtasks.find(item => item.id === element.dataset.toggleSubtask);
-    if (!subtask) return;
-    preserveTaskDraft();
-    state.subtaskPending = true;
-    state.subtaskError = "";
-    element.disabled = true;
-    try {
-      const updated = await serializeTaskMutation(subtask.id, async ({ queued }) => {
-        const current = queued ? await api.get(`/api/v1/tasks/${encodeURIComponent(subtask.id)}`) : subtask;
-        return api.patch(`/api/v1/tasks/${encodeURIComponent(subtask.id)}/status`, { status: current.done || current.status === "done" ? "queued" : "done" });
-      });
-      if (!updated) return;
-      reconcileLoadedTask(updated, { previousTask: subtask });
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
-        await refreshCurrentTaskSurface();
-        if (state.selectedTask?.id === parentID) {
-          const focus = captureDetailFocus();
-          preserveTaskDraft();
-          state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === subtask.id ? { ...item, ...updated } : item);
-          state.subtaskPending = false;
-          await refreshAfterSubtaskMutation(focus);
-        }
-        return;
-      }
-      const focus = captureDetailFocus();
-      state.subtaskPending = false;
-      state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === subtask.id ? { ...item, ...updated } : item);
-      await refreshAfterSubtaskMutation(focus || { toggleSubtask: subtask.id });
-    } catch (err) {
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
-        reportBackgroundMutationFailure("update child card", subtask.title, err);
-        return;
-      }
-      if (handleError(err)) return;
-      state.subtaskPending = false;
-      state.subtaskError = err.message;
-      render();
-      document.querySelector(`[data-toggle-subtask="${subtask.id}"]`)?.focus();
-    }
   });
   const subtaskControl = document.querySelector("#add-subtask");
   const addSubtask = async () => {
@@ -4039,54 +3968,13 @@ function bindApp() {
   });
   document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => openTaskDetail(el.dataset.openTask, el));
   document.querySelectorAll("[data-load-completed]").forEach(el => el.onclick = () => loadCompletedHistory(el.dataset.loadCompleted, el));
-  bindTaskCompletionToggles();
   bindDrag();
   bindWorkspaceDetail();
 }
 
-function bindTaskCompletionToggles() {
-  document.querySelectorAll("[data-toggle-done]").forEach(element => element.onclick = async event => {
-    event.stopPropagation();
-    const task = findTask(element.dataset.toggleDone);
-    if (task) await completeTaskCompletion(task);
-  });
-}
-
-async function completeTaskCompletion(task) {
-  const sessionVersion = authVersion;
-  const userID = state.me?.id;
-  const startedRouteVersion = routeVersion;
-  let updated;
-  try {
-    updated = await toggleTaskCompletion(task);
-  } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
-    state.taskCompletionError = { taskID: task.id, message: err.message };
-    if (state.selectedTask?.id === task.id) {
-      state.error = err.message;
-      const draft = taskDraftFromCurrentForm(state.selectedTask);
-      if (draft) {
-        state.taskDetailDrafts[state.selectedTask.id] = draft;
-        state.selectedTask = { ...state.selectedTask, ...draft };
-      }
-      syncTaskDetailError();
-      return false;
-    }
-    if (state.selectedTask) return false;
-    state.error = err.message;
-    render();
-    return false;
-  }
-  if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
-  clearTaskMutationError(task.id);
-  syncWorkspaceSidebarCounts();
-  await refreshAfterTaskMutation(startedRouteVersion);
-  return true;
-}
-
 function clearTaskMutationError(taskID) {
-  const ownedError = state.taskCompletionError?.taskID === taskID ? state.taskCompletionError.message : "";
-  if (ownedError) state.taskCompletionError = null;
+  const ownedError = state.taskMutationError?.taskID === taskID ? state.taskMutationError.message : "";
+  if (ownedError) state.taskMutationError = null;
   if (ownedError && state.error === ownedError) {
     state.error = "";
     if (state.selectedTask) syncTaskDetailError();
@@ -4132,20 +4020,8 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
   }
 }
 
-function toggleTaskCompletion(task) {
-  const sessionVersion = authVersion;
-  const userID = state.me?.id;
-  return serializeTaskMutation(task.id, async ({ queued }) => {
-    const current = queued ? await api.get(`/api/v1/tasks/${encodeURIComponent(task.id)}`) : task;
-    const updated = await api.patch(`/api/v1/tasks/${encodeURIComponent(task.id)}`, { done: !current.done });
-    if (sessionIsCurrent(sessionVersion, userID)) reconcileTaskCompletion(updated, current);
-    return updated;
-  });
-}
-
-function reconcileTaskCompletion(updated, previousTask) {
-  const status = updated.status || (updated.done ? "done" : "queued");
-  const reconciled = { ...updated, status, done: status === "done" };
+function reconcileTaskMutation(updated, previousTask) {
+  const reconciled = { ...updated };
   const merge = items => (items || []).map(item => item.id === reconciled.id ? { ...item, ...reconciled } : item);
   state.workspaceTasks = merge(state.workspaceTasks);
   state.selectedSubtasks = merge(state.selectedSubtasks);
@@ -4176,9 +4052,9 @@ function reconcileTaskCompletion(updated, previousTask) {
     }
   }
 
-  if (Boolean(previousTask.done) !== reconciled.done) {
+  if (previousTask.status !== reconciled.status && (previousTask.status === "done" || reconciled.status === "done")) {
     const list = state.workspaceLists.find(item => item.id === (reconciled.bucketId || previousTask.bucketId));
-    if (list) list.openCount = Math.max(0, Number(list.openCount || 0) + (reconciled.done ? -1 : 1));
+    if (list) list.openCount = Math.max(0, Number(list.openCount || 0) + (reconciled.status === "done" ? -1 : 1));
   }
 
   if (state.selectedTask?.id !== reconciled.id) return;
@@ -4198,10 +4074,9 @@ function reconcileTaskCompletion(updated, previousTask) {
     const control = form?.querySelector?.(`[name="${field}"]`);
     if (control && "value" in control) control.value = String(reconciled[field] || "");
   }
-  merged.status = statusWasEdited ? liveStatus : status;
-  merged.done = merged.status === "done";
+  merged.status = statusWasEdited ? liveStatus : reconciled.status;
   state.selectedTask = merged;
-  if (statusControl && !statusWasEdited) statusControl.value = status;
+  if (statusControl && !statusWasEdited) statusControl.value = reconciled.status;
   const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
   state.taskDetailDrafts[reconciled.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
 }
@@ -5733,7 +5608,7 @@ async function moveWorkspaceTaskToList(id, bucketID) {
     return false;
   }
   if (!moved || !sessionIsCurrent(sessionVersion, userID)) return false;
-  reconcileTaskCompletion(moved, previousTask);
+  reconcileTaskMutation(moved, previousTask);
   clearTaskMutationError(id);
   await refreshAfterTaskMutation(startedRouteVersion);
   return true;
@@ -5752,7 +5627,7 @@ async function updateTaskStatus(id, status) {
     });
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
-    state.taskCompletionError = { taskID: id, message: err.message };
+    state.taskMutationError = { taskID: id, message: err.message };
     if (state.selectedTask?.id === id) {
       state.error = err.message;
       syncTaskDetailError();
@@ -5764,9 +5639,8 @@ async function updateTaskStatus(id, status) {
     return false;
   }
   if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
-  reconcileTaskCompletion(updated, previousTask);
+  reconcileTaskMutation(updated, previousTask);
   clearTaskMutationError(id);
-  syncWorkspaceSidebarCounts();
   await refreshAfterTaskMutation(startedRouteVersion);
   return true;
 }
@@ -5784,7 +5658,7 @@ async function updateTaskScheduledDate(id, scheduledDate) {
     });
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
-    state.taskCompletionError = { taskID: id, message: err.message };
+    state.taskMutationError = { taskID: id, message: err.message };
     if (state.selectedTask?.id === id) {
       state.error = err.message;
       syncTaskDetailError();
@@ -5796,7 +5670,7 @@ async function updateTaskScheduledDate(id, scheduledDate) {
     return false;
   }
   if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
-  reconcileTaskCompletion(updated, previousTask);
+  reconcileTaskMutation(updated, previousTask);
   clearTaskMutationError(id);
   await refreshAfterTaskMutation(startedRouteVersion);
   return true;
@@ -5936,7 +5810,7 @@ async function dropTask(taskId, bucketId, index) {
     return false;
   }
   if (!moved || !sessionIsCurrent(sessionVersion, userID)) return false;
-  reconcileTaskCompletion(moved, previousTask);
+  reconcileTaskMutation(moved, previousTask);
   clearTaskMutationError(taskId);
   await refreshAfterTaskMutation(startedRouteVersion);
   return true;
@@ -6242,7 +6116,7 @@ function openTaskCount(board) {
 
 function todayActionCount(board) {
   const today = dateKey(new Date());
-  return allTasks(board).filter(item => !item.task.done && item.task.scheduledDate === today).length;
+  return allTasks(board).filter(item => item.task.status !== "done" && item.task.scheduledDate === today).length;
 }
 
 function statusCounts(board) {

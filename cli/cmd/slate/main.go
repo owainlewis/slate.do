@@ -108,7 +108,7 @@ Run "slate help <topic>" for every command and flag.
   slate boards delete <board-id>
 
 "get" returns every active item and the 20 most recently updated completed
-items per list. Use "tasks list --done true" to page older completed work.
+items per list. Use "tasks list --status done" to page older completed work.
 `,
 	"lists": `Usage:
   slate lists list --board <board-id>
@@ -121,7 +121,7 @@ items per list. Use "tasks list --done true" to page older completed work.
 "buckets" is accepted as an alias for "lists".
 `,
 	"tasks": `Usage:
-  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--done <true|false>] [--limit <n>] [--cursor <cursor>]
+  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--limit <n>] [--cursor <cursor>]
   slate tasks get <task-id>
   slate tasks pull [--board <board-id>] [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
   slate tasks create --title <title> [--list <list-id> | --parent <task-id>] [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>]
@@ -130,7 +130,6 @@ items per list. Use "tasks list --done true" to page older completed work.
   slate tasks reorder --list <list-id> <task-id>...
   slate tasks claim <task-id>
   slate tasks status <task-id> new|queued|working|needs_review|done
-  slate tasks done <task-id>
 
 "pull" returns open queued tasks. Claim before starting work. Use an empty
 --description or --date value to clear that field, or an empty --priority to
@@ -328,10 +327,9 @@ func tasksCmd(c client, args []string) error {
 		listID := fs.String("list", "", "list id")
 		limit := fs.Int("limit", 0, "maximum tasks")
 		priority := fs.String("priority", "", "priority filter: p0, p1, or p2")
-		var status, done, cursor *string
+		var status, cursor *string
 		if command == "list" {
 			status = fs.String("status", "", "status filter")
-			done = fs.String("done", "", "done filter")
 			cursor = fs.String("cursor", "", "completed history cursor")
 		}
 		if err := fs.Parse(args[1:]); err != nil {
@@ -352,7 +350,6 @@ func tasksCmd(c client, args []string) error {
 		}
 		if status != nil {
 			setQuery(q, "status", *status)
-			setQuery(q, "done", *done)
 			setQuery(q, "cursor", *cursor)
 		}
 		path := "/api/v1/tasks"
@@ -468,12 +465,6 @@ func tasksCmd(c client, args []string) error {
 			return c.sendJSON(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/claim", map[string]any{})
 		}
 		return c.sendJSON(http.MethodPatch, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/status", map[string]any{"status": args[2]})
-	case "done":
-		id, err := singleID("slate tasks done <task-id>", args[1:])
-		if err != nil {
-			return err
-		}
-		return c.sendJSON(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(id)+"/done", map[string]any{})
 	default:
 		return fmt.Errorf("unknown tasks command %q; run 'slate help tasks'", args[0])
 	}

@@ -30,8 +30,7 @@ func TestCompletedHistoryPaginationIsBoundedStableAndScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := true
-	filter := TaskFilter{BucketID: bucket.ID, Done: &done}
+	filter := TaskFilter{BucketID: bucket.ID, Status: StatusDone}
 	empty, err := store.ListTaskPage(ctx, ownerID, filter)
 	if err != nil || len(empty.Tasks) != 0 || empty.NextCursor != "" {
 		t.Fatalf("empty history = %#v err=%v", empty, err)
@@ -111,7 +110,7 @@ func TestCompletedHistoryPaginationIsBoundedStableAndScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreignID := insertHistoryTask(t, ctx, db, otherBoard.ID, otherBucket.ID, "", 99, base.Add(24*time.Hour))
-	ownerHistory, err := store.ListTaskPage(ctx, ownerID, TaskFilter{Done: &done, Limit: 100})
+	ownerHistory, err := store.ListTaskPage(ctx, ownerID, TaskFilter{Status: StatusDone, Limit: 100})
 	if err != nil || containsTask(ownerHistory.Tasks, foreignID) {
 		t.Fatalf("tenant-scoped history = %#v err=%v", ownerHistory, err)
 	}
@@ -125,11 +124,11 @@ func TestCompletedHistoryPaginationIsBoundedStableAndScoped(t *testing.T) {
 	}
 	firstAssigned := insertHistoryTask(t, ctx, db, board.ID, bucket.ID, firstAgentID, 100, base.Add(25*time.Hour))
 	secondAssigned := insertHistoryTask(t, ctx, db, board.ID, bucket.ID, secondAgentID, 101, base.Add(26*time.Hour))
-	agentPage, err := store.ListTaskPage(ctx, ownerID, TaskFilter{Done: &done, AssigneeAgentID: firstAgentID})
+	agentPage, err := store.ListTaskPage(ctx, ownerID, TaskFilter{Status: StatusDone, AssigneeAgentID: firstAgentID})
 	if err != nil || !containsTask(agentPage.Tasks, firstAssigned) || containsTask(agentPage.Tasks, secondAssigned) {
 		t.Fatalf("agent-scoped history = %#v err=%v", agentPage, err)
 	}
-	wrongScope := TaskFilter{Done: &done, AssigneeAgentID: secondAgentID, Cursor: first.NextCursor}
+	wrongScope := TaskFilter{Status: StatusDone, AssigneeAgentID: secondAgentID, Cursor: first.NextCursor}
 	if _, err := store.ListTaskPage(ctx, ownerID, wrongScope); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("cross-scope cursor error = %v", err)
 	}
@@ -159,8 +158,8 @@ func TestBoardResponseIsBoundedAtStoredTaskCeiling(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, kind, done, status, sort_order, updated_at)
-		SELECT $1, $2, 'Task ' || generated, repeat('x', 1024), 'action', generated > 20,
+		INSERT INTO tasks (board_id, bucket_id, title, description, kind, status, sort_order, updated_at)
+		SELECT $1, $2, 'Task ' || generated, repeat('x', 1024), 'action',
 			CASE WHEN generated > 20 THEN 'done' ELSE 'queued' END, generated,
 			$3::timestamptz + generated * interval '1 second'
 		FROM generate_series(1, 10000) generated
@@ -178,12 +177,11 @@ func TestBoardResponseIsBoundedAtStoredTaskCeiling(t *testing.T) {
 	if len(loaded.Buckets) != 1 || len(loaded.Buckets[0].Tasks) != 40 || loaded.Buckets[0].CompletedNextCursor == "" {
 		t.Fatalf("bounded board rows = %#v", loaded.Buckets)
 	}
-	done := true
-	defaultPage, err := store.ListTaskPage(ctx, userID, TaskFilter{BucketID: bucket.ID, Done: &done})
+	defaultPage, err := store.ListTaskPage(ctx, userID, TaskFilter{BucketID: bucket.ID, Status: StatusDone})
 	if err != nil || len(defaultPage.Tasks) != 20 || defaultPage.NextCursor == "" {
 		t.Fatalf("default ceiling page rows=%d cursor=%t err=%v", len(defaultPage.Tasks), defaultPage.NextCursor != "", err)
 	}
-	maximumPage, err := store.ListTaskPage(ctx, userID, TaskFilter{BucketID: bucket.ID, Done: &done, Limit: 1000})
+	maximumPage, err := store.ListTaskPage(ctx, userID, TaskFilter{BucketID: bucket.ID, Status: StatusDone, Limit: 1000})
 	if err != nil || len(maximumPage.Tasks) != 100 || maximumPage.NextCursor == "" {
 		t.Fatalf("maximum ceiling page rows=%d cursor=%t err=%v", len(maximumPage.Tasks), maximumPage.NextCursor != "", err)
 	}
@@ -200,8 +198,8 @@ func insertHistoryTask(t *testing.T, ctx context.Context, db *database.Pool, boa
 	t.Helper()
 	var id string
 	err := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, kind, done, status, sort_order, assignee_agent_id, updated_at)
-		VALUES ($1, $2, $3, $4, 'action', true, 'done', $5, NULLIF($6, '')::uuid, $7)
+		INSERT INTO tasks (board_id, bucket_id, title, description, kind, status, sort_order, assignee_agent_id, updated_at)
+		VALUES ($1, $2, $3, $4, 'action', 'done', $5, NULLIF($6, '')::uuid, $7)
 		RETURNING id::text
 	`, boardID, bucketID, fmt.Sprintf("Completed %02d", index), fmt.Sprintf("full description %d", index), index, agentID, updatedAt).Scan(&id)
 	if err != nil {

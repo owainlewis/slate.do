@@ -53,7 +53,6 @@ type Task struct {
 	Description       string    `json:"description,omitempty"`
 	ScheduledDate     string    `json:"scheduledDate"`
 	Kind              string    `json:"kind"`
-	Done              bool      `json:"done"`
 	Status            string    `json:"status"`
 	Priority          string    `json:"priority"`
 	AssigneeAgentID   string    `json:"assigneeAgentId,omitempty"`
@@ -114,7 +113,6 @@ type UpdateTaskInput struct {
 	ScheduledDate   *string `json:"scheduledDate"`
 	Kind            *string `json:"kind"`
 	BucketID        *string `json:"bucketId"`
-	Done            *bool   `json:"done"`
 	Status          *string `json:"status"`
 	Priority        *string `json:"priority"`
 	AssigneeAgentID *string `json:"assigneeAgentId"`
@@ -131,7 +129,6 @@ type TaskFilter struct {
 	BucketID        string
 	Status          string
 	Priority        string
-	Done            *bool
 	Limit           int
 	Cursor          string
 	ActionsOnly     bool
@@ -160,7 +157,6 @@ type CardEntry struct {
 	AuthorName       string    `json:"authorName"`
 	CreatedAt        time.Time `json:"createdAt"`
 	CardStatus       string    `json:"cardStatus,omitempty"`
-	CardDone         bool      `json:"cardDone,omitempty"`
 	CardReviewReason string    `json:"cardReviewReason,omitempty"`
 }
 

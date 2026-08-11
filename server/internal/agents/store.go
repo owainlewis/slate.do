@@ -283,7 +283,6 @@ func (s *Store) ArchiveAgent(ctx context.Context, userID string, agentID string,
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1
 			AND t.assignee_agent_id = $2
-			AND NOT t.done
 			AND t.status IN ('new', 'queued', 'working')
 		FOR UPDATE OF t
 	`, userID, agentID)
@@ -318,13 +317,11 @@ func (s *Store) ArchiveAgent(ctx context.Context, userID string, agentID string,
 			UPDATE tasks t
 			SET assignee_agent_id = NULL,
 				status = CASE WHEN t.status = 'working' THEN 'queued' ELSE t.status END,
-				done = false,
 				updated_at = now()
 			FROM boards b
 			WHERE b.id = t.board_id
 				AND b.user_id = $1
 				AND t.assignee_agent_id = $2
-				AND NOT t.done
 				AND t.status IN ('new', 'queued', 'working')
 		`, userID, agentID); err != nil {
 			return ArchiveConflict{}, err
@@ -464,10 +461,10 @@ func (s *Store) workTotals(ctx context.Context, userID string, agentID string) (
 	var totals WorkTotals
 	err := s.db.QueryRow(ctx, `
 		SELECT
-			count(*) FILTER (WHERE t.status = 'queued' AND NOT t.done),
-			count(*) FILTER (WHERE t.status = 'working' AND NOT t.done),
-			count(*) FILTER (WHERE t.status = 'needs_review' AND NOT t.done),
-			count(*) FILTER (WHERE t.done)
+			count(*) FILTER (WHERE t.status = 'queued'),
+			count(*) FILTER (WHERE t.status = 'working'),
+			count(*) FILTER (WHERE t.status = 'needs_review'),
+			count(*) FILTER (WHERE t.status = 'done')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.assignee_agent_id = $2 AND t.kind = 'action'
@@ -480,7 +477,6 @@ func (s *Store) listInitialOpen(ctx context.Context, userID string, agentID stri
 		WHERE b.user_id = $1
 			AND t.assignee_agent_id = $2
 			AND t.kind = 'action'
-			AND NOT t.done
 			AND t.status IN ('queued', 'working', 'needs_review')
 		ORDER BY CASE t.status
 			WHEN 'working' THEN 0
@@ -500,7 +496,7 @@ func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentI
 		WHERE b.user_id = $1
 			AND t.assignee_agent_id = $2
 			AND t.kind = 'action'
-			AND t.done
+			AND t.status = 'done'
 		ORDER BY t.updated_at DESC, t.id
 		LIMIT $3
 	`, userID, agentID, InitialCompletedLimit)
@@ -513,7 +509,7 @@ func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentI
 const workSelect = `
 	SELECT t.id::text, COALESCE(t.parent_task_id::text, ''), t.board_id::text, b.name, t.bucket_id::text, bucket.name,
 		t.title, '', COALESCE(t.scheduled_date::text, ''), t.kind,
-		t.done, t.status, COALESCE(t.assignee_agent_id::text, ''), t.created_at, t.updated_at
+		t.status, COALESCE(t.assignee_agent_id::text, ''), t.created_at, t.updated_at
 	FROM tasks t
 	JOIN boards b ON b.id = t.board_id
 	JOIN buckets bucket ON bucket.id = t.bucket_id
@@ -527,7 +523,7 @@ func scanWorkItems(rows pgx.Rows) ([]WorkItem, error) {
 		if err := rows.Scan(
 			&item.ID, &item.ParentTaskID, &item.BoardID, &item.BoardName, &item.BucketID, &item.BucketName,
 			&item.Title, &item.Description, &item.ScheduledDate, &item.Kind,
-			&item.Done, &item.Status, &item.AssigneeAgentID, &item.CreatedAt, &item.UpdatedAt,
+			&item.Status, &item.AssigneeAgentID, &item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

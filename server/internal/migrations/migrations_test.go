@@ -1181,3 +1181,94 @@ func TestNewCardStatusMigrationAddsCaptureStateAndDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusOnlyCardsMigrationPreservesCompletionAndDropsLegacyColumn(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			board_id uuid NOT NULL DEFAULT gen_random_uuid(),
+			bucket_id uuid NOT NULL DEFAULT gen_random_uuid(),
+			assignee_agent_id uuid,
+			priority text NOT NULL DEFAULT '',
+			status text NOT NULL DEFAULT 'new',
+			done boolean NOT NULL DEFAULT false,
+			updated_at timestamptz NOT NULL DEFAULT now()
+		);
+		CREATE INDEX tasks_assignee_agent_status_idx ON tasks (assignee_agent_id, status) WHERE assignee_agent_id IS NOT NULL AND done = false;
+		CREATE INDEX tasks_board_priority_idx ON tasks (board_id, priority) WHERE priority <> '' AND done = false;
+		CREATE INDEX tasks_bucket_completed_history_idx ON tasks (bucket_id, updated_at DESC, id DESC) WHERE done = true;
+		CREATE INDEX tasks_status_idx ON tasks(status) WHERE done = false;
+		INSERT INTO tasks (status, done) VALUES ('queued', true), ('working', false), ('done', false);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("038_status_only_cards.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := tx.Query(ctx, "SELECT status FROM tasks ORDER BY status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var statuses []string
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		statuses = append(statuses, status)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(statuses, ",") != "done,done,working" {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+
+	var hasDoneColumn bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_attribute
+			WHERE attrelid = 'pg_temp.tasks'::regclass AND attname = 'done' AND NOT attisdropped
+		)
+	`).Scan(&hasDoneColumn); err != nil {
+		t.Fatal(err)
+	}
+	if hasDoneColumn {
+		t.Fatal("legacy done column still exists")
+	}
+
+	var predicates string
+	if err := tx.QueryRow(ctx, `
+		SELECT string_agg(pg_get_expr(indexprs.indpred, indexprs.indrelid), ' ')
+		FROM pg_index indexprs
+		WHERE indexprs.indrelid = 'pg_temp.tasks'::regclass AND indexprs.indpred IS NOT NULL
+	`).Scan(&predicates); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(predicates, "done = true") || strings.Contains(predicates, "done = false") {
+		t.Fatalf("legacy index predicate remains: %s", predicates)
+	}
+}

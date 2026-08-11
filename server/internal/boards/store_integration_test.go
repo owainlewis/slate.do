@@ -128,7 +128,7 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.AuthorKind != "agent" || output.AuthorName != "Builder" || output.CardStatus != StatusNeedsReview || output.CardDone || output.CardReviewReason != "output" {
+	if output.AuthorKind != "agent" || output.AuthorName != "Builder" || output.CardStatus != StatusNeedsReview || output.CardReviewReason != "output" {
 		t.Fatalf("agent output author = %#v", output)
 	}
 	entries, err := store.ListCardEntries(ctx, ownerID, agentID, card.ID)
@@ -142,8 +142,8 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Status != StatusNeedsReview || updated.Done {
-		t.Fatalf("card status = %q, done = %v", updated.Status, updated.Done)
+	if updated.Status != StatusNeedsReview {
+		t.Fatalf("card status = %q", updated.Status)
 	}
 	needsReview := StatusNeedsReview
 	reviewKinds, err := store.ListCardReviewKinds(ctx, ownerID, "")
@@ -187,11 +187,11 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayedOutput.ID != output.ID || replayedOutput.CardStatus != StatusDone || !replayedOutput.CardDone || replayedOutput.CardReviewReason != "" {
+	if replayedOutput.ID != output.ID || replayedOutput.CardStatus != StatusDone || replayedOutput.CardReviewReason != "" {
 		t.Fatalf("replayed output = %#v", replayedOutput)
 	}
 	updated, err = store.GetTask(ctx, ownerID, card.ID)
-	if err != nil || updated.Status != StatusDone || !updated.Done {
+	if err != nil || updated.Status != StatusDone {
 		t.Fatalf("card after output replay = %#v, error = %v", updated, err)
 	}
 	if _, err := store.ListCardEntries(ctx, ownerID, siblingAgentID, card.ID); !errors.Is(err, ErrNotFound) {
@@ -1815,9 +1815,9 @@ func TestTaskMovesPreserveUnrelatedTaskTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := true
+	done := StatusDone
 	for _, taskID := range []string{sourceHistory.ID, destinationHistory.ID} {
-		if _, err := store.UpdateTaskForHuman(ctx, userID, taskID, UpdateTaskInput{Done: &done}); err != nil {
+		if _, err := store.UpdateTaskForHuman(ctx, userID, taskID, UpdateTaskInput{Status: &done}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2053,16 +2053,16 @@ func TestUnifiedListItemsAndActions(t *testing.T) {
 	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Title: &updatedTitle, Kind: &unchangedKind, BucketID: &bucket.ID}); err != nil {
 		t.Fatalf("edit existing action in full list: %v", err)
 	}
-	completeAction := true
-	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &completeAction}); err != nil {
+	completeAction := StatusDone
+	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Status: &completeAction}); err != nil {
 		t.Fatal(err)
 	}
 	replacement, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Replacement action", Kind: KindAction})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopenAction := false
-	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Done: &reopenAction}); err != nil {
+	reopenAction := StatusQueued
+	if _, err := store.UpdateTask(ctx, userID, action.ID, UpdateTaskInput{Status: &reopenAction}); err != nil {
 		t.Fatalf("reopen action: %v", err)
 	}
 	if err := store.DeleteTask(ctx, userID, replacement.ID); err != nil {
@@ -2153,15 +2153,14 @@ func TestAnyQueuedTaskCanBeClaimed(t *testing.T) {
 		t.Fatalf("second claim error = %v, want ErrTaskUnavailable", err)
 	}
 
-	done := true
+	done := StatusDone
 	description := "Chosen direction and rationale."
-	needsReview := StatusNeedsReview
 	noDate := ""
-	completed, err := store.UpdateTask(ctx, userID, task.ID, UpdateTaskInput{Description: &description, ScheduledDate: &noDate, Done: &done, Status: &needsReview})
+	completed, err := store.UpdateTask(ctx, userID, task.ID, UpdateTaskInput{Description: &description, ScheduledDate: &noDate, Status: &done})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !completed.Done || completed.Status != StatusDone || completed.Description != description || completed.ScheduledDate != "" {
+	if completed.Status != StatusDone || completed.Description != description || completed.ScheduledDate != "" {
 		t.Fatalf("completed task = %#v, want done task with updated description", completed)
 	}
 }
@@ -2193,7 +2192,7 @@ func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("set %q: %v", status, err)
 		}
-		if updated.Status != status || updated.Done != (status == StatusDone) {
+		if updated.Status != status {
 			t.Fatalf("updated task = %#v", updated)
 		}
 		if updated.BucketID != bucket.ID {
@@ -2221,7 +2220,7 @@ func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("atomically move into full list and complete: %v", err)
 	}
-	if updated.Title != movedTitle || updated.BucketID != target.ID || !updated.Done {
+	if updated.Title != movedTitle || updated.BucketID != target.ID || updated.Status != StatusDone {
 		t.Fatalf("atomic update = %#v", updated)
 	}
 	if _, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Home blocker", Kind: KindAction}); err != nil {

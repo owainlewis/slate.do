@@ -26,9 +26,6 @@ func TestApplyTaskStatusAllowsEveryHumanTransition(t *testing.T) {
 		if task.Status != status {
 			t.Fatalf("status = %q, want %q", task.Status, status)
 		}
-		if task.Done != (status == StatusDone) {
-			t.Fatalf("done = %v for %q", task.Done, status)
-		}
 	}
 }
 
@@ -94,12 +91,12 @@ func TestTaskFilterFromQueryIncludesPriority(t *testing.T) {
 func TestTaskFilterFromQueryIncludesBoardAndList(t *testing.T) {
 	const boardID = "11111111-1111-4111-8111-111111111111"
 	const bucketID = "22222222-2222-4222-8222-222222222222"
-	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId="+boardID+"&bucketId="+bucketID+"&status=done&done=true&limit=12&cursor=next-page", nil)
+	req := httptest.NewRequest("GET", "/api/v1/tasks?boardId="+boardID+"&bucketId="+bucketID+"&status=done&limit=12&cursor=next-page", nil)
 	filter, err := taskFilterFromQuery(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filter.BoardID != boardID || filter.BucketID != bucketID || filter.Status != "done" || filter.Done == nil || !*filter.Done || filter.Limit != 12 || filter.Cursor != "next-page" {
+	if filter.BoardID != boardID || filter.BucketID != bucketID || filter.Status != "done" || filter.Limit != 12 || filter.Cursor != "next-page" {
 		t.Fatalf("filter = %#v", filter)
 	}
 }

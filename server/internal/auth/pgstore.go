@@ -578,9 +578,9 @@ func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, e
 		) c ON true
 		LEFT JOIN LATERAL (
 			SELECT
-				count(*) FILTER (WHERE t.status = 'queued' AND NOT t.done) AS ready,
-				count(*) FILTER (WHERE t.status = 'working' AND NOT t.done) AS working,
-				count(*) FILTER (WHERE t.status = 'needs_review' AND NOT t.done) AS review
+				count(*) FILTER (WHERE t.status = 'queued') AS ready,
+				count(*) FILTER (WHERE t.status = 'working') AS working,
+				count(*) FILTER (WHERE t.status = 'needs_review') AS review
 			FROM tasks t
 			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
 			WHERE t.assignee_agent_id = a.id
@@ -618,9 +618,9 @@ func (s *PGStore) GetAgent(ctx context.Context, userID string, agentID string) (
 		) c ON true
 		LEFT JOIN LATERAL (
 			SELECT
-				count(*) FILTER (WHERE t.status = 'queued' AND NOT t.done) AS ready,
-				count(*) FILTER (WHERE t.status = 'working' AND NOT t.done) AS working,
-				count(*) FILTER (WHERE t.status = 'needs_review' AND NOT t.done) AS review
+				count(*) FILTER (WHERE t.status = 'queued') AS ready,
+				count(*) FILTER (WHERE t.status = 'working') AS working,
+				count(*) FILTER (WHERE t.status = 'needs_review') AS review
 			FROM tasks t
 			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
 			WHERE t.assignee_agent_id = a.id
@@ -890,7 +890,7 @@ func (s *PGStore) AccountUsage(ctx context.Context, userID string) (entitlements
 			(SELECT COALESCE(max(active_count), 0) FROM (
 				SELECT count(*) AS active_count FROM tasks t
 				JOIN boards b ON b.id = t.board_id
-				WHERE b.user_id = $1 AND t.kind = 'action' AND t.done = false
+				WHERE b.user_id = $1 AND t.kind = 'action' AND t.status <> 'done'
 				GROUP BY t.bucket_id
 			) active),
 			(SELECT count(*) FROM agents WHERE owner_user_id = $1 AND archived_at IS NULL),

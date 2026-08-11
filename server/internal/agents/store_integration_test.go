@@ -56,30 +56,30 @@ func TestDetailAndWorkStayOwnerScopedGroupedAndBounded(t *testing.T) {
 	foreignBoard, foreignBucket := insertBoardAndBucket(t, ctx, db, other.ID, "Other board")
 
 	for index := range 55 {
-		insertAssignedTask(t, ctx, db, ownerBoard, ownerBucket, agent.ID, fmt.Sprintf("Ready %02d", index), "queued", false, time.Now().Add(time.Duration(index)*time.Second))
+		insertAssignedTask(t, ctx, db, ownerBoard, ownerBucket, agent.ID, fmt.Sprintf("Ready %02d", index), "queued", time.Now().Add(time.Duration(index)*time.Second))
 	}
-	insertAssignedTask(t, ctx, db, ownerBoard, ownerBucket, agent.ID, "Current working", "working", false, time.Now().Add(time.Hour))
-	insertAssignedTask(t, ctx, db, ownerBoard, ownerBucket, agent.ID, "Waiting for review", "needs_review", false, time.Now().Add(2*time.Hour))
+	insertAssignedTask(t, ctx, db, ownerBoard, ownerBucket, agent.ID, "Current working", "working", time.Now().Add(time.Hour))
+	insertAssignedTask(t, ctx, db, ownerBoard, ownerBucket, agent.ID, "Waiting for review", "needs_review", time.Now().Add(2*time.Hour))
 	for index := range 25 {
-		insertAssignedTask(t, ctx, db, ownerBoard, ownerBucket, agent.ID, fmt.Sprintf("Completed %02d", index), "done", true, time.Now().Add(time.Duration(index)*time.Minute))
+		insertAssignedTask(t, ctx, db, ownerBoard, ownerBucket, agent.ID, fmt.Sprintf("Completed %02d", index), "done", time.Now().Add(time.Duration(index)*time.Minute))
 	}
 	// Deliberately create an invalid cross-owner assignment. Every detail query
 	// must still exclude it through the board owner join.
-	insertAssignedTask(t, ctx, db, foreignBoard, foreignBucket, agent.ID, "Foreign task", "working", false, time.Now().Add(3*time.Hour))
+	insertAssignedTask(t, ctx, db, foreignBoard, foreignBucket, agent.ID, "Foreign task", "working", time.Now().Add(3*time.Hour))
 	var parentID, childID string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, kind, status, done)
-		VALUES ($1, $2, 'Parent task', 'action', 'queued', false)
+		INSERT INTO tasks (board_id, bucket_id, title, kind, status)
+		VALUES ($1, $2, 'Parent task', 'action', 'queued')
 		RETURNING id::text
 	`, ownerBoard, ownerBucket).Scan(&parentID); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(ctx, `
 		INSERT INTO tasks (
-			board_id, bucket_id, parent_task_id, title, kind, done, status,
+			board_id, bucket_id, parent_task_id, title, kind, status,
 			assignee_agent_id, sort_order, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, 'Assigned child', 'action', false, 'queued', $4, 0, $5, $5)
+		VALUES ($1, $2, $3, 'Assigned child', 'action', 'queued', $4, 0, $5, $5)
 		RETURNING id::text
 	`, ownerBoard, ownerBucket, parentID, agent.ID, time.Now().Add(4*time.Hour)).Scan(&childID); err != nil {
 		t.Fatal(err)
@@ -266,11 +266,11 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	}
 
 	boardID, bucketID := insertBoardAndBucket(t, ctx, db, owner.ID, "Lifecycle board")
-	newID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "New", "new", false)
-	readyID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Ready", "queued", false)
-	workingID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Working", "working", false)
-	reviewID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Review", "needs_review", false)
-	doneID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Done", "done", true)
+	newID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "New", "new")
+	readyID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Ready", "queued")
+	workingID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Working", "working")
+	reviewID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Review", "needs_review")
+	doneID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Done", "done")
 
 	var agentUpdatedBefore, newUpdatedBefore, readyUpdatedBefore, workingUpdatedBefore time.Time
 	if err := db.QueryRow(ctx, "SELECT updated_at FROM agents WHERE id = $1", agent.ID).Scan(&agentUpdatedBefore); err != nil {
@@ -289,9 +289,9 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	if !errors.Is(err, ErrArchiveConflict) || counts != (ArchiveConflict{New: 1, Ready: 1, Working: 1}) {
 		t.Fatalf("archive conflict = %#v, error = %v", counts, err)
 	}
-	assertLifecycleTask(t, ctx, db, newID, agent.ID, "new", false)
-	assertLifecycleTask(t, ctx, db, readyID, agent.ID, "queued", false)
-	assertLifecycleTask(t, ctx, db, workingID, agent.ID, "working", false)
+	assertLifecycleTask(t, ctx, db, newID, agent.ID, "new")
+	assertLifecycleTask(t, ctx, db, readyID, agent.ID, "queued")
+	assertLifecycleTask(t, ctx, db, workingID, agent.ID, "working")
 	var agentUpdatedAfter, newUpdatedAfter, readyUpdatedAfter, workingUpdatedAfter time.Time
 	if err := db.QueryRow(ctx, "SELECT updated_at FROM agents WHERE id = $1", agent.ID).Scan(&agentUpdatedAfter); err != nil {
 		t.Fatal(err)
@@ -338,9 +338,9 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	if _, err := store.ArchiveAgent(ctx, owner.ID, agent.ID, true); err == nil {
 		t.Fatal("forced archive succeeded despite injected final update failure")
 	}
-	assertLifecycleTask(t, ctx, db, newID, agent.ID, "new", false)
-	assertLifecycleTask(t, ctx, db, readyID, agent.ID, "queued", false)
-	assertLifecycleTask(t, ctx, db, workingID, agent.ID, "working", false)
+	assertLifecycleTask(t, ctx, db, newID, agent.ID, "new")
+	assertLifecycleTask(t, ctx, db, readyID, agent.ID, "queued")
+	assertLifecycleTask(t, ctx, db, workingID, agent.ID, "working")
 	if _, err := authStore.FindUserByAPITokenHash(ctx, lifecycleHash(preArchiveToken), time.Now()); err != nil {
 		t.Fatalf("failed archive did not roll back credential revocation: %v", err)
 	}
@@ -358,11 +358,11 @@ func TestAgentLifecycleIsOwnerScopedTransactionalAndRetrySafe(t *testing.T) {
 	if err != nil || counts != (ArchiveConflict{New: 1, Ready: 1, Working: 1}) {
 		t.Fatalf("forced archive = %#v, error = %v", counts, err)
 	}
-	assertLifecycleTask(t, ctx, db, newID, "", "new", false)
-	assertLifecycleTask(t, ctx, db, readyID, "", "queued", false)
-	assertLifecycleTask(t, ctx, db, workingID, "", "queued", false)
-	assertLifecycleTask(t, ctx, db, reviewID, agent.ID, "needs_review", false)
-	assertLifecycleTask(t, ctx, db, doneID, agent.ID, "done", true)
+	assertLifecycleTask(t, ctx, db, newID, "", "new")
+	assertLifecycleTask(t, ctx, db, readyID, "", "queued")
+	assertLifecycleTask(t, ctx, db, workingID, "", "queued")
+	assertLifecycleTask(t, ctx, db, reviewID, agent.ID, "needs_review")
+	assertLifecycleTask(t, ctx, db, doneID, agent.ID, "done")
 	archived, err := authStore.GetAgent(ctx, owner.ID, agent.ID)
 	if err != nil || archived.ArchivedAt == nil || archived.Credential == nil || archived.Credential.RevokedAt == nil {
 		t.Fatalf("archived agent = %#v, error = %v", archived, err)
@@ -470,12 +470,12 @@ func TestDeleteAgentRequiresArchiveAndRemovesOwnedIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	boardID, bucketID := insertBoardAndBucket(t, ctx, db, owner.ID, "Deletion board")
-	taskID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Historical assignment", "done", true)
+	taskID := insertLifecycleTask(t, ctx, db, boardID, bucketID, agent.ID, "Historical assignment", "done")
 
 	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); !errors.Is(err, ErrDeleteRequiresArchive) {
 		t.Fatalf("active delete error = %v", err)
 	}
-	assertLifecycleTask(t, ctx, db, taskID, agent.ID, "done", true)
+	assertLifecycleTask(t, ctx, db, taskID, agent.ID, "done")
 	if err := store.DeleteAgent(ctx, owner.ID, foreignAgent.ID); !errors.Is(err, auth.ErrAgentNotFound) {
 		t.Fatalf("cross-owner delete error = %v", err)
 	}
@@ -496,7 +496,7 @@ func TestDeleteAgentRequiresArchiveAndRemovesOwnedIdentity(t *testing.T) {
 	if agents != 0 || credentials != 0 {
 		t.Fatalf("deleted rows = agents %d, credentials %d", agents, credentials)
 	}
-	assertLifecycleTask(t, ctx, db, taskID, "", "done", true)
+	assertLifecycleTask(t, ctx, db, taskID, "", "done")
 	if err := store.DeleteAgent(ctx, owner.ID, agent.ID); !errors.Is(err, auth.ErrAgentNotFound) {
 		t.Fatalf("repeated delete error = %v", err)
 	}
@@ -563,8 +563,8 @@ func TestConcurrentRotationAndAssignmentArchiveKeepLifecycleInvariants(t *testin
 	boardID, bucketID := insertBoardAndBucket(t, ctx, db, owner.ID, "Race board")
 	var taskID string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, kind, status, done)
-		VALUES ($1, $2, 'Race assignment', 'action', 'queued', false)
+		INSERT INTO tasks (board_id, bucket_id, title, kind, status)
+		VALUES ($1, $2, 'Race assignment', 'action', 'queued')
 		RETURNING id::text
 	`, boardID, bucketID).Scan(&taskID); err != nil {
 		t.Fatal(err)
@@ -657,31 +657,30 @@ func lifecycleHash(token string) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func insertLifecycleTask(t *testing.T, ctx context.Context, db *database.Pool, boardID, bucketID, agentID, title, status string, done bool) string {
+func insertLifecycleTask(t *testing.T, ctx context.Context, db *database.Pool, boardID, bucketID, agentID, title, status string) string {
 	t.Helper()
 	var id string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, kind, status, done, assignee_agent_id)
-		VALUES ($1, $2, $3, 'action', $4, $5, $6)
+		INSERT INTO tasks (board_id, bucket_id, title, kind, status, assignee_agent_id)
+		VALUES ($1, $2, $3, 'action', $4, $5)
 		RETURNING id::text
-	`, boardID, bucketID, title, status, done, agentID).Scan(&id); err != nil {
+	`, boardID, bucketID, title, status, agentID).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func assertLifecycleTask(t *testing.T, ctx context.Context, db *database.Pool, taskID, agentID, status string, done bool) {
+func assertLifecycleTask(t *testing.T, ctx context.Context, db *database.Pool, taskID, agentID, status string) {
 	t.Helper()
 	var gotAgentID, gotStatus string
-	var gotDone bool
 	if err := db.QueryRow(ctx, `
-		SELECT COALESCE(assignee_agent_id::text, ''), status, done
+		SELECT COALESCE(assignee_agent_id::text, ''), status
 		FROM tasks WHERE id = $1
-	`, taskID).Scan(&gotAgentID, &gotStatus, &gotDone); err != nil {
+	`, taskID).Scan(&gotAgentID, &gotStatus); err != nil {
 		t.Fatal(err)
 	}
-	if gotAgentID != agentID || gotStatus != status || gotDone != done {
-		t.Fatalf("task %s = agent %q, status %q, done %t; want %q, %q, %t", taskID, gotAgentID, gotStatus, gotDone, agentID, status, done)
+	if gotAgentID != agentID || gotStatus != status {
+		t.Fatalf("task %s = agent %q, status %q; want %q, %q", taskID, gotAgentID, gotStatus, agentID, status)
 	}
 }
 
@@ -705,15 +704,15 @@ func insertBoardAndBucket(t *testing.T, ctx context.Context, db *database.Pool, 
 	return boardID, bucketID
 }
 
-func insertAssignedTask(t *testing.T, ctx context.Context, db *database.Pool, boardID string, bucketID string, agentID string, title string, status string, done bool, updatedAt time.Time) {
+func insertAssignedTask(t *testing.T, ctx context.Context, db *database.Pool, boardID string, bucketID string, agentID string, title string, status string, updatedAt time.Time) {
 	t.Helper()
 	if _, err := db.Exec(ctx, `
 		INSERT INTO tasks (
-			board_id, bucket_id, title, kind, done, status, assignee_agent_id,
+			board_id, bucket_id, title, kind, status, assignee_agent_id,
 			sort_order, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, 'action', $4, $5, $6, 0, $7, $7)
-	`, boardID, bucketID, title, done, status, agentID, updatedAt); err != nil {
+		VALUES ($1, $2, $3, 'action', $4, $5, 0, $6, $6)
+	`, boardID, bucketID, title, status, agentID, updatedAt); err != nil {
 		t.Fatal(err)
 	}
 }

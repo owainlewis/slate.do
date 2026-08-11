@@ -45,7 +45,7 @@ func TestHelpDocumentsEveryResource(t *testing.T) {
 			t.Fatalf("missing help for %q", topic)
 		}
 	}
-	for _, command := range []string{"boards get", "boards create", "boards update", "boards delete", "lists list", "lists get", "lists create", "lists update", "lists delete", "lists reorder", "tasks list", "tasks get", "tasks create", "tasks update", "tasks delete", "tasks reorder", "tasks pull", "tasks claim", "tasks status", "tasks done"} {
+	for _, command := range []string{"boards get", "boards create", "boards update", "boards delete", "lists list", "lists get", "lists create", "lists update", "lists delete", "lists reorder", "tasks list", "tasks get", "tasks create", "tasks update", "tasks delete", "tasks reorder", "tasks pull", "tasks claim", "tasks status"} {
 		joined := helpText["boards"] + helpText["lists"] + helpText["tasks"]
 		if !strings.Contains(joined, command) {
 			t.Errorf("help does not document %q", command)
@@ -179,12 +179,12 @@ func TestTasksListSendsAllFilters(t *testing.T) {
 	defer server.Close()
 
 	err := tasksCmd(client{baseURL: server.URL, token: "test", http: server.Client()}, []string{
-		"list", "--board", "board-1", "--list", "list-1", "--status", "done", "--done", "true", "--limit", "12", "--cursor", "next-page",
+		"list", "--board", "board-1", "--list", "list-1", "--status", "done", "--limit", "12", "--cursor", "next-page",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"boardId=board-1", "bucketId=list-1", "cursor=next-page", "done=true", "limit=12", "status=done"} {
+	for _, value := range []string{"boardId=board-1", "bucketId=list-1", "cursor=next-page", "limit=12", "status=done"} {
 		if !strings.Contains(requestedPath, value) {
 			t.Fatalf("requested %q, missing %q", requestedPath, value)
 		}

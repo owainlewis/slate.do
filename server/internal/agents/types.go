@@ -23,7 +23,6 @@ type WorkItem struct {
 	Description     string    `json:"description,omitempty"`
 	ScheduledDate   string    `json:"scheduledDate"`
 	Kind            string    `json:"kind"`
-	Done            bool      `json:"done"`
 	Status          string    `json:"status"`
 	AssigneeAgentID string    `json:"assigneeAgentId"`
 	CreatedAt       time.Time `json:"createdAt"`

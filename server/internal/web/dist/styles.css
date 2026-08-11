@@ -25,7 +25,6 @@
 .workspace-nav { min-height: 0; }
 .workspace-nav:has(.nav-section-title) { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .workspace-nav:has(.nav-section-title) .pages { overflow-y: auto; }
-.workspace-plan-nav { flex: 0 0 auto !important; }
 .nav-section-title { display: flex; align-items: center; justify-content: space-between; }
 .nav-section-title button { width: 25px; height: 25px; padding: 3px; }
 .sidebar-list-error { margin: 4px 9px 2px; line-height: 1.4; }
@@ -71,11 +70,7 @@
 .workspace-list-row { width: 100%; min-height: 58px; padding: 9px 14px; display: grid; grid-template-columns: 24px minmax(280px, 1fr) auto auto 110px 80px; align-items: center; gap: 11px; border: 0; border-bottom: 1px solid var(--line-2); background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
 .workspace-list-row:last-child { border-bottom: 0; }
 .workspace-list-row:hover, .workspace-table-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
-.workspace-check { width: 17px; height: 17px; display: grid; place-items: center; border: 1.5px solid var(--faint); border-radius: 50%; color: var(--card); }
-.workspace-check.done { border-color: var(--accent); background: var(--accent); }
-.workspace-check .icon { width: 12px; height: 12px; }
 .workspace-card-mark { width: 8px; height: 8px; margin-left: 5px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 76%, var(--card)); }
-.workspace-completion-toggle { padding: 0; background: transparent; cursor: pointer; }
 .workspace-task-copy { min-width: 0; display: grid; gap: 3px; }
 .workspace-task-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .workspace-task-copy small, .workspace-owner, .workspace-list-row time { color: var(--faint); font-size: 12px; }
@@ -130,11 +125,10 @@
 .workspace-subtasks { margin-top: 36px; padding-top: 26px; border-top: 1px solid var(--line); }
 .workspace-subtasks > header > div { display: flex; align-items: baseline; gap: 8px; }.workspace-subtasks h3 { margin: 0; font-size: 14px; }.workspace-subtasks header span { color: var(--faint); font-size: 10px; }
 .workspace-subtask-list { margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
-.workspace-subtask-row { min-height: 54px; display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: stretch; border-bottom: 1px solid var(--line-2); background: var(--card); }
+.workspace-subtask-row { min-height: 54px; display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; border-bottom: 1px solid var(--line-2); background: var(--card); }
 .workspace-subtask-row:last-child { border-bottom: 0; }
 .workspace-subtask-row:hover { background: color-mix(in srgb, var(--ink) 3%, var(--card)); }
-.workspace-subtask-toggle { display: grid; place-items: center; border: 0; background: transparent; }
-.workspace-subtask-open { width: 100%; padding: 9px 12px 9px 0; display: grid; grid-template-columns: minmax(160px, 1fr) auto 110px; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--ink); text-align: left; }
+.workspace-subtask-open { width: 100%; padding: 9px 12px; display: grid; grid-template-columns: minmax(160px, 1fr) auto 110px; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--ink); text-align: left; }
 .workspace-subtask-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }.workspace-subtask-open > span:last-child { color: var(--faint); font-size: 12px; }
 .workspace-subtask-empty { margin: 10px 0 0; padding: 18px; border: 1px dashed var(--line); border-radius: var(--radius-sm); color: var(--faint); font-size: 13px; text-align: center; }
 .workspace-add-subtask { margin-top: 10px; display: flex; gap: 8px; }.workspace-add-subtask input { min-width: 0; flex: 1; height: 40px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 12px; background: var(--card); color: var(--ink); font-size: 13px; }.workspace-add-subtask button { width: auto; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -184,7 +178,7 @@ button { cursor: pointer; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
-button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
+button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   transition: background-color .15s ease, color .15s ease, border-color .15s ease, box-shadow .15s ease, opacity .15s ease;
 }
 :focus-visible {
@@ -557,27 +551,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .task.dragging { opacity: .4; }
 .task.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
 .task.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
-.task.done .task-title { color: var(--faint); text-decoration: line-through; }
-.check {
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  margin-top: 2px;
-  border: 1.5px solid color-mix(in srgb, var(--faint) 55%, var(--line));
-  border-radius: 4px;
-  background: var(--card);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--card);
-  padding: 0;
-}
-.check .icon { width: 11px; height: 11px; stroke-width: 3; opacity: 0; transition: opacity .15s ease; }
-.check:hover { border-color: var(--accent); }
-.task:not(.done) .check:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
-.task:not(.done) .check:hover .icon { opacity: .6; }
-.task.done .check { background: var(--accent); border-color: var(--accent); }
-.task.done .check .icon { opacity: 1; }
 .task-body { flex: 1; min-width: 0; }
 .task-open { width: 100%; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .avatar { width: 34px; height: 34px; flex: 0 0 34px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .03em; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 22%); }
@@ -759,7 +732,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket, .check {
 .flow-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .flow-card:active { cursor: grabbing; }
 .flow-card.dragging { opacity: .4; }
-.flow-card.done .flow-card-title { color: var(--faint); text-decoration: line-through; }
 .flow-card-open { width: 100%; padding: 12px; border-radius: inherit; color: inherit; text-align: left; }
 .flow-card-title { display: block; overflow-wrap: anywhere; font-weight: 600; line-height: 1.35; }
 .flow-card-meta { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 5px; color: var(--faint); font-size: 11px; }

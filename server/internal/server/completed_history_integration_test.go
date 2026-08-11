@@ -36,7 +36,7 @@ func TestBoardAPIUsesSummaryCollectionsAndExactTaskDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := true
+	done := boards.StatusDone
 	var exactID string
 	for index := 0; index < 21; index++ {
 		task, err := store.CreateTask(ctx, owner.ID, bucket.ID, boards.CreateTaskInput{
@@ -46,7 +46,7 @@ func TestBoardAPIUsesSummaryCollectionsAndExactTaskDetail(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.UpdateTask(ctx, owner.ID, task.ID, boards.UpdateTaskInput{Done: &done}); err != nil {
+		if _, err := store.UpdateTask(ctx, owner.ID, task.ID, boards.UpdateTaskInput{Status: &done}); err != nil {
 			t.Fatal(err)
 		}
 		exactID = task.ID
@@ -72,7 +72,7 @@ func TestBoardAPIUsesSummaryCollectionsAndExactTaskDetail(t *testing.T) {
 	if detailResponse.Code != http.StatusOK || !strings.Contains(detailResponse.Body.String(), "private detail 20") {
 		t.Fatalf("exact task response = %d %s", detailResponse.Code, detailResponse.Body.String())
 	}
-	pageResponse := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks?bucketId="+bucket.ID+"&done=true", "")
+	pageResponse := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks?bucketId="+bucket.ID+"&status=done", "")
 	if pageResponse.Code != http.StatusOK || strings.Contains(pageResponse.Body.String(), "description") {
 		t.Fatalf("history page response = %d %s", pageResponse.Code, pageResponse.Body.String())
 	}
@@ -83,7 +83,7 @@ func TestBoardAPIUsesSummaryCollectionsAndExactTaskDetail(t *testing.T) {
 	if len(page.Tasks) != 20 || page.NextCursor == "" {
 		t.Fatalf("history page = %#v", page)
 	}
-	continuation := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks?bucketId="+bucket.ID+"&done=true&cursor="+page.NextCursor, "")
+	continuation := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks?bucketId="+bucket.ID+"&status=done&cursor="+page.NextCursor, "")
 	if continuation.Code != http.StatusOK {
 		t.Fatalf("history continuation = %d %s", continuation.Code, continuation.Body.String())
 	}
@@ -94,12 +94,12 @@ func TestBoardAPIUsesSummaryCollectionsAndExactTaskDetail(t *testing.T) {
 	if len(finalPage.Tasks) != 1 || finalPage.NextCursor != "" {
 		t.Fatalf("final history page = %#v", finalPage)
 	}
-	badCursor := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks?done=true&cursor=invalid", "")
+	badCursor := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks?status=done&cursor=invalid", "")
 	if badCursor.Code != http.StatusBadRequest {
 		t.Fatalf("bad cursor response = %d %s", badCursor.Code, badCursor.Body.String())
 	}
 	malformedUUIDCursor := cursorWithID(t, page.NextCursor, "--------------------------------0123456789abcdef0123456789abcdef")
-	badUUID := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks?bucketId="+bucket.ID+"&done=true&cursor="+malformedUUIDCursor, "")
+	badUUID := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks?bucketId="+bucket.ID+"&status=done&cursor="+malformedUUIDCursor, "")
 	if badUUID.Code != http.StatusBadRequest {
 		t.Fatalf("malformed cursor UUID response = %d %s", badUUID.Code, badUUID.Body.String())
 	}

@@ -389,10 +389,6 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	done := false
-	if filter.Done == nil {
-		filter.Done = &done
-	}
 	if filter.Status == "" {
 		filter.Status = StatusQueued
 	}
@@ -439,22 +435,6 @@ func (h *Handler) AgentStatus(w http.ResponseWriter, r *http.Request, user auth.
 		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
-	}
-	if handleStoreError(w, err) {
-		return
-	}
-	writeJSON(w, http.StatusOK, task)
-}
-
-func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.User) {
-	status := StatusDone
-	done := true
-	var task Task
-	var err error
-	if user.AgentID != "" {
-		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &status, Done: &done})
-	} else {
-		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &status, Done: &done})
 	}
 	if handleStoreError(w, err) {
 		return
@@ -513,13 +493,6 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 			return TaskFilter{}, err
 		}
 		filter.InboxOnly = *inboxOnly
-	}
-	if raw := strings.TrimSpace(q.Get("done")); raw != "" {
-		done, err := parseQueryBool("done", raw)
-		if err != nil {
-			return TaskFilter{}, err
-		}
-		filter.Done = done
 	}
 	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
 		limit, err := strconv.Atoi(raw)

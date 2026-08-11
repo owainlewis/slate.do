@@ -109,7 +109,6 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/agent/tasks", a.user(a.boards.AgentTasks))
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/claim", a.user(a.boards.AgentClaim))
 	mux.HandleFunc("PATCH /api/v1/agent/tasks/{id}/status", a.user(a.boards.AgentStatus))
-	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/done", a.user(a.boards.AgentDone))
 	mux.HandleFunc("GET /early-access", a.earlyAccess)
 	mux.HandleFunc("GET /early-access/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/early-access/" {
