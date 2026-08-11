@@ -1272,3 +1272,101 @@ func TestStatusOnlyCardsMigrationPreservesCompletionAndDropsLegacyColumn(t *test
 		t.Fatalf("legacy index predicate remains: %s", predicates)
 	}
 }
+
+func TestTaskIdempotencyRequestDataMigrationBackfillsImmutableSnapshot(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY,
+			title text NOT NULL,
+			description text NOT NULL DEFAULT '',
+			scheduled_date date,
+			kind text NOT NULL,
+			assignee_agent_id uuid,
+			parent_task_id uuid
+		);
+		CREATE TEMP TABLE task_idempotency_keys (
+			user_id uuid NOT NULL,
+			key text NOT NULL,
+			request_hash text NOT NULL,
+			task_id uuid
+		);
+		INSERT INTO tasks (id, title, description, scheduled_date, kind, parent_task_id)
+		VALUES (
+			'11111111-1111-4111-8111-111111111111',
+			'Original child', 'Original context', '2026-08-12', 'action',
+			'22222222-2222-4222-8222-222222222222'
+		);
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES (
+			'33333333-3333-4333-8333-333333333333', 'legacy-child', 'legacy-hash',
+			'11111111-1111-4111-8111-111111111111'
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("039_task_idempotency_request_data.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tasks (id, title, description, kind, parent_task_id)
+		VALUES (
+			'44444444-4444-4444-8444-444444444444',
+			'Created after migration', '', 'action',
+			'22222222-2222-4222-8222-222222222222'
+		);
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES (
+			'33333333-3333-4333-8333-333333333333', 'old-writer-after-migration', 'old-writer-hash',
+			'44444444-4444-4444-8444-444444444444'
+		);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE tasks SET title = 'Edited child'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var requestDataHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT request_data_hash
+		FROM task_idempotency_keys
+		WHERE key = 'legacy-child'
+	`).Scan(&requestDataHash); err != nil {
+		t.Fatal(err)
+	}
+	if requestDataHash != "67a9a9acb5baf4b68dff5efe911acaf0886c3b760037551ba62c922bbb724778" {
+		t.Fatalf("request snapshot hash = %q", requestDataHash)
+	}
+	var oldWriterHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT request_data_hash
+		FROM task_idempotency_keys
+		WHERE key = 'old-writer-after-migration'
+	`).Scan(&oldWriterHash); err != nil {
+		t.Fatal(err)
+	}
+	if len(oldWriterHash) != 64 {
+		t.Fatalf("old-writer request snapshot hash = %q", oldWriterHash)
+	}
+}

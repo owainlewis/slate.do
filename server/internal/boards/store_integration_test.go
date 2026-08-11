@@ -1408,10 +1408,14 @@ func TestTaskCreationAcceptsTheImmediatePredeploymentFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	requestData, err := taskCreateRequestData(input.Title, input.Description, "", KindAction, input.AssigneeAgentID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(ctx, `
-		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
-		VALUES ($1, $2, $3, $4)
-	`, userID, input.IdempotencyKey, previousFingerprint, original.ID); err != nil {
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id, request_data_hash)
+		VALUES ($1, $2, $3, $4, encode(sha256(convert_to(($5::jsonb)::text, 'UTF8')), 'hex'))
+	`, userID, input.IdempotencyKey, previousFingerprint, original.ID, requestData); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1569,7 +1573,7 @@ func TestSubtaskCreationAcceptsThePredeploymentFingerprintAfterParentMoves(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := CreateTaskInput{Title: "Write notes", IdempotencyKey: "predeployment-subtask-request"}
+	input := CreateTaskInput{Title: "Write notes", IdempotencyKey: "predeployment-subtask-request", OverrideLimit: true}
 	original, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: input.Title})
 	if err != nil {
 		t.Fatal(err)
@@ -1600,6 +1604,10 @@ func TestSubtaskCreationAcceptsThePredeploymentFingerprintAfterParentMoves(t *te
 	if err := store.DeleteBucket(ctx, userID, originalList.ID); err != nil {
 		t.Fatal(err)
 	}
+	editedTitle := "Edited after creation"
+	if _, err := store.UpdateTask(ctx, userID, original.ID, UpdateTaskInput{Title: &editedTitle}); err != nil {
+		t.Fatal(err)
+	}
 
 	retry, err := store.CreateSubtask(ctx, userID, parent.ID, input)
 	if err != nil {
@@ -1610,6 +1618,11 @@ func TestSubtaskCreationAcceptsThePredeploymentFingerprintAfterParentMoves(t *te
 	}
 	if retry.BucketID != destination.ID {
 		t.Fatalf("rolling deployment retry list = %q, want moved parent list %q", retry.BucketID, destination.ID)
+	}
+	changed := input
+	changed.Title = editedTitle
+	if _, err := store.CreateSubtask(ctx, userID, parent.ID, changed); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("retry using mutable card state error = %v, want %v", err, ErrIdempotencyKey)
 	}
 }
 

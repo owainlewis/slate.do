@@ -3,6 +3,7 @@ package boards
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,6 +28,44 @@ func TestListTasksRejectsMalformedLocationIDsBeforeStore(t *testing.T) {
 		if !strings.Contains(recorder.Body.String(), "must be a valid ID") {
 			t.Fatalf("query %q body = %s", query, recorder.Body.String())
 		}
+	}
+}
+
+func TestChildAndConversationRoutesRejectMalformedCardIDsBeforeStore(t *testing.T) {
+	handler := NewHandler(nil)
+	tests := []struct {
+		name string
+		call func(http.ResponseWriter, *http.Request, auth.User)
+	}{
+		{name: "create child", call: handler.CreateSubtask},
+		{name: "list conversation", call: handler.ListCardEntries},
+		{name: "create conversation entry", call: handler.CreateCardEntry},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/", nil)
+			request.SetPathValue("id", "not-a-uuid")
+
+			test.call(recorder, request, auth.User{})
+
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "must be a valid ID") {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestStoreRejectsMalformedChildAndConversationCardIDs(t *testing.T) {
+	store := NewStore(nil)
+	if _, err := store.CreateSubtask(context.Background(), "", "not-a-uuid", CreateTaskInput{}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("create child error = %v", err)
+	}
+	if _, err := store.ListCardEntries(context.Background(), "", "", "not-a-uuid"); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("list conversation error = %v", err)
+	}
+	if _, err := store.CreateCardEntry(context.Background(), "", "", "", "not-a-uuid", CreateCardEntryInput{}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("create conversation entry error = %v", err)
 	}
 }
 

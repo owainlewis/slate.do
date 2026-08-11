@@ -208,6 +208,9 @@ func (h *Handler) CreateInboxTask(w http.ResponseWriter, r *http.Request, user a
 }
 
 func (h *Handler) CreateSubtask(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validatePathID(w, "parent card", r.PathValue("id")) {
+		return
+	}
 	var input CreateTaskInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -241,6 +244,9 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request, user auth.User
 }
 
 func (h *Handler) ListCardEntries(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validatePathID(w, "card", r.PathValue("id")) {
+		return
+	}
 	entries, err := h.store.ListCardEntries(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
 	if handleStoreError(w, err) {
 		return
@@ -257,6 +263,9 @@ func (h *Handler) ListCardReviewKinds(w http.ResponseWriter, r *http.Request, us
 }
 
 func (h *Handler) CreateCardEntry(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validatePathID(w, "card", r.PathValue("id")) {
+		return
+	}
 	var input CreateCardEntryInput
 	if !decodeJSON(w, r, &input) {
 		return
@@ -502,6 +511,14 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 		filter.Limit = limit
 	}
 	return filter, nil
+}
+
+func validatePathID(w http.ResponseWriter, resource string, id string) bool {
+	if validUUID(id) {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, resource+" ID must be a valid ID")
+	return false
 }
 
 func validateTaskFilterLocationIDs(filter TaskFilter) error {

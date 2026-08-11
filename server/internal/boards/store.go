@@ -795,6 +795,7 @@ type preparedTaskCreate struct {
 	parentTaskID           string
 	idempotencyKey         string
 	fingerprint            string
+	requestData            string
 	compatibleFingerprints []string
 	overrideLimit          bool
 }
@@ -826,6 +827,11 @@ func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (prepare
 		idempotencyKey: idempotencyKey, overrideLimit: input.OverrideLimit,
 	}
 	if idempotencyKey != "" {
+		requestData, err := taskCreateRequestData(title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID)
+		if err != nil {
+			return preparedTaskCreate{}, err
+		}
+		prepared.requestData = requestData
 		fingerprint, err := taskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, input.OverrideLimit)
 		if err != nil {
 			return preparedTaskCreate{}, err
@@ -843,6 +849,9 @@ func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (prepare
 }
 
 func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID string, input CreateTaskInput) (Task, error) {
+	if !validUUID(parentTaskID) {
+		return Task{}, fmt.Errorf("%w: parent card ID must be a valid ID", ErrInvalidData)
+	}
 	parent, err := s.GetTask(ctx, userID, parentTaskID)
 	if err != nil {
 		return Task{}, err
@@ -901,11 +910,13 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 			return Task{}, err
 		}
 		var existingFingerprint, existingTaskID string
+		var requestDataMatches bool
 		err := tx.QueryRow(ctx, `
-			SELECT request_hash, COALESCE(task_id::text, '')
+			SELECT request_hash, COALESCE(task_id::text, ''),
+				COALESCE(request_data_hash = encode(sha256(convert_to(($3::jsonb)::text, 'UTF8')), 'hex'), false)
 			FROM task_idempotency_keys
 			WHERE user_id = $1 AND key = $2
-		`, userID, input.idempotencyKey).Scan(&existingFingerprint, &existingTaskID)
+		`, userID, input.idempotencyKey, input.requestData).Scan(&existingFingerprint, &existingTaskID, &requestDataMatches)
 		if err == nil {
 			fingerprintMatches := existingFingerprint == input.fingerprint
 			for _, compatibleFingerprint := range input.compatibleFingerprints {
@@ -914,16 +925,7 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 					break
 				}
 			}
-			if !fingerprintMatches {
-				if input.parentTaskID != "" && existingTaskID != "" {
-					existingTask, err := taskByID(ctx, tx, existingTaskID)
-					if err != nil {
-						return Task{}, err
-					}
-					if subtaskMatchesCreateInput(existingTask, input) {
-						return existingTask, nil
-					}
-				}
+			if !fingerprintMatches && !(input.parentTaskID != "" && existingTaskID != "" && requestDataMatches) {
 				return Task{}, ErrIdempotencyKey
 			}
 			if existingTaskID == "" {
@@ -969,22 +971,13 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 	}
 	if input.idempotencyKey != "" {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
-			VALUES ($1, $2, $3, $4)
-		`, userID, input.idempotencyKey, input.fingerprint, task.ID); err != nil {
+			INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id, request_data_hash)
+			VALUES ($1, $2, $3, $4, encode(sha256(convert_to(($5::jsonb)::text, 'UTF8')), 'hex'))
+		`, userID, input.idempotencyKey, input.fingerprint, task.ID, input.requestData); err != nil {
 			return Task{}, err
 		}
 	}
 	return task, nil
-}
-
-func subtaskMatchesCreateInput(task Task, input preparedTaskCreate) bool {
-	return task.ParentTaskID == input.parentTaskID &&
-		task.Title == input.title &&
-		task.Description == input.description &&
-		task.ScheduledDate == input.scheduledDate &&
-		task.Kind == input.kind &&
-		task.AssigneeAgentID == input.assigneeAgentID
 }
 
 type queryRower interface {
@@ -1091,6 +1084,18 @@ func parentAwareTaskCreateFingerprint(bucketID string, title string, description
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func taskCreateRequestData(title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string) (string, error) {
+	raw, err := json.Marshal(struct {
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		ScheduledDate   string `json:"scheduledDate"`
+		Kind            string `json:"kind"`
+		AssigneeAgentID string `json:"assigneeAgentId"`
+		ParentTaskID    string `json:"parentTaskId"`
+	}{title, description, scheduledDate, kind, strings.TrimSpace(assigneeAgentID), parentTaskID})
+	return string(raw), err
 }
 
 func topLevelTaskCreateFingerprint(bucketID string, title string, description string, scheduledDate string, kind string, assigneeAgentID string, overrideLimit bool) (string, error) {
@@ -1616,6 +1621,9 @@ func (s *Store) GetTaskForAgent(ctx context.Context, userID string, agentID stri
 }
 
 func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID string, taskID string) ([]CardEntry, error) {
+	if !validUUID(taskID) {
+		return nil, fmt.Errorf("%w: card ID must be a valid ID", ErrInvalidData)
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -1699,6 +1707,9 @@ func (s *Store) ListCardReviewKinds(ctx context.Context, userID string, agentID 
 }
 
 func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID string, authorName string, taskID string, input CreateCardEntryInput) (CardEntry, error) {
+	if !validUUID(taskID) {
+		return CardEntry{}, fmt.Errorf("%w: card ID must be a valid ID", ErrInvalidData)
+	}
 	body := strings.TrimSpace(input.Body)
 	kind := strings.TrimSpace(input.Kind)
 	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
