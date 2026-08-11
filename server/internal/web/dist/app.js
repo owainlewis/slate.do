@@ -3270,6 +3270,7 @@ async function refreshAfterContextDelete() {
     return true;
   } catch (err) {
     if (refreshRouteVersion !== routeVersion) return false;
+    if (handleAgentUnauthorized(err, route)) return false;
     state.workspaceLoading = false;
     const message = `The card was deleted, but this view couldn’t be refreshed: ${err.message}`;
     state.error = message;
@@ -3294,6 +3295,7 @@ async function deleteCardFromContext(taskID) {
     if (!deleted || !sessionIsCurrent(sessionVersion, userID)) return false;
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    if (handleAgentUnauthorized(err)) return false;
     const message = `Couldn’t delete “${task.title}”: ${err.message}`;
     if (["agent-detail", "agent-work"].includes(state.view)) {
       state.agentTaskMutationError = message;

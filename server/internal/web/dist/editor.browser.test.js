@@ -35,7 +35,7 @@ function workspaceFixture() {
   const agents = [
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
+  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -228,6 +228,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       return json(response, { ok: true });
     }
     if (agentMatch && request.method === "GET") {
+      if (state.unauthorizeNextAgentDetail) {
+        state.unauthorizeNextAgentDetail = false;
+        return json(response, { error: "Session expired" }, 401);
+      }
       if (state.failNextAgentDetail) {
         state.failNextAgentDetail = false;
         return json(response, { error: "Could not refresh assigned work" }, 500);
@@ -409,6 +413,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       if (state.failNextDelete) {
         state.failNextDelete = false;
         return json(response, { error: "Could not delete task" }, 500);
+      }
+      if (state.unauthorizeNextDelete) {
+        state.unauthorizeNextDelete = false;
+        return json(response, { error: "Session expired" }, 401);
       }
       const index = state.tasks.findIndex(item => item.id === taskMatch[1]);
       if (index >= 0) {
@@ -871,6 +879,40 @@ test("a failed agent context-menu delete reports the error in place", async t =>
   await parent.waitFor({ state: "detached" });
 
   assert.equal(await page.getByText(error, { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an unauthorized agent context-menu delete clears assigned work", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  state.unauthorizeNextDelete = true;
+
+  await page.locator('.agent-work-item[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await page.getByRole("heading", { name: "Your session has expired.", exact: true }).waitFor();
+
+  assert.equal(await page.getByText("No agent or assigned-work data is being shown. Sign in again to continue.", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an unauthorized post-delete agent refresh clears assigned work", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  const parent = page.locator('.agent-work-item[data-task="task-parent"]');
+  await parent.waitFor();
+  state.unauthorizeNextAgentDetail = true;
+
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await page.getByRole("heading", { name: "Your session has expired.", exact: true }).waitFor();
+
+  assert.equal(await page.getByText("No agent or assigned-work data is being shown. Sign in again to continue.", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("Research examples", { exact: true }).count(), 0);
   assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
   assert.deepEqual(pageErrors, []);
 });
