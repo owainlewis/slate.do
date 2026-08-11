@@ -871,16 +871,21 @@ test("subtasks cannot be dragged independently between lists", () => {
 	assert.match(app.taskHTML({ id: "child", parentTaskId: "parent", title: "Child", status: "new" }), /draggable="false"/);
 });
 
-test("list items show compact state treatment", () => {
+test("list cards leave workflow state to Flow", () => {
 	const ready = app.taskHTML({ id: "ready", title: "Ready action", kind: "action", status: "queued", scheduledDate: "" });
 	const working = app.taskHTML({ id: "working", title: "Working action", kind: "action", status: "working", scheduledDate: "" });
 	const review = app.taskHTML({ id: "review", title: "Review action", kind: "action", status: "needs_review", scheduledDate: "" });
 	const done = app.taskHTML({ id: "done", title: "Done action", kind: "action", status: "done", scheduledDate: "" });
 
-  assert.doesNotMatch(ready, /state-badge/);
-  assert.match(working, /state-working[^>]*>In Progress/);
-  assert.match(review, /state-needs_review[^>]*>Review/);
+	for (const html of [ready, working, review, done]) assert.doesNotMatch(html, /state-badge/);
 	assert.match(done, /class="task action status-done"/);
+
+	vm.runInContext(`state.me = { displayName: "Owain" }; state.workspaceLists = [{ id: "list-one", name: "Plan" }];`, app);
+	const item = { id: "working", title: "Working action", bucketId: "list-one", listName: "Plan", status: "working", scheduledDate: "" };
+	for (const html of [app.workspaceListHTML([item]), app.workspaceBoardHTML([item])]) {
+		assert.doesNotMatch(html, /state-badge|In Progress/);
+	}
+	vm.runInContext(`state.me = null; state.workspaceLists = [];`, app);
 });
 
 test("agent assignments use safe deterministic bot avatars across directory, task, and detail views", () => {

@@ -1667,7 +1667,7 @@ function workspaceTaskContext(task, includeOwner = false) {
 
 function workspaceListHTML(tasks) {
   if (!tasks.length) return `<div class="workspace-empty">Nothing here yet.</div>`;
-  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><span class="workspace-card-mark"></span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></span>${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
+  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><span class="workspace-card-mark"></span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></span>${taskPriorityBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
 }
 
 function workspaceTableHTML(tasks) {
@@ -1690,7 +1690,7 @@ function workspaceBoardHTML(tasks) {
   }
   const card = task => {
     const parent = task.parentTaskId ? `Child of ${task.parentTaskTitle || "parent card"} · ` : "";
-    return `<article class="workspace-flow-card" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(`${parent}${statusLabel(task.status)} · ${workspaceTaskOwner(task)}`)}</small></button></article>`;
+    return `<article class="workspace-flow-card" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(`${parent}${workspaceTaskOwner(task)}`)}</small></button></article>`;
   };
   return `<section class="workspace-flow grouped-by-list">${groups.map(group => {
     const items = tasks.filter(task => task.bucketId === group.value);
@@ -2103,16 +2103,11 @@ function taskHTML(task) {
   return `
     <li class="task action status-${task.status || "new"}" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}">
       <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
-        <div class="task-title">${escapeHTML(task.title)}${taskPriorityBadgeHTML(task)}${taskStateBadgeHTML(task)}</div>
+        <div class="task-title">${escapeHTML(task.title)}${taskPriorityBadgeHTML(task)}</div>
         ${task.scheduledDate ? `<span class="task-date">${formatTaskDate(task.scheduledDate)}</span>` : ""}
       </button>
       ${taskAssigneeHTML(task)}
     </li>`;
-}
-
-function taskStateBadgeHTML(task) {
-  if (task.status === "new" || task.status === "queued" || task.status === "done") return "";
-  return `<span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span>`;
 }
 
 function taskPriorityBadgeHTML(task) {

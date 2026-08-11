@@ -469,6 +469,7 @@ test("the task workspace supports Board, Flow, Table, lists, and filters", async
   assert.equal(await page.getByRole("tab", { name: "Board", selected: true }).count(), 1);
   for (const list of ["Inbox", "YouTube"]) assert.equal(await page.locator(".workspace-flow-column").getByText(list, { exact: true }).count(), 1);
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
+  assert.equal(await page.locator('.workspace-flow-column .task .state-badge').count(), 0);
 
   await page.getByRole("tab", { name: "Flow", exact: true }).click();
   await page.waitForTimeout(300);
