@@ -208,6 +208,95 @@ func TestEnsureAccountInboxMigrationRepairsEveryExistingAccountState(t *testing.
 	}
 }
 
+func TestRemoveArchivedAgentsPreservesCardsAndConversationHistory(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE agents (
+			id uuid PRIMARY KEY,
+			archived_at timestamptz
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE agent_credentials (
+			agent_id uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY,
+			assignee_agent_id uuid REFERENCES agents(id) ON DELETE SET NULL
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE card_entries (
+			task_id uuid NOT NULL,
+			body text NOT NULL,
+			author_id uuid NOT NULL,
+			author_name text NOT NULL
+		) ON COMMIT DROP
+	`); err != nil {
+		t.Fatal(err)
+	}
+	const activeAgentID = "10000000-0000-0000-0000-000000000001"
+	const archivedAgentID = "10000000-0000-0000-0000-000000000002"
+	const taskID = "20000000-0000-0000-0000-000000000001"
+	if _, err := tx.Exec(ctx, "INSERT INTO agents (id, archived_at) VALUES ($1, NULL), ($2, now())", activeAgentID, archivedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO agent_credentials (agent_id) VALUES ($1)", archivedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO tasks (id, assignee_agent_id) VALUES ($1, $2)", taskID, archivedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO card_entries (task_id, body, author_id, author_name)
+		VALUES ($1, 'Historical feedback', $2, 'Legacy archived')
+	`, taskID, archivedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("042_remove_archived_agents.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var archivedAgents, archivedCredentials int
+	var assignedAgentID, entryBody, authorName string
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM agents WHERE id = $1", archivedAgentID).Scan(&archivedAgents); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM agent_credentials WHERE agent_id = $1", archivedAgentID).Scan(&archivedCredentials); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT COALESCE(assignee_agent_id::text, '') FROM tasks WHERE id = $1", taskID).Scan(&assignedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT body, author_name FROM card_entries WHERE task_id = $1", taskID).Scan(&entryBody, &authorName); err != nil {
+		t.Fatal(err)
+	}
+	var activeAgents int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM agents WHERE id = $1", activeAgentID).Scan(&activeAgents); err != nil {
+		t.Fatal(err)
+	}
+	if archivedAgents != 0 || archivedCredentials != 0 || assignedAgentID != "" || entryBody != "Historical feedback" || authorName != "Legacy archived" || activeAgents != 1 {
+		t.Fatalf("archived agents=%d credentials=%d assignment=%q entry=%q author=%q active=%d", archivedAgents, archivedCredentials, assignedAgentID, entryBody, authorName, activeAgents)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE agents SET archived_at = now() WHERE id = $1", activeAgentID); err == nil {
+		t.Fatal("archiving remained writable after migration")
+	}
+}
+
 func TestOneAgentPerOwnerMigrationUpgradesExistingAgentSchema(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

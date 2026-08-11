@@ -892,7 +892,6 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
   vm.runInContext(`
     state.agents = [
       { id: "agent-one", displayName: "<Research Bot>" },
-      { id: "agent-old", displayName: "Old Bot", deletedAt: "2026-07-27T00:00:00Z" },
     ];
     state.boards = [{ id: "board", name: "Board" }];
     state.board = {
@@ -909,14 +908,14 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
   assert.doesNotMatch(taskHTML, />&lt;B<\/span>/);
   assert.doesNotMatch(taskHTML, /<Research Bot>/);
 
-  const detail = app.workspaceDetailHTML({ ...assigned, assigneeAgentId: "agent-old", description: "", priority: "", scheduledDate: "" });
+  const detail = app.workspaceDetailHTML({ ...assigned, assigneeAgentId: "agent-one", description: "", priority: "", scheduledDate: "" });
   assert.match(detail, /id="workspace-detail-owner" name="assigneeAgentId"/);
   assert.match(detail, /value="agent-one"/);
-  assert.match(detail, /value="agent-old" selected disabled>Old Bot \(inactive\)/);
+  assert.match(detail, /value="agent-one" selected>&lt;Research Bot&gt;/);
 
   vm.runInContext(`state.agents = [];`, app);
   const unavailable = app.workspaceDetailHTML({ ...assigned, assigneeAgentId: "agent-one", description: "", priority: "", scheduledDate: "" });
-  assert.match(unavailable, /value="agent-one" selected>Assigned agent unavailable/);
+  assert.match(unavailable, /value="agent-one" selected disabled>Assigned agent unavailable/);
   assert.doesNotMatch(unavailable, /value="" selected>Unassigned/);
 
   const first = app.avatarHTML({ id: "stable", displayName: "Research Bot" });
@@ -988,7 +987,7 @@ test("settings use readable text sizes", () => {
   assert.match(styles, /\.settings-page \.settings-nav-link \{[^}]*font-size: 14px;/);
 });
 
-test("agent directory shows credential facts, work counts, archived identities, and limits", () => {
+test("agent directory shows credential facts, work counts, clean cards, and limits", () => {
   vm.runInContext(`
     state.me = { id: "owner", email: "owner@example.com", theme: "dark" };
     state.view = "agents";
@@ -1006,11 +1005,6 @@ test("agent directory shows credential facts, work counts, archived identities, 
         credential: { revokedAt: "2026-07-27T12:00:00Z" },
         workCounts: {},
       },
-      {
-        id: "agent-archived", displayName: "Old bot", archivedAt: "2026-07-26T12:00:00Z",
-        credential: { revokedAt: "2026-07-26T12:00:00Z" },
-        workCounts: { review: 2 },
-      },
     ];
   `, app);
 
@@ -1019,12 +1013,12 @@ test("agent directory shows credential facts, work counts, archived identities, 
   assert.match(html, /&lt;Builder&gt;/);
   assert.match(html, />Connected</);
   assert.match(html, />Needs connection</);
-  assert.match(html, />Archived</);
   assert.match(html, /2 open cards · 1 working card · 1 review card/);
   assert.match(html, /href="\/app\/agents\/agent-connected" data-agent-link="agent-connected"/);
   assert.match(html, /No open work assigned/);
-  assert.match(html, /<details class="archived-agents">/);
-  assert.match(html, /5 of 5 active agents/);
+  assert.match(html, /class="agent-directory-link"/);
+  assert.doesNotMatch(html, /Archived|archived-agents/);
+  assert.match(html, /5 of 5 agents/);
   assert.match(html, /id="new-agent-link"[^>]*aria-disabled="true"/);
   assert.doesNotMatch(html, /online|offline|runtime|model|concurrency/i);
 
@@ -1096,11 +1090,6 @@ test("agent detail presents real grouped task data, bounded history, and distinc
   assert.match(history, /Page 2 · 2 of 102/);
   assert.match(history, /data-work-page="1"/);
   assert.match(history, /data-work-page="3"/);
-
-  vm.runInContext(`state.agentDetail.agent.archivedAt = "2026-07-27T00:00:00Z"; state.view = "agent-detail";`, app);
-  const archived = app.agentDetailHTML();
-  assert.match(archived, /Archived identity/);
-  assert.doesNotMatch(archived, /id="assign-work"/);
 
   for (const [loadState, text] of [["loading", "Loading agent"], ["not-found", "Agent not found"], ["unauthorized", "session has expired"], ["error", "couldn’t be loaded"]]) {
     vm.runInContext(`state.agentDetailLoadState = ${JSON.stringify(loadState)}; state.agentDetailError = "Network failed";`, app);
@@ -1373,7 +1362,7 @@ test("new-agent route has inline limits and one-time CLI connection instructions
   vm.runInContext(`state.me = null; state.view = "home"; state.agentCreationResult = null; state.agentsLoadState = "idle";`, app);
 });
 
-test("agent settings separate identity, credential, and archive lifecycle without persistent secrets", () => {
+test("agent settings separate identity, credentials, and direct deletion without persistent secrets", () => {
   vm.runInContext(`
     state.me = { id: "owner", theme: "light" };
     state.view = "agent-settings";
@@ -1393,17 +1382,10 @@ test("agent settings separate identity, credential, and archive lifecycle withou
   assert.match(settings, /id="agent-settings-name" name="displayName" value="Builder"/);
   assert.match(settings, /id="rotate-agent-credential"/);
   assert.match(settings, /id="revoke-agent-credential"/);
-  assert.match(settings, /id="archive-agent"/);
-  assert.doesNotMatch(settings, />Delete</);
-
-  vm.runInContext(`
-    state.agentLifecycleConfirm = "archive";
-    state.agentArchiveConflict = { new: 1, ready: 2, working: 1 };
-  `, app);
-  const archiveConflict = app.agentLifecycleConfirmHTML();
-  assert.match(archiveConflict, /Active work is still assigned/);
-  assert.match(archiveConflict, /1 New card, 2 Ready cards, 1 In Progress card must be unassigned/);
-  vm.runInContext(`state.agentLifecycleConfirm = ""; state.agentArchiveConflict = null;`, app);
+  assert.match(settings, /id="delete-agent"[^>]*>Delete agent/);
+  assert.match(settings, /Assigned cards remain in Slate and become unassigned/);
+  assert.match(settings, /Comments and outputs keep their recorded author name/);
+  assert.doesNotMatch(settings, /archive-agent|restore-agent|Archive agent/);
 
   vm.runInContext(`
     state.agentCredentialResult = { ownerID: "owner", agentID: "agent-one", token: "slate_agent_once_only" };
@@ -1424,22 +1406,13 @@ test("agent settings separate identity, credential, and archive lifecycle withou
   `, app);
   assert.equal(vm.runInContext("state.agentCredentialResult", app), null);
 
-  vm.runInContext(`
-    state.agentDetail.agent.archivedAt = "2026-07-28T00:00:00Z";
-  `, app);
-  const archived = app.agentDetailHTML();
-  assert.match(archived, /id="restore-agent"/);
-  assert.match(archived, /id="delete-agent"/);
-  assert.match(archived, /Delete permanently/);
-  assert.match(archived, /Historical tasks remain, but their agent assignment is cleared/);
-  assert.doesNotMatch(archived, /id="rotate-agent-credential"/);
-
   vm.runInContext(`state.agentLifecycleConfirm = "delete";`, app);
   const deletion = app.agentLifecycleConfirmHTML();
-  assert.match(deletion, /Permanently delete this agent/);
+  assert.match(deletion, /Delete Builder\?/);
   assert.match(deletion, /This cannot be undone/);
-  assert.match(deletion, /id="confirm-agent-lifecycle"[^>]*>Delete permanently/);
-  assert.match(source, /\/api\/v1\/agents\/\$\{encodeURIComponent\(context\.agentID\)\}\/permanent/);
+  assert.match(deletion, /id="confirm-agent-lifecycle"[^>]*>Delete agent/);
+  assert.match(source, /api\.del\(`\/api\/v1\/agents\/\$\{encodeURIComponent\(context\.agentID\)\}`\)/);
+  assert.doesNotMatch(source, /agents\/\$\{encodeURIComponent\(context\.agentID\)\}\/(?:archive|restore|permanent)/);
 
   assert.deepEqual(JSON.parse(JSON.stringify(app.parseRoute("/app/agents/agent-one/settings"))), { name: "agent-settings", agentId: "agent-one" });
   vm.runInContext(`state.me = null; state.view = "home"; state.agentDetail = null; state.agentCredentialResult = null;`, app);
@@ -2142,20 +2115,18 @@ test("priority options offer None plus the three levels", () => {
   assert.match(html, /value="p2"/);
 });
 
-test("card assignment offers active agents and preserves an inactive current assignment", () => {
+test("card assignment offers listed agents and preserves an unavailable current assignment", () => {
   vm.runInContext(`state.agents = [
-    { id: "active", displayName: "Active agent" },
-    { id: "archived", displayName: "Archived agent", archivedAt: "2026-08-11T10:00:00Z" },
-    { id: "deleted", displayName: "Deleted agent", deletedAt: "2026-08-11T10:00:00Z" }
+    { id: "active", displayName: "Active agent" }
   ]`, app);
 
   const available = app.agentOptionsHTML();
   assert.match(available, />No agent</);
   assert.match(available, /value="active"/);
-  assert.doesNotMatch(available, /value="archived"|value="deleted"/);
+  assert.doesNotMatch(available, /inactive|Archived|Deleted/);
 
-  const selected = app.agentOptionsHTML("archived");
-  assert.match(selected, /value="archived" selected disabled>Archived agent \(inactive\)</);
+  const selected = app.agentOptionsHTML("missing");
+  assert.match(selected, /value="missing" selected disabled>Assigned agent unavailable</);
   vm.runInContext("state.agents = []", app);
 });
 

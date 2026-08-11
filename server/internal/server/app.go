@@ -63,16 +63,10 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/agents/{id}/work", a.session(a.agents.ListWork))
 	mux.HandleFunc("POST /api/v1/agents/{id}/credential/rotate", a.session(a.agents.RotateCredential))
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/credential", a.session(a.agents.RevokeCredential))
-	mux.HandleFunc("POST /api/v1/agents/{id}/archive", a.session(a.agents.Archive))
-	mux.HandleFunc("POST /api/v1/agents/{id}/restore", a.session(a.agents.Restore))
-	mux.HandleFunc("DELETE /api/v1/agents/{id}/permanent", a.session(a.agents.Delete))
 	// Compatibility for clients released before credentials became their own
-	// lifecycle. Both aliases use the safe owner-scoped behavior.
+	// lifecycle. The token alias remains owner-scoped.
 	mux.HandleFunc("DELETE /api/v1/agents/{id}/token", a.session(a.agents.RevokeCredential))
-	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(func(w http.ResponseWriter, r *http.Request, user auth.User) {
-		r.Body = http.NoBody
-		a.agents.Archive(w, r, user)
-	}))
+	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(a.auth.DeleteAgent))
 	mux.HandleFunc("GET /api/v1/boards", a.accountRead(a.boards.ListBoards))
 	mux.HandleFunc("GET /api/v1/lists", a.accountRead(a.boards.ListAllBuckets))
 	mux.HandleFunc("POST /api/v1/boards", a.accountManage(a.boards.CreateBoard))

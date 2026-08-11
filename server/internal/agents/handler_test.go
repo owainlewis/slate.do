@@ -28,11 +28,6 @@ type fakeStore struct {
 	rotateApplied bool
 	rotateErr     error
 	revokeErr     error
-	archiveCounts ArchiveConflict
-	archiveErr    error
-	restoreAgent  auth.AgentUser
-	restoreErr    error
-	deleteErr     error
 	lastUserID    string
 	lastAgentID   string
 	lastName      string
@@ -40,7 +35,6 @@ type fakeStore struct {
 	lastKey       string
 	lastTokenHash string
 	lastPrefix    string
-	unassignOpen  bool
 }
 
 func (s *fakeStore) GetDetail(_ context.Context, userID string, agentID string) (Detail, error) {
@@ -68,21 +62,6 @@ func (s *fakeStore) RotateCredential(_ context.Context, userID, agentID, key, to
 func (s *fakeStore) RevokeCredential(_ context.Context, userID, agentID string) error {
 	s.lastUserID, s.lastAgentID = userID, agentID
 	return s.revokeErr
-}
-
-func (s *fakeStore) ArchiveAgent(_ context.Context, userID, agentID string, unassignOpen bool) (ArchiveConflict, error) {
-	s.lastUserID, s.lastAgentID, s.unassignOpen = userID, agentID, unassignOpen
-	return s.archiveCounts, s.archiveErr
-}
-
-func (s *fakeStore) RestoreAgent(_ context.Context, userID, agentID string) (auth.AgentUser, error) {
-	s.lastUserID, s.lastAgentID = userID, agentID
-	return s.restoreAgent, s.restoreErr
-}
-
-func (s *fakeStore) DeleteAgent(_ context.Context, userID, agentID string) error {
-	s.lastUserID, s.lastAgentID = userID, agentID
-	return s.deleteErr
 }
 
 func TestGetDetailMapsOwnedAgentResponses(t *testing.T) {
@@ -160,7 +139,6 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 		updateAgent:   auth.AgentUser{ID: "agent-1", DisplayName: "Builder"},
 		rotate:        auth.AgentCredential{ID: "credential-1", TokenPrefix: "slate_agent_example"},
 		rotateApplied: true,
-		restoreAgent:  auth.AgentUser{ID: "agent-1", DisplayName: "Builder"},
 	}
 	handler := NewHandler(store)
 	user := auth.User{ID: "owner-1"}
@@ -193,45 +171,6 @@ func TestAgentLifecycleHandlersValidateAndMapStableResponses(t *testing.T) {
 	response = lifecycleRequest(t, handler.RevokeCredential, user, http.MethodDelete, "")
 	if response.Code != http.StatusOK || store.lastUserID != user.ID || store.lastAgentID != "agent-1" {
 		t.Fatalf("revoke = %d %q, owner = %q/%q", response.Code, response.Body.String(), store.lastUserID, store.lastAgentID)
-	}
-
-	store.archiveErr = &ArchiveConflictError{Counts: ArchiveConflict{New: 3, Ready: 2, Working: 1}}
-	response = lifecycleRequest(t, handler.Archive, user, http.MethodPost, `{"unassignOpenWork":false}`)
-	var conflict struct {
-		Code     string `json:"code"`
-		Conflict struct {
-			New     int `json:"new"`
-			Ready   int `json:"ready"`
-			Working int `json:"working"`
-		} `json:"conflict"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &conflict); err != nil {
-		t.Fatal(err)
-	}
-	if response.Code != http.StatusConflict || conflict.Code != "agent_open_work" || conflict.Conflict.New != 3 || conflict.Conflict.Ready != 2 || conflict.Conflict.Working != 1 {
-		t.Fatalf("archive conflict = %d %#v", response.Code, conflict)
-	}
-	store.archiveErr = nil
-	response = lifecycleRequest(t, handler.Archive, user, http.MethodPost, `{"unassignOpenWork":true}`)
-	if response.Code != http.StatusOK || !store.unassignOpen {
-		t.Fatalf("forced archive = %d %q", response.Code, response.Body.String())
-	}
-
-	store.restoreErr = ErrRestoreLimit
-	response = lifecycleRequest(t, handler.Restore, user, http.MethodPost, `{}`)
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "agent_limit_reached") {
-		t.Fatalf("restore limit = %d %q", response.Code, response.Body.String())
-	}
-
-	store.deleteErr = ErrDeleteRequiresArchive
-	response = lifecycleRequest(t, handler.Delete, user, http.MethodDelete, "")
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "agent_not_archived") {
-		t.Fatalf("active delete = %d %q", response.Code, response.Body.String())
-	}
-	store.deleteErr = nil
-	response = lifecycleRequest(t, handler.Delete, user, http.MethodDelete, "")
-	if response.Code != http.StatusOK || store.lastUserID != user.ID || store.lastAgentID != "agent-1" {
-		t.Fatalf("archived delete = %d %q, owner = %q/%q", response.Code, response.Body.String(), store.lastUserID, store.lastAgentID)
 	}
 
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/agent-1", strings.NewReader(`{"displayName":"Builder","purpose":""}`))

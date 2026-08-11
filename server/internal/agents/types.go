@@ -59,9 +59,3 @@ type WorkPage struct {
 	HasNext     bool       `json:"hasNext"`
 	HasPrevious bool       `json:"hasPrevious"`
 }
-
-type ArchiveConflict struct {
-	New     int `json:"new"`
-	Ready   int `json:"ready"`
-	Working int `json:"working"`
-}

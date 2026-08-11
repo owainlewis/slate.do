@@ -585,8 +585,8 @@ func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, e
 			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
 			WHERE t.assignee_agent_id = a.id
 		) work ON true
-		WHERE a.owner_user_id = $1
-		ORDER BY a.archived_at NULLS FIRST, lower(a.name), a.created_at
+		WHERE a.owner_user_id = $1 AND a.archived_at IS NULL
+		ORDER BY lower(a.name), a.created_at
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -625,7 +625,7 @@ func (s *PGStore) GetAgent(ctx context.Context, userID string, agentID string) (
 			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
 			WHERE t.assignee_agent_id = a.id
 		) work ON true
-		WHERE a.owner_user_id = $1 AND a.id::text = $2
+		WHERE a.owner_user_id = $1 AND a.id::text = $2 AND a.archived_at IS NULL
 	`, userID, agentID)
 	agent, err := scanAgent(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -661,12 +661,13 @@ func (s *PGStore) CreateAgent(ctx context.Context, userID string, displayName st
 	}
 
 	var agent AgentUser
+	var archivedAt *time.Time
 	err = tx.QueryRow(ctx, `
 		INSERT INTO agents (owner_user_id, name, purpose)
 		VALUES ($1, $2, NULLIF($3, ''))
 		RETURNING id::text, name, COALESCE(purpose, ''), archived_at, created_at, updated_at
 	`, activeUserID, displayName, purpose).Scan(
-		&agent.ID, &agent.DisplayName, &agent.Purpose, &agent.ArchivedAt, &agent.CreatedAt, &agent.UpdatedAt,
+		&agent.ID, &agent.DisplayName, &agent.Purpose, &archivedAt, &agent.CreatedAt, &agent.UpdatedAt,
 	)
 	if constraintViolation(err, "agents_owner_active_name_idx") {
 		return AgentUser{}, ErrAgentNameTaken
@@ -717,23 +718,13 @@ func (s *PGStore) RevokeAgentToken(ctx context.Context, userID string, agentID s
 }
 
 func (s *PGStore) DeleteAgent(ctx context.Context, userID string, agentID string) error {
-	var found bool
+	var deletedID string
 	err := s.db.QueryRow(ctx, `
-		WITH archived AS (
-			UPDATE agents
-			SET archived_at = now(), updated_at = now()
-			WHERE owner_user_id = $1 AND id = $2 AND archived_at IS NULL
-			RETURNING id
-		), revoked AS (
-			UPDATE agent_credentials c
-			SET revoked_at = COALESCE(c.revoked_at, now()), updated_at = now()
-			FROM archived a
-			WHERE c.agent_id = a.id
-			RETURNING c.id
-		)
-		SELECT EXISTS (SELECT 1 FROM archived)
-	`, userID, agentID).Scan(&found)
-	if err == nil && !found {
+		DELETE FROM agents
+		WHERE owner_user_id = $1 AND id = $2
+		RETURNING id::text
+	`, userID, agentID).Scan(&deletedID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrAgentNotFound
 	}
 	return err
@@ -810,6 +801,7 @@ type rowScanner interface {
 
 func scanAgent(row rowScanner) (AgentUser, error) {
 	var agent AgentUser
+	var archivedAt *time.Time
 	var credentialID *string
 	var credentialPrefix *string
 	var credentialLastUsedAt *time.Time
@@ -820,7 +812,7 @@ func scanAgent(row rowScanner) (AgentUser, error) {
 		&agent.ID,
 		&agent.DisplayName,
 		&agent.Purpose,
-		&agent.ArchivedAt,
+		&archivedAt,
 		&agent.CreatedAt,
 		&agent.UpdatedAt,
 		&credentialID,
@@ -836,7 +828,6 @@ func scanAgent(row rowScanner) (AgentUser, error) {
 	if err != nil {
 		return AgentUser{}, err
 	}
-	agent.DeletedAt = agent.ArchivedAt
 	if credentialID != nil && credentialCreatedAt != nil && credentialUpdatedAt != nil {
 		credential := AgentCredential{
 			ID:         *credentialID,

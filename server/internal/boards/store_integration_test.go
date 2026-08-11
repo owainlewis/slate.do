@@ -231,7 +231,7 @@ func TestFreeAccountUsesCatalogBoardAndListLimits(t *testing.T) {
 	}
 }
 
-func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
+func TestAgentAssignmentsAreAccountScopedAndClearOnAgentDeletion(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -330,12 +330,12 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
 		t.Fatalf("assigned agent claim: %v", err)
 	}
 
-	if _, err := db.Exec(ctx, "UPDATE agents SET archived_at = now() WHERE id = $1", ownerAgentID); err != nil {
+	if _, err := db.Exec(ctx, "DELETE FROM agents WHERE id = $1", ownerAgentID); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := store.GetTask(ctx, ownerID, task.ID)
-	if err != nil || loaded.AssigneeAgentID != ownerAgentID {
-		t.Fatalf("assignment after soft delete = %#v, error = %v", loaded, err)
+	if err != nil || loaded.AssigneeAgentID != "" {
+		t.Fatalf("assignment after agent delete = %#v, error = %v", loaded, err)
 	}
 	if _, err := store.UpdateTask(ctx, ownerID, task.ID, UpdateTaskInput{AssigneeAgentID: &ownerAgentID}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("deleted agent reassignment error = %v", err)

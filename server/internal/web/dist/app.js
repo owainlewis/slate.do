@@ -161,7 +161,6 @@ const state = {
   agentLifecycleError: "",
   agentLifecyclePending: "",
   agentLifecycleConfirm: "",
-  agentArchiveConflict: null,
   agentCredentialResult: null,
   boardMode: "lists",
   flowListId: "",
@@ -445,7 +444,6 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
   state.agentLifecycleConfirm = "";
-  state.agentArchiveConflict = null;
   clearAgentLifecycleCredential();
   state.agentDetailLoadState = "unauthorized";
   state.agentDetailError = err.message;
@@ -475,7 +473,6 @@ function prepareAgentRoute(route) {
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
   state.agentLifecycleConfirm = "";
-  state.agentArchiveConflict = null;
   state.agentDetailLoadState = "loading";
   state.agentDetailError = "";
   render();
@@ -867,7 +864,6 @@ function resetAuthenticatedState() {
   state.agentLifecycleError = "";
   state.agentLifecyclePending = "";
   state.agentLifecycleConfirm = "";
-  state.agentArchiveConflict = null;
   state.agentCredentialResult = null;
   state.boardMode = "lists";
   state.flowListId = "";
@@ -1640,7 +1636,7 @@ function workspaceFilterCount() {
 
 function workspaceFilterHTML() {
   const query = new URLSearchParams(globalThis.location?.search || "");
-  const agentOptions = state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
+  const agentOptions = state.agents.map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
   return `<form class="workspace-filters" id="workspace-filters">
     <label class="workspace-search"><span>Search</span><input name="q" value="${escapeAttr(query.get("q") || "")}" placeholder="Search cards…"></label>
     ${state.workspaceScope === "review" ? "" : `<label><span>Status</span><select name="status"><option value="">Any status</option>${FLOW_STATES.map(item => `<option value="${item.value}" ${query.get("status") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>`}
@@ -1844,7 +1840,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
         <section class="nav-sec nav-collaborators">
           <h3>Agents</h3>
           <a class="plain-btn icon-label nav-link ${agentsCurrent && !route.agentId ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent && !route.agentId ? 'aria-current="page"' : ""}>${icon("bot")}<span>All agents</span></a>
-          ${state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).map(agent => `<a class="nav-link agent-nav-link ${route.agentId === agent.id ? "on" : ""}" href="${agentPath(agent.id)}">${avatarHTML(agent, { small: true, decorative: true })}<span>${escapeHTML(agent.displayName)}</span></a>`).join("")}
+          ${state.agents.map(agent => `<a class="nav-link agent-nav-link ${route.agentId === agent.id ? "on" : ""}" href="${agentPath(agent.id)}">${avatarHTML(agent, { small: true, decorative: true })}<span>${escapeHTML(agent.displayName)}</span></a>`).join("")}
         </section>
         <section class="nav-sec nav-sec-footer">
           ${themeSwitchHTML(theme)}
@@ -2077,10 +2073,8 @@ function avatarTone(id) {
 function avatarHTML(identity, options = {}) {
   if (!identity) return "";
   const name = identity.displayName || identity.email || "User";
-  const inactive = Boolean(identity.archivedAt || identity.deletedAt);
-  const label = inactive ? `${name} (archived)` : name;
-  const accessibility = options.decorative ? 'aria-hidden="true"' : `title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}"`;
-  return `<span class="avatar agent-avatar tone-${avatarTone(identity.id)} ${options.small ? "avatar-small" : ""} ${options.large ? "avatar-large" : ""} ${inactive ? "avatar-inactive" : ""}" ${accessibility}>${icon("bot")}</span>`;
+  const accessibility = options.decorative ? 'aria-hidden="true"' : `title="${escapeAttr(name)}" aria-label="${escapeAttr(name)}"`;
+  return `<span class="avatar agent-avatar tone-${avatarTone(identity.id)} ${options.small ? "avatar-small" : ""} ${options.large ? "avatar-large" : ""}" ${accessibility}>${icon("bot")}</span>`;
 }
 
 function userAvatarHTML(identity, options = {}) {
@@ -2096,7 +2090,7 @@ function taskAgent(task) {
 function taskAssigneeHTML(task, showName = false) {
   const agent = taskAgent(task);
   if (!agent) return "";
-  return `<span class="task-assignee">${avatarHTML(agent, { small: true })}${showName ? `<span>${escapeHTML(agent.displayName)}${agent.deletedAt ? " (inactive)" : ""}</span>` : ""}</span>`;
+  return `<span class="task-assignee">${avatarHTML(agent, { small: true })}${showName ? `<span>${escapeHTML(agent.displayName)}</span>` : ""}</span>`;
 }
 
 function taskHTML(task) {
@@ -2226,13 +2220,8 @@ function agentOptionsHTML(selectedID = "") {
   const selectedExists = state.agents.some(agent => agent.id === selectedID);
   return [
     `<option value="" ${selectedID ? "" : "selected"}>No agent</option>`,
-    ...state.agents
-      .filter(agent => (!agent.archivedAt && !agent.deletedAt) || agent.id === selectedID)
-      .map(agent => {
-        const inactive = agent.archivedAt || agent.deletedAt;
-        return `<option value="${escapeAttr(agent.id)}" ${agent.id === selectedID ? "selected" : ""} ${inactive ? "disabled" : ""}>${escapeHTML(agent.displayName)}${inactive ? " (inactive)" : ""}</option>`;
-      }),
-    selectedID && !selectedExists ? `<option value="${escapeAttr(selectedID)}" selected>Assigned agent unavailable</option>` : "",
+    ...state.agents.map(agent => `<option value="${escapeAttr(agent.id)}" ${agent.id === selectedID ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`),
+    selectedID && !selectedExists ? `<option value="${escapeAttr(selectedID)}" selected disabled>Assigned agent unavailable</option>` : "",
   ].join("");
 }
 
@@ -2261,8 +2250,6 @@ function statusNoticeHTML(notice) {
 function agentsHTML() {
   const theme = currentTheme();
   const onNew = state.view === "agent-new";
-  const active = state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt);
-  const archived = state.agents.filter(agent => agent.archivedAt || agent.deletedAt);
   const limitReached = state.activeAgents >= state.maxAgents;
   return `
     <section class="shell agents-shell theme-${theme}">
@@ -2277,14 +2264,14 @@ function agentsHTML() {
                 ? (state.agentCreationResult ? "Save this credential, then verify the connection from your agent’s environment." : "Give this collaborator a clear identity and purpose.")
                 : "External agents can pick up only the work assigned to them in Slate."}</p>
             </div>
-            ${!onNew && active.length ? `<a class="primary agents-new-action ${limitReached ? "disabled" : ""}" href="${NEW_AGENT_PATH}" id="new-agent-link" ${limitReached ? 'aria-disabled="true" aria-describedby="agents-limit"' : ""}>${icon("plus")}<span>New agent</span></a>` : ""}
+            ${!onNew && state.agents.length ? `<a class="primary agents-new-action ${limitReached ? "disabled" : ""}" href="${NEW_AGENT_PATH}" id="new-agent-link" ${limitReached ? 'aria-disabled="true" aria-describedby="agents-limit"' : ""}>${icon("plus")}<span>New agent</span></a>` : ""}
           </header>
           ${statusErrorHTML(state.error)}
           ${state.agentLifecycleNotice && !onNew ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentLifecycleNotice)}</p>` : ""}
           ${state.agentsLoadState === "loading" ? agentsLoadingHTML() : ""}
           ${state.agentsLoadState === "error" ? agentsErrorHTML() : ""}
           ${state.agentsLoadState === "ready" && onNew ? newAgentHTML(limitReached) : ""}
-          ${state.agentsLoadState === "ready" && !onNew ? agentDirectoryHTML(active, archived, limitReached) : ""}
+          ${state.agentsLoadState === "ready" && !onNew ? agentDirectoryHTML(state.agents, limitReached) : ""}
         </div>
       </main>
     </section>`;
@@ -2309,30 +2296,24 @@ function agentsErrorHTML() {
     </section>`;
 }
 
-function agentDirectoryHTML(active, archived, limitReached) {
+function agentDirectoryHTML(agents, limitReached) {
   return `
     <section aria-labelledby="active-agents-heading">
       <div class="agent-directory-meta">
         <div>
-          <h2 id="active-agents-heading">Active agents <span>${active.length}</span></h2>
+          <h2 id="active-agents-heading">Your agents <span>${agents.length}</span></h2>
           <p id="agents-limit">${limitReached
-            ? `${state.maxAgents} of ${state.maxAgents} active agents. Archive an agent before creating another.`
-            : `${state.activeAgents} of ${state.maxAgents} active agent slots used.`}</p>
+            ? `${state.maxAgents} of ${state.maxAgents} agents. Delete an agent before creating another.`
+            : `${state.activeAgents} of ${state.maxAgents} agent slots used.`}</p>
         </div>
       </div>
-      ${active.length ? `<div class="agent-directory">${active.map(agentRowHTML).join("")}</div>` : `
+      ${agents.length ? `<div class="agent-directory">${agents.map(agentRowHTML).join("")}</div>` : `
         <section class="agents-empty">
           <span class="agent-state-icon">${icon("bot")}</span>
           <h2>Bring an agent into the plan.</h2>
           <p>An agent is an external collaborator with its own identity and credential. Assign it work when you are ready.</p>
           <a class="primary" href="${NEW_AGENT_PATH}" id="empty-new-agent">${icon("plus")}<span>New agent</span></a>
         </section>`}
-      ${archived.length ? `
-        <details class="archived-agents">
-          <summary>Archived <span>${archived.length}</span></summary>
-          <p>Archived identities stay visible for assignment history and cannot connect.</p>
-          <div class="agent-directory archived-agent-directory">${archived.map(agentRowHTML).join("")}</div>
-        </details>` : ""}
     </section>`;
 }
 
@@ -2345,9 +2326,8 @@ function agentRowHTML(agent) {
     counts.working ? formatCount(counts.working, "working card", "working cards") : "",
     counts.review ? formatCount(counts.review, "review card", "review cards") : "",
   ].filter(Boolean);
-  const archived = stateLabel === "Archived";
   return `
-    <article class="agent-directory-row ${archived ? "archived" : ""}">
+    <article class="agent-directory-row">
       <a class="agent-directory-link" href="${agentPath(agent.id)}" data-agent-link="${escapeAttr(agent.id)}">
         ${avatarHTML(agent, { large: true, decorative: true })}
         <div class="agent-identity">
@@ -2367,7 +2347,6 @@ function agentRowHTML(agent) {
 }
 
 function agentConnectionState(agent) {
-  if (agent.archivedAt || agent.deletedAt) return "Archived";
   const credential = agent.credential;
   if (credential && !credential.revokedAt) return "Connected";
   return "Needs connection";
@@ -2433,7 +2412,6 @@ function agentDetailBodyHTML() {
       </section>`;
   }
   const agent = state.agentDetail.agent;
-  const archived = Boolean(agent.archivedAt || agent.deletedAt);
   const current = state.view === "agent-work" ? "work" : state.view === "agent-settings" ? "settings" : "overview";
   return `
     <header class="agent-detail-head">
@@ -2448,18 +2426,13 @@ function agentDetailBodyHTML() {
           <p class="agent-last-used">Last credential use: ${escapeHTML(formatLastUse(agent.credential?.lastUsedAt || agent.lastUsedAt))}</p>
         </div>
       </div>
-      ${archived || current === "settings" ? "" : `<button class="primary icon-label" id="assign-work" type="button">${icon("plus")}<span>Assign work</span></button>`}
+      ${current === "settings" ? "" : `<button class="primary icon-label" id="assign-work" type="button">${icon("plus")}<span>Assign work</span></button>`}
     </header>
     <nav class="agent-tabs" aria-label="Agent sections" role="tablist">
       <a id="agent-tab-overview" href="${agentPath(agent.id)}" role="tab" tabindex="${current === "overview" ? "0" : "-1"}" aria-selected="${current === "overview"}" aria-controls="agent-panel-overview" ${current === "overview" ? 'aria-current="page"' : ""} data-agent-tab>Overview</a>
       <a id="agent-tab-work" href="${agentWorkPath(agent.id)}" role="tab" tabindex="${current === "work" ? "0" : "-1"}" aria-selected="${current === "work"}" aria-controls="agent-panel-work" ${current === "work" ? 'aria-current="page"' : ""} data-agent-tab>Work</a>
       <a id="agent-tab-settings" href="${agentSettingsPath(agent.id)}" role="tab" tabindex="${current === "settings" ? "0" : "-1"}" aria-selected="${current === "settings"}" aria-controls="agent-panel-settings" ${current === "settings" ? 'aria-current="page"' : ""} data-agent-tab>Settings</a>
     </nav>
-    ${archived ? `
-      <section class="agent-archived-note" role="status">
-        <strong>Archived identity</strong>
-        <p>This agent cannot connect or receive new work. Its assigned task history stays available.</p>
-      </section>` : ""}
     ${state.agentAssignNotice ? `<p class="agent-detail-notice" role="status">${escapeHTML(state.agentAssignNotice)}</p>` : ""}
     <p class="status-error" role="alert" data-agent-task-mutation-error ${state.agentTaskMutationError ? "" : "hidden"}>${escapeHTML(state.agentTaskMutationError)}</p>
     <section id="agent-panel-overview" class="agent-tab-panel" role="tabpanel" aria-labelledby="agent-tab-overview" tabindex="0" ${current === "overview" ? "" : "hidden"}>
@@ -2475,7 +2448,6 @@ function agentDetailBodyHTML() {
 }
 
 function agentSettingsHTML(agent) {
-  const archived = Boolean(agent.archivedAt || agent.deletedAt);
   const connected = agentConnectionState(agent) === "Connected";
   if (state.agentCredentialResult?.ownerID === state.me?.id && state.agentCredentialResult?.agentID === agent.id) {
     return agentRotationResultHTML(agent, state.agentCredentialResult);
@@ -2491,22 +2463,17 @@ function agentSettingsHTML(agent) {
     </form>
     <section class="agent-settings-card" aria-labelledby="credential-settings-heading">
       <header><div><p class="eyebrow">Credential</p><h2 id="credential-settings-heading">${connected ? "Connected" : "Needs connection"}</h2></div>${icon("key")}</header>
-      <p>${archived ? "Archived agents cannot connect. Restore this identity before creating a new credential." : connected ? "Only this agent’s assigned work is available through its active credential." : "Create a new credential to connect this identity again."}</p>
-      ${archived ? "" : `<div class="agent-settings-actions">
+      <p>${connected ? "Only this agent’s assigned work is available through its active credential." : "Create a new credential to connect this identity again."}</p>
+      <div class="agent-settings-actions">
         <button class="secondary icon-label" id="rotate-agent-credential" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>${icon("key")}<span>${connected ? "Rotate credential" : "Create credential"}</span></button>
         ${connected ? `<button class="secondary danger-text" id="revoke-agent-credential" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>Revoke credential</button>` : ""}
-      </div>`}
+      </div>
     </section>
-    <section class="agent-settings-card agent-danger-zone" aria-labelledby="agent-lifecycle-heading">
-      <header><div><p class="eyebrow">Lifecycle</p><h2 id="agent-lifecycle-heading">${archived ? "Restore identity" : "Archive agent"}</h2></div>${icon("archive")}</header>
-      <p>${archived ? "Restore this identity as Needs connection. Historical assignments remain attached." : "Archiving removes this agent from assignment choices and revokes every credential. Review and Done history remains attached."}</p>
-      <div class="agent-settings-actions"><button class="${archived ? "secondary" : "danger"}" id="${archived ? "restore-agent" : "archive-agent"}" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>${archived ? "Restore agent" : "Archive agent"}</button></div>
-    </section>
-    ${archived ? `<section class="agent-settings-card agent-danger-zone" aria-labelledby="agent-delete-heading">
-      <header><div><p class="eyebrow">Danger zone</p><h2 id="agent-delete-heading">Permanently delete agent</h2></div>${icon("trash")}</header>
-      <p>Delete this identity and every credential. Historical tasks remain, but their agent assignment is cleared. This cannot be undone.</p>
-      <div class="agent-settings-actions"><button class="danger" id="delete-agent" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>Delete permanently</button></div>
-    </section>` : ""}`;
+    <section class="agent-settings-card agent-danger-zone" aria-labelledby="agent-delete-heading">
+      <header><div><p class="eyebrow">Danger zone</p><h2 id="agent-delete-heading">Delete agent</h2></div>${icon("trash")}</header>
+      <p>Delete this identity and every credential. Assigned cards remain in Slate and become unassigned. Comments and outputs keep their recorded author name. This cannot be undone.</p>
+      <div class="agent-settings-actions"><button class="danger" id="delete-agent" type="button" ${state.agentLifecyclePending ? "disabled" : ""}>Delete agent</button></div>
+    </section>`;
 }
 
 function agentRotationResultHTML(agent, result) {
@@ -2526,14 +2493,6 @@ function agentLifecycleConfirmHTML() {
   const agent = state.agentDetail.agent;
   const action = state.agentLifecycleConfirm;
   const pending = Boolean(state.agentLifecyclePending);
-  const conflict = state.agentArchiveConflict;
-  const conflictSummary = conflict
-    ? [
-      formatCount(conflict.new, "New card", "New cards"),
-      formatCount(conflict.ready, "Ready card", "Ready cards"),
-      formatCount(conflict.working, "In Progress card", "In Progress cards"),
-    ].filter((label, index) => [conflict.new, conflict.ready, conflict.working][index] > 0).join(", ")
-    : "";
   const config = {
     rotate: {
       title: agentConnectionState(agent) === "Connected" ? "Rotate credential?" : "Create credential?",
@@ -2547,31 +2506,19 @@ function agentLifecycleConfirmHTML() {
       body: "The agent will become Needs connection. All assigned work stays assigned.",
       confirm: "Revoke credential",
     },
-    archive: {
-      title: conflict ? "Active work is still assigned." : "Archive this agent?",
-      body: conflict
-        ? `${conflictSummary} must be unassigned. Review and Done history will remain attached.`
-        : "Credentials will be revoked and the identity will leave assignment choices. Slate will first check for New, Ready, and In Progress cards.",
-      confirm: conflict ? "Unassign open work and archive" : "Archive agent",
-    },
-    restore: {
-      title: "Restore this identity?",
-      body: "It will return as Needs connection and use one active agent slot. Existing credentials stay revoked.",
-      confirm: "Restore agent",
-    },
     delete: {
-      title: "Permanently delete this agent?",
-      body: "This cannot be undone. The identity and every credential will be deleted. Historical tasks will remain, but their agent assignment will be cleared.",
-      confirm: "Delete permanently",
+      title: `Delete ${agent.displayName}?`,
+      body: "The identity and every credential will be deleted. Assigned cards remain and become unassigned. Comments and outputs keep their recorded author name. This cannot be undone.",
+      confirm: "Delete agent",
     },
   }[action];
   return `
     <div class="detail-overlay agent-lifecycle-overlay">
       <section class="agent-lifecycle-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-lifecycle-confirm-heading" ${pending ? 'aria-busy="true"' : ""}>
-        <header><span class="agent-state-icon">${icon(action === "rotate" ? "key" : action === "restore" ? "bot" : action === "delete" ? "trash" : "archive")}</span><div><h2 id="agent-lifecycle-confirm-heading">${escapeHTML(config.title)}</h2><p>${escapeHTML(config.body)}</p></div></header>
+        <header><span class="agent-state-icon">${icon(action === "delete" ? "trash" : "key")}</span><div><h2 id="agent-lifecycle-confirm-heading">${escapeHTML(config.title)}</h2><p>${escapeHTML(config.body)}</p></div></header>
         ${pending ? '<p class="agent-lifecycle-pending" id="agent-lifecycle-pending" role="status" tabindex="-1">Working… Keep this page open.</p>' : ""}
         ${state.agentLifecycleError ? `<p class="status-error" role="alert">${escapeHTML(state.agentLifecycleError)}</p>` : ""}
-        <footer><button class="secondary" id="cancel-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>Cancel</button><button class="${action === "rotate" || action === "restore" ? "primary" : "danger"}" id="confirm-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>${pending ? "Working…" : escapeHTML(config.confirm)}</button></footer>
+        <footer><button class="secondary" id="cancel-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>Cancel</button><button class="${action === "rotate" ? "primary" : "danger"}" id="confirm-agent-lifecycle" type="button" ${pending ? "disabled" : ""}>${pending ? "Working…" : escapeHTML(config.confirm)}</button></footer>
       </section>
     </div>`;
 }
@@ -4921,15 +4868,12 @@ function bindAgentLifecycle() {
 
   const openConfirm = action => {
     state.agentLifecycleConfirm = action;
-    state.agentArchiveConflict = null;
     state.agentLifecycleError = "";
     render();
     document.querySelector("#confirm-agent-lifecycle")?.focus();
   };
   document.querySelector("#rotate-agent-credential")?.addEventListener("click", () => openConfirm("rotate"));
   document.querySelector("#revoke-agent-credential")?.addEventListener("click", () => openConfirm("revoke"));
-  document.querySelector("#archive-agent")?.addEventListener("click", () => openConfirm("archive"));
-  document.querySelector("#restore-agent")?.addEventListener("click", () => openConfirm("restore"));
   document.querySelector("#delete-agent")?.addEventListener("click", () => openConfirm("delete"));
   document.querySelector("#finish-lifecycle-credential")?.addEventListener("click", () => {
     clearAgentLifecycleCredential();
@@ -4962,10 +4906,9 @@ function bindAgentLifecycleDialog() {
     if (state.agentLifecyclePending) return;
     const action = state.agentLifecycleConfirm;
     state.agentLifecycleConfirm = "";
-    state.agentArchiveConflict = null;
     state.agentLifecycleError = "";
     render();
-    document.querySelector(`#${action === "rotate" ? "rotate-agent-credential" : action === "revoke" ? "revoke-agent-credential" : action === "restore" ? "restore-agent" : action === "delete" ? "delete-agent" : "archive-agent"}`)?.focus();
+    document.querySelector(`#${action === "rotate" ? "rotate-agent-credential" : action === "revoke" ? "revoke-agent-credential" : "delete-agent"}`)?.focus();
   };
   document.querySelector("#cancel-agent-lifecycle")?.addEventListener("click", cancel);
   overlay.addEventListener("click", event => { if (event.target === overlay) cancel(); });
@@ -5018,43 +4961,13 @@ async function runAgentLifecycleMutation() {
       updateAgentCache(state.agentDetail.agent);
       state.agentLifecycleNotice = "Credential revoked. Assigned work is unchanged.";
     } else if (action === "delete") {
-      await api.del(`/api/v1/agents/${encodeURIComponent(context.agentID)}/permanent`);
+      await api.del(`/api/v1/agents/${encodeURIComponent(context.agentID)}`);
       if (!agentMutationIsCurrent(context)) return;
-      state.agents = state.agents.filter(agent => agent.id !== context.agentID);
-      state.agentDetail = null;
-      state.agentWorkPage = null;
-      state.agentDetailLoadState = "idle";
-      state.agentLifecycleConfirm = "";
-      state.agentArchiveConflict = null;
-      state.agentLifecyclePending = "";
-      state.agentLifecycleNotice = "Agent permanently deleted.";
-      await navigate(AGENTS_PATH);
+      await finishAgentDeletion(context);
       return;
-    } else if (action === "archive") {
-      const force = Boolean(state.agentArchiveConflict);
-      await api.post(`/api/v1/agents/${encodeURIComponent(context.agentID)}/archive`, { unassignOpenWork: force });
-      if (!agentMutationIsCurrent(context)) return;
-      state.agentLifecycleNotice = force
-        ? "Open work was unassigned and the agent was archived."
-        : "Agent archived.";
-      state.agentDetail.agent = {
-        ...state.agentDetail.agent,
-        archivedAt: new Date().toISOString(),
-        credential: { ...(state.agentDetail.agent.credential || {}), revokedAt: new Date().toISOString() },
-      };
-      updateAgentCache(state.agentDetail.agent);
-      state.activeAgents = Math.max(0, state.activeAgents - 1);
-    } else if (action === "restore") {
-      const restored = await api.post(`/api/v1/agents/${encodeURIComponent(context.agentID)}/restore`, {});
-      if (!agentMutationIsCurrent(context)) return;
-      state.agentDetail.agent = restored;
-      updateAgentCache(restored);
-      state.activeAgents += 1;
-      state.agentLifecycleNotice = "Agent restored. Create a credential when you are ready to connect it.";
     }
     if (!agentMutationIsCurrent(context)) return;
     state.agentLifecycleConfirm = "";
-    state.agentArchiveConflict = null;
     state.agentLifecyclePending = "";
     try {
       await refreshAgentSettings(context);
@@ -5067,28 +4980,32 @@ async function runAgentLifecycleMutation() {
   } catch (err) {
     if (!agentMutationIsCurrent(context)) return;
     if (handleAgentUnauthorized(err)) return;
-    state.agentLifecyclePending = "";
-    if (action === "archive" && err.status === 409 && err.code === "agent_open_work") {
-      state.agentArchiveConflict = {
-        new: Number(err.data?.conflict?.new || 0),
-        ready: Number(err.data?.conflict?.ready || 0),
-        working: Number(err.data?.conflict?.working || 0),
-      };
-      state.agentLifecycleError = "";
-    } else {
-      state.agentLifecycleError = err.message;
+    if (action === "delete" && err.status === 404) {
+      await finishAgentDeletion(context);
+      return;
     }
+    state.agentLifecyclePending = "";
+    state.agentLifecycleError = err.message;
     render();
     document.querySelector("#confirm-agent-lifecycle")?.focus();
   }
 }
 
+async function finishAgentDeletion(context) {
+  if (!agentMutationIsCurrent(context)) return;
+  state.agents = state.agents.filter(agent => agent.id !== context.agentID);
+  state.activeAgents = Math.max(0, state.activeAgents - 1);
+  state.agentDetail = null;
+  state.agentWorkPage = null;
+  state.agentDetailLoadState = "idle";
+  state.agentLifecycleConfirm = "";
+  state.agentLifecyclePending = "";
+  state.agentLifecycleNotice = "Agent deleted.";
+  await navigate(AGENTS_PATH);
+}
+
 function focusAfterAgentLifecycle(action) {
-  const selector = action === "archive"
-    ? "#restore-agent"
-    : action === "restore" || action === "revoke"
-      ? "#rotate-agent-credential"
-      : "#copy-lifecycle-credential";
+  const selector = action === "revoke" ? "#rotate-agent-credential" : "#copy-lifecycle-credential";
   const target = document.querySelector(selector)
     || document.querySelector("#agent-tab-settings")
     || document.querySelector(".agent-detail-notice")
@@ -5903,7 +5820,7 @@ async function loadAgents(optional = false, sessionVersion = authVersion, userID
     state.maxAgents = Number(data.maxAgents) || accountLimits().agents || DEFAULT_MAX_AGENTS;
     state.activeAgents = Number.isInteger(data.activeAgents)
       ? data.activeAgents
-      : state.agents.filter(agent => !agent.archivedAt && !agent.deletedAt).length;
+      : state.agents.length;
     return true;
   } catch (err) {
     if (optional) return false;
@@ -5960,7 +5877,7 @@ async function createAgent(displayName, purpose, expectedRouteVersion) {
     state.credentialCopyError = "";
     state.agentCreateNotice = "";
     state.agents = [...state.agents.filter(item => item.id !== agent.id), agent];
-    state.activeAgents = state.agents.filter(item => !item.archivedAt && !item.deletedAt).length;
+    state.activeAgents = state.agents.length;
     state.error = "";
     try {
       await loadAgents(false, sessionVersion, userID, expectedRouteVersion);

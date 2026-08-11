@@ -324,7 +324,7 @@ func TestDisableSerializesWithSessionAPITokenAndAgentCreation(t *testing.T) {
 		if err := store.SetMemberDisabled(ctx, email, false); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Exec(ctx, "UPDATE agents SET archived_at = now() WHERE owner_user_id = $1 AND archived_at IS NULL", user.ID); err != nil {
+		if _, err := db.Exec(ctx, "DELETE FROM agents WHERE owner_user_id = $1", user.ID); err != nil {
 			t.Fatal(err)
 		}
 		sessionHash := fmt.Sprintf("race-session-%d-%d", time.Now().UnixNano(), iteration)
@@ -512,12 +512,32 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 
 	store := NewPGStore(db)
 	email := fmt.Sprintf("free-auth-%d@slate.test", time.Now().UnixNano())
-	var userID string
-	if err := db.QueryRow(ctx, `
+	setupTx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer setupTx.Rollback(ctx)
+	var userID, inboxBoardID string
+	if err := setupTx.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, role)
 		VALUES ($1, 'hash', 'member')
 		RETURNING id::text
 	`, email).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := setupTx.QueryRow(ctx, `
+		INSERT INTO boards (user_id, name) VALUES ($1, 'Today')
+		RETURNING id::text
+	`, userID).Scan(&inboxBoardID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setupTx.Exec(ctx, `
+		INSERT INTO buckets (board_id, name, is_inbox)
+		VALUES ($1, 'Inbox', true)
+	`, inboxBoardID); err != nil {
+		t.Fatal(err)
+	}
+	if err := setupTx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
@@ -613,7 +633,7 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.Boards != 1 || usage.MaxListsPerBoard != 1 || usage.MaxActiveItemsPerList != 1 || usage.Agents != 1 || usage.StoredTasks != 2 || usage.StoredContentBytes != 9 || usage.APITokens != 3 {
+	if usage.Boards != 2 || usage.MaxListsPerBoard != 1 || usage.MaxActiveItemsPerList != 1 || usage.Agents != 1 || usage.StoredTasks != 2 || usage.StoredContentBytes != 9 || usage.APITokens != 3 {
 		t.Fatalf("free usage = %#v", usage)
 	}
 
@@ -759,7 +779,7 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	if err := store.RevokeAgentToken(ctx, owner.ID, agent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateAgent(ctx, owner.ID, "Replacement before archive", "", tokenHash+"-revoked", "slate_agent_revoked"); !errors.Is(err, ErrAgentLimit) {
+	if _, err := store.CreateAgent(ctx, owner.ID, "Replacement before delete", "", tokenHash+"-revoked", "slate_agent_revoked"); !errors.Is(err, ErrAgentLimit) {
 		t.Fatalf("revoked agent should still consume slot: %v", err)
 	}
 	if _, err := store.FindUserByAPITokenHash(ctx, tokenHash, time.Now()); !errors.Is(err, ErrUnauthorized) {
@@ -775,22 +795,38 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agents) != entitlements.ProLimits.Agents || agents[len(agents)-1].DeletedAt == nil {
-		t.Fatalf("archived agent list = %#v", agents)
+	if len(agents) != entitlements.ProLimits.Agents-1 {
+		t.Fatalf("agent list after delete = %#v", agents)
 	}
-	var archived AgentUser
 	for _, listed := range agents {
 		if listed.ID == agent.ID {
-			archived = listed
-			break
+			t.Fatalf("deleted agent still listed = %#v", listed)
 		}
 	}
-	if archived.ArchivedAt == nil || archived.DeletedAt == nil || archived.RevokedAt == nil || archived.Credential == nil || archived.Credential.TokenPrefix != "slate_agent_research" || archived.Purpose != "Research customer needs" {
-		t.Fatalf("archived agent = %#v", archived)
+	if _, err := store.GetAgent(ctx, owner.ID, agent.ID); !errors.Is(err, ErrAgentNotFound) {
+		t.Fatalf("deleted agent lookup error = %v", err)
+	}
+	var taskCount, unassignedCount int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE assignee_agent_id IS NULL)
+		FROM tasks
+		WHERE board_id IN ($1, $2)
+	`, boardID, otherBoardID).Scan(&taskCount, &unassignedCount); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 5 || unassignedCount != taskCount {
+		t.Fatalf("tasks after agent delete = %d total, %d unassigned", taskCount, unassignedCount)
+	}
+	var credentialCount int
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM agent_credentials WHERE agent_id = $1", agent.ID).Scan(&credentialCount); err != nil {
+		t.Fatal(err)
+	}
+	if credentialCount != 0 {
+		t.Fatalf("credentials after agent delete = %d", credentialCount)
 	}
 	replacement, err := store.CreateAgent(ctx, owner.ID, "Replacement Bot", "", tokenHash+"-replacement", "slate_agent_replacement")
 	if err != nil {
-		t.Fatalf("replacement after archive: %v", err)
+		t.Fatalf("replacement after delete: %v", err)
 	}
 	if replacement.ID == agent.ID {
 		t.Fatalf("replacement reused deleted identity: %#v", replacement)

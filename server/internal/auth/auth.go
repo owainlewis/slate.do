@@ -96,13 +96,11 @@ type AgentUser struct {
 	ID          string           `json:"id"`
 	DisplayName string           `json:"displayName"`
 	Purpose     string           `json:"purpose,omitempty"`
-	ArchivedAt  *time.Time       `json:"archivedAt,omitempty"`
 	CreatedAt   time.Time        `json:"createdAt"`
 	UpdatedAt   time.Time        `json:"updatedAt"`
 	Credential  *AgentCredential `json:"credential,omitempty"`
 	LastUsedAt  *time.Time       `json:"lastUsedAt,omitempty"`
 	RevokedAt   *time.Time       `json:"revokedAt,omitempty"`
-	DeletedAt   *time.Time       `json:"deletedAt,omitempty"`
 	WorkCounts  AgentWorkCounts  `json:"workCounts"`
 }
 
@@ -796,12 +794,7 @@ func (s *Service) ListAgents(w http.ResponseWriter, r *http.Request, user User) 
 	if agents == nil {
 		agents = []AgentUser{}
 	}
-	activeAgents := 0
-	for _, agent := range agents {
-		if agent.ArchivedAt == nil {
-			activeAgents++
-		}
-	}
+	activeAgents := len(agents)
 	writeJSON(w, http.StatusOK, struct {
 		Agents       []AgentUser `json:"agents"`
 		ActiveAgents int         `json:"activeAgents"`
@@ -848,7 +841,7 @@ func (s *Service) CreateAgent(w http.ResponseWriter, r *http.Request, user User)
 	}
 	agent, err := store.CreateAgent(r.Context(), user.ID, displayName, purpose, hashToken(plain), tokenDisplayPrefix(plain))
 	if errors.Is(err, ErrAgentLimit) {
-		writeCodedError(w, http.StatusConflict, "agent_limit_reached", fmt.Sprintf("%s allows up to %d active agents. Archive an agent before creating another.", planName(user.Entitlement.Plan), user.Entitlement.Limits.Agents))
+		writeCodedError(w, http.StatusConflict, "agent_limit_reached", fmt.Sprintf("%s allows up to %d agents. Delete an agent before creating another.", planName(user.Entitlement.Plan), user.Entitlement.Limits.Agents))
 		return
 	}
 	if errors.Is(err, ErrAgentNameTaken) {

@@ -175,7 +175,7 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 			t.Errorf("%s %s = %d %s, want 403", request.method, request.path, recorder.Code, recorder.Body.String())
 		}
 	}
-	permanentDelete := agentRequest(t, app, agentAToken, http.MethodDelete, "/api/v1/agents/"+agentA.ID+"/permanent", "")
+	permanentDelete := agentRequest(t, app, agentAToken, http.MethodDelete, "/api/v1/agents/"+agentA.ID, "")
 	if permanentDelete.Code != http.StatusUnauthorized {
 		t.Errorf("agent credential permanent delete = %d %s, want 401", permanentDelete.Code, permanentDelete.Body.String())
 	}

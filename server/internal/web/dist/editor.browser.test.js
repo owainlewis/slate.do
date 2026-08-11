@@ -34,9 +34,8 @@ function workspaceFixture() {
   }];
   const agents = [
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
-    { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
+  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -188,15 +187,6 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }
       return json(response, entry, 201);
     }
-    const permanentAgentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/permanent$/);
-    if (permanentAgentMatch && request.method === "DELETE") {
-      const index = state.agents.findIndex(agent => agent.id === permanentAgentMatch[1]);
-      if (index < 0) return json(response, { error: "agent not found" }, 404);
-      if (!state.agents[index].archivedAt) return json(response, { code: "agent_not_archived", error: "Archive this agent before permanently deleting it." }, 409);
-      state.deletedAgents.push(state.agents[index].id);
-      state.agents.splice(index, 1);
-      return json(response, { ok: true });
-    }
     const agentWorkMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/work$/);
     if (agentWorkMatch && request.method === "GET") {
       if (state.delayNextAgentWork) {
@@ -215,6 +205,24 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       return json(response, { items, total: items.length, page, pageSize: 50, hasPrevious: page > 1, hasNext: false });
     }
     const agentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)$/);
+    if (agentMatch && request.method === "DELETE") {
+      const index = state.agents.findIndex(agent => agent.id === agentMatch[1]);
+      if (index < 0) return json(response, { error: "agent not found" }, 404);
+      const deletedID = state.agents[index].id;
+      state.deletedAgents.push(deletedID);
+      state.agents.splice(index, 1);
+      for (const task of [...state.tasks, ...state.subtasks]) {
+        if (task.assigneeAgentId === deletedID) {
+          task.assigneeAgentId = "";
+          task.assigneeAgentName = "";
+        }
+      }
+      if (state.commitNextAgentDeleteThenFail) {
+        state.commitNextAgentDeleteThenFail = false;
+        return json(response, { error: "Response was lost" }, 500);
+      }
+      return json(response, { ok: true });
+    }
     if (agentMatch && request.method === "GET") {
       if (state.failNextAgentDetail) {
         state.failNextAgentDetail = false;
@@ -3223,27 +3231,63 @@ test("a delayed delete closes the same task when it has been reopened", async t 
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 0);
 });
 
-test("only archived agents can be permanently deleted from settings", async t => {
-  const { page, state, origin } = await startWorkspace(t);
+test("agent directory uses quiet card surfaces on desktop and mobile", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/agents`);
+  await page.getByRole("heading", { name: "Agents", exact: true, level: 1 }).waitFor();
+  const row = page.locator(".agent-directory-row");
+  const card = page.locator(".agent-directory-link");
+  assert.equal(await row.count(), 1);
+  assert.equal(await page.locator(".archived-agents").count(), 0);
+  const styles = await page.evaluate(() => {
+    const rowStyle = getComputedStyle(document.querySelector(".agent-directory-row"));
+    const cardStyle = getComputedStyle(document.querySelector(".agent-directory-link"));
+    return {
+      rowDivider: rowStyle.borderBottomWidth,
+      cardBorder: cardStyle.borderTopWidth,
+      cardRadius: cardStyle.borderRadius,
+      cardBackground: cardStyle.backgroundColor,
+    };
+  });
+  assert.equal(styles.rowDivider, "0px");
+  assert.notEqual(styles.cardBorder, "0px");
+  assert.notEqual(styles.cardRadius, "0px");
+  assert.notEqual(styles.cardBackground, "rgba(0, 0, 0, 0)");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  assert.equal(await card.isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("agents can be deleted directly from settings", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
 
   await page.goto(`${origin}/app/agents/agent-research/settings`);
   await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
-  assert.equal(await page.locator("#delete-agent").count(), 0);
-
-  await page.goto(`${origin}/app/agents/agent-archived/settings`);
-  await page.getByRole("heading", { name: "Archived agent", exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Restore agent", exact: true }).isVisible(), true);
   await page.locator("#delete-agent").click();
-  const dialog = page.getByRole("dialog", { name: "Permanently delete this agent?", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Delete Research agent?", exact: true });
   assert.equal(await dialog.getByText("This cannot be undone.", { exact: false }).isVisible(), true);
-  assert.equal(await dialog.getByText("Historical tasks will remain, but their agent assignment will be cleared.", { exact: false }).isVisible(), true);
-  await dialog.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  assert.equal(await dialog.getByText("Assigned cards remain and become unassigned.", { exact: false }).isVisible(), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await dialog.count(), 0);
+  await page.locator("#delete-agent").click();
+  state.commitNextAgentDeleteThenFail = true;
+  await page.keyboard.press("Enter");
+
+  await dialog.getByText("Response was lost", { exact: true }).waitFor();
+  assert.deepEqual(state.deletedAgents, ["agent-research"]);
+  await dialog.getByRole("button", { name: "Delete agent", exact: true }).click();
 
   await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
-  await page.getByText("Agent permanently deleted.", { exact: true }).waitFor();
-  assert.deepEqual(state.deletedAgents, ["agent-archived"]);
-  assert.equal(await page.getByText("Archived agent", { exact: true }).count(), 0);
-  assert.ok(state.requests.includes("DELETE /api/v1/agents/agent-archived/permanent"));
+  await page.getByText("Agent deleted.", { exact: true }).waitFor();
+  assert.deepEqual(state.deletedAgents, ["agent-research"]);
+  assert.equal(state.tasks.find(item => item.id === "task-parent").assigneeAgentId, "");
+  assert.equal(state.subtasks.find(item => item.id === "task-child").assigneeAgentId, "");
+  assert.ok(state.requests.includes("DELETE /api/v1/agents/agent-research"));
+  assert.equal(state.requests.filter(item => item === "DELETE /api/v1/agents/agent-research").length, 2);
+  assert.deepEqual(pageErrors, []);
 });
 
 function isAppShell(pathname) {
