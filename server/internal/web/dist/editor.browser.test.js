@@ -879,21 +879,26 @@ test("boards offer table and calendar views without turning them into separate n
   for (const view of ["Board", "Flow", "Table", "Calendar"]) {
     assert.equal(await page.locator(`[data-board-mode="${view === "Board" ? "lists" : view.toLowerCase()}"]`).getByText(view, { exact: true }).isVisible(), true, view);
   }
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isVisible(), true);
+
+  await page.locator('[data-board-mode="flow"]').click();
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).count(), 0);
 
   await page.locator('[data-board-mode="table"]').click();
   await page.getByRole("table", { name: "Cards", exact: true }).waitFor();
   assert.equal(await page.getByRole("columnheader", { name: "Location", exact: true }).isVisible(), true);
   assert.ok(await page.getByText("Workspace / YouTube", { exact: true }).count() > 0);
-  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).count(), 0);
 
   await page.locator('[data-board-mode="calendar"]').click();
   const calendar = page.getByLabel("Board calendar", { exact: true });
   await calendar.waitFor();
   assert.equal(await calendar.locator(".calendar-day").count(), 7);
-  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).count(), 0);
 
   await page.locator('[data-board-mode="lists"]').click();
   assert.equal(await page.locator('[data-board-mode="lists"]').getAttribute("aria-pressed"), "true");
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isVisible(), true);
   assert.equal(await page.getByLabel("List name").count(), 2);
   assert.deepEqual(pageErrors, []);
 });

@@ -1605,7 +1605,7 @@ function boardHTML() {
             <button data-board-mode="table" aria-pressed="${boardMode === "table"}" class="${boardMode === "table" ? "on" : ""}" title="Table">${icon("rows")}<span>Table</span></button>
             <button data-board-mode="calendar" aria-pressed="${boardMode === "calendar"}" class="${boardMode === "calendar" ? "on" : ""}" title="Calendar">${icon("calendar")}<span>Calendar</span></button>
           </div>
-          <button class="secondary" id="add-list" ${boardMode === "lists" && !listLimitReached ? "" : "disabled"}>${icon("plus")}<span>New list</span></button>
+          ${boardMode === "lists" ? `<button class="secondary" id="add-list" ${listLimitReached ? "disabled" : ""}>${icon("plus")}<span>New list</span></button>` : ""}
         </div>
       </header>
       ${statusErrorHTML(state.error || state.taskMutationError?.message)}
