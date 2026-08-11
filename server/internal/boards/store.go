@@ -947,9 +947,7 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 		if parent.ParentTaskID != "" {
 			return Task{}, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
 		}
-		if parent.BucketID != bucketID {
-			return Task{}, fmt.Errorf("%w: subtask must use its parent list", ErrInvalidData)
-		}
+		bucketID = parent.BucketID
 	}
 	bucket, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
@@ -1436,6 +1434,9 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		current.AssigneeAgentID, err = activeAgentAssignment(ctx, tx, userID, *input.AssigneeAgentID)
 		if err != nil {
 			return Task{}, err
+		}
+		if current.AssigneeAgentID != "" && !current.Done && current.Status == StatusNew {
+			current.Status = StatusQueued
 		}
 	}
 	if current.AssigneeAgentID != "" && !current.Done && (current.Status == StatusNew || current.Status == StatusQueued || current.Status == StatusWorking) {

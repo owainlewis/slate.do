@@ -297,6 +297,17 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
 	if err != nil || len(tasks) != 1 || tasks[0].ID != task.ID {
 		t.Fatalf("assigned queue = %#v, error = %v", tasks, err)
 	}
+	captured, err := store.CreateTask(ctx, ownerID, list.ID, CreateTaskInput{Title: "Captured first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignedCaptured, err := store.UpdateTaskForHuman(ctx, ownerID, captured.ID, UpdateTaskInput{AssigneeAgentID: &ownerAgentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignedCaptured.Status != StatusQueued {
+		t.Fatalf("newly assigned captured task status = %q, want %q", assignedCaptured.Status, StatusQueued)
+	}
 	ready := StatusQueued
 	if _, err := store.UpdateTaskForHuman(ctx, ownerID, task.ID, UpdateTaskInput{Status: &ready}); err != nil {
 		t.Fatalf("mark assigned card ready: %v", err)
@@ -1495,6 +1506,46 @@ func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
 	}
 }
 
+func TestPreparedSubtaskCreationResolvesTheLockedParentList(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Concurrent child creation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalList, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, originalList.ID, CreateTaskInput{Title: "Ship release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := prepareTaskCreate(CreateTaskInput{Title: "Write notes", ParentTaskID: parent.ID}, "parent:"+parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.createPreparedTask(ctx, userID, originalList.ID, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.BucketID != destination.ID {
+		t.Fatalf("child list = %q, want locked parent list %q", child.BucketID, destination.ID)
+	}
+}
+
 func TestSubtaskCreationAcceptsThePredeploymentFingerprintAfterParentMoves(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -1843,10 +1894,14 @@ func TestSubtaskCreationRacingParentMoveNeverSplitsLists(t *testing.T) {
 			}()
 			waitForBlockedQueryContaining(t, ctx, db, "FOR UPDATE OF t")
 
-			createResult := make(chan error, 1)
+			type createOutcome struct {
+				task Task
+				err  error
+			}
+			createResult := make(chan createOutcome, 1)
 			go func() {
-				_, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Racing child"})
-				createResult <- err
+				task, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Racing child"})
+				createResult <- createOutcome{task: task, err: err}
 			}()
 			waitForBlockedQueryContaining(t, ctx, db, "FROM users u")
 
@@ -1856,8 +1911,12 @@ func TestSubtaskCreationRacingParentMoveNeverSplitsLists(t *testing.T) {
 			if err := <-moveResult; err != nil {
 				t.Fatalf("parent move: %v", err)
 			}
-			if err := <-createResult; !errors.Is(err, ErrInvalidData) {
-				t.Fatalf("racing subtask creation error = %v, want ErrInvalidData", err)
+			created := <-createResult
+			if created.err != nil {
+				t.Fatalf("racing subtask creation: %v", created.err)
+			}
+			if created.task.BucketID != destination.ID {
+				t.Fatalf("racing child list = %q, want locked parent list %q", created.task.BucketID, destination.ID)
 			}
 
 			var splitChildren int

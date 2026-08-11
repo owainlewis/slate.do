@@ -351,6 +351,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const previousBucketID = task.bucketId;
       if (input.status && input.status !== task.status) task.reviewReason = "";
       Object.assign(task, input, { done: input.status === "done" });
+      if (input.assigneeAgentId && task.status === "new" && !task.done) task.status = "queued";
       if (!task.parentTaskId && input.bucketId) {
         const list = state.lists.find(item => item.id === input.bucketId);
         if (previousBucketID !== list.id && !task.done) {
@@ -860,6 +861,25 @@ test("generic cards open from the table without a task completion control", asyn
   await page.getByRole("button", { name: "Back to cards", exact: true }).click();
   const opener = page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true });
   assert.equal(await opener.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("assigning an existing New card makes it Ready for agent work", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("button", { name: "Open card: Write the doc my boss asked for", exact: true }).click();
+  await page.getByLabel("Owner", { exact: true }).selectOption("agent-research");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => state.tasks.find(task => task.id === "task-inbox")?.assigneeAgentId === "agent-research");
+  await page.getByRole("region", { name: "Card detail" }).waitFor({ state: "detached" });
+
+  const assigned = state.tasks.find(task => task.id === "task-inbox");
+  assert.equal(assigned.status, "queued");
+  await page.getByRole("tab", { name: "Flow", exact: true }).click();
+  await page.getByRole("tab", { name: "Flow", selected: true }).waitFor();
+  const readyCard = page.locator('[data-flow-status="queued"]').getByText("Write the doc my boss asked for", { exact: true });
+  await readyCard.waitFor();
+  assert.equal(await readyCard.isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 
