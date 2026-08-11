@@ -388,6 +388,7 @@ let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
 let workspaceListLoadVersion = 0;
 let workspaceLoadVersion = 0;
+let boardLoadVersion = 0;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
 let cardContextMenu = null;
@@ -935,20 +936,24 @@ async function logout() {
 }
 
 async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion) {
+  const loadVersion = ++boardLoadVersion;
+  const loadIsCurrent = () => loadVersion === boardLoadVersion
+    && sessionVersion === authVersion
+    && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
   const previousBoardID = state.board?.id || "";
   let board = await api.get(`/api/v1/boards/${id}`);
-  if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+  if (!loadIsCurrent()) return false;
   const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
   if (staleNames.length) {
     try {
       await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
-      if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+      if (!loadIsCurrent()) return false;
       board = await api.get(`/api/v1/boards/${id}`);
     } catch (err) {
-      if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+      if (!loadIsCurrent()) return false;
       throw err;
     }
-    if (sessionVersion !== authVersion || (expectedRouteVersion !== undefined && expectedRouteVersion !== routeVersion)) return false;
+    if (!loadIsCurrent()) return false;
   }
   const changedBoard = previousBoardID && previousBoardID !== board.id;
   state.board = board;
@@ -3242,7 +3247,7 @@ async function refreshAfterContextDelete() {
     return true;
   }
 
-  const refreshRouteVersion = ++routeVersion;
+  const refreshRouteVersion = routeVersion;
   try {
     if (route.name === "workspace" || route.name === "board") {
       const loaded = await reload();
@@ -3280,6 +3285,7 @@ async function refreshAfterContextDelete() {
 async function deleteCardFromContext(taskID) {
   const task = findTask(taskID);
   if (!task || !confirm(`Delete “${task.title}” and its child cards?`)) return false;
+  const deleteErrorPrefix = `Couldn’t delete “${task.title}”:`;
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   const family = loadedTaskFamily(taskID);
@@ -3300,7 +3306,8 @@ async function deleteCardFromContext(taskID) {
 
   const deletedTasks = new Map([...family, ...loadedTaskFamily(taskID)].map(item => [item.id, item]));
   removeLoadedTaskFamily(taskID, [...deletedTasks.values()]);
-  state.error = "";
+  if (state.error.startsWith(deleteErrorPrefix)) state.error = "";
+  if (state.agentTaskMutationError.startsWith(deleteErrorPrefix)) state.agentTaskMutationError = "";
   await refreshAfterContextDelete();
   return true;
 }

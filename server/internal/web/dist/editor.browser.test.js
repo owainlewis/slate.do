@@ -854,15 +854,24 @@ test("a failed agent context-menu delete reports the error in place", async t =>
   const { page, state, origin, pageErrors } = await startWorkspace(t);
   await page.goto(`${origin}/app/agents/agent-research/work`);
   const parent = page.locator('.agent-work-item[data-task="task-parent"]');
+  const error = "Couldn’t delete “Publish task-first agents video”: Could not delete task";
   state.failNextDelete = true;
 
   await parent.click({ button: "right" });
   page.once("dialog", dialog => dialog.accept());
   await page.getByRole("menuitem", { name: "Delete card" }).click();
-  await page.getByText("Couldn’t delete “Publish task-first agents video”: Could not delete task", { exact: true }).waitFor();
+  await page.getByText(error, { exact: true }).waitFor();
 
   assert.equal(await parent.count(), 1);
   assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await parent.waitFor({ state: "detached" });
+
+  assert.equal(await page.getByText(error, { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
   assert.deepEqual(pageErrors, []);
 });
 
