@@ -512,12 +512,32 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 
 	store := NewPGStore(db)
 	email := fmt.Sprintf("free-auth-%d@slate.test", time.Now().UnixNano())
-	var userID string
-	if err := db.QueryRow(ctx, `
+	setupTx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer setupTx.Rollback(ctx)
+	var userID, inboxBoardID string
+	if err := setupTx.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, role)
 		VALUES ($1, 'hash', 'member')
 		RETURNING id::text
 	`, email).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := setupTx.QueryRow(ctx, `
+		INSERT INTO boards (user_id, name) VALUES ($1, 'Today')
+		RETURNING id::text
+	`, userID).Scan(&inboxBoardID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setupTx.Exec(ctx, `
+		INSERT INTO buckets (board_id, name, is_inbox)
+		VALUES ($1, 'Inbox', true)
+	`, inboxBoardID); err != nil {
+		t.Fatal(err)
+	}
+	if err := setupTx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
@@ -613,7 +633,7 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.Boards != 1 || usage.MaxListsPerBoard != 1 || usage.MaxActiveItemsPerList != 1 || usage.Agents != 1 || usage.StoredTasks != 2 || usage.StoredContentBytes != 9 || usage.APITokens != 3 {
+	if usage.Boards != 2 || usage.MaxListsPerBoard != 1 || usage.MaxActiveItemsPerList != 1 || usage.Agents != 1 || usage.StoredTasks != 2 || usage.StoredContentBytes != 9 || usage.APITokens != 3 {
 		t.Fatalf("free usage = %#v", usage)
 	}
 
