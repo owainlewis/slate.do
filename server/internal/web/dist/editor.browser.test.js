@@ -719,8 +719,8 @@ test("an agent context-menu delete refreshes totals for hidden descendants", asy
   await page.goto(`${origin}/app/agents/agent-research`);
   await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: /Research examples/ }).count(), 0);
-  assert.equal(await page.getByText("1 assigned item in current task data.", { exact: true }).count(), 0);
-  assert.equal(await page.getByText("2 assigned items in current task data.", { exact: true }).count(), 1);
+  assert.equal(await page.locator(".state-group-done header > span").textContent(), "1");
+  assert.equal(await page.locator(".agent-view-all").count(), 1);
   const detailRequestsBeforeDelete = state.requests.filter(request => request === "GET /api/v1/agents/agent-research").length;
 
   const parent = page.locator('.agent-work-item[data-task="task-parent"]');
@@ -728,7 +728,7 @@ test("an agent context-menu delete refreshes totals for hidden descendants", asy
   page.once("dialog", dialog => dialog.accept());
   await page.getByRole("menuitem", { name: "Delete card" }).click();
   await waitFor(() => state.requests.filter(request => request === "GET /api/v1/agents/agent-research").length > detailRequestsBeforeDelete);
-  await page.getByText("Research agent has no active work.", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "No work assigned", exact: true }).waitFor();
 
   assert.equal(await page.locator(".agent-work-item").count(), 0);
   assert.equal(await page.locator(".agent-view-all").count(), 0);
