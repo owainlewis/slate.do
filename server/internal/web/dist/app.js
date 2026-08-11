@@ -390,6 +390,7 @@ let workspaceListLoadVersion = 0;
 let workspaceLoadVersion = 0;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
+let cardContextMenu = null;
 
 async function serializeTaskMutation(taskID, mutation) {
   const sessionVersion = authVersion;
@@ -1201,6 +1202,7 @@ function focusOpenedTaskDetail() {
 }
 
 function render() {
+  closeCardContextMenu();
   const root = document.querySelector("#app");
 	if (state.view === "logging-out" || state.view === "logout-error") {
 	  root.innerHTML = logoutStatusHTML();
@@ -1663,14 +1665,14 @@ function workspaceTaskContext(task, includeOwner = false) {
 
 function workspaceListHTML(tasks) {
   if (!tasks.length) return `<div class="workspace-empty">Nothing here yet.</div>`;
-  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><span class="workspace-card-mark"></span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></span>${taskPriorityBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
+  return `<section class="workspace-list-view">${tasks.map(task => `<button class="workspace-list-row" data-task="${task.id}" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><span class="workspace-card-mark"></span><span class="workspace-task-copy"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task))}</small></span>${taskPriorityBadgeHTML(task)}<span class="workspace-owner">${escapeHTML(workspaceTaskOwner(task))}</span><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : ""}</time></button>`).join("")}</section>`;
 }
 
 function workspaceTableHTML(tasks) {
   return `<table class="workspace-table" aria-label="Cards">
     <colgroup><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
     <thead><tr class="workspace-table-head"><th scope="col">Card</th><th scope="col">Location</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
-    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Child of ${escapeHTML(task.parentTaskTitle || "parent card")}</small>` : ""}</button></td><td>${escapeHTML([task.boardName, task.listName || "Inbox"].filter(Boolean).join(" / "))}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="6"><div class="workspace-empty">No cards match these filters.</div></td></tr>`}</tbody>
+    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task="${task.id}" data-task-row><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Child of ${escapeHTML(task.parentTaskTitle || "parent card")}</small>` : ""}</button></td><td>${escapeHTML([task.boardName, task.listName || "Inbox"].filter(Boolean).join(" / "))}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="6"><div class="workspace-empty">No cards match these filters.</div></td></tr>`}</tbody>
   </table>`;
 }
 
@@ -1777,7 +1779,7 @@ function workspaceDetailHTML(task) {
     <section class="workspace-subtasks" aria-labelledby="subtasks-heading">
       <header><div><h3 id="subtasks-heading">Child cards</h3><span>${completed} of ${state.selectedSubtasks.length} done</span></div></header>
       ${state.selectedSubtasks.length ? `<div class="workspace-subtask-list">
-        ${state.selectedSubtasks.map(item => `<div class="workspace-subtask-row"><button class="workspace-subtask-open" type="button" data-open-task="${item.id}"><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button></div>`).join("")}
+        ${state.selectedSubtasks.map(item => `<div class="workspace-subtask-row" data-task="${item.id}"><button class="workspace-subtask-open" type="button" data-open-task="${item.id}"><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button></div>`).join("")}
       </div>` : `<p class="workspace-subtask-empty">Use child cards only when this intent needs smaller pieces.</p>`}
       <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a child card" aria-label="Child card title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add child"}</span></button></div>
       <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
@@ -2567,7 +2569,7 @@ function agentWorkSectionHTML(title, description, items = [], total = 0, status 
 
 function agentWorkItemHTML(item) {
   return `
-    <button class="agent-work-item" type="button" data-open-task="${escapeAttr(item.id)}" data-open-agent-task="${escapeAttr(item.id)}" data-agent-task-board="${escapeAttr(item.boardId)}">
+    <button class="agent-work-item" type="button" data-task="${escapeAttr(item.id)}" data-open-task="${escapeAttr(item.id)}" data-open-agent-task="${escapeAttr(item.id)}" data-agent-task-board="${escapeAttr(item.boardId)}">
       <span class="agent-work-title">${escapeHTML(item.title)}</span>
       <span class="agent-work-meta">
         <span class="state-badge state-${escapeAttr(item.status)}">${escapeHTML(statusLabel(item.status))}</span>
@@ -3069,6 +3071,166 @@ function bindWorkspace() {
   document.querySelector("#workspace-load-more")?.addEventListener("click", loadMoreWorkspaceTasks);
   bindDrag();
   bindWorkspaceDetail();
+}
+
+function cardContextMenuHTML(task) {
+  return `<div class="card-context-menu" role="menu" aria-label="Actions for ${escapeAttr(task.title)}">
+    <button type="button" role="menuitem" data-context-delete>${icon("trash")}<span>Delete card</span></button>
+  </div>`;
+}
+
+function cardContextMenuPosition(x, y, width, height, viewportWidth, viewportHeight) {
+  const margin = 8;
+  const offset = 4;
+  return {
+    left: Math.max(margin, Math.min(x + offset, viewportWidth - width - margin)),
+    top: Math.max(margin, Math.min(y + offset, viewportHeight - height - margin)),
+  };
+}
+
+function closeCardContextMenu({ restoreFocus = false } = {}) {
+  if (!cardContextMenu) return;
+  const { menu, card, trigger, onPointerDown, onKeyDown } = cardContextMenu;
+  cardContextMenu = null;
+  globalThis.document?.removeEventListener?.("pointerdown", onPointerDown, true);
+  globalThis.document?.removeEventListener?.("keydown", onKeyDown, true);
+  card?.classList?.remove("context-open");
+  menu?.remove?.();
+  if (restoreFocus) trigger?.focus?.();
+}
+
+function bindCardContextMenus() {
+  document.querySelectorAll("[data-task]").forEach(card => card.addEventListener("contextmenu", event => {
+    const task = findTask(card.dataset.task);
+    if (!task) return;
+    event.preventDefault();
+    closeCardContextMenu();
+
+    const trigger = card.matches("button, a") ? card : card.querySelector("[data-open-task], button, a") || card;
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = cardContextMenuHTML(task);
+    const menu = wrapper.firstElementChild;
+    const menuHost = document.querySelector("#app > .theme-dark, #app > .theme-light") || document.body;
+    menuHost.append(menu);
+
+    let x = event.clientX;
+    let y = event.clientY;
+    if (!x && !y) {
+      const bounds = trigger.getBoundingClientRect();
+      x = bounds.left;
+      y = bounds.bottom;
+    }
+    const position = cardContextMenuPosition(x, y, menu.offsetWidth, menu.offsetHeight, window.innerWidth, window.innerHeight);
+    menu.style.left = `${position.left}px`;
+    menu.style.top = `${position.top}px`;
+    card.classList.add("context-open");
+
+    const onPointerDown = pointerEvent => {
+      if (!menu.contains(pointerEvent.target)) closeCardContextMenu();
+    };
+    const onKeyDown = keyEvent => {
+      if (keyEvent.key === "Escape") {
+        keyEvent.preventDefault();
+        closeCardContextMenu({ restoreFocus: true });
+      } else if (keyEvent.key === "Tab") {
+        closeCardContextMenu();
+      }
+    };
+    cardContextMenu = { menu, card, trigger, onPointerDown, onKeyDown };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    menu.querySelector("[data-context-delete]").addEventListener("click", async () => {
+      closeCardContextMenu({ restoreFocus: true });
+      await deleteCardFromContext(task.id);
+    });
+    menu.querySelector("[role=menuitem]").focus();
+  }));
+}
+
+function loadedTaskFamily(taskID) {
+  const candidates = [
+    ...state.workspaceTasks,
+    ...state.selectedSubtasks,
+    ...(state.selectedTask ? [state.selectedTask] : []),
+    ...(state.board?.buckets || []).flatMap(list => list.tasks || []),
+    ...(state.agentWorkPage?.items || []),
+    ...["ready", "working", "review", "recentlyCompleted"].flatMap(group => state.agentDetail?.work?.[group] || []),
+  ];
+  const byID = new Map(candidates.filter(task => task?.id).map(task => [task.id, task]));
+  const familyIDs = new Set([taskID]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of byID.values()) {
+      if (!familyIDs.has(task.id) && familyIDs.has(task.parentTaskId)) {
+        familyIDs.add(task.id);
+        changed = true;
+      }
+    }
+  }
+  return [...familyIDs].map(id => byID.get(id)).filter(Boolean);
+}
+
+function removeLoadedTaskFamily(taskID, tasks) {
+  const deletedIDs = new Set([taskID, ...tasks.map(task => task.id)]);
+  const keep = task => !deletedIDs.has(task.id);
+  const openCountChanges = new Map();
+  for (const task of tasks) {
+    if (task.status === "done") continue;
+    openCountChanges.set(task.bucketId, Number(openCountChanges.get(task.bucketId) || 0) + 1);
+  }
+  const reconciledLists = new Set();
+  for (const list of [...state.workspaceLists, ...(state.board?.buckets || [])]) {
+    if (reconciledLists.has(list)) continue;
+    reconciledLists.add(list);
+    const change = openCountChanges.get(list.id);
+    if (change) list.openCount = Math.max(0, Number(list.openCount || 0) - change);
+  }
+  state.workspaceTasks = state.workspaceTasks.filter(keep);
+  state.selectedSubtasks = state.selectedSubtasks.filter(keep);
+  for (const list of state.board?.buckets || []) list.tasks = (list.tasks || []).filter(keep);
+  for (const task of tasks) {
+    reconcileAgentTaskCaches(task, { deleted: true });
+    delete state.workspaceReviewKinds[task.id];
+    delete state.taskDetailDrafts[task.id];
+  }
+  if (!state.selectedTask || !deletedIDs.has(state.selectedTask.id)) return;
+  taskDetailVersion += 1;
+  state.selectedTask = null;
+  state.selectedSubtasks = [];
+  state.selectedEntries = [];
+  state.cardEntryDraft = "";
+  state.cardEntryKind = "comment";
+  state.cardEntryPending = false;
+  state.cardEntryError = "";
+  state.subtaskDraft = "";
+  state.subtaskCreateAttempt = null;
+  state.subtaskPending = false;
+  state.subtaskError = "";
+}
+
+async function deleteCardFromContext(taskID) {
+  const task = findTask(taskID);
+  if (!task || !confirm(`Delete “${task.title}” and its child cards?`)) return false;
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  const family = loadedTaskFamily(taskID);
+  try {
+    const deleted = await serializeTaskMutation(taskID, () => api.del(`/api/v1/tasks/${encodeURIComponent(taskID)}`));
+    if (!deleted || !sessionIsCurrent(sessionVersion, userID)) return false;
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
+    state.error = `Couldn’t delete “${task.title}”: ${err.message}`;
+    render();
+    document.querySelector(`[data-task="${CSS.escape(taskID)}"] [data-open-task], [data-task="${CSS.escape(taskID)}"]`)?.focus();
+    return false;
+  }
+
+  const deletedTasks = new Map([...family, ...loadedTaskFamily(taskID)].map(item => [item.id, item]));
+  removeLoadedTaskFamily(taskID, [...deletedTasks.values()]);
+  state.error = "";
+  await applyRoute();
+  return true;
 }
 
 function agentWorkGroupForTask(task) {
@@ -4031,6 +4193,7 @@ function reconcileTaskMutation(updated, previousTask) {
 
 function bindAppShell() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindCardContextMenus();
   document.querySelectorAll(".task-nav-pages a, .agent-nav-link").forEach(el => el.addEventListener("click", event => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
@@ -5943,6 +6106,12 @@ function findTask(id) {
     const task = (list.tasks || []).find(t => t.id === id);
     if (task) return task;
   }
+  const agentTask = (state.agentWorkPage?.items || []).find(task => task.id === id)
+    || ["ready", "working", "review", "recentlyCompleted"]
+      .flatMap(group => state.agentDetail?.work?.[group] || [])
+      .find(task => task.id === id);
+  if (agentTask) return agentTask;
+  if (state.selectedTask?.id === id) return state.selectedTask;
   return null;
 }
 

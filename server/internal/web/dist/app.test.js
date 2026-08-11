@@ -372,6 +372,24 @@ test("kanban items use raised card surfaces", () => {
   }
 });
 
+test("cards expose a compact viewport-safe delete context menu", () => {
+  const task = { id: "task-one", title: "Delete me", status: "new", priority: "", scheduledDate: "" };
+  const menu = app.cardContextMenuHTML(task);
+
+  assert.match(menu, /role="menu" aria-label="Actions for Delete me"/);
+  assert.match(menu, /role="menuitem" data-context-delete/);
+  assert.match(menu, />Delete card</);
+  assert.match(app.workspaceListHTML([task]), /data-task="task-one" data-open-task="task-one"/);
+  assert.match(app.workspaceTableHTML([task]), /data-task="task-one" data-task-row/);
+  assert.match(app.agentWorkItemHTML(task), /data-task="task-one" data-open-task="task-one"/);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(app.cardContextMenuPosition(990, 790, 176, 48, 1000, 800))),
+    { left: 816, top: 744 },
+  );
+  assert.match(styles, /\.card-context-menu \{[^}]*position: fixed;[^}]*z-index: 120;/s);
+  assert.match(styles, /\.card-context-menu button \{[^}]*color: var\(--danger\);/s);
+});
+
 test("default board creation stays incomplete when either default list fails", async () => {
   vm.runInContext(`
     state.me = { id: "owner", theme: "light" };
@@ -545,7 +563,7 @@ test("the card table exposes native headers, cells, and keyboard-operable rows",
   for (const heading of ["Card", "Location", "Status", "Priority", "Owner", "Planned"]) {
     assert.match(html, new RegExp(`<th scope="col">${heading}<\\/th>`));
   }
-  assert.match(html, /<tr class="workspace-table-row" data-task-row>/);
+  assert.match(html, /<tr class="workspace-table-row" data-task="task-one" data-task-row>/);
   assert.doesNotMatch(html, /workspace-completion-toggle|data-toggle-done/);
   assert.match(html, /<button type="button" class="workspace-table-open" data-open-task="task-one" aria-label="Open card: Accessible task"><strong>Accessible task<\/strong><\/button>/);
   assert.doesNotMatch(html, /<section class="workspace-table"|<tr[^>]*tabindex=/);
