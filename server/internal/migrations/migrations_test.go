@@ -1182,7 +1182,7 @@ func TestNewCardStatusMigrationAddsCaptureStateAndDefault(t *testing.T) {
 	}
 }
 
-func TestStatusOnlyCardsMigrationPreservesCompletionAndDropsLegacyColumn(t *testing.T) {
+func TestStatusOnlyCardsMigrationPreservesCompletionAndSyncsLegacyColumn(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
@@ -1256,8 +1256,54 @@ func TestStatusOnlyCardsMigrationPreservesCompletionAndDropsLegacyColumn(t *test
 	`).Scan(&hasDoneColumn); err != nil {
 		t.Fatal(err)
 	}
-	if hasDoneColumn {
-		t.Fatal("legacy done column still exists")
+	if !hasDoneColumn {
+		t.Fatal("legacy done column was removed before old revisions drained")
+	}
+
+	var oldWriterID string
+	var oldWriterStatus string
+	var oldWriterDone bool
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tasks (status, done) VALUES ('queued', true)
+		RETURNING id::text, status, done
+	`).Scan(&oldWriterID, &oldWriterStatus, &oldWriterDone); err != nil {
+		t.Fatal(err)
+	}
+	if oldWriterStatus != "done" || !oldWriterDone {
+		t.Fatalf("old-writer insert = status %q done %v", oldWriterStatus, oldWriterDone)
+	}
+
+	var newWriterID string
+	var newWriterDone bool
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tasks (status) VALUES ('done')
+		RETURNING id::text, done
+	`).Scan(&newWriterID, &newWriterDone); err != nil {
+		t.Fatal(err)
+	}
+	if !newWriterDone {
+		t.Fatal("new-writer status did not sync to done")
+	}
+
+	if _, err := tx.Exec(ctx, "UPDATE tasks SET done = false WHERE id = $1", oldWriterID); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := tx.QueryRow(ctx, "SELECT status FROM tasks WHERE id = $1", oldWriterID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" {
+		t.Fatalf("old-writer reopen status = %q, want queued", status)
+	}
+
+	if _, err := tx.Exec(ctx, "UPDATE tasks SET status = 'working' WHERE id = $1", newWriterID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT done FROM tasks WHERE id = $1", newWriterID).Scan(&newWriterDone); err != nil {
+		t.Fatal(err)
+	}
+	if newWriterDone {
+		t.Fatal("new-writer status update did not clear done")
 	}
 
 	var predicates string
@@ -1270,6 +1316,60 @@ func TestStatusOnlyCardsMigrationPreservesCompletionAndDropsLegacyColumn(t *test
 	}
 	if strings.Contains(predicates, "done = true") || strings.Contains(predicates, "done = false") {
 		t.Fatalf("legacy index predicate remains: %s", predicates)
+	}
+}
+
+func TestStatusDoneRolloutCompatibilityRestoresDevelopmentSchema(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tasks (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			status text NOT NULL DEFAULT 'new'
+		);
+		INSERT INTO tasks (status) VALUES ('new'), ('done');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("040_status_done_rollout_compatibility.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var mismatches int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM tasks WHERE done IS DISTINCT FROM (status = 'done')").Scan(&mismatches); err != nil {
+		t.Fatal(err)
+	}
+	if mismatches != 0 {
+		t.Fatalf("restored schema has %d status/done mismatches", mismatches)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE tasks SET done = true WHERE status = 'new'"); err != nil {
+		t.Fatal(err)
+	}
+	var completed int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM tasks WHERE status = 'done' AND done = true").Scan(&completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed != 2 {
+		t.Fatalf("completed rows = %d, want 2", completed)
 	}
 }
 

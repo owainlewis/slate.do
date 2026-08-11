@@ -196,6 +196,10 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"status":"needs_review"`) {
 		t.Fatalf("assigned task status = %d %s", status.Code, status.Body.String())
 	}
+	legacyDone := agentRequest(t, app, agentAToken, http.MethodPost, "/api/v1/agent/tasks/"+taskA.ID+"/done", "")
+	if legacyDone.Code != http.StatusOK || !strings.Contains(legacyDone.Body.String(), `"status":"done"`) {
+		t.Fatalf("legacy assigned task done = %d %s", legacyDone.Code, legacyDone.Body.String())
+	}
 
 	persistedSibling, err := boardStore.GetTask(ctx, owner.ID, taskB.ID)
 	if err != nil || persistedSibling.Title != taskB.Title {

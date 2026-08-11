@@ -56,6 +56,19 @@ func TestChildAndConversationRoutesRejectMalformedCardIDsBeforeStore(t *testing.
 	}
 }
 
+func TestGenericTaskCreateRejectsMalformedParentIDBeforeDatabaseAccess(t *testing.T) {
+	handler := NewHandler(NewStore(nil))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(`{"title":"Child","parentTaskId":"not-a-uuid"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	handler.CreateInboxTask(recorder, request, auth.User{})
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "parentTaskId must be a valid ID") {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestStoreRejectsMalformedChildAndConversationCardIDs(t *testing.T) {
 	store := NewStore(nil)
 	if _, err := store.CreateSubtask(context.Background(), "", "not-a-uuid", CreateTaskInput{}); !errors.Is(err, ErrInvalidData) {

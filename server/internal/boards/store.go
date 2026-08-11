@@ -817,6 +817,9 @@ func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (prepare
 		return preparedTaskCreate{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 	}
 	parentTaskID := clean(input.ParentTaskID)
+	if parentTaskID != "" && !validUUID(parentTaskID) {
+		return preparedTaskCreate{}, fmt.Errorf("%w: parentTaskId must be a valid ID", ErrInvalidData)
+	}
 	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
 	if len(idempotencyKey) > httpapi.TaskIdempotencyBytes {
 		return preparedTaskCreate{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)

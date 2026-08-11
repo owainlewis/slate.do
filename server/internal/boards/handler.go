@@ -451,6 +451,23 @@ func (h *Handler) AgentStatus(w http.ResponseWriter, r *http.Request, user auth.
 	writeJSON(w, http.StatusOK, task)
 }
 
+// AgentDone keeps the released CLI command working while status is now the
+// sole completion model.
+func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.User) {
+	status := StatusDone
+	var task Task
+	var err error
+	if user.AgentID != "" {
+		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &status})
+	} else {
+		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &status})
+	}
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
 func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 	q := r.URL.Query()
 	filter := TaskFilter{

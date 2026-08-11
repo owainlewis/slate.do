@@ -66,6 +66,13 @@ func TestValidKind(t *testing.T) {
 	}
 }
 
+func TestPrepareTaskCreateRejectsMalformedParentID(t *testing.T) {
+	_, err := prepareTaskCreate(CreateTaskInput{Title: "Child", ParentTaskID: "not-a-uuid"}, "inbox")
+	if !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("error = %v, want ErrInvalidData", err)
+	}
+}
+
 func TestValidPriority(t *testing.T) {
 	for _, priority := range []string{PriorityNone, PriorityP0, PriorityP1, PriorityP2} {
 		if !validPriority(priority) {
