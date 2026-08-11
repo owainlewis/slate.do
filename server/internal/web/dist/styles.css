@@ -104,6 +104,7 @@
 .workspace-flow-card { margin-bottom: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); box-shadow: var(--card-shadow); cursor: grab; }
 .workspace-flow-card:hover { border-color: color-mix(in srgb, var(--ink) 18%, var(--line)); box-shadow: var(--card-shadow-hover); }
 .workspace-flow-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.workspace-flow-card.context-open, .workspace-list-row.context-open, .workspace-table-row.context-open { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent), var(--card-shadow-hover); }
 .workspace-flow-card button { width: 100%; padding: 12px; display: grid; gap: 7px; border: 0; border-radius: inherit; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
 .workspace-flow-card strong { font-size: 14px; line-height: 1.4; }
 .workspace-flow-card small { color: var(--faint); font-size: 12px; }
@@ -142,6 +143,33 @@
 .workspace-parent-link .icon { width: 16px; height: 16px; }
 .workspace-parent-context { margin-bottom: 28px; padding-bottom: 22px; border-bottom: 1px solid var(--line-2); }
 .workspace-parent-context > span { color: var(--faint); font-size: 12px; }
+
+.card-context-menu {
+  position: fixed;
+  z-index: 120;
+  min-width: 176px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 12px 34px rgb(20 22 28 / 20%), 0 2px 8px rgb(20 22 28 / 12%);
+}
+.card-context-menu button {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--danger);
+  text-align: left;
+  font-weight: 600;
+}
+.card-context-menu button:hover, .card-context-menu button:focus-visible { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.card-context-menu .icon { width: 17px; height: 17px; }
 
 @media (max-width: 900px) {
   .workspace-topbar, .workspace-viewbar, .workspace-filters { padding-left: 18px; padding-right: 18px; }
@@ -552,6 +580,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 }
 .task:hover { border-color: color-mix(in srgb, var(--ink) 18%, var(--line)); box-shadow: var(--card-shadow-hover); }
 .task:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task.context-open, .flow-card.context-open, .workspace-subtask-row.context-open, .agent-work-item.context-open { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent), var(--card-shadow-hover); }
 .task:active { cursor: grabbing; }
 .task.dragging { opacity: .4; }
 .task.drop-before { box-shadow: inset 0 2px 0 var(--accent); }

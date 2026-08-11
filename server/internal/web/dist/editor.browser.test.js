@@ -35,7 +35,7 @@ function workspaceFixture() {
   const agents = [
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
+  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -76,8 +76,12 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       if (!board) return json(response, { error: "board not found" }, 404);
       const buckets = state.lists.filter(list => list.boardId === boardID).map(list => ({
         ...list,
-        tasks: [...state.tasks, ...state.subtasks].filter(task => task.bucketId === list.id),
+        tasks: [...state.tasks, ...state.subtasks].filter(task => task.bucketId === list.id).map(task => ({ ...task })),
       }));
+      if (state.delayNextBoardDetail) {
+        state.delayNextBoardDetail = false;
+        await new Promise(resolve => { state.releaseBoardDetail = resolve; });
+      }
       return json(response, { ...board, buckets });
     }
     if (boardMatch && request.method === "DELETE") {
@@ -153,6 +157,18 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }) : state.agents;
       return json(response, { agents, maxAgents: 5 });
     }
+    if (url.pathname === "/api/v1/agents" && request.method === "POST") {
+      const input = await requestJSON(request);
+      const agent = {
+        id: `agent-created-${state.agents.length + 1}`,
+        displayName: input.displayName,
+        purpose: input.purpose || "",
+        credential: {},
+        workCounts: {},
+      };
+      state.agents.push(agent);
+      return json(response, { ...agent, token: "slate_agent_test_secret" }, 201);
+    }
     if (url.pathname === "/api/v1/card-review-kinds" && request.method === "GET") {
       const kinds = Object.fromEntries([...state.tasks, ...state.subtasks]
         .filter(task => task.status === "needs_review")
@@ -224,6 +240,14 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       return json(response, { ok: true });
     }
     if (agentMatch && request.method === "GET") {
+      if (state.delayNextAgentDetail) {
+        state.delayNextAgentDetail = false;
+        await new Promise(resolve => { state.releaseAgentDetail = resolve; });
+      }
+      if (state.unauthorizeNextAgentDetail) {
+        state.unauthorizeNextAgentDetail = false;
+        return json(response, { error: "Session expired" }, 401);
+      }
       if (state.failNextAgentDetail) {
         state.failNextAgentDetail = false;
         return json(response, { error: "Could not refresh assigned work" }, 500);
@@ -406,13 +430,29 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         state.failNextDelete = false;
         return json(response, { error: "Could not delete task" }, 500);
       }
+      if (state.unauthorizeNextDelete) {
+        state.unauthorizeNextDelete = false;
+        return json(response, { error: "Session expired" }, 401);
+      }
       const index = state.tasks.findIndex(item => item.id === taskMatch[1]);
       if (index >= 0) {
+        const deleted = [state.tasks[index], ...state.subtasks.filter(item => item.parentTaskId === taskMatch[1])];
+        for (const item of deleted) {
+          if (item.status === "done") continue;
+          const list = state.lists.find(candidate => candidate.id === item.bucketId);
+          if (list) list.openCount = Math.max(0, list.openCount - 1);
+        }
         state.tasks.splice(index, 1);
         state.subtasks = state.subtasks.filter(item => item.parentTaskId !== taskMatch[1]);
       }
       const subtaskIndex = state.subtasks.findIndex(item => item.id === taskMatch[1]);
-      if (subtaskIndex >= 0) state.subtasks.splice(subtaskIndex, 1);
+      if (subtaskIndex >= 0) {
+        const [deleted] = state.subtasks.splice(subtaskIndex, 1);
+        if (deleted.status !== "done") {
+          const list = state.lists.find(candidate => candidate.id === deleted.bucketId);
+          if (list) list.openCount = Math.max(0, list.openCount - 1);
+        }
+      }
       return json(response, {});
     }
     if (taskMatch && request.method === "GET") {
@@ -571,6 +611,491 @@ test("kanban items render as distinct physical card surfaces", async t => {
   assert.equal(boardAppearance.background, workspaceAppearance.background);
   assert.notEqual(boardAppearance.shadow, "none");
   assert.ok(boardAppearance.radius >= 8);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("right-clicking a card offers a fast confirmed delete action", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t, { width: 1024, height: 720 });
+  const card = page.locator('[data-task="task-parent"]');
+
+  await card.click({ button: "right" });
+  let menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
+  await menu.waitFor();
+  const bounds = await menu.boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.y >= 0);
+  assert.ok(bounds.x + bounds.width <= 1024 && bounds.y + bounds.height <= 720);
+
+  await page.keyboard.press("Escape");
+  await menu.waitFor({ state: "detached" });
+  assert.equal(await card.locator("[data-open-task]").evaluate(element => element === document.activeElement), true);
+
+  await card.click({ button: "right" });
+  menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
+  await page.getByRole("heading", { name: "All cards", exact: true }).click();
+  await menu.waitFor({ state: "detached" });
+
+  await card.click({ button: "right" });
+  menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
+  page.once("dialog", async dialog => {
+    assert.equal(dialog.message(), "Delete “Publish task-first agents video” and its child cards?");
+    await dialog.accept();
+  });
+  await menu.getByRole("menuitem", { name: "Delete card" }).click();
+  await card.waitFor({ state: "detached" });
+
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(task => task.parentTaskId === "task-parent"), false);
+  assert.ok(state.requests.includes("DELETE /api/v1/tasks/task-parent"));
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete removes children loaded by newer navigation", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/lists/list-youtube`);
+  const parent = page.locator('[data-task="task-parent"]');
+  await parent.waitFor();
+  assert.equal(await page.locator('[data-task="task-child"]').count(), 0);
+
+  state.delayNextDelete = true;
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  await page.locator('[data-board="board-one"]').click();
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  await page.locator('[data-task="task-child"]').waitFor();
+  const listCount = page.locator('[data-bucket="list-youtube"] .count');
+  assert.equal(await listCount.textContent(), "2");
+  state.releaseDelete();
+  await page.locator('[data-task="task-child"]').waitFor({ state: "detached" });
+
+  assert.equal(await page.locator('[data-task="task-parent"]').count(), 0);
+  assert.equal(await listCount.textContent(), "1");
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(task => task.parentTaskId === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a context-menu delete invalidates a stale navigation response", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/lists/list-youtube`);
+  const parent = page.locator('[data-task="task-parent"]');
+  await parent.waitFor();
+
+  state.delayNextDelete = true;
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  state.delayNextWorkspaceTasks = true;
+  await page.getByRole("link", { name: "All cards", exact: true }).click();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+  const taskRequestsBeforeDelete = state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length;
+  const boardRequestsBeforeDelete = state.requests.filter(request => request === "GET /api/v1/boards").length;
+  state.releaseDelete();
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/boards").length > boardRequestsBeforeDelete);
+  state.releaseWorkspaceTasks();
+  await waitFor(() => state.delayedWorkspaceTasksCompleted);
+  await waitFor(() => state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length > taskRequestsBeforeDelete);
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.waitForTimeout(50);
+
+  assert.equal(await page.locator('[data-task="task-parent"]').count(), 0);
+  assert.equal(await page.locator('[data-task="task-child"]').count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a navigation-first context-menu delete cannot restore a stale board", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const parent = page.locator('[data-task="task-parent"]');
+  await parent.waitFor();
+
+  state.delayNextBoardDetail = true;
+  await page.locator('[data-board="board-two"]').click();
+  await waitFor(() => typeof state.releaseBoardDetail === "function");
+  const boardListRequestsBeforeDelete = state.requests.filter(request => request === "GET /api/v1/boards").length;
+
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/boards").length > boardListRequestsBeforeDelete);
+  state.releaseBoardDetail();
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  await page.waitForTimeout(50);
+
+  assert.equal(await page.locator('[data-task="task-parent"]').count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(task => task.parentTaskId === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("agent work cards expose the same context-menu delete action", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
+  const parent = page.locator('.agent-work-item[data-task="task-parent"]');
+
+  await parent.click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
+  page.once("dialog", dialog => dialog.accept());
+  await menu.getByRole("menuitem", { name: "Delete card" }).click();
+  await page.getByText("No assigned work.", { exact: true }).waitFor();
+
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(task => task.parentTaskId === "task-parent"), false);
+  assert.ok(state.requests.includes("DELETE /api/v1/tasks/task-parent"));
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an agent context-menu delete refreshes totals for hidden descendants", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.hideSubtasksFromAgentOverview = true;
+  await page.goto(`${origin}/app/agents/agent-research`);
+  await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /Research examples/ }).count(), 0);
+  assert.equal(await page.locator(".state-group-done header > span").textContent(), "1");
+  assert.equal(await page.locator(".agent-view-all").count(), 1);
+  const detailRequestsBeforeDelete = state.requests.filter(request => request === "GET /api/v1/agents/agent-research").length;
+
+  const parent = page.locator('.agent-work-item[data-task="task-parent"]');
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/agents/agent-research").length > detailRequestsBeforeDelete);
+  await page.getByRole("heading", { name: "No work assigned", exact: true }).waitFor();
+
+  assert.equal(await page.locator(".agent-work-item").count(), 0);
+  assert.equal(await page.locator(".agent-view-all").count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete preserves a newer unrelated card detail", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const parent = page.locator('[data-task="task-parent"]');
+  state.delayNextDelete = true;
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  await page.locator('[data-open-task="task-inbox"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Newest unrelated draft");
+  state.releaseDelete();
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+  await page.waitForTimeout(50);
+
+  assert.equal(await title.inputValue(), "Newest unrelated draft");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a failed post-delete refresh preserves a newer unrelated card draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const parent = page.locator('[data-task="task-parent"]');
+  state.delayNextDelete = true;
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  await page.locator('[data-open-task="task-inbox"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Draft survives failed refresh");
+  state.failNextWorkspaceTasks = true;
+  state.releaseDelete();
+  await page.getByText("The card was deleted, but this view couldn’t be refreshed: Could not refresh tasks", { exact: true }).waitFor();
+
+  assert.equal(await title.inputValue(), "Draft survives failed refresh");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a context-delete refresh preserves a detail opened and edited while it loads", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const parent = page.locator('[data-task="task-parent"]');
+  state.delayNextDelete = true;
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+
+  state.delayNextWorkspaceTasks = true;
+  state.releaseDelete();
+  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
+  await page.locator('[data-open-task="task-inbox"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Edited while delete refresh loads");
+  state.releaseWorkspaceTasks();
+  await waitFor(() => state.delayedWorkspaceTasksCompleted);
+  await page.waitForTimeout(50);
+
+  assert.equal(await title.inputValue(), "Edited while delete refresh loads");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a failed overview refresh keeps the locally deleted card removed", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const parent = page.locator('[data-task="task-parent"]');
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  state.failNextWorkspaceTasks = true;
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await page.getByText("The card was deleted, but this view couldn’t be refreshed: Could not refresh tasks", { exact: true }).waitFor();
+
+  assert.equal(await page.getByRole("heading", { name: "All cards", exact: true }).count(), 1);
+  assert.equal(await page.locator('[data-task="task-parent"]').count(), 0);
+  assert.equal(await page.locator('[data-task="task-inbox"]').count(), 1);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("deleting a child from its context menu keeps the parent detail open", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  await page.locator('[data-open-task="task-parent"]').first().click();
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+  const child = page.locator('.workspace-subtask-row[data-task="task-child"]');
+
+  await child.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => !state.subtasks.some(task => task.id === "task-child"));
+  await page.locator('.workspace-subtask-row[data-task="task-child"]').waitFor({ state: "detached" });
+
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
+  assert.equal(await page.locator('.workspace-subtask-row[data-task="task-child"]').count(), 0);
+  assert.equal(state.subtasks.some(task => task.id === "task-child"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a failed agent context-menu delete reports the error in place", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  const parent = page.locator('.agent-work-item[data-task="task-parent"]');
+  const error = "Couldn’t delete “Publish task-first agents video”: Could not delete task";
+  state.failNextDelete = true;
+
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await page.getByText(error, { exact: true }).waitFor();
+
+  assert.equal(await parent.count(), 1);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await parent.waitFor({ state: "detached" });
+
+  assert.equal(await page.getByText(error, { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete failure preserves a newer card draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.locator('[data-open-task="task-inbox"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Unsaved draft after rejected context delete");
+
+  state.releaseDelete();
+  await page.locator(".detail-error").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+
+  assert.equal(await title.inputValue(), "Unsaved draft after rejected context delete");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed agent context-menu delete failure preserves settings and reports in place", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+
+  await page.locator('.agent-work-item[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  const purpose = page.locator("#agent-settings-purpose");
+  await purpose.fill("Unsaved purpose after rejected context delete");
+
+  state.releaseDelete();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+
+  assert.equal(await purpose.inputValue(), "Unsaved purpose after rejected context delete");
+  assert.equal(await purpose.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete failure preserves a one-time agent credential", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("link", { name: "New agent", exact: true }).click();
+  await page.locator("#agent-name").fill("New research agent");
+  await page.locator("#agent-purpose").fill("Keep this one-time credential visible");
+  await page.getByRole("button", { name: "Create agent", exact: true }).click();
+  await page.getByRole("heading", { name: "Connect your agent", exact: true }).waitFor();
+
+  const credential = page.locator("#agent-credential");
+  const secret = await credential.textContent();
+  await credential.focus();
+  state.releaseDelete();
+  await page.locator(".agents-context-error").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+
+  assert.equal(await credential.textContent(), secret);
+  assert.equal(await credential.evaluate(element => element === document.activeElement), true);
+  assert.equal(await page.getByRole("heading", { name: "Connect your agent", exact: true }).count(), 1);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an unauthorized agent context-menu delete clears assigned work", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  state.unauthorizeNextDelete = true;
+
+  await page.locator('.agent-work-item[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await page.getByRole("heading", { name: "Your session has expired.", exact: true }).waitFor();
+
+  assert.equal(await page.getByText("No agent or assigned-work data is being shown. Sign in again to continue.", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an unauthorized post-delete agent refresh clears assigned work", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  const parent = page.locator('.agent-work-item[data-task="task-parent"]');
+  await parent.waitFor();
+  state.unauthorizeNextAgentDetail = true;
+
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await page.getByRole("heading", { name: "Your session has expired.", exact: true }).waitFor();
+
+  assert.equal(await page.getByText("No agent or assigned-work data is being shown. Sign in again to continue.", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("Research examples", { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed unauthorized agent refresh outranks a faster list failure", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  await page.goto(`${origin}/app/agents/agent-research/work`);
+  const parent = page.locator('.agent-work-item[data-task="task-parent"]');
+  await parent.waitFor();
+  state.failNextLists = true;
+  state.delayNextAgentDetail = true;
+  state.unauthorizeNextAgentDetail = true;
+
+  await parent.click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseAgentDetail === "function");
+  assert.equal(await page.getByRole("heading", { name: "Your session has expired.", exact: true }).count(), 0);
+
+  state.releaseAgentDetail();
+  await page.getByRole("heading", { name: "Your session has expired.", exact: true }).waitFor();
+
+  assert.equal(await page.getByText("No agent or assigned-work data is being shown. Sign in again to continue.", { exact: true }).count(), 1);
+  assert.equal(await page.getByText("Could not refresh lists", { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete preserves an unrelated settings draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.delayNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+
+  const displayName = page.locator("#profile-display-name");
+  await displayName.fill("Unsaved settings draft during context delete");
+  const listRequests = state.requests.filter(request => request === "GET /api/v1/lists").length;
+  state.releaseDelete();
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/lists").length > listRequests);
+  await waitFor(() => state.tasks.some(task => task.id === "task-parent") === false);
+
+  assert.equal(await displayName.inputValue(), "Unsaved settings draft during context delete");
+  assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
+  assert.equal(new URL(page.url()).pathname, "/app/settings/profile");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete failure preserves and reports beside a settings draft", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.delayNextDelete = true;
+  state.failNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
+
+  const displayName = page.locator("#profile-display-name");
+  await displayName.fill("Unsaved settings draft after rejected delete");
+  state.releaseDelete();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t delete “Publish task-first agents video”: Could not delete task" }).waitFor();
+
+  assert.equal(await displayName.inputValue(), "Unsaved settings draft after rejected delete");
+  assert.equal(await displayName.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a delayed context-menu delete refreshes the mounted agent directory", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.dynamicAgentCounts = true;
+  state.delayNextDelete = true;
+
+  await page.locator('[data-task="task-parent"]').click({ button: "right" });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("menuitem", { name: "Delete card" }).click();
+  await waitFor(() => typeof state.releaseDelete === "function");
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+
+  const researchAgent = page.locator(".agent-directory-row").filter({ hasText: "Research agent" });
+  await researchAgent.getByText("1 working card", { exact: true }).waitFor();
+  state.releaseDelete();
+  await researchAgent.getByText("No open work assigned", { exact: true }).waitFor();
+
+  assert.equal(await researchAgent.getByText("1 working card", { exact: true }).count(), 0);
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
   assert.deepEqual(pageErrors, []);
 });
 
