@@ -28,20 +28,5 @@ BEFORE INSERT ON task_idempotency_keys
 FOR EACH ROW
 EXECUTE FUNCTION set_task_idempotency_request_data_hash();
 
-UPDATE task_idempotency_keys key
-SET request_data_hash = snapshot.request_data_hash
-FROM (
-	SELECT task.id, encode(sha256(convert_to(jsonb_build_object(
-		'title', task.title,
-		'description', task.description,
-		'scheduledDate', COALESCE(task.scheduled_date::text, ''),
-		'kind', task.kind,
-		'assigneeAgentId', COALESCE(task.assignee_agent_id::text, ''),
-		'parentTaskId', COALESCE(task.parent_task_id::text, '')
-	)::text, 'UTF8')), 'hex') AS request_data_hash
-	FROM tasks task
-) snapshot
-WHERE key.task_id = snapshot.id;
-
 COMMENT ON COLUMN task_idempotency_keys.request_data_hash IS
-'One-way hash of the immutable normalized create request, used only to validate rolling-deployment retries whose legacy location fingerprint can no longer be reproduced.';
+'One-way hash of the immutable normalized create request. NULL marks a key created before this identity was captured; mutable task data must never be used to backfill it.';

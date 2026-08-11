@@ -912,14 +912,23 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":"+input.idempotencyKey); err != nil {
 			return Task{}, err
 		}
-		var existingFingerprint, existingTaskID string
-		var requestDataMatches bool
+		var existingFingerprint, existingTaskID, existingParentTaskID string
+		var requestDataMatches, legacyRequestUnknown bool
 		err := tx.QueryRow(ctx, `
-			SELECT request_hash, COALESCE(task_id::text, ''),
-				COALESCE(request_data_hash = encode(sha256(convert_to(($3::jsonb)::text, 'UTF8')), 'hex'), false)
-			FROM task_idempotency_keys
-			WHERE user_id = $1 AND key = $2
-		`, userID, input.idempotencyKey, input.requestData).Scan(&existingFingerprint, &existingTaskID, &requestDataMatches)
+			SELECT key.request_hash, COALESCE(key.task_id::text, ''),
+				COALESCE(key.request_data_hash = encode(sha256(convert_to(($3::jsonb)::text, 'UTF8')), 'hex'), false),
+				key.request_data_hash IS NULL,
+				COALESCE(task.parent_task_id::text, '')
+			FROM task_idempotency_keys key
+			LEFT JOIN tasks task ON task.id = key.task_id
+			WHERE key.user_id = $1 AND key.key = $2
+		`, userID, input.idempotencyKey, input.requestData).Scan(
+			&existingFingerprint,
+			&existingTaskID,
+			&requestDataMatches,
+			&legacyRequestUnknown,
+			&existingParentTaskID,
+		)
 		if err == nil {
 			fingerprintMatches := existingFingerprint == input.fingerprint
 			for _, compatibleFingerprint := range input.compatibleFingerprints {
@@ -928,7 +937,16 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 					break
 				}
 			}
-			if !fingerprintMatches && !(input.parentTaskID != "" && existingTaskID != "" && requestDataMatches) {
+			requestDataFallback := input.parentTaskID != "" && existingTaskID != "" && requestDataMatches
+			// Pre-migration keys did not retain the original request body. A
+			// child retry may still return its original result when the stable
+			// parent relationship matches. Never derive identity from fields on
+			// the mutable task row.
+			legacyParentFallback := input.parentTaskID != "" &&
+				existingTaskID != "" &&
+				legacyRequestUnknown &&
+				existingParentTaskID == input.parentTaskID
+			if !fingerprintMatches && !requestDataFallback && !legacyParentFallback {
 				return Task{}, ErrIdempotencyKey
 			}
 			if existingTaskID == "" {

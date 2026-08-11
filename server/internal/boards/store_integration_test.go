@@ -1634,6 +1634,95 @@ func TestSubtaskCreationAcceptsThePredeploymentFingerprintAfterParentMoves(t *te
 	}
 }
 
+func TestLegacySubtaskRetryUsesStableParentAfterCardEditAndSourceDeletion(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Legacy child retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalList, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, originalList.ID, CreateTaskInput{Title: "Ship release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{Title: "Write notes", IdempotencyKey: "legacy-unknown-child-request"}
+	original, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: input.Title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyFingerprint, err := parentAwareTaskCreateFingerprint(
+		originalList.ID,
+		input.Title,
+		input.Description,
+		"",
+		KindAction,
+		input.AssigneeAgentID,
+		parent.ID,
+		input.OverrideLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO task_idempotency_keys (user_id, key, request_hash, task_id)
+		VALUES ($1, $2, $3, $4)
+	`, userID, input.IdempotencyKey, legacyFingerprint, original.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a key that existed before migration 039. Its original request
+	// body was never stored and must not be reconstructed from the card.
+	if _, err := db.Exec(ctx, `
+		UPDATE task_idempotency_keys
+		SET request_data_hash = NULL
+		WHERE user_id = $1 AND key = $2
+	`, userID, input.IdempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+
+	position := 0
+	if _, err := store.MoveTask(ctx, userID, parent.ID, MoveTaskInput{BucketID: destination.ID, Position: &position}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteBucket(ctx, userID, originalList.ID); err != nil {
+		t.Fatal(err)
+	}
+	editedTitle := "Edited after legacy creation"
+	if _, err := store.UpdateTask(ctx, userID, original.ID, UpdateTaskInput{Title: &editedTitle}); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.CreateSubtask(ctx, userID, parent.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != original.ID || retry.Title != editedTitle || retry.BucketID != destination.ID {
+		t.Fatalf("legacy retry = %#v, want edited original %q in %q", retry, original.ID, destination.ID)
+	}
+
+	otherParent, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Other parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSubtask(ctx, userID, otherParent.ID, input); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("legacy key reused for another parent error = %v, want %v", err, ErrIdempotencyKey)
+	}
+	if _, err := store.CreateTask(ctx, userID, destination.ID, input); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("legacy child key reused for top-level card error = %v, want %v", err, ErrIdempotencyKey)
+	}
+}
+
 func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

@@ -1373,7 +1373,7 @@ func TestStatusDoneRolloutCompatibilityRestoresDevelopmentSchema(t *testing.T) {
 	}
 }
 
-func TestTaskIdempotencyRequestDataMigrationBackfillsImmutableSnapshot(t *testing.T) {
+func TestTaskIdempotencyRequestDataMigrationLeavesLegacyIdentityUnknownAndCapturesOldWriters(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
@@ -1447,7 +1447,7 @@ func TestTaskIdempotencyRequestDataMigrationBackfillsImmutableSnapshot(t *testin
 		t.Fatal(err)
 	}
 
-	var requestDataHash string
+	var requestDataHash *string
 	if err := tx.QueryRow(ctx, `
 		SELECT request_data_hash
 		FROM task_idempotency_keys
@@ -1455,8 +1455,8 @@ func TestTaskIdempotencyRequestDataMigrationBackfillsImmutableSnapshot(t *testin
 	`).Scan(&requestDataHash); err != nil {
 		t.Fatal(err)
 	}
-	if requestDataHash != "67a9a9acb5baf4b68dff5efe911acaf0886c3b760037551ba62c922bbb724778" {
-		t.Fatalf("request snapshot hash = %q", requestDataHash)
+	if requestDataHash != nil {
+		t.Fatalf("legacy request snapshot hash = %q, want NULL", *requestDataHash)
 	}
 	var oldWriterHash string
 	if err := tx.QueryRow(ctx, `
@@ -1468,5 +1468,66 @@ func TestTaskIdempotencyRequestDataMigrationBackfillsImmutableSnapshot(t *testin
 	}
 	if len(oldWriterHash) != 64 {
 		t.Fatalf("old-writer request snapshot hash = %q", oldWriterHash)
+	}
+}
+
+func TestLegacyTaskIdempotencyMigrationClearsMutableDevelopmentBackfill(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE schema_migrations (
+			version text PRIMARY KEY,
+			applied_at timestamptz NOT NULL
+		);
+		CREATE TEMP TABLE task_idempotency_keys (
+			key text PRIMARY KEY,
+			request_data_hash text,
+			created_at timestamptz NOT NULL
+		);
+		INSERT INTO schema_migrations (version, applied_at)
+		VALUES ('039_task_idempotency_request_data', '2026-08-11T12:00:00Z');
+		INSERT INTO task_idempotency_keys (key, request_data_hash, created_at)
+		VALUES
+			('legacy', repeat('a', 64), '2026-08-11T11:00:00Z'),
+			('old-writer-after-migration', repeat('b', 64), '2026-08-11T13:00:00Z');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := files.ReadFile("041_legacy_task_idempotency_identity.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	var legacyHash *string
+	var oldWriterHash string
+	if err := tx.QueryRow(ctx, "SELECT request_data_hash FROM task_idempotency_keys WHERE key = 'legacy'").Scan(&legacyHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT request_data_hash FROM task_idempotency_keys WHERE key = 'old-writer-after-migration'").Scan(&oldWriterHash); err != nil {
+		t.Fatal(err)
+	}
+	if legacyHash != nil {
+		t.Fatalf("legacy hash = %q, want NULL", *legacyHash)
+	}
+	if oldWriterHash != strings.Repeat("b", 64) {
+		t.Fatalf("old-writer hash = %q", oldWriterHash)
 	}
 }
