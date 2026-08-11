@@ -36,7 +36,7 @@ function workspaceFixture() {
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
     { id: "agent-archived", displayName: "Archived agent", purpose: "Historical collaborator", archivedAt: "2026-08-01T10:00:00Z", credential: { revokedAt: "2026-08-01T10:00:00Z" }, workCounts: { completed: 2 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
+  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -270,10 +270,19 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "POST") {
       const input = await requestJSON(request);
+      const idempotencyKey = request.headers["idempotency-key"] || "";
+      state.inboxRequestKeys.push(idempotencyKey);
+      const existing = state.inboxIdempotency.get(idempotencyKey);
+      if (existing) return json(response, existing, 201);
       const created = { id: `task-created-${state.created.length + 1}`, boardId: "board-one", bucketId: "list-inbox", listName: "Inbox", title: input.title, description: input.description || "", scheduledDate: "", kind: "action", status: "new", priority: "", assigneeAgentId: "" };
       state.tasks.unshift(created);
       state.created.push(created);
       state.lists.find(list => list.id === "list-inbox").openCount += 1;
+      if (idempotencyKey) state.inboxIdempotency.set(idempotencyKey, created);
+      if (state.commitNextInboxThenFail) {
+        state.commitNextInboxThenFail = false;
+        return json(response, { error: "Connection lost after capture" }, 500);
+      }
       return json(response, created, 201);
     }
     const bucketTaskMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)\/tasks$/);
@@ -443,14 +452,20 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
 test("the task workspace supports Board, Flow, Table, lists, and filters", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
-  for (const label of ["Focus", "Today", "Week", "Boards", "Workspace", "Other", "All agents"]) {
+  for (const label of ["Focus", "All cards", "Boards", "Workspace", "Other", "All agents"]) {
     assert.equal(await page.getByText(label, { exact: true }).first().isVisible(), true, label);
   }
-  for (const label of ["Inbox", "Review", "All cards"]) assert.equal(await page.getByRole("link", { name: label, exact: true }).count(), 0, label);
+  for (const label of ["Inbox", "Today", "Week", "Review"]) assert.equal(await page.getByRole("link", { name: label, exact: true }).count(), 0, label);
   const boardsHeading = page.getByRole("heading", { name: "Boards", exact: true });
   const focusHeading = page.getByRole("heading", { name: "Focus", exact: true });
   assert.equal(await focusHeading.evaluate((focus, boards) => Boolean(focus.compareDocumentPosition(boards) & Node.DOCUMENT_POSITION_FOLLOWING), await boardsHeading.elementHandle()), true);
   assert.ok(parseFloat(await page.locator(".task-nav-pages .nav-link").first().evaluate(element => getComputedStyle(element).fontSize)) >= 13);
+  const agentLinkStyle = await page.locator(".agent-nav-link").first().evaluate(element => {
+    const style = getComputedStyle(element);
+    const avatar = element.querySelector(".avatar").getBoundingClientRect();
+    return { display: style.display, decoration: style.textDecorationLine, avatarWidth: avatar.width };
+  });
+  assert.deepEqual(agentLinkStyle, { display: "grid", decoration: "none", avatarWidth: 23 });
   assert.equal(await page.getByRole("tab", { name: "Board", selected: true }).count(), 1);
   for (const list of ["Inbox", "YouTube"]) assert.equal(await page.locator(".workspace-flow-column").getByText(list, { exact: true }).count(), 1);
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
@@ -463,7 +478,7 @@ test("the task workspace supports Board, Flow, Table, lists, and filters", async
 
   await page.getByRole("tab", { name: "Table", exact: true }).click();
   await page.getByRole("tab", { name: "Table", selected: true }).waitFor();
-  for (const column of ["Card", "List", "Status", "Priority", "Owner", "Planned"]) {
+  for (const column of ["Card", "Location", "Status", "Priority", "Owner", "Planned"]) {
     assert.equal(await page.locator(".workspace-table-head").getByText(column, { exact: true }).isVisible(), true, column);
   }
   assert.ok(parseFloat(await page.locator(".workspace-table-head").evaluate(element => getComputedStyle(element).fontSize)) >= 11);
@@ -657,7 +672,7 @@ test("a delayed board creation cannot override newer navigation", async t => {
   state.delayNextBoardCreate = true;
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await waitFor(() => typeof state.releaseBoardCreate === "function");
-  await page.getByRole("link", { name: "Today", exact: true }).click();
+  await navigateApp(page, "/app/today");
   await page.getByRole("heading", { name: "Today", exact: true }).waitFor();
   state.releaseBoardCreate();
   await waitFor(() => state.createdBoards.length === 1);
@@ -856,6 +871,33 @@ test("board Flow stays in one horizontal scroll lane", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("boards offer table and calendar views without turning them into separate navigation", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  for (const view of ["Board", "Flow", "Table", "Calendar"]) {
+    assert.equal(await page.locator(`[data-board-mode="${view === "Board" ? "lists" : view.toLowerCase()}"]`).getByText(view, { exact: true }).isVisible(), true, view);
+  }
+
+  await page.locator('[data-board-mode="table"]').click();
+  await page.getByRole("table", { name: "Cards", exact: true }).waitFor();
+  assert.equal(await page.getByRole("columnheader", { name: "Location", exact: true }).isVisible(), true);
+  assert.ok(await page.getByText("Workspace / YouTube", { exact: true }).count() > 0);
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isDisabled(), true);
+
+  await page.locator('[data-board-mode="calendar"]').click();
+  const calendar = page.getByLabel("Board calendar", { exact: true });
+  await calendar.waitFor();
+  assert.equal(await calendar.locator(".calendar-day").count(), 7);
+  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isDisabled(), true);
+
+  await page.locator('[data-board-mode="lists"]').click();
+  assert.equal(await page.locator('[data-board-mode="lists"]').getAttribute("aria-pressed"), "true");
+  assert.equal(await page.getByLabel("List name").count(), 2);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a delayed list creation cannot repaint while a newer history route loads", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
@@ -904,7 +946,7 @@ test("generic cards open from the table without a task completion control", asyn
   assert.equal(await page.getByRole("button", { name: "Back to cards", exact: true }).isVisible(), true);
   assert.equal(await page.getByLabel("Prompt and context", { exact: true }).isVisible(), true);
   assert.equal(await page.getByText("Act with an agent", { exact: true }).count(), 0);
-  assert.equal(await page.getByText("Assigned to Research agent", { exact: true }).isVisible(), true);
+  assert.equal(await page.getByLabel("Agent", { exact: true }).inputValue(), "agent-research");
   await page.getByRole("button", { name: "Back to cards", exact: true }).click();
   const opener = page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true });
   assert.equal(await opener.evaluate(element => element === document.activeElement), true);
@@ -915,7 +957,7 @@ test("assigning an existing New card makes it Ready for agent work", async t => 
   const { page, state, pageErrors } = await startWorkspace(t);
 
   await page.getByRole("button", { name: "Open card: Write the doc my boss asked for", exact: true }).click();
-  await page.getByLabel("Owner", { exact: true }).selectOption("agent-research");
+  await page.getByLabel("Agent", { exact: true }).selectOption("agent-research");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => state.tasks.find(task => task.id === "task-inbox")?.assigneeAgentId === "agent-research");
   await page.getByRole("region", { name: "Card detail" }).waitFor({ state: "detached" });
@@ -1121,7 +1163,7 @@ test("task view tabs and table rows work from the keyboard and accessibility tre
   assert.equal(await tableTab.getAttribute("aria-selected"), "true");
   const accessibility = await table.ariaSnapshot();
   assert.match(accessibility, /table "Cards"/);
-  for (const heading of ["Card", "List", "Status", "Priority", "Owner", "Planned"]) {
+  for (const heading of ["Card", "Location", "Status", "Priority", "Owner", "Planned"]) {
     assert.match(accessibility, new RegExp(`columnheader "${heading}"`));
   }
   const scan = await new AxeBuilder({ page }).include(".workspace-main").analyze();
@@ -1168,7 +1210,7 @@ test("Week shows only calendar controls while filters and task opening keep work
   await navigateApp(page, "/app/tasks");
   await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
   assert.equal(await page.locator(".workspace-flow.grouped-by-list").count(), 1);
-  await page.getByRole("link", { name: "Week", exact: true }).click();
+  await navigateApp(page, "/app/week");
   await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
 
   for (const viewport of [{ width: 1440, height: 960 }, { width: 820, height: 900 }, { width: 390, height: 844 }]) {
@@ -1436,7 +1478,7 @@ test("agent task properties stay locked while a save is pending", async t => {
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
-  for (const label of ["Title", "Prompt and context", "Status", "List", "Priority", "Owner", "Planned"]) {
+  for (const label of ["Title", "Prompt and context", "Status", "List", "Priority", "Agent", "Planned"]) {
     assert.equal(await page.getByLabel(label, { exact: true }).isDisabled(), true, `${label} should be disabled`);
   }
   for (const name of ["Delete card", "Saving…"]) {
@@ -1455,7 +1497,7 @@ test("a delayed reassignment refreshes the newly assigned agent work page", asyn
 
   await page.goto(`${origin}/app/agents/agent-research/work?page=2`);
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  await page.getByLabel("Owner", { exact: true }).selectOption("agent-writing");
+  await page.getByLabel("Agent", { exact: true }).selectOption("agent-writing");
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -2032,7 +2074,7 @@ test("a parent list move preserves and keeps locked a saving child detail", asyn
   assert.equal(await title.inputValue(), "Saving child title");
   assert.equal(await brief.inputValue(), "Saving child brief");
   assert.equal(await back.evaluate(element => element === document.activeElement), true);
-  for (const label of ["Title", "Prompt and context", "Status", "List", "Priority", "Owner", "Planned"]) {
+  for (const label of ["Title", "Prompt and context", "Status", "List", "Priority", "Agent", "Planned"]) {
     assert.equal(await page.getByLabel(label, { exact: true }).isDisabled(), true, `${label} should stay disabled`);
   }
 
@@ -2137,7 +2179,7 @@ test("a delayed post-save refresh failure cannot render into a newer route", asy
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
 
-  await page.getByRole("link", { name: "Today", exact: true }).click();
+  await navigateApp(page, "/app/today");
   await page.getByRole("heading", { name: "Today", level: 1, exact: true }).waitFor();
   state.releaseWorkspaceTasks();
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
@@ -2160,7 +2202,7 @@ test("a delayed subtask refresh failure cannot render into a newer route", async
   await page.getByRole("button", { name: "Add child", exact: true }).click();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
 
-  await page.getByRole("link", { name: "Today", exact: true }).click();
+  await navigateApp(page, "/app/today");
   await page.getByRole("heading", { name: "Today", level: 1, exact: true }).waitFor();
   state.releaseWorkspaceTasks();
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
@@ -2831,6 +2873,24 @@ test("New card captures directly into Inbox and opens a normal card editor", asy
   assert.equal(state.patches.at(-1).priority, "p0");
 });
 
+test("a lost Inbox capture response retries without creating a duplicate card", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  state.commitNextInboxThenFail = true;
+  await page.getByRole("button", { name: "New card", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Connection lost after capture" }).waitFor();
+  assert.equal(state.created.length, 1);
+
+  await page.getByRole("button", { name: "New card", exact: true }).click();
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+
+  assert.equal(state.created.length, 1);
+  assert.equal(state.inboxRequestKeys.length, 2);
+  assert.ok(state.inboxRequestKeys[0]);
+  assert.equal(state.inboxRequestKeys[1], state.inboxRequestKeys[0]);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("New card preserves a successful capture when the workspace refresh fails", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
@@ -2882,7 +2942,7 @@ test("task detail coordinates one level of human and agent subtasks through the 
   assert.equal(await page.getByText("Child cards", { exact: true }).isVisible(), true);
   assert.equal(await page.getByText("1 of 1 done", { exact: true }).isVisible(), true);
   assert.equal(await dialog.getByText("Research examples", { exact: true }).isVisible(), true);
-  assert.equal(await page.getByText("Assigned to Research agent", { exact: true }).isVisible(), true);
+  assert.equal(await page.getByLabel("Agent", { exact: true }).inputValue(), "agent-research");
   assert.equal(await page.getByText(/refine with|scout|autopilot/i).count(), 0);
   const bounds = await dialog.boundingBox();
   assert.ok(bounds.width >= 700, `detail width=${bounds.width}`);

@@ -308,6 +308,14 @@ func TestAgentAssignmentsAreAccountScopedAndSurviveArchive(t *testing.T) {
 	if assignedCaptured.Status != StatusQueued {
 		t.Fatalf("newly assigned captured task status = %q, want %q", assignedCaptured.Status, StatusQueued)
 	}
+	newStatus := StatusNew
+	assignedCaptured, err = store.UpdateTaskForHuman(ctx, ownerID, assignedCaptured.ID, UpdateTaskInput{Status: &newStatus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignedCaptured.Status != StatusQueued {
+		t.Fatalf("assigned card returned to New has status %q, want %q", assignedCaptured.Status, StatusQueued)
+	}
 	ready := StatusQueued
 	if _, err := store.UpdateTaskForHuman(ctx, ownerID, task.ID, UpdateTaskInput{Status: &ready}); err != nil {
 		t.Fatalf("mark assigned card ready: %v", err)

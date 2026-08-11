@@ -1429,9 +1429,9 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 		if err != nil {
 			return Task{}, err
 		}
-		if current.AssigneeAgentID != "" && current.Status == StatusNew {
-			current.Status = StatusQueued
-		}
+	}
+	if current.AssigneeAgentID != "" && current.Status == StatusNew {
+		current.Status = StatusQueued
 	}
 	if current.AssigneeAgentID != "" && (current.Status == StatusNew || current.Status == StatusQueued || current.Status == StatusWorking) {
 		if _, err := activeAgentAssignment(ctx, tx, userID, current.AssigneeAgentID); err != nil {

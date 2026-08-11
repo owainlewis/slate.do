@@ -114,15 +114,15 @@ test("sidebar makes cards, boards, and agents the primary control plane", () => 
   `, app);
 
   const html = app.appSidebarHTML();
-  for (const label of ["Focus", "Today", "Week", "Boards", "Content", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
-  for (const label of ["Attention", "Inbox", "Review", "Plan", "All cards"]) assert.doesNotMatch(html, new RegExp(`>${label}<`));
+  for (const label of ["Focus", "All cards", "Boards", "Content", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
+  for (const label of ["Attention", "Inbox", "Today", "Week", "Review", "Plan"]) assert.doesNotMatch(html, new RegExp(`>${label}<`));
   assert.ok(html.indexOf(">Focus<") < html.indexOf(">Boards<"));
   assert.match(html, /data-board="content"><span>Content<\/span>/);
   assert.match(html, /id="new-board"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
   const settings = app.settingsHTML();
-  for (const label of ["Focus", "Today", "Week", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
-  for (const label of ["Inbox", "Review", "All cards"]) assert.doesNotMatch(settings, new RegExp(`>${label}<`));
+  for (const label of ["Focus", "All cards", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
+  for (const label of ["Inbox", "Today", "Week", "Review"]) assert.doesNotMatch(settings, new RegExp(`>${label}<`));
   assert.ok(settings.indexOf(">Focus<") < settings.indexOf(">Boards<"));
   vm.runInContext(`state.boards = [];`, app);
 });
@@ -542,7 +542,7 @@ test("the card table exposes native headers, cells, and keyboard-operable rows",
   }]);
 
   assert.match(html, /^<table class="workspace-table" aria-label="Cards">/);
-  for (const heading of ["Card", "List", "Status", "Priority", "Owner", "Planned"]) {
+  for (const heading of ["Card", "Location", "Status", "Priority", "Owner", "Planned"]) {
     assert.match(html, new RegExp(`<th scope="col">${heading}<\\/th>`));
   }
   assert.match(html, /<tr class="workspace-table-row" data-task-row>/);
@@ -2137,6 +2137,23 @@ test("priority options offer None plus the three levels", () => {
   assert.match(html, /value="p2"/);
 });
 
+test("card assignment offers active agents and preserves an inactive current assignment", () => {
+  vm.runInContext(`state.agents = [
+    { id: "active", displayName: "Active agent" },
+    { id: "archived", displayName: "Archived agent", archivedAt: "2026-08-11T10:00:00Z" },
+    { id: "deleted", displayName: "Deleted agent", deletedAt: "2026-08-11T10:00:00Z" }
+  ]`, app);
+
+  const available = app.agentOptionsHTML();
+  assert.match(available, />No agent</);
+  assert.match(available, /value="active"/);
+  assert.doesNotMatch(available, /value="archived"|value="deleted"/);
+
+  const selected = app.agentOptionsHTML("archived");
+  assert.match(selected, /value="archived" selected disabled>Archived agent \(inactive\)</);
+  vm.runInContext("state.agents = []", app);
+});
+
 test("Flow filters cards to one selected list", () => {
   vm.runInContext('state.flowListId = "youtube"', app);
   const html = app.flowHTML(board);
@@ -2178,6 +2195,8 @@ test("detail presents one contextual accessible card editor with clear actions",
   assert.match(html, />Back to cards<\/span>/);
   assert.match(html, />Delete card</);
   assert.match(html, /Home list/);
+  assert.match(html, /<label for="workspace-detail-owner">Agent<\/label>/);
+  assert.doesNotMatch(html, /Act with an agent|Choose an agent as owner|workspace-agent-action/);
   assert.doesNotMatch(html, /aria-label="Close card"/);
 });
 
@@ -2727,7 +2746,7 @@ test("routes parse into the surface they name", () => {
 
   assert.deepEqual(route("/"), { name: "home" });
   assert.deepEqual(route("/login"), { name: "login" });
-  assert.deepEqual(route("/app"), { name: "workspace", scope: "today", redirect: true });
+  assert.deepEqual(route("/app"), { name: "workspace", scope: "all", redirect: true });
   assert.deepEqual(route("/app/tasks"), { name: "workspace", scope: "all" });
   assert.deepEqual(route("/app/inbox"), { name: "workspace", scope: "inbox" });
   assert.deepEqual(route("/app/today"), { name: "workspace", scope: "today" });
@@ -2753,7 +2772,7 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/app/boards/%ED%A0%80"), { name: "not-found" });
 
   // Trailing slashes, queries, and fragments never change which route is named.
-  assert.deepEqual(route("/app/"), { name: "workspace", scope: "today", redirect: true });
+  assert.deepEqual(route("/app/"), { name: "workspace", scope: "all", redirect: true });
   assert.deepEqual(route("/login?next=/app"), { name: "login" });
   assert.deepEqual(route("/app/settings#token"), { name: "settings", settingsPage: "profile", redirect: true });
 
@@ -2806,7 +2825,7 @@ test("logging in returns to the requested route, defaulting to the app", async (
 
   const plain = router({ url: "/login", signedIn: true, boards: [{ id: "board_1" }] });
   await plain.apply();
-  assert.equal(plain.url(), "/app/today");
+  assert.equal(plain.url(), "/app/tasks?view=table");
 });
 
 test("a rejected next target falls back to the app rather than leaving the origin", async () => {
@@ -2814,44 +2833,44 @@ test("a rejected next target falls back to the app rather than leaving the origi
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/today");
+  assert.equal(it.url(), "/app/tasks?view=table");
 });
 
-test("/app resolves to Today", async () => {
+test("/app resolves to the All cards table", async () => {
   const withBoards = router({ url: "/app", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await withBoards.apply();
-  assert.equal(withBoards.url(), "/app/today");
+  assert.equal(withBoards.url(), "/app/tasks?view=table");
   assert.equal(withBoards.board(), "board_1");
   assert.equal(withBoards.depth(), 1, "resolving /app must not add a history entry");
 
   const empty = router({ url: "/app", signedIn: true, boards: [] });
   await empty.apply();
-  assert.equal(empty.url(), "/app/today");
+  assert.equal(empty.url(), "/app/tasks?view=table");
   assert.equal(empty.view(), "app");
   assert.equal(empty.board(), null);
 });
 
-test("the brand link goes to Today when signed in, and home when signed out", async () => {
+test("the brand link goes to All cards when signed in, and home when signed out", async () => {
   const onBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await onBoard.apply();
   await onBoard.home();
-  assert.equal(onBoard.url(), "/app/today", "the brand must not drop a signed-in user onto the landing page");
+  assert.equal(onBoard.url(), "/app/tasks?view=table", "the brand must not drop a signed-in user onto the landing page");
 
   const noBoardLoaded = router({ url: "/app/settings/profile", signedIn: true, boards: [{ id: "board_1" }] });
   await noBoardLoaded.apply();
   await noBoardLoaded.home();
-  assert.equal(noBoardLoaded.url(), "/app/today");
+  assert.equal(noBoardLoaded.url(), "/app/tasks?view=table");
 
   const staleBoard = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await staleBoard.apply();
   vm.runInContext(`state.boards = [{ id: "board_1" }];`, staleBoard.context);
   await staleBoard.home();
-  assert.equal(staleBoard.url(), "/app/today");
+  assert.equal(staleBoard.url(), "/app/tasks?view=table");
 
   const noBoards = router({ url: "/app", signedIn: true, boards: [] });
   await noBoards.apply();
   await noBoards.home();
-  assert.equal(noBoards.url(), "/app/today");
+  assert.equal(noBoards.url(), "/app/tasks?view=table");
 
   const signedOut = router({ url: "/login" });
   await signedOut.apply();
@@ -3145,7 +3164,7 @@ test("back and forward move between landing, boards, and settings", async () => 
   assert.equal(it.view(), "home");
 
   await it.go("/app");
-  assert.equal(it.url(), "/app/today");
+  assert.equal(it.url(), "/app/tasks?view=table");
   await it.go("/app/boards/board_2");
   assert.equal(it.board(), "board_2");
   await it.go("/app/settings/profile");
@@ -3155,7 +3174,7 @@ test("back and forward move between landing, boards, and settings", async () => 
   assert.equal(it.url(), "/app/boards/board_2");
   assert.equal(it.view(), "board");
   await it.back();
-  assert.equal(it.url(), "/app/today");
+  assert.equal(it.url(), "/app/tasks?view=table");
   await it.back();
   assert.equal(it.url(), "/");
   assert.equal(it.view(), "home");
@@ -3176,7 +3195,7 @@ test("an authenticated visit to early access is sent to the app", async () => {
 
   await it.apply();
 
-  assert.equal(it.url(), "/app/today");
+  assert.equal(it.url(), "/app/tasks?view=table");
 });
 
 test("the landing page stays public while signed in", async () => {

@@ -122,6 +122,7 @@ const state = {
   subtaskError: "",
   newTaskRecovery: null,
   newTaskCapturePending: false,
+  newTaskCaptureAttemptKey: "",
   settings: false,
   settingsPage: "profile",
   view: "home",
@@ -273,7 +274,7 @@ function parseRoute(pathname) {
   if (path === LOGIN_PATH) return { name: "login" };
   if (path === EARLY_ACCESS_PATH) return { name: "early-access" };
   if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
-  if (path === APP_PATH) return { name: "workspace", scope: "today", redirect: true };
+  if (path === APP_PATH) return { name: "workspace", scope: "all", redirect: true };
   if (path === TASKS_PATH) return { name: "workspace", scope: "all" };
   if (path === INBOX_PATH) return { name: "workspace", scope: "inbox" };
   if (path === TODAY_PATH) return { name: "workspace", scope: "today" };
@@ -431,6 +432,7 @@ function handleAgentUnauthorized(err, route = parseRoute(location.pathname)) {
   state.subtaskError = "";
   state.newTaskRecovery = null;
   state.newTaskCapturePending = false;
+  state.newTaskCaptureAttemptKey = "";
   state.agentAssignOpen = false;
   state.agentAssignError = "";
   state.agentAssignNotice = "";
@@ -525,7 +527,7 @@ async function applyRoute() {
   if (!state.me) return navigate(loginPathFor(currentLocationPath()), { replace: true });
   if (route.redirect) {
     return route.name === "workspace"
-      ? navigate(TODAY_PATH, { replace: true })
+      ? navigate(`${TASKS_PATH}?view=table`, { replace: true })
       : route.name === "agents"
       ? navigate(AGENTS_PATH, { replace: true })
       : route.name === "board"
@@ -828,6 +830,7 @@ function resetAuthenticatedState() {
   state.subtaskError = "";
   state.newTaskRecovery = null;
   state.newTaskCapturePending = false;
+  state.newTaskCaptureAttemptKey = "";
   state.settings = false;
   state.settingsPage = "profile";
   state.error = "";
@@ -1578,6 +1581,7 @@ function boardSurfaceTasks(board = state.board) {
   return (board?.buckets || []).flatMap(list => (list.tasks || []).map(task => ({
     ...task,
     boardId: task.boardId || board.id,
+    boardName: task.boardName || board.name,
     bucketId: task.bucketId || list.id,
     listName: task.listName || list.name,
   })));
@@ -1587,7 +1591,7 @@ function boardHTML() {
   const board = state.board;
   const theme = currentTheme();
   const lists = board?.buckets || [];
-  const boardMode = state.boardMode !== "flow";
+  const boardMode = ["lists", "flow", "table", "calendar"].includes(state.boardMode) ? state.boardMode : "lists";
   const listLimitReached = lists.length >= state.maxListsPerBoard;
   const openCards = boardSurfaceTasks(board).filter(task => task.status !== "done").length;
   const overview = `
@@ -1596,15 +1600,20 @@ function boardHTML() {
         <div class="board-heading"><div><h1>${escapeHTML(board?.name || "Board")}</h1><span>${openCards}</span></div><p>Lists keep related cards together.</p></div>
         <div class="top-actions">
           <div class="view-switch" aria-label="Board view">
-            <button data-board-mode="lists" aria-pressed="${boardMode}" class="${boardMode ? "on" : ""}" title="Board">${icon("kanban")}<span>Board</span></button>
-            <button data-board-mode="flow" aria-pressed="${!boardMode}" class="${!boardMode ? "on" : ""}" title="Flow">${icon("columns")}<span>Flow</span></button>
+            <button data-board-mode="lists" aria-pressed="${boardMode === "lists"}" class="${boardMode === "lists" ? "on" : ""}" title="Board">${icon("kanban")}<span>Board</span></button>
+            <button data-board-mode="flow" aria-pressed="${boardMode === "flow"}" class="${boardMode === "flow" ? "on" : ""}" title="Flow">${icon("columns")}<span>Flow</span></button>
+            <button data-board-mode="table" aria-pressed="${boardMode === "table"}" class="${boardMode === "table" ? "on" : ""}" title="Table">${icon("rows")}<span>Table</span></button>
+            <button data-board-mode="calendar" aria-pressed="${boardMode === "calendar"}" class="${boardMode === "calendar" ? "on" : ""}" title="Calendar">${icon("calendar")}<span>Calendar</span></button>
           </div>
-          <button class="secondary" id="add-list" ${boardMode && !listLimitReached ? "" : "disabled"}>${icon("plus")}<span>New list</span></button>
+          <button class="secondary" id="add-list" ${boardMode === "lists" && !listLimitReached ? "" : "disabled"}>${icon("plus")}<span>New list</span></button>
         </div>
       </header>
       ${statusErrorHTML(state.error || state.taskMutationError?.message)}
       ${statusNoticeHTML(state.moveNotice)}
-      ${boardMode ? `<div class="grid">${lists.map(listHTML).join("")}</div>` : flowHTML(board)}
+      ${boardMode === "lists" ? `<div class="grid">${lists.map(listHTML).join("")}</div>`
+        : boardMode === "flow" ? flowHTML(board)
+          : boardMode === "table" ? `<div class="board-table-view">${workspaceTableHTML(boardSurfaceTasks(board))}</div>`
+            : calendarHTML(board)}
       ${footerHTML(board, false)}
     </div>`;
   return `
@@ -1664,8 +1673,8 @@ function workspaceListHTML(tasks) {
 function workspaceTableHTML(tasks) {
   return `<table class="workspace-table" aria-label="Cards">
     <colgroup><col class="workspace-table-task"><col class="workspace-table-list"><col class="workspace-table-status"><col class="workspace-table-priority"><col class="workspace-table-owner"><col class="workspace-table-planned"></colgroup>
-    <thead><tr class="workspace-table-head"><th scope="col">Card</th><th scope="col">List</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
-    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Child of ${escapeHTML(task.parentTaskTitle || "parent card")}</small>` : ""}</button></td><td>${escapeHTML(task.listName || "Inbox")}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="6"><div class="workspace-empty">No cards match these filters.</div></td></tr>`}</tbody>
+    <thead><tr class="workspace-table-head"><th scope="col">Card</th><th scope="col">Location</th><th scope="col">Status</th><th scope="col">Priority</th><th scope="col">Owner</th><th scope="col">Planned</th></tr></thead>
+    <tbody>${tasks.length ? tasks.map(task => `<tr class="workspace-table-row" data-task-row><td><button type="button" class="workspace-table-open" data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong>${task.parentTaskId ? `<small>Child of ${escapeHTML(task.parentTaskTitle || "parent card")}</small>` : ""}</button></td><td>${escapeHTML([task.boardName, task.listName || "Inbox"].filter(Boolean).join(" / "))}</td><td><span class="state-badge state-${task.status}">${escapeHTML(statusLabel(task.status))}</span></td><td>${task.priority ? escapeHTML(priorityLabel(task.priority)) : "—"}</td><td>${escapeHTML(workspaceTaskOwner(task))}</td><td><time>${task.scheduledDate ? formatTaskDate(task.scheduledDate) : "—"}</time></td></tr>`).join("") : `<tr><td colspan="6"><div class="workspace-empty">No cards match these filters.</div></td></tr>`}</tbody>
   </table>`;
 }
 
@@ -1783,7 +1792,6 @@ function workspaceDetailHTML(task) {
         <div class="workspace-detail-main">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
           <label class="workspace-brief-label" for="workspace-detail-description">Prompt and context</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…">${escapeHTML(task.description || "")}</textarea>
-          <aside class="workspace-agent-action">${icon("bot")}<div><strong>${task.assigneeAgentId ? `Assigned to ${escapeHTML(workspaceTaskOwner(task))}` : "Act with an agent"}</strong><p>${task.assigneeAgentId ? "This card is available to the agent as a prompt." : "Choose an agent as owner to make this card available for work."}</p></div><button type="button" class="secondary" id="act-with-agent">${task.assigneeAgentId ? "Change agent" : "Choose agent"}</button></aside>
           ${latestOutput ? `<section class="card-latest-output"><header>${icon("bot")}<div><span>Latest output</span><strong>${escapeHTML(latestOutput.authorName)}</strong></div></header><p>${escapeHTML(latestOutput.body).replace(/\n/g, "<br>")}</p></section>` : ""}
           <section class="card-conversation" aria-labelledby="card-conversation-heading">
             <header><div><h3 id="card-conversation-heading">Conversation</h3><span>${state.selectedEntries.length}</span></div></header>
@@ -1805,7 +1813,7 @@ function workspaceDetailHTML(task) {
             <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
             <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Child cards stay with their parent card.</small>` : ""}</div>
             <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
-            <div class="field"><label for="workspace-detail-owner">Owner</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
+            <div class="field"><label for="workspace-detail-owner">Agent</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
             <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
           </div>
         </aside>
@@ -1829,8 +1837,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
         <section class="nav-sec workspace-nav">
           <h3>Focus</h3>
           <div class="pages task-nav-pages">
-            <a class="nav-link ${workspaceOn("today") ? "on" : ""}" href="${TODAY_PATH}">${icon("sun")}<span>Today</span></a>
-            <a class="nav-link ${workspaceOn("week") ? "on" : ""}" href="${WEEK_PATH}">${icon("calendar")}<span>Week</span></a>
+            <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}?view=table">${icon("rows")}<span>All cards</span></a>
           </div>
         </section>
         ${boardsNavigationHTML()}
@@ -2166,7 +2173,7 @@ function calendarHTML(board) {
   const days = weekDays();
   const tasks = allTasks(board);
   return `
-    <section class="week-calendar">
+    <section class="week-calendar" aria-label="Board calendar">
       <div class="calendar-toolbar">
         <button class="icon-btn" id="previous-week" title="Previous week">${icon("chevronLeft")}</button>
         <button class="plain-btn" id="current-week">This week</button>
@@ -2223,10 +2230,13 @@ function todayHTML(board) {
 function agentOptionsHTML(selectedID = "") {
   const selectedExists = state.agents.some(agent => agent.id === selectedID);
   return [
-    `<option value="" ${selectedID ? "" : "selected"}>Unassigned</option>`,
+    `<option value="" ${selectedID ? "" : "selected"}>No agent</option>`,
     ...state.agents
-      .filter(agent => !agent.deletedAt || agent.id === selectedID)
-      .map(agent => `<option value="${escapeAttr(agent.id)}" ${agent.id === selectedID ? "selected" : ""} ${agent.deletedAt ? "disabled" : ""}>${escapeHTML(agent.displayName)}${agent.deletedAt ? " (inactive)" : ""}</option>`),
+      .filter(agent => (!agent.archivedAt && !agent.deletedAt) || agent.id === selectedID)
+      .map(agent => {
+        const inactive = agent.archivedAt || agent.deletedAt;
+        return `<option value="${escapeAttr(agent.id)}" ${agent.id === selectedID ? "selected" : ""} ${inactive ? "disabled" : ""}>${escapeHTML(agent.displayName)}${inactive ? " (inactive)" : ""}</option>`;
+      }),
     selectedID && !selectedExists ? `<option value="${escapeAttr(selectedID)}" selected>Assigned agent unavailable</option>` : "",
   ].join("");
 }
@@ -2894,8 +2904,7 @@ function settingsHTML() {
         <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Focus">
           <h3>Focus</h3>
           <div class="pages task-nav-pages">
-            <a class="nav-link" href="${TODAY_PATH}">${icon("sun")}<span>Today</span></a>
-            <a class="nav-link" href="${WEEK_PATH}">${icon("calendar")}<span>Week</span></a>
+            <a class="nav-link" href="${TASKS_PATH}?view=table">${icon("rows")}<span>All cards</span></a>
           </div>
         </section>
         ${boardsNavigationHTML()}
@@ -3574,9 +3583,6 @@ function bindWorkspaceDetail(options = {}) {
   };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
   document.onkeydown = event => { if (event.key === "Escape") close(); };
-  document.querySelector("#act-with-agent")?.addEventListener("click", () => {
-    document.querySelector("#workspace-detail-owner")?.focus();
-  });
   document.querySelectorAll("[data-entry-kind]").forEach(element => element.addEventListener("click", () => {
     preserveTaskDraft();
     state.cardEntryDraft = document.querySelector("#card-entry-body")?.value || state.cardEntryDraft;
@@ -4324,8 +4330,13 @@ async function captureInboxTask(button) {
   state.error = "";
   render();
   let task;
+  state.newTaskCaptureAttemptKey ||= newClientRequestKey();
   try {
-    task = await api.post("/api/v1/tasks", { title: "Untitled card", description: "", kind: "action" });
+    task = await api.post(
+      "/api/v1/tasks",
+      { title: "Untitled card", description: "", kind: "action" },
+      { headers: { "Idempotency-Key": state.newTaskCaptureAttemptKey } },
+    );
   } catch (err) {
     state.newTaskCapturePending = false;
     state.error = err.message;
@@ -4334,6 +4345,7 @@ async function captureInboxTask(button) {
   }
 
   state.newTaskCapturePending = false;
+  state.newTaskCaptureAttemptKey = "";
   state.newTaskRecovery = { task, message: "The Inbox could not be refreshed.", pending: false };
   try {
     if (parseRoute(location.pathname).name === "workspace") {

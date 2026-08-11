@@ -34,7 +34,11 @@
 .task-nav-pages .nav-link .icon { width: 16px; height: 16px; color: var(--faint); }
 .task-nav-pages .nav-link b { color: var(--faint); font-size: 12px; font-weight: 600; }
 .workspace-list-dot { width: 7px; height: 7px; margin-left: 4px; border-radius: 2px; background: var(--accent); }
-.agent-nav-link { grid-template-columns: 18px minmax(0, 1fr) !important; }
+.nav-collaborators { display: grid; gap: 2px; }
+.nav-collaborators .nav-link { min-height: 36px; padding: 7px 9px; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 9px; border-radius: var(--radius-sm); color: var(--soft); font-size: 13px; text-decoration: none; }
+.nav-collaborators .nav-link:hover, .nav-collaborators .nav-link.on { color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.nav-collaborators .nav-link .icon { width: 16px; height: 16px; color: var(--faint); }
+.nav-collaborators .agent-nav-link { grid-template-columns: 23px minmax(0, 1fr); }
 .workspace-topbar { min-height: 104px; padding: 22px 30px 18px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line-2); }
 .workspace-title { display: flex; align-items: baseline; gap: 9px; }
 .workspace-title h1 { margin: 0; font-size: 27px; letter-spacing: -.035em; }
@@ -457,6 +461,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   overflow-y: hidden;
   overscroll-behavior-inline: contain;
 }
+.board-table-view { flex: 1; min-height: 0; margin: 16px 24px 10px; overflow: auto; }
 .board-heading { min-width: 0; }
 .board-heading > div { display: flex; align-items: baseline; gap: 8px; }
 .board-heading h1 { margin: 0; font-size: 20px; }
@@ -1000,11 +1005,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .workspace-detail .field input, .workspace-detail .field select { min-height: 40px; padding: 9px 11px; font-size: 13px; }
 .workspace-detail .detail-actions { grid-column: 1 / -1; min-height: 64px; padding: 12px 18px; }
 .workspace-detail .detail-actions button { min-height: 38px; font-size: 13px; }
-.workspace-agent-action { margin: 8px 0 24px; padding: 13px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
-.workspace-agent-action > .icon { width: 19px; height: 19px; color: var(--accent); }
-.workspace-agent-action strong { font-size: 13px; }
-.workspace-agent-action p { margin: 3px 0 0; color: var(--faint); font-size: 11px; line-height: 1.4; }
-.workspace-agent-action button { white-space: nowrap; }
 .card-latest-output { margin: 0 0 28px; padding: 15px; border: 1px solid color-mix(in srgb, var(--review) 28%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--review) 6%, var(--card)); }
 .card-latest-output header { display: flex; align-items: center; gap: 9px; }
 .card-latest-output header .icon { color: var(--review); }
@@ -1933,6 +1933,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   .bucket-goal { opacity: 1; }
   .main { width: 100%; }
   .grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(280px, 85vw); grid-template-rows: minmax(280px, 1fr); margin: 10px 14px; overflow-x: auto; overflow-y: hidden; }
+  .board-table-view { margin: 10px 14px 20px; }
   .bucket.drop-before-bucket { box-shadow: -9px 0 0 -7px var(--accent); }
   .bucket.drop-after-bucket { box-shadow: 9px 0 0 -7px var(--accent); }
   .flow { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(280px, 85vw); grid-template-rows: minmax(280px, 1fr); margin: 10px 14px 20px; overflow-x: auto; overflow-y: hidden; }
