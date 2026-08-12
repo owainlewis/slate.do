@@ -1,0 +1,1526 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <meta name="document-kind" content="design">
+  <meta name="source-path" content="docs/agent-task-watcher/design.md">
+  <meta name="source-sha256" content="f292b582ab3656aa7fa0f47211fc857bc9bbe7f962888740c61fc03273da2253">
+  <meta name="generator" content="blueprint/html-doc@1">
+  <title>Agent task watcher</title>
+  <style>:root {
+  color-scheme: light;
+  --paper: #e8edf0;
+  --sheet: #fbfcfd;
+  --ink: #202a31;
+  --muted: #5c6d78;
+  --line: #c7d2d9;
+  --accent: #536f82;
+  --accent-soft: #dce6ec;
+  --code: #202a32;
+  --focus: #176b93;
+  --shadow: 0 22px 60px rgb(39 56 67 / 10%);
+  --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --serif: Iowan Old Style, Baskerville, "Times New Roman", serif;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.68;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; background: var(--paper); }
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 8% 3%, rgb(83 111 130 / 12%), transparent 24rem),
+    radial-gradient(circle at 92% 12%, rgb(63 101 117 / 8%), transparent 26rem),
+    var(--paper);
+  text-rendering: optimizeLegibility;
+}
+
+a { color: #3f6575; text-underline-offset: .16em; }
+a:hover { color: var(--accent); }
+a:focus-visible, summary:focus-visible, [tabindex="-1"]:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 4px;
+  border-radius: 3px;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 20;
+  top: .75rem;
+  left: .75rem;
+  transform: translateY(-180%);
+  padding: .65rem .9rem;
+  color: white;
+  background: var(--ink);
+  border-radius: .35rem;
+}
+.skip-link:focus { transform: translateY(0); }
+
+.document-header {
+  border-bottom: 1px solid rgb(63 78 88 / 18%);
+  background: rgb(251 252 253 / 76%);
+}
+.document-header__inner {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 1.1rem clamp(1rem, 4vw, 3rem);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+}
+.document-brand {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  font-weight: 760;
+  letter-spacing: -.015em;
+  white-space: nowrap;
+}
+.document-brand__mark {
+  width: 2.1rem;
+  height: 2.1rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--sheet);
+  background: var(--accent);
+  font-family: var(--serif);
+  font-size: 1.15rem;
+}
+.metadata {
+  display: flex;
+  justify-content: flex-end;
+  gap: .65rem;
+  flex-wrap: wrap;
+  margin: 0;
+  color: var(--muted);
+  font-size: .78rem;
+}
+.metadata__item {
+  display: flex;
+  gap: .3rem;
+  padding: .28rem .55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--sheet);
+}
+.metadata dt { color: var(--ink); font-weight: 760; }
+.metadata dt::after { content: ":"; }
+.metadata dd { margin: 0; overflow-wrap: anywhere; }
+.metadata code { padding: 0; color: inherit; background: transparent; }
+
+.page-shell,
+.document-footer {
+  width: min(1440px, 100%);
+  margin-inline: auto;
+}
+.page-shell {
+  padding: clamp(1rem, 3vw, 2.6rem);
+  display: grid;
+  grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
+  gap: clamp(1rem, 3vw, 2.5rem);
+  align-items: start;
+}
+.toc {
+  position: sticky;
+  top: 1.5rem;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+  padding: 1.15rem .35rem 1.15rem 0;
+  color: var(--muted);
+  font-size: .82rem;
+  line-height: 1.35;
+  scrollbar-width: thin;
+}
+.toc-title {
+  margin: 0 0 .85rem .75rem;
+  color: var(--ink);
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.toc ol { margin: 0; padding: 0; list-style: none; }
+.toc li { margin: .12rem 0; }
+.toc li[data-level="3"] { padding-left: .85rem; }
+.toc a {
+  display: block;
+  padding: .38rem .72rem;
+  color: var(--muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  border-radius: 0 .3rem .3rem 0;
+}
+.toc a:hover, .toc a:focus-visible {
+  color: var(--ink);
+  border-left-color: var(--accent);
+  background: rgb(251 252 253 / 82%);
+}
+.mobile-toc { display: none; }
+
+.document-content {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--sheet);
+  border: 1px solid rgb(85 104 116 / 22%);
+  box-shadow: var(--shadow);
+}
+.document-intro > .source-block:first-child {
+  padding: clamp(2.2rem, 7vw, 6.2rem) clamp(1.2rem, 6vw, 5.5rem) 1rem;
+}
+.document-intro > .source-block:first-child h1 {
+  max-width: 18ch;
+  margin: 0;
+  font-family: var(--serif);
+  font-size: clamp(3rem, 6vw, 6.3rem);
+  font-weight: 500;
+  line-height: .96;
+  letter-spacing: -.045em;
+  text-wrap: balance;
+}
+.document-intro > .source-block:not(:first-child) {
+  padding-inline: clamp(1.2rem, 6vw, 5.5rem);
+}
+.document-intro > .source-block:last-child {
+  padding-bottom: clamp(2.5rem, 7vw, 5.5rem);
+}
+.document-intro blockquote {
+  width: fit-content;
+  margin: .2rem 0;
+  padding: .4rem .75rem;
+  color: #314d5e;
+  background: var(--accent-soft);
+  border: 1px solid #b9cbd4;
+  border-radius: 999px;
+  font-size: .82rem;
+  font-weight: 740;
+}
+.document-intro blockquote p { margin: 0; }
+
+.document-section {
+  padding: clamp(2.3rem, 6vw, 5rem) clamp(1.2rem, 6vw, 5.5rem);
+  border-top: 1px solid var(--line);
+}
+.document-intro + .document-section {
+  color: #f4f7f9;
+  background: var(--ink);
+  border-top: 0;
+}
+.document-intro + .document-section h2 { color: white; }
+.document-intro + .document-section p,
+.document-intro + .document-section li { color: #dce5e9; }
+.document-intro + .document-section a { color: #bad0da; }
+.source-block { min-width: 0; }
+.source-block > :first-child { margin-top: 0; }
+.source-block > :last-child { margin-bottom: 0; }
+.source-block + .source-block { margin-top: .85rem; }
+h1, h2, h3, h4 { color: var(--ink); scroll-margin-top: 1.5rem; }
+.document-section h2 {
+  max-width: 24ch;
+  margin: 0 0 1.7rem;
+  font-family: var(--serif);
+  font-size: clamp(2rem, 3.4vw, 3.5rem);
+  font-weight: 500;
+  line-height: 1.04;
+  letter-spacing: -.028em;
+  text-wrap: balance;
+}
+.document-section h3 {
+  margin: 2.8rem 0 1rem;
+  color: #3f6575;
+  font-size: .78rem;
+  line-height: 1.3;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.document-section h4 { font-size: 1rem; }
+p { max-width: 76ch; margin: .85rem 0; }
+strong { font-weight: 780; }
+ul, ol { max-width: 80ch; padding-left: 1.25rem; }
+li { margin: .48rem 0; padding-left: .28rem; }
+li::marker { color: var(--accent); font-weight: 800; }
+
+blockquote {
+  margin-inline: 0;
+  padding: .8rem 1rem;
+  border-left: 4px solid var(--accent);
+  background: #e8eef2;
+  color: #314854;
+}
+blockquote > :first-child { margin-top: 0; }
+blockquote > :last-child { margin-bottom: 0; }
+code, pre { font-family: var(--mono); }
+code {
+  padding: .12rem .32rem;
+  border-radius: .25rem;
+  color: #315565;
+  background: #e2ebf0;
+  font-size: .86em;
+}
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 1.35rem 0;
+  padding: 1.15rem 1.25rem;
+  color: #edf3f6;
+  background: var(--code);
+  border-radius: .5rem;
+  line-height: 1.55;
+  white-space: pre;
+}
+pre code { padding: 0; color: inherit; background: transparent; white-space: pre; }
+.table-wrap { width: 100%; overflow-x: auto; margin: 1.5rem 0; }
+table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: .88rem;
+  line-height: 1.45;
+}
+th, td {
+  padding: .85rem .9rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+th {
+  color: var(--sheet);
+  background: var(--ink);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+tbody tr:nth-child(even) { background: #eff3f5; }
+.diagram {
+  margin: 2rem 0;
+  padding: clamp(.7rem, 2vw, 1.5rem);
+  background: #f0f4f6;
+  border: 1px solid var(--line);
+  border-radius: .65rem;
+}
+.diagram img {
+  display: block;
+  width: min(100%, 880px);
+  height: auto;
+  max-height: 650px;
+  margin: 0 auto;
+  object-fit: contain;
+}
+.diagram-wide {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+.diagram-wide img {
+  width: max(100%, 1600px);
+  max-height: none;
+  margin-inline: 0;
+}
+.diagram figcaption { margin-top: .8rem; color: var(--muted); text-align: center; font-size: .82rem; }
+.diagram details { margin-top: .8rem; }
+.diagram summary { cursor: pointer; color: var(--accent); font-weight: 650; }
+.diagram details pre { max-height: 18rem; }
+.document-footer {
+  padding: .2rem clamp(1rem, 4vw, 3rem) 2.5rem;
+  color: var(--muted);
+  font-size: .76rem;
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .document-header__inner { align-items: flex-start; flex-direction: column; }
+  .metadata { justify-content: flex-start; }
+  .page-shell { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .toc { display: none; }
+  .mobile-toc {
+    display: block;
+    background: rgb(251 252 253 / 82%);
+    border: 1px solid var(--line);
+  }
+  .mobile-toc summary {
+    padding: .8rem 1rem;
+    color: var(--ink);
+    cursor: pointer;
+    font-size: .75rem;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .mobile-toc nav { padding: 0 1rem 1rem; font-size: .82rem; }
+  .mobile-toc ol { margin: 0; padding: 0; list-style: none; }
+  .mobile-toc li { margin: .25rem 0; }
+  .mobile-toc li[data-level="3"] { padding-left: .85rem; }
+  .mobile-toc a { color: var(--muted); text-decoration: none; }
+}
+
+@media (max-width: 560px) {
+  :root { font-size: 16px; }
+  .document-header__inner { padding: .85rem 1rem; }
+  .metadata { gap: .4rem; }
+  .metadata__item { max-width: 100%; }
+  .page-shell { padding: .75rem; }
+  .document-intro > .source-block:first-child { padding-top: 2.6rem; }
+  .document-intro > .source-block:first-child h1 { font-size: clamp(2.7rem, 14vw, 4rem); }
+  .document-intro blockquote { border-radius: .4rem; }
+  .document-section { padding-top: 2.8rem; padding-bottom: 2.8rem; }
+  .document-section h2 { font-size: 2.15rem; }
+  figure.diagram { overflow-x: auto; }
+  figure.diagram img { min-width: 360px; }
+}
+
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+@media print {
+  :root { background: white; font-size: 10.5pt; line-height: 1.45; }
+  @page { size: auto; margin: 16mm; }
+  html, body { background: white; }
+  .document-header, .toc, .mobile-toc, .skip-link { display: none; }
+  .page-shell { display: block; width: auto; margin: 0; padding: 0; }
+  .document-content { overflow: visible; border: 0; box-shadow: none; }
+  .document-intro > .source-block:first-child { padding: 0 0 8mm; }
+  .document-intro > .source-block:first-child h1 { font-size: 32pt; }
+  .document-intro > .source-block:not(:first-child) { padding-inline: 0; }
+  .document-intro > .source-block:last-child { padding-bottom: 10mm; }
+  .document-section,
+  .document-intro + .document-section {
+    padding: 9mm 0;
+    color: var(--ink);
+    background: white;
+    break-inside: auto;
+  }
+  .document-intro + .document-section h2,
+  .document-intro + .document-section p,
+  .document-intro + .document-section li { color: var(--ink); }
+  h1, h2, h3, h4 { break-after: avoid-page; }
+  p, li { orphans: 3; widows: 3; }
+  table { min-width: 0; font-size: 8pt; }
+  thead { display: table-header-group; }
+  tr, figure, pre, blockquote { break-inside: avoid; }
+  .diagram-wide { overflow: visible; }
+  .diagram-wide img { width: 100%; max-height: 650px; margin-inline: auto; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  a { color: inherit; text-decoration: none; }
+  .document-footer { width: auto; padding: 8mm 0 0; }
+}
+</style>
+</head>
+<body>
+  <a class="skip-link" href="#document-content">Skip to document</a>
+  <header class="document-header" aria-label="Document metadata">
+    <div class="document-header__inner">
+      <div class="document-brand"><span class="document-brand__mark" aria-hidden="true">B</span>Blueprint document</div>
+      <dl class="metadata">
+        <div class="metadata__item"><dt>Kind</dt><dd>Technical design</dd></div>
+        <div class="metadata__item"><dt>Status</dt><dd>Proposed for review</dd></div>
+        <div class="metadata__item"><dt>Source</dt><dd>docs/agent-task-watcher/design.md</dd></div>
+        <div class="metadata__item"><dt>Revision</dt><dd><code title="f292b582ab3656aa7fa0f47211fc857bc9bbe7f962888740c61fc03273da2253">f292b582ab36</code></dd></div>
+      </dl>
+    </div>
+  </header>
+  <div class="page-shell">
+    <aside class="mobile-toc" aria-label="Document navigation"><details><summary>Contents</summary><nav aria-label="Document sections on small screens"><ol><li data-level="2"><a href="#1-executive-summary">1. Executive summary</a></li><li data-level="2"><a href="#2-context-and-scope">2. Context and scope</a></li><li data-level="2"><a href="#3-system-context">3. System context</a></li><li data-level="2"><a href="#4-proposed-design">4. Proposed design</a></li><li data-level="3"><a href="#how-it-works">How it works</a></li><li data-level="3"><a href="#components-and-responsibilities">Components and responsibilities</a></li><li data-level="3"><a href="#decisions">Decisions</a></li><li data-level="2"><a href="#5-invariants-and-requirements">5. Invariants and requirements</a></li><li data-level="3"><a href="#invariants">Invariants</a></li><li data-level="3"><a href="#requirements">Requirements</a></li><li data-level="2"><a href="#6-interfaces-and-data">6. Interfaces and data</a></li><li data-level="3"><a href="#commands">Commands</a></li><li data-level="3"><a href="#database-and-rollout">Database and rollout</a></li><li data-level="3"><a href="#local-profile-and-registry">Local profile and registry</a></li><li data-level="3"><a href="#prompt-envelope">Prompt envelope</a></li><li data-level="3"><a href="#naming-and-identity">Naming and identity</a></li><li data-level="2"><a href="#7-failure-behavior-and-lifecycle">7. Failure behavior and lifecycle</a></li><li data-level="2"><a href="#8-security-privacy-and-operations">8. Security, privacy, and operations</a></li><li data-level="2"><a href="#9-acceptance-criteria">9. Acceptance criteria</a></li><li data-level="2"><a href="#10-test-approach">10. Test approach</a></li><li data-level="2"><a href="#11-risks-and-tradeoffs">11. Risks and tradeoffs</a></li><li data-level="2"><a href="#12-open-questions">12. Open questions</a></li><li data-level="2"><a href="#13-implementation-notes">13. Implementation notes</a></li><li data-level="2"><a href="#14-out-of-scope">14. Out of scope</a></li></ol></nav></details></aside><nav class="toc" aria-label="Document contents"><p class="toc-title">On this page</p><ol><li data-level="2"><a href="#1-executive-summary">1. Executive summary</a></li><li data-level="2"><a href="#2-context-and-scope">2. Context and scope</a></li><li data-level="2"><a href="#3-system-context">3. System context</a></li><li data-level="2"><a href="#4-proposed-design">4. Proposed design</a></li><li data-level="3"><a href="#how-it-works">How it works</a></li><li data-level="3"><a href="#components-and-responsibilities">Components and responsibilities</a></li><li data-level="3"><a href="#decisions">Decisions</a></li><li data-level="2"><a href="#5-invariants-and-requirements">5. Invariants and requirements</a></li><li data-level="3"><a href="#invariants">Invariants</a></li><li data-level="3"><a href="#requirements">Requirements</a></li><li data-level="2"><a href="#6-interfaces-and-data">6. Interfaces and data</a></li><li data-level="3"><a href="#commands">Commands</a></li><li data-level="3"><a href="#database-and-rollout">Database and rollout</a></li><li data-level="3"><a href="#local-profile-and-registry">Local profile and registry</a></li><li data-level="3"><a href="#prompt-envelope">Prompt envelope</a></li><li data-level="3"><a href="#naming-and-identity">Naming and identity</a></li><li data-level="2"><a href="#7-failure-behavior-and-lifecycle">7. Failure behavior and lifecycle</a></li><li data-level="2"><a href="#8-security-privacy-and-operations">8. Security, privacy, and operations</a></li><li data-level="2"><a href="#9-acceptance-criteria">9. Acceptance criteria</a></li><li data-level="2"><a href="#10-test-approach">10. Test approach</a></li><li data-level="2"><a href="#11-risks-and-tradeoffs">11. Risks and tradeoffs</a></li><li data-level="2"><a href="#12-open-questions">12. Open questions</a></li><li data-level="2"><a href="#13-implementation-notes">13. Implementation notes</a></li><li data-level="2"><a href="#14-out-of-scope">14. Out of scope</a></li></ol></nav>
+    <main id="document-content" class="document-content" data-source-block-count="121">
+<div class="document-intro">
+<section id="agent-task-watcher" class="source-block"
+data-source-block="1"
+data-source-sha256="e5862f7830001e234600dfda9fcb57d614d32c89715138e84d3c2e00788995b2">
+<h1>Agent task watcher</h1>
+</section>
+<div class="source-block" data-source-block="2"
+data-source-sha256="f3cfda141bb0d969e973d91600064c759ac4c936fa82e9f2c3f6bb2a60fbb270">
+<blockquote>
+<p><strong>Status:</strong> Proposed for review</p>
+</blockquote>
+</div>
+</div>
+<div class="document-section">
+<section id="1-executive-summary" class="source-block role-summary"
+data-source-block="3"
+data-source-sha256="369eedb81a8602aa50ed832662b898c91ab782d2b66611d11a6b18d8001d4703">
+<h2>1. Executive summary</h2>
+</section>
+<div class="source-block" data-source-block="4"
+data-source-sha256="76a2cba4fdb2c2049a9000043c3bb5b4bc18e1d299c720aa674e837402e6eb28">
+<p>Slate agents can already list assigned Ready tasks, claim one, add an
+output, and move work into review, but a person must start and guide
+every coding-agent session. This change adds a long-running
+<code>slate watch</code> command for people who want Codex, Claude, or
+another command-line agent to process assigned coding work
+automatically. The watcher starts each candidate in a unique Git
+worktree. The coding agent then uses the Slate CLI to claim the task,
+read its context, implement it, comment with its result, and move it
+into review. Slate records a run ID so only the winning execution can
+update the task and the watcher can verify its exact output. The main
+costs are local worktree management, a Git-only first release, and
+passing a narrow Slate credential to the coding agent.</p>
+</div>
+</div>
+<div class="document-section">
+<section id="2-context-and-scope" class="source-block"
+data-source-block="5"
+data-source-sha256="7f27d9838429652fd04876b144f647ac2408f51de0d0db5fc261c40076a8d500">
+<h2>2. Context and scope</h2>
+</section>
+<div class="source-block" data-source-block="6"
+data-source-sha256="74e9aa0cbee1c935f6637e2865d3566baa56d4a6ec7aa04d5ef05a9e2f4abaec">
+<p>The current CLI is a stateless, one-command client.
+<code>slate tasks pull</code> lists queued actions,
+<code>slate tasks claim</code> atomically changes a queued action to
+working, and <code>slate tasks status</code> changes later workflow
+state. The API limits agent credentials to tasks assigned to their
+immutable agent ID. Card conversation entries support agent-authored
+comments and outputs. Creating an output stores the entry and changes
+the card to <code>needs_review</code> in the same transaction.</p>
+</div>
+<div class="source-block" data-source-block="7"
+data-source-sha256="309d9c4d407cbff4f2a7e964f42e1f580d863711bc21a71f19ca7de794d478ea">
+<p>This design uses product and API status names together. Ready means
+<code>queued</code>, In Progress means <code>working</code>, and Review
+means <code>needs_review</code>. A managed run is a claim made by the
+watcher-launched CLI with a server-recorded run ID. Existing claims
+without a run ID are legacy runs.</p>
+</div>
+<div class="source-block" data-source-block="8"
+data-source-sha256="d02b059eb4ce91f196a2e3ca1451dc576dc3b5964e3dfd7433fe29416e357e13">
+<p>This design changes the CLI boundary described in <a
+href="../../ARCHITECTURE.md">ARCHITECTURE.md</a>. The CLI becomes a
+long-lived local process that reads local profiles, creates isolated Git
+worktrees, starts one process group at a time, and monitors the selected
+run. PostgreSQL remains the source of truth. The server adds managed-run
+fencing and correlation while retaining legacy agent behavior.</p>
+</div>
+<div class="source-block" data-source-block="9"
+data-source-sha256="03c3887b4777b9e2d9ca4a98d77e3314ccbcd3e7a939e2d8c4607daf76f32025">
+<p>Once shipped, a user can run one watcher for a Codex profile and
+another for a Claude profile. Each profile has a distinct Slate agent
+credential and executor command. A watcher only offers work assigned to
+the authenticated Slate agent. The coding agent owns claim,
+implementation, comment, and output. The watcher owns isolation,
+dispatch, monitoring, and cleanup of losing runs.</p>
+</div>
+<div class="source-block" data-source-block="10"
+data-source-sha256="be5b99299c832f26e68337797ad2944e92b489203a82d96b5eecd5475447fd11">
+<p>The first version supports local command-line executors, Git
+repositories with a clean checkout, and one task at a time per watcher.
+It does not provide hosted workers, remote repository checkout,
+automatic takeover of interrupted work, or automatic pull-request
+creation.</p>
+</div>
+</div>
+<div class="document-section">
+<section id="3-system-context" class="source-block"
+data-source-block="11"
+data-source-sha256="40793fe15cdedd8ecf4489800820100043e0c3ebe6ee96e6db9b0dc8f866fabd">
+<h2>3. System context</h2>
+</section>
+<figure data-source-sha256="fad84b040006da1dc000bb80c9f4364fa3226969177eb48e907e10b36ade9898" class="diagram source-block" data-source-block="12"><img alt="Diagram 1 showing Human starts a configured profile, slate watch, Slate API, PostgreSQL, Unique disposable Git worktree, Codex, Claude, or another CLI agent, Exact slate binary, poll assigned Ready tasks, prompt on stdin, claim with run ID, change files after claim, comment or output with run ID, verify exact run entry" src="data:image/svg+xml;base64,PHN2ZyBpZD0ibXktc3ZnIiB3aWR0aD0iMTAwJSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgY2xhc3M9ImZsb3djaGFydCIgc3R5bGU9Im1heC13aWR0aDogMTAzNC42MXB4OyBiYWNrZ3JvdW5kLWNvbG9yOiB0cmFuc3BhcmVudDsiIHZpZXdCb3g9IjAgMCAxMDM0LjYwOTM3NSA2ODQuNDAwMDI0NDE0MDYyNSIgcm9sZT0iZ3JhcGhpY3MtZG9jdW1lbnQgZG9jdW1lbnQiIGFyaWEtcm9sZWRlc2NyaXB0aW9uPSJmbG93Y2hhcnQtdjIiPjxzdHlsZT4jbXktc3Zne2ZvbnQtZmFtaWx5OkludGVyLHVpLXNhbnMtc2VyaWYsc3lzdGVtLXVpLHNhbnMtc2VyaWY7Zm9udC1zaXplOjE2cHg7ZmlsbDojMTcyNjMwO31Aa2V5ZnJhbWVzIGVkZ2UtYW5pbWF0aW9uLWZyYW1le2Zyb217c3Ryb2tlLWRhc2hvZmZzZXQ6MDt9fUBrZXlmcmFtZXMgZGFzaHt0b3tzdHJva2UtZGFzaG9mZnNldDowO319I215LXN2ZyAuZWRnZS1hbmltYXRpb24tc2xvd3tzdHJva2UtZGFzaGFycmF5OjksNSFpbXBvcnRhbnQ7c3Ryb2tlLWRhc2hvZmZzZXQ6OTAwO2FuaW1hdGlvbjpkYXNoIDUwcyBsaW5lYXIgaW5maW5pdGU7c3Ryb2tlLWxpbmVjYXA6cm91bmQ7fSNteS1zdmcgLmVkZ2UtYW5pbWF0aW9uLWZhc3R7c3Ryb2tlLWRhc2hhcnJheTo5LDUhaW1wb3J0YW50O3N0cm9rZS1kYXNob2Zmc2V0OjkwMDthbmltYXRpb246ZGFzaCAyMHMgbGluZWFyIGluZmluaXRlO3N0cm9rZS1saW5lY2FwOnJvdW5kO30jbXktc3ZnIC5lcnJvci1pY29ue2ZpbGw6I2Y3ZjlmYjt9I215LXN2ZyAuZXJyb3ItdGV4dHtmaWxsOiMwODA2MDQ7c3Ryb2tlOiMwODA2MDQ7fSNteS1zdmcgLmVkZ2UtdGhpY2tuZXNzLW5vcm1hbHtzdHJva2Utd2lkdGg6MXB4O30jbXktc3ZnIC5lZGdlLXRoaWNrbmVzcy10aGlja3tzdHJva2Utd2lkdGg6My41cHg7fSNteS1zdmcgLmVkZ2UtcGF0dGVybi1zb2xpZHtzdHJva2UtZGFzaGFycmF5OjA7fSNteS1zdmcgLmVkZ2UtdGhpY2tuZXNzLWludmlzaWJsZXtzdHJva2Utd2lkdGg6MDtmaWxsOm5vbmU7fSNteS1zdmcgLmVkZ2UtcGF0dGVybi1kYXNoZWR7c3Ryb2tlLWRhc2hhcnJheTozO30jbXktc3ZnIC5lZGdlLXBhdHRlcm4tZG90dGVke3N0cm9rZS1kYXNoYXJyYXk6Mjt9I215LXN2ZyAubWFya2Vye2ZpbGw6IzUyNmE3OTtzdHJva2U6IzUyNmE3OTt9I215LXN2ZyAubWFya2VyLmNyb3Nze3N0cm9rZTojNTI2YTc5O30jbXktc3ZnIHN2Z3tmb250LWZhbWlseTpJbnRlcix1aS1zYW5zLXNlcmlmLHN5c3RlbS11aSxzYW5zLXNlcmlmO2ZvbnQtc2l6ZToxNnB4O30jbXktc3ZnIHB7bWFyZ2luOjA7fSNteS1zdmcgLmxhYmVse2ZvbnQtZmFtaWx5OkludGVyLHVpLXNhbnMtc2VyaWYsc3lzdGVtLXVpLHNhbnMtc2VyaWY7Y29sb3I6IzE3MjYzMDt9I215LXN2ZyAuY2x1c3Rlci1sYWJlbCB0ZXh0e2ZpbGw6IzA4MDYwNDt9I215LXN2ZyAuY2x1c3Rlci1sYWJlbCBzcGFue2NvbG9yOiMwODA2MDQ7fSNteS1zdmcgLmNsdXN0ZXItbGFiZWwgc3BhbiBwe2JhY2tncm91bmQtY29sb3I6dHJhbnNwYXJlbnQ7fSNteS1zdmcgLmxhYmVsIHRleHQsI215LXN2ZyBzcGFue2ZpbGw6IzE3MjYzMDtjb2xvcjojMTcyNjMwO30jbXktc3ZnIC5ub2RlIHJlY3QsI215LXN2ZyAubm9kZSBjaXJjbGUsI215LXN2ZyAubm9kZSBlbGxpcHNlLCNteS1zdmcgLm5vZGUgcG9seWdvbiwjbXktc3ZnIC5ub2RlIHBhdGh7ZmlsbDojZGJlNWVjO3N0cm9rZTojNjA3OThhO3N0cm9rZS13aWR0aDoxcHg7fSNteS1zdmcgLnJvdWdoLW5vZGUgLmxhYmVsIHRleHQsI215LXN2ZyAubm9kZSAubGFiZWwgdGV4dCwjbXktc3ZnIC5pbWFnZS1zaGFwZSAubGFiZWwsI215LXN2ZyAuaWNvbi1zaGFwZSAubGFiZWx7dGV4dC1hbmNob3I6bWlkZGxlO30jbXktc3ZnIC5ub2RlIC5rYXRleCBwYXRoe2ZpbGw6IzAwMDtzdHJva2U6IzAwMDtzdHJva2Utd2lkdGg6MXB4O30jbXktc3ZnIC5yb3VnaC1ub2RlIC5sYWJlbCwjbXktc3ZnIC5ub2RlIC5sYWJlbCwjbXktc3ZnIC5pbWFnZS1zaGFwZSAubGFiZWwsI215LXN2ZyAuaWNvbi1zaGFwZSAubGFiZWx7dGV4dC1hbGlnbjpjZW50ZXI7fSNteS1zdmcgLm5vZGUuY2xpY2thYmxle2N1cnNvcjpwb2ludGVyO30jbXktc3ZnIC5yb290IC5hbmNob3IgcGF0aHtmaWxsOiM1MjZhNzkhaW1wb3J0YW50O3N0cm9rZS13aWR0aDowO3N0cm9rZTojNTI2YTc5O30jbXktc3ZnIC5hcnJvd2hlYWRQYXRoe2ZpbGw6IzA4MDYwNDt9I215LXN2ZyAuZWRnZVBhdGggLnBhdGh7c3Ryb2tlOiM1MjZhNzk7c3Ryb2tlLXdpZHRoOjFweDt9I215LXN2ZyAuZmxvd2NoYXJ0LWxpbmt7c3Ryb2tlOiM1MjZhNzk7ZmlsbDpub25lO30jbXktc3ZnIC5lZGdlTGFiZWx7YmFja2dyb3VuZC1jb2xvcjojZWRmMmY1O3RleHQtYWxpZ246Y2VudGVyO30jbXktc3ZnIC5lZGdlTGFiZWwgcHtiYWNrZ3JvdW5kLWNvbG9yOiNlZGYyZjU7fSNteS1zdmcgLmVkZ2VMYWJlbCByZWN0e29wYWNpdHk6MC41O2JhY2tncm91bmQtY29sb3I6I2VkZjJmNTtmaWxsOiNlZGYyZjU7fSNteS1zdmcgLmxhYmVsQmtne2JhY2tncm91bmQtY29sb3I6cmdiYSgyMzcsIDI0MiwgMjQ1LCAwLjUpO30jbXktc3ZnIC5jbHVzdGVyIHJlY3R7ZmlsbDojZjdmOWZiO3N0cm9rZTpoc2woMjEwLCAwJSwgODcuNjQ3MDU4ODIzNSUpO3N0cm9rZS13aWR0aDoxcHg7fSNteS1zdmcgLmNsdXN0ZXIgdGV4dHtmaWxsOiMwODA2MDQ7fSNteS1zdmcgLmNsdXN0ZXIgc3Bhbntjb2xvcjojMDgwNjA0O30jbXktc3ZnIGRpdi5tZXJtYWlkVG9vbHRpcHtwb3NpdGlvbjphYnNvbHV0ZTt0ZXh0LWFsaWduOmNlbnRlcjttYXgtd2lkdGg6MjAwcHg7cGFkZGluZzoycHg7Zm9udC1mYW1pbHk6SW50ZXIsdWktc2Fucy1zZXJpZixzeXN0ZW0tdWksc2Fucy1zZXJpZjtmb250LXNpemU6MTJweDtiYWNrZ3JvdW5kOiNmN2Y5ZmI7Ym9yZGVyOjFweCBzb2xpZCBoc2woMjEwLCAwJSwgODcuNjQ3MDU4ODIzNSUpO2JvcmRlci1yYWRpdXM6MnB4O3BvaW50ZXItZXZlbnRzOm5vbmU7ei1pbmRleDoxMDA7fSNteS1zdmcgLmZsb3djaGFydFRpdGxlVGV4dHt0ZXh0LWFuY2hvcjptaWRkbGU7Zm9udC1zaXplOjE4cHg7ZmlsbDojMTcyNjMwO30jbXktc3ZnIHJlY3QudGV4dHtmaWxsOm5vbmU7c3Ryb2tlLXdpZHRoOjA7fSNteS1zdmcgLmljb24tc2hhcGUsI215LXN2ZyAuaW1hZ2Utc2hhcGV7YmFja2dyb3VuZC1jb2xvcjojZWRmMmY1O3RleHQtYWxpZ246Y2VudGVyO30jbXktc3ZnIC5pY29uLXNoYXBlIHAsI215LXN2ZyAuaW1hZ2Utc2hhcGUgcHtiYWNrZ3JvdW5kLWNvbG9yOiNlZGYyZjU7cGFkZGluZzoycHg7fSNteS1zdmcgLmljb24tc2hhcGUgLmxhYmVsIHJlY3QsI215LXN2ZyAuaW1hZ2Utc2hhcGUgLmxhYmVsIHJlY3R7b3BhY2l0eTowLjU7YmFja2dyb3VuZC1jb2xvcjojZWRmMmY1O2ZpbGw6I2VkZjJmNTt9I215LXN2ZyAubGFiZWwtaWNvbntkaXNwbGF5OmlubGluZS1ibG9jaztoZWlnaHQ6MWVtO292ZXJmbG93OnZpc2libGU7dmVydGljYWwtYWxpZ246LTAuMTI1ZW07fSNteS1zdmcgLm5vZGUgLmxhYmVsLWljb24gcGF0aHtmaWxsOmN1cnJlbnRDb2xvcjtzdHJva2U6cmV2ZXJ0O3N0cm9rZS13aWR0aDpyZXZlcnQ7fSNteS1zdmcgLm5vZGUgLm5lby1ub2Rle3N0cm9rZTojNjA3OThhO30jbXktc3ZnIFtkYXRhLWxvb2s9Im5lbyJdLm5vZGUgcmVjdCwjbXktc3ZnIFtkYXRhLWxvb2s9Im5lbyJdLmNsdXN0ZXIgcmVjdCwjbXktc3ZnIFtkYXRhLWxvb2s9Im5lbyJdLm5vZGUgcG9seWdvbntzdHJva2U6dXJsKCNteS1zdmctZ3JhZGllbnQpO2ZpbHRlcjpkcm9wLXNoYWRvdyggMXB4IDJweCAycHggcmdiYSgxODUsMTg1LDE4NSwxKSk7fSNteS1zdmcgW2RhdGEtbG9vaz0ibmVvIl0uc3dpbWxhbmUuY2x1c3RlciByZWN0e2ZpbHRlcjpub25lO30jbXktc3ZnIFtkYXRhLWxvb2s9Im5lbyJdLm5vZGUgcGF0aHtzdHJva2U6dXJsKCNteS1zdmctZ3JhZGllbnQpO3N0cm9rZS13aWR0aDoxcHg7fSNteS1zdmcgW2RhdGEtbG9vaz0ibmVvIl0ubm9kZSAub3V0ZXItcGF0aHtmaWx0ZXI6ZHJvcC1zaGFkb3coIDFweCAycHggMnB4IHJnYmEoMTg1LDE4NSwxODUsMSkpO30jbXktc3ZnIFtkYXRhLWxvb2s9Im5lbyJdLm5vZGUgLm5lby1saW5lIHBhdGh7c3Ryb2tlOiM2MDc5OGE7ZmlsdGVyOm5vbmU7fSNteS1zdmcgW2RhdGEtbG9vaz0ibmVvIl0ubm9kZSBjaXJjbGV7c3Ryb2tlOnVybCgjbXktc3ZnLWdyYWRpZW50KTtmaWx0ZXI6ZHJvcC1zaGFkb3coIDFweCAycHggMnB4IHJnYmEoMTg1LDE4NSwxODUsMSkpO30jbXktc3ZnIFtkYXRhLWxvb2s9Im5lbyJdLm5vZGUgY2lyY2xlIC5zdGF0ZS1zdGFydHtmaWxsOiMwMDAwMDA7fSNteS1zdmcgW2RhdGEtbG9vaz0ibmVvIl0uaWNvbi1zaGFwZSAuaWNvbntmaWxsOnVybCgjbXktc3ZnLWdyYWRpZW50KTtmaWx0ZXI6ZHJvcC1zaGFkb3coIDFweCAycHggMnB4IHJnYmEoMTg1LDE4NSwxODUsMSkpO30jbXktc3ZnIFtkYXRhLWxvb2s9Im5lbyJdLmljb24tc2hhcGUgLmljb24tbmVvIHBhdGh7c3Ryb2tlOnVybCgjbXktc3ZnLWdyYWRpZW50KTtmaWx0ZXI6ZHJvcC1zaGFkb3coIDFweCAycHggMnB4IHJnYmEoMTg1LDE4NSwxODUsMSkpO30jbXktc3ZnIDpyb290ey0tbWVybWFpZC1mb250LWZhbWlseToidHJlYnVjaGV0IG1zIix2ZXJkYW5hLGFyaWFsLHNhbnMtc2VyaWY7fTwvc3R5bGU+PGc+PG1hcmtlciBpZD0ibXktc3ZnX2Zsb3djaGFydC12Mi1wb2ludEVuZCIgY2xhc3M9Im1hcmtlciBmbG93Y2hhcnQtdjIiIHZpZXdCb3g9IjAgMCAxMCAxMCIgcmVmWD0iNSIgcmVmWT0iNSIgbWFya2VyVW5pdHM9InVzZXJTcGFjZU9uVXNlIiBtYXJrZXJXaWR0aD0iOCIgbWFya2VySGVpZ2h0PSI4IiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0gMCAwIEwgMTAgNSBMIDAgMTAgeiIgY2xhc3M9ImFycm93TWFya2VyUGF0aCIgc3R5bGU9InN0cm9rZS13aWR0aDogMTsgc3Ryb2tlLWRhc2hhcnJheTogMSwgMDsiLz48L21hcmtlcj48bWFya2VyIGlkPSJteS1zdmdfZmxvd2NoYXJ0LXYyLXBvaW50U3RhcnQiIGNsYXNzPSJtYXJrZXIgZmxvd2NoYXJ0LXYyIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjQuNSIgcmVmWT0iNSIgbWFya2VyVW5pdHM9InVzZXJTcGFjZU9uVXNlIiBtYXJrZXJXaWR0aD0iOCIgbWFya2VySGVpZ2h0PSI4IiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0gMCA1IEwgMTAgMTAgTCAxMCAwIHoiIGNsYXNzPSJhcnJvd01hcmtlclBhdGgiIHN0eWxlPSJzdHJva2Utd2lkdGg6IDE7IHN0cm9rZS1kYXNoYXJyYXk6IDEsIDA7Ii8+PC9tYXJrZXI+PG1hcmtlciBpZD0ibXktc3ZnX2Zsb3djaGFydC12Mi1wb2ludEVuZC1tYXJnaW4iIGNsYXNzPSJtYXJrZXIgZmxvd2NoYXJ0LXYyIiB2aWV3Qm94PSIwIDAgMTEuNSAxNCIgcmVmWD0iMTEuNSIgcmVmWT0iNyIgbWFya2VyVW5pdHM9InVzZXJTcGFjZU9uVXNlIiBtYXJrZXJXaWR0aD0iMTAuNSIgbWFya2VySGVpZ2h0PSIxNCIgb3JpZW50PSJhdXRvIj48cGF0aCBkPSJNIDAgMCBMIDExLjUgNyBMIDAgMTQgeiIgY2xhc3M9ImFycm93TWFya2VyUGF0aCIgc3R5bGU9InN0cm9rZS13aWR0aDogMDsgc3Ryb2tlLWRhc2hhcnJheTogMSwgMDsiLz48L21hcmtlcj48bWFya2VyIGlkPSJteS1zdmdfZmxvd2NoYXJ0LXYyLXBvaW50U3RhcnQtbWFyZ2luIiBjbGFzcz0ibWFya2VyIGZsb3djaGFydC12MiIgdmlld0JveD0iMCAwIDExLjUgMTQiIHJlZlg9IjEiIHJlZlk9IjciIG1hcmtlclVuaXRzPSJ1c2VyU3BhY2VPblVzZSIgbWFya2VyV2lkdGg9IjExLjUiIG1hcmtlckhlaWdodD0iMTQiIG9yaWVudD0iYXV0byI+PHBvbHlnb24gcG9pbnRzPSIwLDcgMTEuNSwxNCAxMS41LDAiIGNsYXNzPSJhcnJvd01hcmtlclBhdGgiIHN0eWxlPSJzdHJva2Utd2lkdGg6IDA7IHN0cm9rZS1kYXNoYXJyYXk6IDEsIDA7Ii8+PC9tYXJrZXI+PG1hcmtlciBpZD0ibXktc3ZnX2Zsb3djaGFydC12Mi1jaXJjbGVFbmQiIGNsYXNzPSJtYXJrZXIgZmxvd2NoYXJ0LXYyIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjExIiByZWZZPSI1IiBtYXJrZXJVbml0cz0idXNlclNwYWNlT25Vc2UiIG1hcmtlcldpZHRoPSIxMSIgbWFya2VySGVpZ2h0PSIxMSIgb3JpZW50PSJhdXRvIj48Y2lyY2xlIGN4PSI1IiBjeT0iNSIgcj0iNSIgY2xhc3M9ImFycm93TWFya2VyUGF0aCIgc3R5bGU9InN0cm9rZS13aWR0aDogMTsgc3Ryb2tlLWRhc2hhcnJheTogMSwgMDsiLz48L21hcmtlcj48bWFya2VyIGlkPSJteS1zdmdfZmxvd2NoYXJ0LXYyLWNpcmNsZVN0YXJ0IiBjbGFzcz0ibWFya2VyIGZsb3djaGFydC12MiIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSItMSIgcmVmWT0iNSIgbWFya2VyVW5pdHM9InVzZXJTcGFjZU9uVXNlIiBtYXJrZXJXaWR0aD0iMTEiIG1hcmtlckhlaWdodD0iMTEiIG9yaWVudD0iYXV0byI+PGNpcmNsZSBjeD0iNSIgY3k9IjUiIHI9IjUiIGNsYXNzPSJhcnJvd01hcmtlclBhdGgiIHN0eWxlPSJzdHJva2Utd2lkdGg6IDE7IHN0cm9rZS1kYXNoYXJyYXk6IDEsIDA7Ii8+PC9tYXJrZXI+PG1hcmtlciBpZD0ibXktc3ZnX2Zsb3djaGFydC12Mi1jaXJjbGVFbmQtbWFyZ2luIiBjbGFzcz0ibWFya2VyIGZsb3djaGFydC12MiIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZZPSI1IiByZWZYPSIxMi4yNSIgbWFya2VyVW5pdHM9InVzZXJTcGFjZU9uVXNlIiBtYXJrZXJXaWR0aD0iMTQiIG1hcmtlckhlaWdodD0iMTQiIG9yaWVudD0iYXV0byI+PGNpcmNsZSBjeD0iNSIgY3k9IjUiIHI9IjUiIGNsYXNzPSJhcnJvd01hcmtlclBhdGgiIHN0eWxlPSJzdHJva2Utd2lkdGg6IDA7IHN0cm9rZS1kYXNoYXJyYXk6IDEsIDA7Ii8+PC9tYXJrZXI+PG1hcmtlciBpZD0ibXktc3ZnX2Zsb3djaGFydC12Mi1jaXJjbGVTdGFydC1tYXJnaW4iIGNsYXNzPSJtYXJrZXIgZmxvd2NoYXJ0LXYyIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9Ii0yIiByZWZZPSI1IiBtYXJrZXJVbml0cz0idXNlclNwYWNlT25Vc2UiIG1hcmtlcldpZHRoPSIxNCIgbWFya2VySGVpZ2h0PSIxNCIgb3JpZW50PSJhdXRvIj48Y2lyY2xlIGN4PSI1IiBjeT0iNSIgcj0iNSIgY2xhc3M9ImFycm93TWFya2VyUGF0aCIgc3R5bGU9InN0cm9rZS13aWR0aDogMDsgc3Ryb2tlLWRhc2hhcnJheTogMSwgMDsiLz48L21hcmtlcj48bWFya2VyIGlkPSJteS1zdmdfZmxvd2NoYXJ0LXYyLWNyb3NzRW5kIiBjbGFzcz0ibWFya2VyIGNyb3NzIGZsb3djaGFydC12MiIgdmlld0JveD0iMCAwIDExIDExIiByZWZYPSIxMiIgcmVmWT0iNS4yIiBtYXJrZXJVbml0cz0idXNlclNwYWNlT25Vc2UiIG1hcmtlcldpZHRoPSIxMSIgbWFya2VySGVpZ2h0PSIxMSIgb3JpZW50PSJhdXRvIj48cGF0aCBkPSJNIDEsMSBsIDksOSBNIDEwLDEgbCAtOSw5IiBjbGFzcz0iYXJyb3dNYXJrZXJQYXRoIiBzdHlsZT0ic3Ryb2tlLXdpZHRoOiAyOyBzdHJva2UtZGFzaGFycmF5OiAxLCAwOyIvPjwvbWFya2VyPjxtYXJrZXIgaWQ9Im15LXN2Z19mbG93Y2hhcnQtdjItY3Jvc3NTdGFydCIgY2xhc3M9Im1hcmtlciBjcm9zcyBmbG93Y2hhcnQtdjIiIHZpZXdCb3g9IjAgMCAxMSAxMSIgcmVmWD0iLTEiIHJlZlk9IjUuMiIgbWFya2VyVW5pdHM9InVzZXJTcGFjZU9uVXNlIiBtYXJrZXJXaWR0aD0iMTEiIG1hcmtlckhlaWdodD0iMTEiIG9yaWVudD0iYXV0byI+PHBhdGggZD0iTSAxLDEgbCA5LDkgTSAxMCwxIGwgLTksOSIgY2xhc3M9ImFycm93TWFya2VyUGF0aCIgc3R5bGU9InN0cm9rZS13aWR0aDogMjsgc3Ryb2tlLWRhc2hhcnJheTogMSwgMDsiLz48L21hcmtlcj48bWFya2VyIGlkPSJteS1zdmdfZmxvd2NoYXJ0LXYyLWNyb3NzRW5kLW1hcmdpbiIgY2xhc3M9Im1hcmtlciBjcm9zcyBmbG93Y2hhcnQtdjIiIHZpZXdCb3g9IjAgMCAxNSAxNSIgcmVmWD0iMTcuNyIgcmVmWT0iNy41IiBtYXJrZXJVbml0cz0idXNlclNwYWNlT25Vc2UiIG1hcmtlcldpZHRoPSIxMiIgbWFya2VySGVpZ2h0PSIxMiIgb3JpZW50PSJhdXRvIj48cGF0aCBkPSJNIDEsMSBMIDE0LDE0IE0gMSwxNCBMIDE0LDEiIGNsYXNzPSJhcnJvd01hcmtlclBhdGgiIHN0eWxlPSJzdHJva2Utd2lkdGg6IDIuNTsiLz48L21hcmtlcj48bWFya2VyIGlkPSJteS1zdmdfZmxvd2NoYXJ0LXYyLWNyb3NzU3RhcnQtbWFyZ2luIiBjbGFzcz0ibWFya2VyIGNyb3NzIGZsb3djaGFydC12MiIgdmlld0JveD0iMCAwIDE1IDE1IiByZWZYPSItMy41IiByZWZZPSI3LjUiIG1hcmtlclVuaXRzPSJ1c2VyU3BhY2VPblVzZSIgbWFya2VyV2lkdGg9IjEyIiBtYXJrZXJIZWlnaHQ9IjEyIiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0gMSwxIEwgMTQsMTQgTSAxLDE0IEwgMTQsMSIgY2xhc3M9ImFycm93TWFya2VyUGF0aCIgc3R5bGU9InN0cm9rZS13aWR0aDogMi41OyBzdHJva2UtZGFzaGFycmF5OiAxLCAwOyIvPjwvbWFya2VyPjxnIGNsYXNzPSJyb290Ij48ZyBjbGFzcz0iY2x1c3RlcnMiLz48ZyBjbGFzcz0iZWRnZVBhdGhzIj48cGF0aCBkPSJNNDc4LjIyMyw3NS42TDQ3OC4yMjMsNzkuNzY3QzQ3OC4yMjMsODMuOTMzLDQ3OC4yMjMsOTIuMjY3LDQ3OC4yMjMsOTkuOTMzQzQ3OC4yMjMsMTA3LjYsNDc4LjIyMywxMTQuNiw0NzguMjIzLDExOC4xTDQ3OC4yMjMsMTIxLjYiIGlkPSJteS1zdmctTF9IdW1hbl9XYXRjaGVyXzAiIGNsYXNzPSJlZGdlLXRoaWNrbmVzcy1ub3JtYWwgZWRnZS1wYXR0ZXJuLXNvbGlkIGVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZmxvd2NoYXJ0LWxpbmsiIHN0eWxlPSI7IiBkYXRhLWVkZ2U9InRydWUiIGRhdGEtZXQ9ImVkZ2UiIGRhdGEtaWQ9IkxfSHVtYW5fV2F0Y2hlcl8wIiBkYXRhLXBvaW50cz0iVzNzaWVDSTZORGM0TGpJeU1qWTFOakkxTENKNUlqbzNOUzQxT1RrNU9UZzBOelF4TWpFeGZTeDdJbmdpT2pRM09DNHlNakkyTlRZeU5Td2llU0k2TVRBd0xqVTVPVGs1T0RRM05ERXlNVEY5TEhzaWVDSTZORGM0TGpJeU1qWTFOakkxTENKNUlqb3hNalV1TlRrNU9UazRORGMwTVRJeE1YMWQiIGRhdGEtbG9vaz0iY2xhc3NpYyIgbWFya2VyLWVuZD0idXJsKCNteS1zdmdfZmxvd2NoYXJ0LXYyLXBvaW50RW5kKSIvPjxwYXRoIGQ9Ik00NDAuOTczLDE3NS42TDQzMS43ODUsMTgxLjc2N0M0MjIuNTk3LDE4Ny45MzMsNDA0LjIyLDIwMC4yNjcsMzk1LjAzMiwyMTguMjMzQzM4NS44NDQsMjM2LjIsMzg1Ljg0NCwyNTkuOCwzODUuODQ0LDI4NC44NjdDMzg1Ljg0NCwzMDkuOTMzLDM4NS44NDQsMzM2LjQ2NywzODUuODQ0LDM2M0MzODUuODQ0LDM4OS41MzMsMzg1Ljg0NCw0MTYuMDY3LDM4NS44NDQsNDM5LjEzM0MzODUuODQ0LDQ2Mi4yLDM4NS44NDQsNDgxLjgsNDIwLjEyOSw0OTcuODY3QzQ1NC40MTUsNTEzLjkzNCw1MjIuOTg2LDUyNi40NjcsNTU3LjI3Miw1MzIuNzM0TDU5MS41NTcsNTM5LjAwMSIgaWQ9Im15LXN2Zy1MX1dhdGNoZXJfQVBJXzAiIGNsYXNzPSJlZGdlLXRoaWNrbmVzcy1ub3JtYWwgZWRnZS1wYXR0ZXJuLXNvbGlkIGVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZmxvd2NoYXJ0LWxpbmsiIHN0eWxlPSI7IiBkYXRhLWVkZ2U9InRydWUiIGRhdGEtZXQ9ImVkZ2UiIGRhdGEtaWQ9IkxfV2F0Y2hlcl9BUElfMCIgZGF0YS1wb2ludHM9Ilczc2llQ0k2TkRRd0xqazNNekE1TnpJM09ESXlOVGdzSW5raU9qRTNOUzQxT1RrNU9UZzBOelF4TWpFeGZTeDdJbmdpT2pNNE5TNDRORE0zTlN3aWVTSTZNakV5TGpVNU9UazVPRFEzTkRFeU1URjlMSHNpZUNJNk16ZzFMamcwTXpjMUxDSjVJam95T0RNdU16azVPVGszTnpFeE1UZ3hOalI5TEhzaWVDSTZNemcxTGpnME16YzFMQ0o1SWpvek5qSXVPVGs1T1RrMk1UZzFNekF5TnpOOUxIc2llQ0k2TXpnMUxqZzBNemMxTENKNUlqbzBOREl1TlRrNU9UazBOalU1TkRJek9IMHNleUo0SWpvek9EVXVPRFF6TnpVc0lua2lPalV3TVM0ek9UazVPVE00T1RZME9EUTBmU3g3SW5naU9qVTVOUzQwT1RJeE9EYzFMQ0o1SWpvMU16a3VOekl3TXpnd01ESTNOelEyTW4xZCIgZGF0YS1sb29rPSJjbGFzc2ljIiBtYXJrZXItZW5kPSJ1cmwoI215LXN2Z19mbG93Y2hhcnQtdjItcG9pbnRFbmQpIi8+PHBhdGggZD0iTTY1OS4zOTEsNTc2LjRMNjU5LjM5MSw1ODAuNTY3QzY1OS4zOTEsNTg0LjczMyw2NTkuMzkxLDU5My4wNjcsNjU5LjM5MSw2MDAuNzMzQzY1OS4zOTEsNjA4LjQsNjU5LjM5MSw2MTUuNCw2NTkuMzkxLDYxOC45TDY1OS4zOTEsNjIyLjQiIGlkPSJteS1zdmctTF9BUElfREJfMCIgY2xhc3M9ImVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZWRnZS10aGlja25lc3Mtbm9ybWFsIGVkZ2UtcGF0dGVybi1zb2xpZCBmbG93Y2hhcnQtbGluayIgc3R5bGU9IjsiIGRhdGEtZWRnZT0idHJ1ZSIgZGF0YS1ldD0iZWRnZSIgZGF0YS1pZD0iTF9BUElfREJfMCIgZGF0YS1wb2ludHM9Ilczc2llQ0k2TmpVNUxqTTVNRFl5TlN3aWVTSTZOVGMyTGpNNU9UazVNemc1TmpRNE5EUjlMSHNpZUNJNk5qVTVMak01TURZeU5Td2llU0k2TmpBeExqTTVPVGs1TXpnNU5qUTRORFI5TEhzaWVDSTZOalU1TGpNNU1EWXlOU3dpZVNJNk5qSTJMak01T1RrNU16ZzVOalE0TkRSOVhRPT0iIGRhdGEtbG9vaz0iY2xhc3NpYyIgbWFya2VyLWVuZD0idXJsKCNteS1zdmdfZmxvd2NoYXJ0LXYyLXBvaW50RW5kKSIvPjxwYXRoIGQ9Ik00MDQuNzg1LDE2MS42NTFMMzQ4LjM1NywxNzAuMTQzQzI5MS45MywxNzguNjM0LDE3OS4wNzQsMTk1LjYxNywxMjIuNjQ2LDIxNS45MDlDNjYuMjE5LDIzNi4yLDY2LjIxOSwyNTkuOCw2Ni4yMTksMjg0Ljg2N0M2Ni4yMTksMzA5LjkzMyw2Ni4yMTksMzM2LjQ2Nyw3MS4xMDYsMzU2LjgxOEM3NS45OTQsMzc3LjE2OSw4NS43NjksMzkxLjMzOCw5MC42NTYsMzk4LjQyM0w5NS41NDQsNDA1LjUwNyIgaWQ9Im15LXN2Zy1MX1dhdGNoZXJfV29ya3RyZWVfMCIgY2xhc3M9ImVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZWRnZS10aGlja25lc3Mtbm9ybWFsIGVkZ2UtcGF0dGVybi1zb2xpZCBmbG93Y2hhcnQtbGluayIgc3R5bGU9IjsiIGRhdGEtZWRnZT0idHJ1ZSIgZGF0YS1ldD0iZWRnZSIgZGF0YS1pZD0iTF9XYXRjaGVyX1dvcmt0cmVlXzAiIGRhdGEtcG9pbnRzPSJXM3NpZUNJNk5EQTBMamM0TlRFMU5qSTFMQ0o1SWpveE5qRXVOalV4TVRZM09UWTNOek0xTlRkOUxIc2llQ0k2TmpZdU1qRTROelVzSW5raU9qSXhNaTQxT1RrNU9UZzBOelF4TWpFeGZTeDdJbmdpT2pZMkxqSXhPRGMxTENKNUlqb3lPRE11TXprNU9UazNOekV4TVRneE5qUjlMSHNpZUNJNk5qWXVNakU0TnpVc0lua2lPak0yTWk0NU9UazVPVFl4T0RVek1ESTNNMzBzZXlKNElqbzVOeTQ0TVRVd016SXlOekUxTlRjM05Dd2llU0k2TkRBNExqYzVPVGs1TlRReU1qTTJNek45WFE9PSIgZGF0YS1sb29rPSJjbGFzc2ljIiBtYXJrZXItZW5kPSJ1cmwoI215LXN2Z19mbG93Y2hhcnQtdjItcG9pbnRFbmQpIi8+PHBhdGggZD0iTTUxNS40NzIsMTc1LjZMNTI0LjY2LDE4MS43NjdDNTMzLjg0OSwxODcuOTMzLDU1Mi4yMjUsMjAwLjI2Nyw1NjEuNDEzLDIxMS45MzNDNTcwLjYwMiwyMjMuNiw1NzAuNjAyLDIzNC42LDU3MC42MDIsMjQwLjFMNTcwLjYwMiwyNDUuNiIgaWQ9Im15LXN2Zy1MX1dhdGNoZXJfRXhlY3V0b3JfMCIgY2xhc3M9ImVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZWRnZS10aGlja25lc3Mtbm9ybWFsIGVkZ2UtcGF0dGVybi1zb2xpZCBmbG93Y2hhcnQtbGluayIgc3R5bGU9IjsiIGRhdGEtZWRnZT0idHJ1ZSIgZGF0YS1ldD0iZWRnZSIgZGF0YS1pZD0iTF9XYXRjaGVyX0V4ZWN1dG9yXzAiIGRhdGEtcG9pbnRzPSJXM3NpZUNJNk5URTFMalEzTWpJeE5USXlNVGMzTkRFc0lua2lPakUzTlM0MU9UazVPVGcwTnpReE1qRXhmU3g3SW5naU9qVTNNQzQyTURFMU5qSTFMQ0o1SWpveU1USXVOVGs1T1RrNE5EYzBNVEl4TVgwc2V5SjRJam8xTnpBdU5qQXhOVFl5TlN3aWVTSTZNalE1TGpVNU9UazVPRFEzTkRFeU1URjlYUT09IiBkYXRhLWxvb2s9ImNsYXNzaWMiIG1hcmtlci1lbmQ9InVybCgjbXktc3ZnX2Zsb3djaGFydC12Mi1wb2ludEVuZCkiLz48cGF0aCBkPSJNNTcwLjYwMiwzMTcuMkw1NzAuNjAyLDMyNC44MzNDNTcwLjYwMiwzMzIuNDY3LDU3MC42MDIsMzQ3LjczMyw1ODAuMjU2LDM2NC4wMjJDNTg5LjkxLDM4MC4zMSw2MDkuMjE4LDM5Ny42Miw2MTguODcyLDQwNi4yNzVMNjI4LjUyNiw0MTQuOTMiIGlkPSJteS1zdmctTF9FeGVjdXRvcl9DTElfMCIgY2xhc3M9ImVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZWRnZS10aGlja25lc3Mtbm9ybWFsIGVkZ2UtcGF0dGVybi1zb2xpZCBmbG93Y2hhcnQtbGluayIgc3R5bGU9IjsiIGRhdGEtZWRnZT0idHJ1ZSIgZGF0YS1ldD0iZWRnZSIgZGF0YS1pZD0iTF9FeGVjdXRvcl9DTElfMCIgZGF0YS1wb2ludHM9Ilczc2llQ0k2TlRjd0xqWXdNVFUyTWpVc0lua2lPak14Tnk0eE9UazVPVFk1TkRneU5ESXlmU3g3SW5naU9qVTNNQzQyTURFMU5qSTFMQ0o1SWpvek5qSXVPVGs1T1RrMk1UZzFNekF5TnpOOUxIc2llQ0k2TmpNeExqVXdORFl4TWpNM016Y3pOVElzSW5raU9qUXhOeTQxT1RrNU9UUTJOVGswTWpNNGZWMD0iIGRhdGEtbG9vaz0iY2xhc3NpYyIgbWFya2VyLWVuZD0idXJsKCNteS1zdmdfZmxvd2NoYXJ0LXYyLXBvaW50RW5kKSIvPjxwYXRoIGQ9Ik02NTkuMzkxLDQ2Ny42TDY1OS4zOTEsNDczLjIzM0M2NTkuMzkxLDQ3OC44NjcsNjU5LjM5MSw0OTAuMTMzLDY1OS4zOTEsNDk5LjI2N0M2NTkuMzkxLDUwOC40LDY1OS4zOTEsNTE1LjQsNjU5LjM5MSw1MTguOUw2NTkuMzkxLDUyMi40IiBpZD0ibXktc3ZnLUxfQ0xJX0FQSV8wIiBjbGFzcz0iZWRnZS10aGlja25lc3Mtbm9ybWFsIGVkZ2UtcGF0dGVybi1zb2xpZCBlZGdlLXRoaWNrbmVzcy1ub3JtYWwgZWRnZS1wYXR0ZXJuLXNvbGlkIGZsb3djaGFydC1saW5rIiBzdHlsZT0iOyIgZGF0YS1lZGdlPSJ0cnVlIiBkYXRhLWV0PSJlZGdlIiBkYXRhLWlkPSJMX0NMSV9BUElfMCIgZGF0YS1wb2ludHM9Ilczc2llQ0k2TmpVNUxqTTVNRFl5TlN3aWVTSTZORFkzTGpVNU9UazVORFkxT1RReU16aDlMSHNpZUNJNk5qVTVMak01TURZeU5Td2llU0k2TlRBeExqTTVPVGs1TXpnNU5qUTRORFI5TEhzaWVDSTZOalU1TGpNNU1EWXlOU3dpZVNJNk5USTJMak01T1RrNU16ZzVOalE0TkRSOVhRPT0iIGRhdGEtbG9vaz0iY2xhc3NpYyIgbWFya2VyLWVuZD0idXJsKCNteS1zdmdfZmxvd2NoYXJ0LXYyLXBvaW50RW5kKSIvPjxwYXRoIGQ9Ik00NDEuMzU5LDMwOS40NzRMMzk3LjE0MSwzMTguMzk1QzM1Mi45MjIsMzI3LjMxNiwyNjQuNDg0LDM0NS4xNTgsMjE1LjM3OCwzNjEuMTY0QzE2Ni4yNzIsMzc3LjE2OSwxNTYuNDk3LDM5MS4zMzgsMTUxLjYwOSwzOTguNDIzTDE0Ni43MjIsNDA1LjUwNyIgaWQ9Im15LXN2Zy1MX0V4ZWN1dG9yX1dvcmt0cmVlXzAiIGNsYXNzPSJlZGdlLXRoaWNrbmVzcy1ub3JtYWwgZWRnZS1wYXR0ZXJuLXNvbGlkIGVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZmxvd2NoYXJ0LWxpbmsiIHN0eWxlPSI7IiBkYXRhLWVkZ2U9InRydWUiIGRhdGEtZXQ9ImVkZ2UiIGRhdGEtaWQ9IkxfRXhlY3V0b3JfV29ya3RyZWVfMCIgZGF0YS1wb2ludHM9Ilczc2llQ0k2TkRReExqTTFPVE0zTlN3aWVTSTZNekE1TGpRM05ERTBOekkyTVRnME9UWjlMSHNpZUNJNk1UYzJMakEwTmpnM05Td2llU0k2TXpZeUxqazVPVGs1TmpFNE5UTXdNamN6ZlN4N0luZ2lPakUwTkM0ME5UQTFPVEkzTWpnME5ESXlOeXdpZVNJNk5EQTRMamM1T1RrNU5UUXlNak0yTXpOOVhRPT0iIGRhdGEtbG9vaz0iY2xhc3NpYyIgbWFya2VyLWVuZD0idXJsKCNteS1zdmdfZmxvd2NoYXJ0LXYyLXBvaW50RW5kKSIvPjxwYXRoIGQ9Ik02NDYuMDA1LDMxNy4yTDY2My4wMzQsMzI0LjgzM0M2ODAuMDYzLDMzMi40NjcsNzE0LjEyMiwzNDcuNzMzLDcyMS40OTcsMzY0LjAyMkM3MjguODcxLDM4MC4zMSw3MDkuNTYzLDM5Ny42Miw2OTkuOTA5LDQwNi4yNzVMNjkwLjI1NSw0MTQuOTMiIGlkPSJteS1zdmctTF9FeGVjdXRvcl9DTElfMiIgY2xhc3M9ImVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZWRnZS10aGlja25lc3Mtbm9ybWFsIGVkZ2UtcGF0dGVybi1zb2xpZCBmbG93Y2hhcnQtbGluayIgc3R5bGU9IjsiIGRhdGEtZWRnZT0idHJ1ZSIgZGF0YS1ldD0iZWRnZSIgZGF0YS1pZD0iTF9FeGVjdXRvcl9DTElfMiIgZGF0YS1wb2ludHM9Ilczc2llQ0k2TmpRMkxqQXdOVE16T0Rrek9UTTVNamtzSW5raU9qTXhOeTR4T1RrNU9UWTVORGd5TkRJeWZTeDdJbmdpT2pjME9DNHhOemsyT0RjMUxDSjVJam96TmpJdU9UazVPVGsyTVRnMU16QXlOek45TEhzaWVDSTZOamczTGpJM05qWXpOell5TmpJMk5EZ3NJbmtpT2pReE55NDFPVGs1T1RRMk5UazBNak00ZlYwPSIgZGF0YS1sb29rPSJjbGFzc2ljIiBtYXJrZXItZW5kPSJ1cmwoI215LXN2Z19mbG93Y2hhcnQtdjItcG9pbnRFbmQpIi8+PHBhdGggZD0iTTU1MS42NiwxNjAuMzhMNjE3LjAxNSwxNjkuMDgzQzY4Mi4zNywxNzcuNzg3LDgxMy4wNzksMTk1LjE5Myw4NzguNDM0LDIxNS42OTdDOTQzLjc4OSwyMzYuMiw5NDMuNzg5LDI1OS44LDk0My43ODksMjg0Ljg2N0M5NDMuNzg5LDMwOS45MzMsOTQzLjc4OSwzMzYuNDY3LDk0My43ODksMzYzQzk0My43ODksMzg5LjUzMyw5NDMuNzg5LDQxNi4wNjcsOTQzLjc4OSw0MzkuMTMzQzk0My43ODksNDYyLjIsOTQzLjc4OSw0ODEuOCw5MDcuNjk2LDQ5Ny45NDZDODcxLjYwMiw1MTQuMDkxLDc5OS40MTUsNTI2Ljc4Miw3NjMuMzIyLDUzMy4xMjhMNzI3LjIyOSw1MzkuNDczIiBpZD0ibXktc3ZnLUxfV2F0Y2hlcl9BUElfMiIgY2xhc3M9ImVkZ2UtdGhpY2tuZXNzLW5vcm1hbCBlZGdlLXBhdHRlcm4tc29saWQgZWRnZS10aGlja25lc3Mtbm9ybWFsIGVkZ2UtcGF0dGVybi1zb2xpZCBmbG93Y2hhcnQtbGluayIgc3R5bGU9IjsiIGRhdGEtZWRnZT0idHJ1ZSIgZGF0YS1ldD0iZWRnZSIgZGF0YS1pZD0iTF9XYXRjaGVyX0FQSV8yIiBkYXRhLXBvaW50cz0iVzNzaWVDSTZOVFV4TGpZMk1ERTFOakkxTENKNUlqb3hOakF1TXpjNU56VXlOak0zT0RFMk1UaDlMSHNpZUNJNk9UUXpMamM0T1RBMk1qVXNJbmtpT2pJeE1pNDFPVGs1T1RnME56UXhNakV4ZlN4N0luZ2lPamswTXk0M09Ea3dOakkxTENKNUlqb3lPRE11TXprNU9UazNOekV4TVRneE5qUjlMSHNpZUNJNk9UUXpMamM0T1RBMk1qVXNJbmtpT2pNMk1pNDVPVGs1T1RZeE9EVXpNREkzTTMwc2V5SjRJam81TkRNdU56ZzVNRFl5TlN3aWVTSTZORFF5TGpVNU9UazVORFkxT1RReU16aDlMSHNpZUNJNk9UUXpMamM0T1RBMk1qVXNJbmtpT2pVd01TNHpPVGs1T1RNNE9UWTBPRFEwZlN4N0luZ2lPamN5TXk0eU9Ea3dOakkxTENKNUlqbzFOREF1TVRZMk1ESTVOall5TnpZM05IMWQiIGRhdGEtbG9vaz0iY2xhc3NpYyIgbWFya2VyLWVuZD0idXJsKCNteS1zdmdfZmxvd2NoYXJ0LXYyLXBvaW50RW5kKSIvPjwvZz48ZyBjbGFzcz0iZWRnZUxhYmVscyI+PGcgY2xhc3M9ImVkZ2VMYWJlbCI+PGcgY2xhc3M9ImxhYmVsIiBkYXRhLWlkPSJMX0h1bWFuX1dhdGNoZXJfMCIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCwgMCkiPjx0ZXh0IHk9Ii0xMC4xIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj48dHNwYW4gY2xhc3M9InRleHQtb3V0ZXItdHNwYW4gcm93IiB4PSIwIiB5PSItMC4xZW0iIGR5PSIxLjFlbSIgdGV4dC1hbmNob3I9Im1pZGRsZSIvPjwvdGV4dD48L2c+PC9nPjxnPjxyZWN0IGNsYXNzPSJiYWNrZ3JvdW5kIiBzdHlsZT0ic3Ryb2tlOiBub25lIi8+PC9nPjxnIGNsYXNzPSJlZGdlTGFiZWwiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDM4NS44NDM3NSwgMzYyLjk5OTk5NjE4NTMwMjczKSI+PGcgY2xhc3M9ImxhYmVsIiBkYXRhLWlkPSJMX1dhdGNoZXJfQVBJXzAiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAsIC0xMCkiPjxnPjxyZWN0IGNsYXNzPSJiYWNrZ3JvdW5kIiBzdHlsZT0iIiB4PSItOTkuOTY4NzUiIHk9Ii0yIiB3aWR0aD0iMTk5LjkzNzUiIGhlaWdodD0iMjQiLz48dGV4dCB5PSItMTAuMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9IiI+PHRzcGFuIGNsYXNzPSJ0ZXh0LW91dGVyLXRzcGFuIHJvdyIgeD0iMCIgeT0iLTAuMWVtIiBkeT0iMS4xZW0iIHRleHQtYW5jaG9yPSJtaWRkbGUiPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj5wb2xsPC90c3Bhbj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+IGFzc2lnbmVkPC90c3Bhbj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+IFJlYWR5PC90c3Bhbj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+IHRhc2tzPC90c3Bhbj48L3RzcGFuPjwvdGV4dD48L2c+PC9nPjwvZz48ZyBjbGFzcz0iZWRnZUxhYmVsIj48ZyBjbGFzcz0ibGFiZWwiIGRhdGEtaWQ9IkxfQVBJX0RCXzAiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAsIDApIj48dGV4dCB5PSItMTAuMSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+PHRzcGFuIGNsYXNzPSJ0ZXh0LW91dGVyLXRzcGFuIHJvdyIgeD0iMCIgeT0iLTAuMWVtIiBkeT0iMS4xZW0iIHRleHQtYW5jaG9yPSJtaWRkbGUiLz48L3RleHQ+PC9nPjwvZz48Zz48cmVjdCBjbGFzcz0iYmFja2dyb3VuZCIgc3R5bGU9InN0cm9rZTogbm9uZSIvPjwvZz48ZyBjbGFzcz0iZWRnZUxhYmVsIj48ZyBjbGFzcz0ibGFiZWwiIGRhdGEtaWQ9IkxfV2F0Y2hlcl9Xb3JrdHJlZV8wIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLCAwKSI+PHRleHQgeT0iLTEwLjEiIHRleHQtYW5jaG9yPSJtaWRkbGUiPjx0c3BhbiBjbGFzcz0idGV4dC1vdXRlci10c3BhbiByb3ciIHg9IjAiIHk9Ii0wLjFlbSIgZHk9IjEuMWVtIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIi8+PC90ZXh0PjwvZz48L2c+PGc+PHJlY3QgY2xhc3M9ImJhY2tncm91bmQiIHN0eWxlPSJzdHJva2U6IG5vbmUiLz48L2c+PGcgY2xhc3M9ImVkZ2VMYWJlbCIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNTcwLjYwMTU2MjUsIDIxMi41OTk5OTg0NzQxMjExKSI+PGcgY2xhc3M9ImxhYmVsIiBkYXRhLWlkPSJMX1dhdGNoZXJfRXhlY3V0b3JfMCIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCwgLTEwKSI+PGc+PHJlY3QgY2xhc3M9ImJhY2tncm91bmQiIHN0eWxlPSIiIHg9Ii02MS43ODkwNjI1IiB5PSItMiIgd2lkdGg9IjEyMy41NzgxMjUiIGhlaWdodD0iMjQiLz48dGV4dCB5PSItMTAuMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9IiI+PHRzcGFuIGNsYXNzPSJ0ZXh0LW91dGVyLXRzcGFuIHJvdyIgeD0iMCIgeT0iLTAuMWVtIiBkeT0iMS4xZW0iIHRleHQtYW5jaG9yPSJtaWRkbGUiPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj5wcm9tcHQ8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gb248L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gc3RkaW48L3RzcGFuPjwvdHNwYW4+PC90ZXh0PjwvZz48L2c+PC9nPjxnIGNsYXNzPSJlZGdlTGFiZWwiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDU3MC42MDE1NjI1LCAzNjIuOTk5OTk2MTg1MzAyNzMpIj48ZyBjbGFzcz0ibGFiZWwiIGRhdGEtaWQ9IkxfRXhlY3V0b3JfQ0xJXzAiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAsIC0xMCkiPjxnPjxyZWN0IGNsYXNzPSJiYWNrZ3JvdW5kIiBzdHlsZT0iIiB4PSItNjQuNzg5MDYyNSIgeT0iLTIiIHdpZHRoPSIxMjkuNTc4MTI1IiBoZWlnaHQ9IjI0Ii8+PHRleHQgeT0iLTEwLjEiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHN0eWxlPSIiPjx0c3BhbiBjbGFzcz0idGV4dC1vdXRlci10c3BhbiByb3ciIHg9IjAiIHk9Ii0wLjFlbSIgZHk9IjEuMWVtIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+Y2xhaW08L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gd2l0aDwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBydW48L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gSUQ8L3RzcGFuPjwvdHNwYW4+PC90ZXh0PjwvZz48L2c+PC9nPjxnIGNsYXNzPSJlZGdlTGFiZWwiPjxnIGNsYXNzPSJsYWJlbCIgZGF0YS1pZD0iTF9DTElfQVBJXzAiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAsIDApIj48dGV4dCB5PSItMTAuMSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+PHRzcGFuIGNsYXNzPSJ0ZXh0LW91dGVyLXRzcGFuIHJvdyIgeD0iMCIgeT0iLTAuMWVtIiBkeT0iMS4xZW0iIHRleHQtYW5jaG9yPSJtaWRkbGUiLz48L3RleHQ+PC9nPjwvZz48Zz48cmVjdCBjbGFzcz0iYmFja2dyb3VuZCIgc3R5bGU9InN0cm9rZTogbm9uZSIvPjwvZz48ZyBjbGFzcz0iZWRnZUxhYmVsIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyODEuNDMxODgsIDM0MS43Mzg5NSkiPjxnIGNsYXNzPSJsYWJlbCIgZGF0YS1pZD0iTF9FeGVjdXRvcl9Xb3JrdHJlZV8wIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLCAtMTApIj48Zz48cmVjdCBjbGFzcz0iYmFja2dyb3VuZCIgc3R5bGU9IiIgeD0iLTg5LjgyODEyNSIgeT0iLTIiIHdpZHRoPSIxNzkuNjU2MjUiIGhlaWdodD0iMjQiLz48dGV4dCB5PSItMTAuMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgc3R5bGU9IiI+PHRzcGFuIGNsYXNzPSJ0ZXh0LW91dGVyLXRzcGFuIHJvdyIgeD0iMCIgeT0iLTAuMWVtIiBkeT0iMS4xZW0iIHRleHQtYW5jaG9yPSJtaWRkbGUiPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj5jaGFuZ2U8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gZmlsZXM8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gYWZ0ZXI8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gY2xhaW08L3RzcGFuPjwvdHNwYW4+PC90ZXh0PjwvZz48L2c+PC9nPjxnIGNsYXNzPSJlZGdlTGFiZWwiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDczNC40MTE5NSwgMzU2LjgyODU2KSI+PGcgY2xhc3M9ImxhYmVsIiBkYXRhLWlkPSJMX0V4ZWN1dG9yX0NMSV8yIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLCAtMTguNzk5OTk5MjM3MDYwNTQ3KSI+PGc+PHJlY3QgY2xhc3M9ImJhY2tncm91bmQiIHN0eWxlPSIiIHg9Ii05Mi43ODkwNjI1IiB5PSItMiIgd2lkdGg9IjE4NS41NzgxMjUiIGhlaWdodD0iNDEuNTk5OTk4NDc0MTIxMDk0Ii8+PHRleHQgeT0iLTEwLjEiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHN0eWxlPSIiPjx0c3BhbiBjbGFzcz0idGV4dC1vdXRlci10c3BhbiByb3ciIHg9IjAiIHk9Ii0wLjFlbSIgZHk9IjEuMWVtIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+Y29tbWVudDwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBvcjwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBvdXRwdXQ8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gd2l0aDwvdHNwYW4+PC90c3Bhbj48dHNwYW4gY2xhc3M9InRleHQtb3V0ZXItdHNwYW4gcm93IiB4PSIwIiB5PSIxZW0iIGR5PSIxLjFlbSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPnJ1bjwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBJRDwvdHNwYW4+PC90c3Bhbj48L3RleHQ+PC9nPjwvZz48L2c+PGcgY2xhc3M9ImVkZ2VMYWJlbCIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoOTQzLjc4OTA2MjUsIDM2Mi45OTk5OTYxODUzMDI3MykiPjxnIGNsYXNzPSJsYWJlbCIgZGF0YS1pZD0iTF9XYXRjaGVyX0FQSV8yIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLCAtMTApIj48Zz48cmVjdCBjbGFzcz0iYmFja2dyb3VuZCIgc3R5bGU9IiIgeD0iLTgyLjgyMDMxMjUiIHk9Ii0yIiB3aWR0aD0iMTY1LjY0MDYyNSIgaGVpZ2h0PSIyNCIvPjx0ZXh0IHk9Ii0xMC4xIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBzdHlsZT0iIj48dHNwYW4gY2xhc3M9InRleHQtb3V0ZXItdHNwYW4gcm93IiB4PSIwIiB5PSItMC4xZW0iIGR5PSIxLjFlbSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPnZlcmlmeTwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBleGFjdDwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBydW48L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gZW50cnk8L3RzcGFuPjwvdHNwYW4+PC90ZXh0PjwvZz48L2c+PC9nPjwvZz48ZyBjbGFzcz0ibm9kZXMiPjxnIGNsYXNzPSJub2RlIGRlZmF1bHQiIGlkPSJteS1zdmctZmxvd2NoYXJ0LUh1bWFuLTAiIGRhdGEtbG9vaz0iY2xhc3NpYyIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDc4LjIyMjY1NjI1LCA0MS43OTk5OTkyMzcwNjA1NSkiPjxyZWN0IGNsYXNzPSJiYXNpYyBsYWJlbC1jb250YWluZXIiIHN0eWxlPSIiIHg9Ii05Ni43ODEyNSIgeT0iLTMzLjc5OTk5OTIzNzA2MDU1IiB3aWR0aD0iMTkzLjU2MjUiIGhlaWdodD0iNjcuNTk5OTk4NDc0MTIxMSIvPjxnIGNsYXNzPSJsYWJlbCIgc3R5bGU9IiIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCwgLTE4Ljc5OTk5OTIzNzA2MDU0NykiPjxyZWN0Lz48Zz48cmVjdCBjbGFzcz0iYmFja2dyb3VuZCIgc3R5bGU9InN0cm9rZTogbm9uZSIvPjx0ZXh0IHk9Ii0xMC4xIiBzdHlsZT0iIj48dHNwYW4gY2xhc3M9InRleHQtb3V0ZXItdHNwYW4gcm93IiB4PSIwIiB5PSItMC4xZW0iIGR5PSIxLjFlbSI+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPkh1bWFuPC90c3Bhbj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+IHN0YXJ0czwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBhPC90c3Bhbj48L3RzcGFuPjx0c3BhbiBjbGFzcz0idGV4dC1vdXRlci10c3BhbiByb3ciIHg9IjAiIHk9IjFlbSIgZHk9IjEuMWVtIj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+Y29uZmlndXJlZDwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBwcm9maWxlPC90c3Bhbj48L3RzcGFuPjwvdGV4dD48L2c+PC9nPjwvZz48ZyBjbGFzcz0ibm9kZSBkZWZhdWx0IiBpZD0ibXktc3ZnLWZsb3djaGFydC1XYXRjaGVyLTEiIGRhdGEtbG9vaz0iY2xhc3NpYyIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDc4LjIyMjY1NjI1LCAxNTAuNTk5OTk4NDc0MTIxMSkiPjxyZWN0IGNsYXNzPSJiYXNpYyBsYWJlbC1jb250YWluZXIiIHN0eWxlPSIiIHg9Ii03My40Mzc1IiB5PSItMjUiIHdpZHRoPSIxNDYuODc1IiBoZWlnaHQ9IjUwIi8+PGcgY2xhc3M9ImxhYmVsIiBzdHlsZT0iIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLCAtMTApIj48cmVjdC8+PGc+PHJlY3QgY2xhc3M9ImJhY2tncm91bmQiIHN0eWxlPSJzdHJva2U6IG5vbmUiLz48dGV4dCB5PSItMTAuMSIgc3R5bGU9IiI+PHRzcGFuIGNsYXNzPSJ0ZXh0LW91dGVyLXRzcGFuIHJvdyIgeD0iMCIgeT0iLTAuMWVtIiBkeT0iMS4xZW0iPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj5zbGF0ZTwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiB3YXRjaDwvdHNwYW4+PC90c3Bhbj48L3RleHQ+PC9nPjwvZz48L2c+PGcgY2xhc3M9Im5vZGUgZGVmYXVsdCIgaWQ9Im15LXN2Zy1mbG93Y2hhcnQtQVBJLTMiIGRhdGEtbG9vaz0iY2xhc3NpYyIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNjU5LjM5MDYyNSwgNTUxLjM5OTk5Mzg5NjQ4NDQpIj48cmVjdCBjbGFzcz0iYmFzaWMgbGFiZWwtY29udGFpbmVyIiBzdHlsZT0iIiB4PSItNjMuODk4NDM3NSIgeT0iLTI1IiB3aWR0aD0iMTI3Ljc5Njg3NSIgaGVpZ2h0PSI1MCIvPjxnIGNsYXNzPSJsYWJlbCIgc3R5bGU9IiIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCwgLTEwKSI+PHJlY3QvPjxnPjxyZWN0IGNsYXNzPSJiYWNrZ3JvdW5kIiBzdHlsZT0ic3Ryb2tlOiBub25lIi8+PHRleHQgeT0iLTEwLjEiIHN0eWxlPSIiPjx0c3BhbiBjbGFzcz0idGV4dC1vdXRlci10c3BhbiByb3ciIHg9IjAiIHk9Ii0wLjFlbSIgZHk9IjEuMWVtIj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+U2xhdGU8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gQVBJPC90c3Bhbj48L3RzcGFuPjwvdGV4dD48L2c+PC9nPjwvZz48ZyBjbGFzcz0ibm9kZSBkZWZhdWx0IiBpZD0ibXktc3ZnLWZsb3djaGFydC1EQi01IiBkYXRhLWxvb2s9ImNsYXNzaWMiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDY1OS4zOTA2MjUsIDY1MS4zOTk5OTM4OTY0ODQ0KSI+PHJlY3QgY2xhc3M9ImJhc2ljIGxhYmVsLWNvbnRhaW5lciIgc3R5bGU9IiIgeD0iLTc0LjkyMTg3NSIgeT0iLTI1IiB3aWR0aD0iMTQ5Ljg0Mzc1IiBoZWlnaHQ9IjUwIi8+PGcgY2xhc3M9ImxhYmVsIiBzdHlsZT0iIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLCAtMTApIj48cmVjdC8+PGc+PHJlY3QgY2xhc3M9ImJhY2tncm91bmQiIHN0eWxlPSJzdHJva2U6IG5vbmUiLz48dGV4dCB5PSItMTAuMSIgc3R5bGU9IiI+PHRzcGFuIGNsYXNzPSJ0ZXh0LW91dGVyLXRzcGFuIHJvdyIgeD0iMCIgeT0iLTAuMWVtIiBkeT0iMS4xZW0iPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj5Qb3N0Z3JlU1FMPC90c3Bhbj48L3RzcGFuPjwvdGV4dD48L2c+PC9nPjwvZz48ZyBjbGFzcz0ibm9kZSBkZWZhdWx0IiBpZD0ibXktc3ZnLWZsb3djaGFydC1Xb3JrdHJlZS03IiBkYXRhLWxvb2s9ImNsYXNzaWMiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEyMS4xMzI4MTI1LCA0NDIuNTk5OTk0NjU5NDIzOCkiPjxyZWN0IGNsYXNzPSJiYXNpYyBsYWJlbC1jb250YWluZXIiIHN0eWxlPSIiIHg9Ii0xMTMuMTMyODEyNSIgeT0iLTMzLjc5OTk5OTIzNzA2MDU1IiB3aWR0aD0iMjI2LjI2NTYyNSIgaGVpZ2h0PSI2Ny41OTk5OTg0NzQxMjExIi8+PGcgY2xhc3M9ImxhYmVsIiBzdHlsZT0iIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLCAtMTguNzk5OTk5MjM3MDYwNTQ3KSI+PHJlY3QvPjxnPjxyZWN0IGNsYXNzPSJiYWNrZ3JvdW5kIiBzdHlsZT0ic3Ryb2tlOiBub25lIi8+PHRleHQgeT0iLTEwLjEiIHN0eWxlPSIiPjx0c3BhbiBjbGFzcz0idGV4dC1vdXRlci10c3BhbiByb3ciIHg9IjAiIHk9Ii0wLjFlbSIgZHk9IjEuMWVtIj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+VW5pcXVlPC90c3Bhbj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+IGRpc3Bvc2FibGU8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gR2l0PC90c3Bhbj48L3RzcGFuPjx0c3BhbiBjbGFzcz0idGV4dC1vdXRlci10c3BhbiByb3ciIHg9IjAiIHk9IjFlbSIgZHk9IjEuMWVtIj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+d29ya3RyZWU8L3RzcGFuPjwvdHNwYW4+PC90ZXh0PjwvZz48L2c+PC9nPjxnIGNsYXNzPSJub2RlIGRlZmF1bHQiIGlkPSJteS1zdmctZmxvd2NoYXJ0LUV4ZWN1dG9yLTkiIGRhdGEtbG9vaz0iY2xhc3NpYyIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNTcwLjYwMTU2MjUsIDI4My4zOTk5OTc3MTExODE2NCkiPjxyZWN0IGNsYXNzPSJiYXNpYyBsYWJlbC1jb250YWluZXIiIHN0eWxlPSIiIHg9Ii0xMjkuMjQyMTg3NSIgeT0iLTMzLjc5OTk5OTIzNzA2MDU1IiB3aWR0aD0iMjU4LjQ4NDM3NSIgaGVpZ2h0PSI2Ny41OTk5OTg0NzQxMjExIi8+PGcgY2xhc3M9ImxhYmVsIiBzdHlsZT0iIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLCAtMTguNzk5OTk5MjM3MDYwNTQ3KSI+PHJlY3QvPjxnPjxyZWN0IGNsYXNzPSJiYWNrZ3JvdW5kIiBzdHlsZT0ic3Ryb2tlOiBub25lIi8+PHRleHQgeT0iLTEwLjEiIHN0eWxlPSIiPjx0c3BhbiBjbGFzcz0idGV4dC1vdXRlci10c3BhbiByb3ciIHg9IjAiIHk9Ii0wLjFlbSIgZHk9IjEuMWVtIj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+Q29kZXgsPC90c3Bhbj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+IENsYXVkZSw8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gb3I8L3RzcGFuPjx0c3BhbiBmb250LXN0eWxlPSJub3JtYWwiIGNsYXNzPSJ0ZXh0LWlubmVyLXRzcGFuIiBmb250LXdlaWdodD0ibm9ybWFsIj4gYW5vdGhlcjwvdHNwYW4+PC90c3Bhbj48dHNwYW4gY2xhc3M9InRleHQtb3V0ZXItdHNwYW4gcm93IiB4PSIwIiB5PSIxZW0iIGR5PSIxLjFlbSI+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPkNMSTwvdHNwYW4+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPiBhZ2VudDwvdHNwYW4+PC90c3Bhbj48L3RleHQ+PC9nPjwvZz48L2c+PGcgY2xhc3M9Im5vZGUgZGVmYXVsdCIgaWQ9Im15LXN2Zy1mbG93Y2hhcnQtQ0xJLTExIiBkYXRhLWxvb2s9ImNsYXNzaWMiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDY1OS4zOTA2MjUsIDQ0Mi41OTk5OTQ2NTk0MjM4KSI+PHJlY3QgY2xhc3M9ImJhc2ljIGxhYmVsLWNvbnRhaW5lciIgc3R5bGU9IiIgeD0iLTk3LjI0MjE4NzUiIHk9Ii0yNSIgd2lkdGg9IjE5NC40ODQzNzUiIGhlaWdodD0iNTAiLz48ZyBjbGFzcz0ibGFiZWwiIHN0eWxlPSIiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAsIC0xMCkiPjxyZWN0Lz48Zz48cmVjdCBjbGFzcz0iYmFja2dyb3VuZCIgc3R5bGU9InN0cm9rZTogbm9uZSIvPjx0ZXh0IHk9Ii0xMC4xIiBzdHlsZT0iIj48dHNwYW4gY2xhc3M9InRleHQtb3V0ZXItdHNwYW4gcm93IiB4PSIwIiB5PSItMC4xZW0iIGR5PSIxLjFlbSI+PHRzcGFuIGZvbnQtc3R5bGU9Im5vcm1hbCIgY2xhc3M9InRleHQtaW5uZXItdHNwYW4iIGZvbnQtd2VpZ2h0PSJub3JtYWwiPkV4YWN0PC90c3Bhbj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+IHNsYXRlPC90c3Bhbj48dHNwYW4gZm9udC1zdHlsZT0ibm9ybWFsIiBjbGFzcz0idGV4dC1pbm5lci10c3BhbiIgZm9udC13ZWlnaHQ9Im5vcm1hbCI+IGJpbmFyeTwvdHNwYW4+PC90c3Bhbj48L3RleHQ+PC9nPjwvZz48L2c+PC9nPjwvZz48L2c+PGRlZnM+PGZpbHRlciBpZD0ibXktc3ZnLWRyb3Atc2hhZG93IiBoZWlnaHQ9IjEzMCUiIHdpZHRoPSIxMzAlIj48ZmVEcm9wU2hhZG93IGR4PSI0IiBkeT0iNCIgc3RkRGV2aWF0aW9uPSIwIiBmbG9vZC1vcGFjaXR5PSIwLjA2IiBmbG9vZC1jb2xvcj0iIzAwMDAwMCIvPjwvZmlsdGVyPjwvZGVmcz48ZGVmcz48ZmlsdGVyIGlkPSJteS1zdmctZHJvcC1zaGFkb3ctc21hbGwiIGhlaWdodD0iMTUwJSIgd2lkdGg9IjE1MCUiPjxmZURyb3BTaGFkb3cgZHg9IjIiIGR5PSIyIiBzdGREZXZpYXRpb249IjAiIGZsb29kLW9wYWNpdHk9IjAuMDYiIGZsb29kLWNvbG9yPSIjMDAwMDAwIi8+PC9maWx0ZXI+PC9kZWZzPjxsaW5lYXJHcmFkaWVudCBpZD0ibXktc3ZnLWdyYWRpZW50IiBncmFkaWVudFVuaXRzPSJvYmplY3RCb3VuZGluZ0JveCIgeDE9IjAlIiB5MT0iMCUiIHgyPSIxMDAlIiB5Mj0iMCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiM2MDc5OGEiIHN0b3Atb3BhY2l0eT0iMSIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iaHNsKDIwMi41LCAwJSwgODQuNTA5ODAzOTIxNiUpIiBzdG9wLW9wYWNpdHk9IjEiLz48L2xpbmVhckdyYWRpZW50Pjwvc3ZnPg=="><figcaption>Diagram 1</figcaption><details><summary>View Mermaid source</summary><pre><code class="language-mermaid">flowchart TD
+    Human[&quot;Human starts a configured profile&quot;] --&gt; Watcher[&quot;slate watch&quot;]
+    Watcher --&gt;|&quot;poll assigned Ready tasks&quot;| API[&quot;Slate API&quot;]
+    API --&gt; DB[&quot;PostgreSQL&quot;]
+    Watcher --&gt; Worktree[&quot;Unique disposable Git worktree&quot;]
+    Watcher --&gt;|&quot;prompt on stdin&quot;| Executor[&quot;Codex, Claude, or another CLI agent&quot;]
+    Executor --&gt;|&quot;claim with run ID&quot;| CLI[&quot;Exact slate binary&quot;]
+    CLI --&gt; API
+    Executor --&gt;|&quot;change files after claim&quot;| Worktree
+    Executor --&gt;|&quot;comment or output with run ID&quot;| CLI
+    Watcher --&gt;|&quot;verify exact run entry&quot;| API</code></pre></details></figure>
+<div class="source-block" data-source-block="13"
+data-source-sha256="a2160bef86b21b0b9180c38855c726b776bad74341f265a0196f41fa06099f2f">
+<p>The watcher and child <code>slate</code> commands use the same agent
+credential. The coding executor can access its generated worktree and
+run commands as the current operating-system user. It never receives the
+source checkout as its working directory. Slate does not otherwise
+sandbox the executor.</p>
+</div>
+</div>
+<div class="document-section">
+<section id="4-proposed-design" class="source-block"
+data-source-block="14"
+data-source-sha256="cb43280d884b7bd10ddfe1c903a3a3ffc221ebb65bc3295cbb6d512812e2ddb1">
+<h2>4. Proposed design</h2>
+</section>
+<section id="how-it-works" class="source-block" data-source-block="15"
+data-source-sha256="e248d7da23aef6704ac43f3f639e0b91f6c326e9ecb982e008905e4785a6b4ed">
+<h3>How it works</h3>
+</section>
+<div class="source-block" data-source-block="16"
+data-source-sha256="f1cac63d2057ad6bd453a29a6a0a89011d34ca4acca82a533f86f766f8b3d6a4">
+<p>A user creates a local profile named <code>codex</code>. The profile
+names an environment variable containing a Slate agent token, records
+the immutable agent ID expected from that token, and supplies an
+executor command as an argument array. The token itself is not stored in
+the profile.</p>
+</div>
+<div class="source-block" data-source-block="17"
+data-source-sha256="e07e10b1e3ea00c5e414d3b37c6f8ac7a6d5ffd2abfcfa8eda7281a867023394">
+<p>The user changes into a Git repository and runs:</p>
+</div>
+<div class="source-block" data-source-block="18"
+data-source-sha256="b4558a370171d5003502d6fecb2027e92e460b095e0ed30b8ad8c4853ef0f7ea">
+<pre class="bash"><code>slate watch --profile codex</code></pre>
+</div>
+<div class="source-block" data-source-block="19"
+data-source-sha256="12fd3e325c595f865664e451d576daf7651f13ea2d140ee20ac399f3a2457ef8">
+<p>The watcher loads the profile, resolves its own executable path,
+reads the token, and calls <code>/api/v1/me</code>. It verifies that the
+credential resolves to the expected agent ID. It also verifies the
+executor, repository, current <code>HEAD</code>, and a clean source
+checkout. A personal token, identity mismatch, detached source
+<code>HEAD</code>, untracked or modified file, missing executor, or
+repository error stops startup.</p>
+</div>
+<div class="source-block" data-source-block="20"
+data-source-sha256="ef442a93c145b95643fffb1e0493947598337ae2f3be21c98c6f1ad0944d7e5d">
+<p>The watcher checks for assigned working tasks inside its selected
+scope. <code>--board</code> scopes both this check and queued polling. A
+working task stops startup and tells the user to finish it or move it
+back to Ready. The first version has no automatic resume command.</p>
+</div>
+<div class="source-block" data-source-block="21"
+data-source-sha256="f8ee6b484a61d026b7df77fa2bd373fc25fa356fc9ed35b89d4facac18f4fa7d">
+<p>During a normal run, the watcher polls for one assigned queued
+action. The server orders eligible work by priority, then age: P0, P1,
+P2, no priority, with the oldest task first inside each group.</p>
+</div>
+<div class="source-block" data-source-block="22"
+data-source-sha256="1062197ffed8bef4edee840f88f831f1def20ad1b123bb4ccd97ef661fc52785">
+<p>When a candidate appears, the watcher creates a cryptographically
+random run ID, branch
+<code>slate/&lt;task-id&gt;-&lt;run-short-id&gt;</code>, and worktree
+beneath the operating system's user cache directory. Creation uses the
+verified source <code>HEAD</code>. Each run has a unique directory and
+branch, including when several machines or processes offer the same
+task.</p>
+</div>
+<div class="source-block" data-source-block="23"
+data-source-sha256="88b33e82254efa22de16e76bbeb58c51f3a1d6b96243e83b05f015cd6e4d9f03">
+<p>The watcher launches the executor in that worktree as a new process
+group. It writes the complete prompt to stdin and then closes stdin. The
+child receives <code>SLATE_API_TOKEN</code>,
+<code>SLATE_BASE_URL</code>, <code>SLATE_RUN_ID</code>, and
+<code>SLATE_BIN</code>. <code>SLATE_BIN</code> is the absolute path of
+the running Slate binary. Its directory is prepended to the inherited
+<code>PATH</code>. The prompt uses <code>$SLATE_BIN</code> for every
+Slate command.</p>
+</div>
+<div class="source-block" data-source-block="24"
+data-source-sha256="6546eacb586a878080403fcbca9744cf861b2fb7cc16f30033943ed7f9034188">
+<p>The prompt contains candidate metadata but not the task description
+or conversation. The coding agent's first task-specific command is:</p>
+</div>
+<div class="source-block" data-source-block="25"
+data-source-sha256="c9c54d1dbf9d11f6238833cac87d9d0094f9c048bfded7801c1bd5a6142b8134">
+<pre class="bash"><code>&quot;$SLATE_BIN&quot; tasks claim &lt;task-id&gt;</code></pre>
+</div>
+<div class="source-block" data-source-block="26"
+data-source-sha256="ccda1f51d5f33d114605cc042ede77591933dd56146d5770461b579ba9e531e1">
+<p>When <code>SLATE_RUN_ID</code> is present, this command sends the run
+ID to the claim endpoint. A successful claim atomically changes
+<code>queued</code> to <code>working</code> and records that run ID.
+Only one competing run can win. Before claim, an executor may alter only
+its unique disposable worktree. If claim fails, it must exit. The
+watcher removes the losing worktree and branch even if the executor
+changed them.</p>
+</div>
+<div class="source-block" data-source-block="27"
+data-source-sha256="584f74519a9b4b38f42278f2c8fb1a5b35b8b2e852fc2b41a1e7618822ccfdd8">
+<p>After claiming, the agent runs <code>tasks get</code> and
+<code>tasks entries</code> to obtain the full description and
+conversation. It reads repository instructions, implements the task in
+its worktree, and runs relevant checks.</p>
+</div>
+<div class="source-block" data-source-block="28"
+data-source-sha256="0f8ba51a72fab7cf42b0a6c1f52405d9665702949e9c9b20815222660fdac12a">
+<p>When blocked, the agent runs:</p>
+</div>
+<div class="source-block" data-source-block="29"
+data-source-sha256="1aa6b5115de67b804aa0449615a404b6bcb225287124a3262ad7790850a28be2">
+<pre class="bash"><code>&quot;$SLATE_BIN&quot; tasks comment &lt;task-id&gt; \
+  --file &lt;comment-file&gt; \
+  --idempotency-key watch-run:&lt;task-id&gt;:&lt;run-id&gt;:blocked</code></pre>
+</div>
+<div class="source-block" data-source-block="30"
+data-source-sha256="363a3f8e3729d549d96c2c2ba8f434c8492528e634a3e4867a3bf0bfbdf625b2">
+<p>The server tags the comment with the managed run ID. The task remains
+working. The watcher stops and retains the worktree for inspection.</p>
+</div>
+<div class="source-block" data-source-block="31"
+data-source-sha256="fd759711d9f5f2b99f7e2184ed49490ac1f5a5307d1f48535c71c2ae6a14ede7">
+<p>When ready for review, the agent runs:</p>
+</div>
+<div class="source-block" data-source-block="32"
+data-source-sha256="911a6d44f34766fe90663dd0f9b3f4c21a641a3efbc7f31eb5a02079c607c73a">
+<pre class="bash"><code>&quot;$SLATE_BIN&quot; tasks output &lt;task-id&gt; \
+  --file &lt;report-file&gt; \
+  --idempotency-key watch-run:&lt;task-id&gt;:&lt;run-id&gt;:output</code></pre>
+</div>
+<div class="source-block" data-source-block="33"
+data-source-sha256="99bc86d916a96097c626031d9c61d66f7c14833f77d6dd6a53da8f4f59dd3c2a">
+<p>The completion report states what changed, checks and results, branch
+and commit or pull-request links when present, and reviewer notes. The
+server first resolves an exact idempotency replay. For a new output, it
+verifies the assigned task is working and owned by the same run ID,
+stores the run-tagged entry, and moves the task to
+<code>needs_review</code> in one transaction.</p>
+</div>
+<div class="source-block" data-source-block="34"
+data-source-sha256="b84f3581daa881ad0f21b24437570002da5f61a42fd512d4eceab8849541bf61">
+<p>The watcher queries the task and entries by its exact run ID while
+the executor is active and after it exits. The expected output plus
+<code>needs_review</code> means success. A run-tagged comment on a
+working task means blocked. Working with no run entry means interrupted.
+After detecting success, the watcher gives the executor ten seconds to
+exit and then terminates its process group. A successful or blocked
+worktree is retained and listed for the user. The watcher starts another
+task only after success; blocked or interrupted work stops it.</p>
+</div>
+<section id="components-and-responsibilities" class="source-block"
+data-source-block="35"
+data-source-sha256="ec9a76783795a31c5a8fa78eb007e1288ed67056f6e893afc753006cc7f2e898">
+<h3>Components and responsibilities</h3>
+</section>
+<div class="source-block" data-source-block="36"
+data-source-sha256="bdb315ad4a7051613340bdf701e521b8483735e314294cfd4a5d5c69623306b2">
+<p>The watcher owns profile loading, startup validation, scoped polling,
+run identity, isolated branch and worktree creation, prompt transport,
+process-group lifecycle, exact-run monitoring, backoff, losing-run
+cleanup, and terminal output. It depends on the public Slate API, Git,
+the local executor, and the source checkout. It does not claim tasks,
+interpret requirements, modify task state, write card entries, or decide
+implementation quality.</p>
+</div>
+<div class="source-block" data-source-block="37"
+data-source-sha256="1d557995239644cb8986f8c5e20649a867b24438361de71e5c85eb771c0b0503">
+<p>The coding executor owns claim, context reads, repository changes,
+checks, blocked comments, completion output, and any commit or pull
+request required by repository instructions. It depends on its isolated
+worktree, the exact Slate binary, and its agent credential. It does not
+choose among the queue, manage another run, or bypass server
+fencing.</p>
+</div>
+<div class="source-block" data-source-block="38"
+data-source-sha256="294fcd3336fa6f115c65e9e618964c6157fefa4129017cc29ee766fcb1e94080">
+<p>The one-shot CLI commands own request construction, run-ID
+propagation, file validation, JSON handling, retry metadata, and
+readable errors. They do not add authority beyond the server.</p>
+</div>
+<div class="source-block" data-source-block="39"
+data-source-sha256="1724ab4a9690e4c645a417d6e943bf325600a2e857cbee71b0e64b0760c95680">
+<p>The Slate server owns immutable agent identity, assignment checks,
+queue ordering, atomic claim, managed-run fencing, entry correlation,
+entry idempotency, output-to-review transition, rate limits, and storage
+limits. It does not run executors, inspect Git, or judge results.</p>
+</div>
+<div class="source-block" data-source-block="40"
+data-source-sha256="b0f1434cda1687d615d1d23da9a44d0d27c5b4de7463bdddcf409c8521ae8469">
+<p>The worktree registry owns local run ID, task ID, agent ID, branch,
+worktree path, source repository, source commit, creation time, and
+disposition. It contains no token or task content. It does not establish
+server authority.</p>
+</div>
+<section id="decisions" class="source-block role-decisions"
+data-source-block="41"
+data-source-sha256="5a6a5f0f1903f8ea343148136e7bb0710d2555ca216504d9bf9d9b532157aa00">
+<h3>Decisions</h3>
+</section>
+<div class="source-block" data-source-block="42"
+data-source-sha256="96f9da2f716e347fa463513f821271e0ed3eb38bea06404de0cd8f322fe0e469">
+<p><strong>The coding agent claims the task inside an isolated
+worktree.</strong> Having the watcher claim was rejected because it
+splits the visible workflow across two actors. Giving competing agents
+the source checkout was rejected because prompt compliance cannot
+protect it. Isolation preserves agent-owned claiming while making
+pre-claim changes disposable. The cost is requiring Git and managing
+local worktrees.</p>
+</div>
+<div class="source-block" data-source-block="43"
+data-source-sha256="66c226bf7ac3893f020ced2a5ae85f01146b0bc30a15e74fb46efb1051da15c6">
+<p><strong>Managed runs use server fencing.</strong> The run ID is
+recorded during claim and required on later agent mutations for that
+task. A stale or losing run receives <code>run_conflict</code>. Relying
+only on local locks was rejected because watchers can run on different
+machines. Automatic resume was rejected for v1 because safe takeover
+needs leases, expiry, and heartbeat policy.</p>
+</div>
+<div class="source-block" data-source-block="44"
+data-source-sha256="614491d8639d4706045c57cc61af8638c1ec4ef83db4d7dca7082b51b30e4135">
+<p><strong>Managed and legacy claims coexist.</strong> Existing agents
+that claim without a run ID keep their current status authority,
+including direct <code>needs_review</code>. A managed run must use
+output to enter review. A global breaking change was rejected because
+released CLI guidance and clients use the direct transition. The cost is
+maintaining two transition rules until a later version retires legacy
+claims.</p>
+</div>
+<div class="source-block" data-source-block="45"
+data-source-sha256="6e706a95a6896a4e27599e66b059ae53cfa2378767b86adcc8bb38f8a1ac7039">
+<p><strong>The coding agent posts its own output.</strong> The server
+stores the output and review transition atomically. Having the watcher
+compose the comment was rejected because the coding agent owns the
+implementation evidence. The watcher verifies the exact run-tagged entry
+rather than trusting exit code or scanning recent comments.</p>
+</div>
+<div class="source-block" data-source-block="46"
+data-source-sha256="6acf506fa1333c5a3f8be9a7076f8b96e3524685f2dd8b901f417d5f87ca1f4b">
+<p><strong>Prompt transport and binary selection are explicit.</strong>
+The watcher writes the prompt to stdin, closes it, resolves its own
+binary path, supplies it as <code>SLATE_BIN</code>, and prepends its
+directory to <code>PATH</code>. Shell interpolation and an arbitrary
+<code>slate</code> earlier on <code>PATH</code> were rejected.</p>
+</div>
+<div class="source-block" data-source-block="47"
+data-source-sha256="83adbc29f0e76b51755c7b484083f299e414d2751c1b1dbf2f337023c7437aaa">
+<p><strong>The watcher requires a clean Git checkout and creates one
+branch per run.</strong> Running directly in the current directory or
+copying arbitrary folders was rejected because losing claims and
+concurrent watchers need enforceable isolation. The cost is that non-Git
+tasks and dirty checkouts are not supported in v1.</p>
+</div>
+<div class="source-block" data-source-block="48"
+data-source-sha256="d97919f917ed4e0900ff7ec33c51f0f9a834c91b705e3a681dd08fb917925394">
+<p><strong>One watcher runs one process group at a time.</strong> This
+bounds local concurrency and makes shutdown understandable. Child-only
+signalling was rejected because descendants could keep changing
+files.</p>
+</div>
+<div class="source-block" data-source-block="49"
+data-source-sha256="c129e6ab5baf10d8fa989db08ffad97ced923e191e1bee00c6f1530b0a4bed39">
+<p><strong>Managed runs cannot use the status command.</strong> Claim
+establishes working state and output establishes review state. All
+direct agent status changes are rejected for a managed run, while a
+human can still requeue or complete the task. Allowing managed agents to
+set another status was rejected because it could bypass the required
+output or leave the watcher unable to classify the result.</p>
+</div>
+<div class="source-block" data-source-block="50"
+data-source-sha256="efb76d1902a5295e838fdf9cba7ce0054a89217bef34d8b64ccebcc80899a770">
+<p><strong>The server orders the queue.</strong> Eligible work is
+ordered P0, P1, P2, unprioritized, then oldest first. Client-only
+sorting was rejected because tasks outside the returned page could
+starve.</p>
+</div>
+</div>
+<div class="document-section">
+<section id="5-invariants-and-requirements" class="source-block"
+data-source-block="51"
+data-source-sha256="a564a89ef16d655f45f32b2298c33c4d79e1b4129c3a882f233e5c6d85b55fc2">
+<h2>5. Invariants and requirements</h2>
+</section>
+<section id="invariants" class="source-block role-invariants"
+data-source-block="52"
+data-source-sha256="41701f368993e3f63ab599cb3ebcf32756d56c298bf06612195e918bf86cd6b4">
+<h3>Invariants</h3>
+</section>
+<div class="source-block" data-source-block="53"
+data-source-sha256="6402dbcf334a744012180ee1b3c28a8010366c7261dc8d7f4e8bd359868e0e16">
+<ul>
+<li><code>INV-1</code>: Every executor starts in a unique watcher-owned
+disposable worktree that no other run uses.</li>
+<li><code>INV-2</code>: A managed claim succeeds only for a queued
+action assigned to the authenticated agent and records one run ID
+atomically.</li>
+<li><code>INV-3</code>: At most one executor process group runs in one
+watcher.</li>
+<li><code>INV-4</code>: A successful watcher run contains exactly one
+output entry authored by the assigned agent and tagged with its run
+ID.</li>
+<li><code>INV-5</code>: A managed run enters <code>needs_review</code>
+only in the transaction that stores its completion output.</li>
+<li><code>INV-6</code>: An exact idempotency replay returns the original
+entry before current task status or run ownership is validated.</li>
+<li><code>INV-7</code>: A profile and local run registry never store a
+plaintext Slate credential.</li>
+<li><code>INV-8</code>: A profile cannot start when its expected agent
+ID differs from the credential's agent ID.</li>
+<li><code>INV-9</code>: The watcher never writes a bearer credential to
+its prompt, arguments, stdout, stderr, or registry.</li>
+<li><code>INV-10</code>: A watcher does not launch another candidate
+while its launched task remains working.</li>
+<li><code>INV-11</code>: A new managed output is accepted only for an
+assigned working task owned by the same run ID.</li>
+<li><code>INV-12</code>: A losing or stale run cannot comment on, output
+to, or change the status of a task owned by another managed run.</li>
+</ul>
+</div>
+<section id="requirements" class="source-block role-requirements"
+data-source-block="54"
+data-source-sha256="d58a3741c408d72bf8e99cb9c99f055d7cabeda3c3b4d006597446e8412a7e76">
+<h3>Requirements</h3>
+</section>
+<div class="source-block" data-source-block="55"
+data-source-sha256="ef0295734ab8770dd2049a95dfc3b361f16d7db813a27a0effdfd110ad0cb74e">
+<ul>
+<li><code>slate watch --profile &lt;name&gt;</code> watches assigned
+queued actions across all visible boards. <code>--board</code> scopes
+both queued polling and the working-task startup check.</li>
+<li><code>--workdir</code> selects the source Git checkout and defaults
+to the current directory. The executor runs only in the generated
+worktree.</li>
+<li>The source checkout must be on a named branch and have no staged,
+modified, deleted, or untracked files.</li>
+<li>The watcher offers the highest-priority, oldest eligible task
+first.</li>
+<li>Idle polling starts at five seconds and doubles to 60 seconds with
+up to 20 percent jitter. Healthy idle polling therefore occurs every 5
+to 72 seconds.</li>
+<li>Polling retries connection failures, timeouts, and HTTP 429, 500,
+502, 503, and 504. A valid delta-seconds <code>Retry-After</code> on 429
+sets a minimum wait; the five-second exponential backoff capped at 60
+seconds with 20 percent jitter always advances, and the longer of the
+two is used.</li>
+<li>HTTP 400, 401, 403, 404, and 409 are terminal for the current
+operation. Authentication and identity failures stop the watcher.
+Candidate claim conflicts return to polling after cleanup.</li>
+<li>Mutation commands do not retry automatically. The agent repeats a
+comment or output with the same required idempotency key after an
+uncertain result.</li>
+<li>Idle and failure backoff are separate. Any successful API response
+resets failure backoff; finding work resets idle backoff.</li>
+<li>The watcher generates a random UUID run ID before worktree creation
+and passes it through <code>SLATE_RUN_ID</code>.</li>
+<li>The watcher writes the prompt to executor stdin and closes it.
+Executor commands must be argument arrays and are never passed through a
+shell.</li>
+<li>The watcher creates a new process group on macOS and Linux and
+signals the whole group on shutdown or post-output termination.</li>
+<li>The prompt identifies agent, task metadata, run ID, worktree, claim
+rule, context commands, repository instructions, checks, blocked
+workflow, output workflow, and exact idempotency keys.</li>
+<li><code>slate tasks entries</code> accepts optional
+<code>--run &lt;run-id&gt;</code> and returns only entries tagged with
+that managed run.</li>
+<li><code>slate tasks comment</code> and <code>tasks output</code>
+accept exactly one of <code>--body</code> or <code>--file</code>;
+<code>--file -</code> reads stdin.</li>
+<li>Comment and output commands require a non-empty idempotency key and
+reject empty or over-16-KiB bodies locally.</li>
+<li>Any managed direct status change returns HTTP 409
+<code>managed_run_status_locked</code>. The same status changes remain
+valid for legacy claims.</li>
+<li>A managed mutation with a missing or different run ID returns HTTP
+409 <code>run_conflict</code>.</li>
+<li>The watcher retains successful, blocked, and interrupted worktrees.
+It automatically deletes only a run that failed to claim.</li>
+<li>The local registry holds at most ten retained worktrees per profile.
+Startup stops with cleanup instructions at the limit.</li>
+<li><code>slate runs list</code> lists retained runs.
+<code>slate runs clean &lt;run-id&gt;</code> removes a worktree only
+when no child is active and the worktree is clean; it refuses dirty
+worktrees, never forces deletion, and retains the branch.</li>
+<li>Profile changes are loaded only at startup. Applying a change
+requires restarting the watcher.</li>
+</ul>
+</div>
+</div>
+<div class="document-section">
+<section id="6-interfaces-and-data" class="source-block"
+data-source-block="56"
+data-source-sha256="c031b53bb441f0ffee3273a73ce9f61efab706f92df0957046bc404cf8ffd544">
+<h2>6. Interfaces and data</h2>
+</section>
+<section id="commands" class="source-block" data-source-block="57"
+data-source-sha256="54fb02b881eedc1bd8917a88c801e233a9ab685115241f4ea1615328f199defb">
+<h3>Commands</h3>
+</section>
+<div class="source-block" data-source-block="58"
+data-source-sha256="cb587db0bc154ae8ea7eb5c4e3c7eca68a8723f87867f23adfc84a77dbcd43c5">
+<pre class="text"><code>slate watch --profile &lt;name&gt; [--board &lt;board-id&gt;] [--workdir &lt;git-path&gt;]
+
+slate tasks entries &lt;task-id&gt; [--run &lt;run-id&gt;]
+slate tasks comment &lt;task-id&gt; (--body &lt;text&gt; | --file &lt;path|-&gt;) --idempotency-key &lt;key&gt;
+slate tasks output &lt;task-id&gt; (--body &lt;text&gt; | --file &lt;path|-&gt;) --idempotency-key &lt;key&gt;
+
+slate runs list [--profile &lt;name&gt;]
+slate runs clean &lt;run-id&gt;</code></pre>
+</div>
+<div class="source-block" data-source-block="59"
+data-source-sha256="81ff6b53da2d17a0760b5a21a01cf260e8ffcf51fd022fddc410af64cac808d5">
+<p>The child commands read <code>SLATE_RUN_ID</code>. When present,
+claim, status, comment, and output requests send
+<code>X-Slate-Run-ID</code>. The watcher also sends this header when
+querying exact run state. The header must be a UUID. It is execution
+identity, not independent authority.</p>
+</div>
+<div class="source-block" data-source-block="60"
+data-source-sha256="0465298393c0088019c21f5ccd3a13b98f59ec028bc26c95853e739ea08610a4">
+<p><code>POST /api/v1/agent/tasks/{id}/claim</code> accepts the optional
+run header. A managed claim writes <code>tasks.execution_run_id</code>
+in the same atomic update that writes <code>working</code>. A legacy
+claim omits it. A task carries a run only while it is working: any
+change of status or of assignee ends the run, and so does the output
+transaction, after its entry is stored.</p>
+</div>
+<div class="source-block" data-source-block="61"
+data-source-sha256="4b09bd5328488c8ed4bc866151360c5ee35ed15fb00410380c827d46a674195d">
+<p><code>GET /api/v1/tasks/{id}</code> reports
+<code>executionRunId</code> while a managed run owns the task. A watcher
+cannot otherwise tell its own interrupted run from a claim another run
+won, and those need opposite cleanup. Collection responses do not carry
+it.</p>
+</div>
+<div class="source-block" data-source-block="62"
+data-source-sha256="1008a60994411a4e046da1fbe48e507b2565d652e90f06e11124bd0edf31f925">
+<p><code>POST /api/v1/tasks/{id}/entries</code> stores optional
+<code>run_id</code> from the authenticated managed run. For a new
+managed entry, the server locks the task and checks account, assignment,
+working status, and matching run ID. It first looks up an exact
+idempotency replay using task, author, and key. A matching replay
+succeeds from <code>needs_review</code> or <code>done</code>; a reused
+key with different content conflicts.</p>
+</div>
+<div class="source-block" data-source-block="63"
+data-source-sha256="42bacca71dc206a06da2ce23ab9c18bf48ee7ca674ddf4832a6d882fa63404ff">
+<p><code>GET /api/v1/tasks/{id}/entries?runId=&lt;id&gt;</code> returns
+entries for that exact managed run. An agent credential may query only
+its assigned task. The response exposes <code>runId</code> but not the
+idempotency key.</p>
+</div>
+<div class="source-block" data-source-block="64"
+data-source-sha256="f044e49e82e811f80faf73b40e7960fce468c36052d8aca985815f30178f4e6a">
+<p>For a managed run, <code>PATCH /api/v1/agent/tasks/{id}/status</code>
+returns HTTP 409 <code>managed_run_status_locked</code> even with the
+matching run header. A stale or missing run identity returns
+<code>run_conflict</code>. Legacy agent claims retain current behavior.
+Account sessions and personal tokens retain their current authority,
+including requeue and completion. A human status change away from
+working clears the managed run ID.</p>
+</div>
+<div class="source-block" data-source-block="65"
+data-source-sha256="70ec787c562fab6a428fe983fe5f0de23842bcc97480970d7d63bab0d27a3ce5">
+<p><code>GET /api/v1/me</code> adds optional <code>agentPurpose</code>
+for agent credentials and a <code>managedRuns</code> capability boolean.
+The watcher refuses to start unless <code>managedRuns</code> is true.
+This allows the server to deploy before the new CLI without enabling an
+incomplete workflow.</p>
+</div>
+<div class="source-block" data-source-block="66"
+data-source-sha256="a34b30c7cdeb65fa12183e3107d80bf2c0762b16acde36ab90a81798fe2f4496">
+<p>The queue response keeps its current shape. The server changes
+<code>GET /api/v1/agent/tasks</code> ordering to priority rank,
+<code>created_at</code>, then task ID. Existing filters remain
+available.</p>
+</div>
+<section id="database-and-rollout" class="source-block"
+data-source-block="67"
+data-source-sha256="dac1b2bdcb3e9b2ada4f96e3f066adbf3d3ae103fef9c4ccb57b1e1c3752544f">
+<h3>Database and rollout</h3>
+</section>
+<div class="source-block" data-source-block="68"
+data-source-sha256="1db3391ea198a29523b138e2ec8eb8ade6bb414cf40b23bfcc07a83ce59ef148">
+<p>A migration adds nullable <code>tasks.execution_run_id uuid</code>
+and nullable <code>card_entries.run_id uuid</code>, plus an index on
+<code>(task_id, run_id, created_at, id)</code>. Existing rows remain
+legacy because both values are null.</p>
+</div>
+<div class="source-block" data-source-block="69"
+data-source-sha256="a5584030f00c8d57c585f6cefb09614be02d9f06d97cc2365d5bddd895f7f6e7">
+<p>Rollout is additive and ordered:</p>
+</div>
+<div class="source-block" data-source-block="70"
+data-source-sha256="c8118552e6fd6f8f21545c617c5fc023a6a94c74acf7e7fc19275b0969685ef5">
+<ol type="1">
+<li>Deploy the migration and server support for run headers, correlation
+reads, new error codes, queue ordering, and
+<code>managedRuns: true</code>. Legacy requests remain unchanged.</li>
+<li>Release the CLI with <code>tasks entries</code>,
+<code>tasks comment</code>, <code>tasks output</code>, managed headers,
+worktree registry, and watcher.</li>
+<li>Update CLI documentation to recommend output for all agents. Managed
+runs enforce it immediately; legacy direct review remains
+compatible.</li>
+</ol>
+</div>
+<div class="source-block" data-source-block="71"
+data-source-sha256="649e2a1216cd928c8d381f62f258af01ecdbd535e5770f4ee409decc13bd3b92">
+<p>Rollback disables <code>managedRuns</code> first so new watchers
+refuse startup, then rolls back the CLI or server. Nullable columns
+remain harmless to old code. Dropping them is a separate cleanup
+migration after rollback risk has passed.</p>
+</div>
+<section id="local-profile-and-registry" class="source-block"
+data-source-block="72"
+data-source-sha256="01ad3aaf49dad9ec83ba864ee3013fac5e0aba48cf0da8ac55f51061d2b4040f">
+<h3>Local profile and registry</h3>
+</section>
+<div class="source-block" data-source-block="73"
+data-source-sha256="80ca590ae96651e565a1ea45e3ace8066cb555abe858a7b9aeae3758cbdfa045">
+<p>The CLI reads JSON from <code>SLATE_CONFIG</code> when set, or
+<code>slate/config.json</code> beneath the operating system's user
+configuration directory:</p>
+</div>
+<div class="source-block" data-source-block="74"
+data-source-sha256="8daf2da9500e4b11faaca4243c8a4b31c197ab8ac08ed32021ecf8f6285d6efd">
+<pre class="json"><code>{
+  &quot;profiles&quot;: {
+    &quot;codex&quot;: {
+      &quot;agentId&quot;: &quot;4fb10cce-f7c8-43bb-9d43-9bcb2bacaf08&quot;,
+      &quot;tokenEnv&quot;: &quot;SLATE_CODEX_TOKEN&quot;,
+      &quot;command&quot;: [&quot;codex&quot;, &quot;exec&quot;, &quot;-&quot;]
+    }
+  }
+}</code></pre>
+</div>
+<div class="source-block" data-source-block="75"
+data-source-sha256="ce21ad46f7978ffd84bf9057d0d5450e349a6414009f0b23587e5e7a594776e3">
+<p>Required fields are <code>agentId</code>, <code>tokenEnv</code>, and
+a non-empty <code>command</code>. Unknown fields are rejected. The
+command is an example, not a built-in default. The executable is
+resolved through <code>PATH</code> at startup and then invoked by
+absolute path. Relative <code>--workdir</code> values are resolved from
+the starting directory.</p>
+</div>
+<div class="source-block" data-source-block="76"
+data-source-sha256="090b5315551c43fe0f33e78800974619d2a60412e8f3925742731f95d5f0d0e6">
+<p>Registry records are JSON files beneath the user state directory,
+written atomically with owner-only permissions. Each record contains run
+ID, profile name, agent ID, task ID, board ID, branch, worktree, source
+repository, source commit, state, child PID and process-group ID while
+active, and timestamps. Child identifiers are cleared after exit. The
+registry is not used for server authorization.</p>
+</div>
+<section id="prompt-envelope" class="source-block"
+data-source-block="77"
+data-source-sha256="9fe3ade83ad975fbfb17808e468ae6237d260057fccda7b6ce92e96512d5ac8b">
+<h3>Prompt envelope</h3>
+</section>
+<div class="source-block" data-source-block="78"
+data-source-sha256="6991e51a951136749c299db5cf2fc4f65e194c7de5097f9d3004adb579fb240d">
+<p>The prompt contains authenticated agent ID, display name, purpose,
+candidate metadata, run ID, absolute worktree, claim and context
+commands, repository-instruction requirement, verification requirement,
+blocked and output contracts, exact idempotency keys, and the rule to
+exit after reporting.</p>
+</div>
+<div class="source-block" data-source-block="79"
+data-source-sha256="c8a68db2c0dfc4a6514c6c2fc91f12ea2cbff1b9282cff9298617b36b8c2ff38">
+<p>The prompt does not contain the token, task description,
+conversation, source-checkout path, or unrelated environment values. The
+agent obtains task content through assigned CLI reads after claim.</p>
+</div>
+<section id="naming-and-identity" class="source-block"
+data-source-block="80"
+data-source-sha256="8d3d7b7a1af98b0dfa8eb94237680e19b796bb68dc456be15450d239907cc0ab">
+<h3>Naming and identity</h3>
+</section>
+<div class="source-block" data-source-block="81"
+data-source-sha256="4e7d2e79b491f1d766cfc0fbebeb8ce50dfab10309469432a4d867884ab2c72b">
+<p>Slate creates immutable agent UUIDs on the server. The profile stores
+the expected ID and startup fails when it is missing, malformed,
+deleted, or differs from the credential result.</p>
+</div>
+<div class="source-block" data-source-block="82"
+data-source-sha256="c174f8e2a4b736cdc5eccfd0027636c11924cae59e2b86e6f2aafedac027dbc9">
+<p>The watcher creates a random UUID run ID. The server binds it to one
+assigned task during atomic claim. A later display-name or profile-name
+change does not alter run ownership or stored entry authorship.</p>
+</div>
+<div class="source-block" data-source-block="83"
+data-source-sha256="5ba9f6a9fe6120b155281744a3335b04c0ad0bb03d93b12be7f0ede4998f1437">
+<p>Branch and worktree names derive from validated task and run UUIDs,
+not task text. If a generated path already exists or Git creation fails,
+the watcher records no active run and starts no executor.</p>
+</div>
+</div>
+<div class="document-section">
+<section id="7-failure-behavior-and-lifecycle"
+class="source-block role-failures" data-source-block="84"
+data-source-sha256="caf163a2a6ae29594c9aceec85019732d86f557465622ee179014fdfedcee686">
+<h2>7. Failure behavior and lifecycle</h2>
+</section>
+<div class="source-block" data-source-block="85"
+data-source-sha256="2432b6172b067689ffb4dc3519a8c4cbb474506dadfcd8fd145a48050d0ca8d6">
+<p>Startup validates configuration, identity, server capability, API
+reachability, executor, clean source checkout, Git branch, registry
+capacity, and scoped working tasks. Invalid local state or HTTP 400,
+401, 403, 404, or 409 exits nonzero. Retryable startup failures use the
+defined failure backoff until interrupted.</p>
+</div>
+<div class="source-block" data-source-block="86"
+data-source-sha256="059fa8d7138002f446d9f7495203dc1ff71afd319c939eb0afcdca544d73d808">
+<p>With no eligible task, the watcher uses idle backoff. A newly
+eligible task is observed within 72 seconds while the API is healthy and
+no executor is active.</p>
+</div>
+<div class="source-block" data-source-block="87"
+data-source-sha256="4e0ba145aad246d662c234b369c7ba885bdf02bc4a46bb1132310d8dcc2dfdd3">
+<p>If worktree or executor creation fails before claim, the watcher
+removes any partial watcher-owned directory and branch, marks the run
+failed locally, and retries the candidate. Five consecutive local launch
+failures stop the watcher.</p>
+</div>
+<div class="source-block" data-source-block="88"
+data-source-sha256="8166a860786e46131c2ca9a0098fa39bf1dcd1d95cb1c1d43edb9c6c9d1618cc">
+<p>If claim fails, the executor exits. The watcher waits up to ten
+seconds, terminates its process group if needed, and removes the
+disposable worktree and branch. A claim conflict returns to polling.
+Authentication or server-capability failure stops the watcher.</p>
+</div>
+<div class="source-block" data-source-block="89"
+data-source-sha256="3f0589c02903677d4c8fe4329e8c50103da5e03476295f927d30f744cebf3bb3">
+<p>If an exact output request commits but its response is lost,
+repeating the same key returns the stored entry before status and run
+checks. This works after the task reaches review or done. A changed body
+with the same key conflicts.</p>
+</div>
+<div class="source-block" data-source-block="90"
+data-source-sha256="cd38d949edb7132a0021ee9a2ba70610fa7807f480123b536fa30bffc56b0278">
+<p>If a stale process attempts a mutation after another managed run owns
+the task, the server returns <code>run_conflict</code>. It cannot add a
+comment, post output, or change status. A human moving a task back to
+Ready clears the old run ID; the next managed claim establishes a new
+fence.</p>
+</div>
+<div class="source-block" data-source-block="91"
+data-source-sha256="4ae972f45907f6c0a29768632b5f2cad81797755323293b25a74defc6bed4e87">
+<p>If the agent posts a blocked comment, exits without an entry, or
+crashes after claim, the task stays working and the worktree is
+retained. The watcher stops with task, run, branch, worktree, and
+recovery guidance. Recovery in v1 is manual: inspect or commit useful
+changes, stop any remaining process, move the task to Ready, and let a
+new isolated run claim it. There is no automatic resume or takeover.</p>
+</div>
+<div class="source-block" data-source-block="92"
+data-source-sha256="9331934deaea17d9fd111e00bc629e470a00ca138ce2e9f329f2418be1ff1248">
+<p>The watcher checks exact run state every five seconds while the
+executor runs. When it observes the run output and review state, it
+waits ten seconds for normal exit, then sends <code>SIGTERM</code> to
+the process group, waits ten more seconds, and sends
+<code>SIGKILL</code> to the group. <code>SIGINT</code> or
+<code>SIGTERM</code> sent to the watcher uses the same group shutdown
+sequence and never changes task state.</p>
+</div>
+<div class="source-block" data-source-block="93"
+data-source-sha256="173d6543e2d988512078864d6784b15a7bccf2fc0c31905a79310a0cc58979a8">
+<p>Credential revocation makes the next operation fail authentication.
+The watcher terminates the process group and exits. Configuration is
+immutable during a run. Agent purpose and profile changes take effect
+after restart; entry author names use server state at write time.</p>
+</div>
+</div>
+<div class="document-section">
+<section id="8-security-privacy-and-operations" class="source-block"
+data-source-block="94"
+data-source-sha256="d373a802adb9444e8d300217a0222856fa057b13255436c0f4709f894158a5f1">
+<h2>8. Security, privacy, and operations</h2>
+</section>
+<div class="source-block" data-source-block="95"
+data-source-sha256="e30390374ad0e1894253032f7be713b28eb387b311bfa1d9eea5464a25bcb9ce">
+<p>Task content, repository files, executor output, profiles, command
+arrays, API responses, and environment values are untrusted. The CLI
+validates IDs and paths, executes arrays without a shell, restricts
+entry sizes, and relies on server account, assignment, status, and run
+fencing.</p>
+</div>
+<div class="source-block" data-source-block="96"
+data-source-sha256="1d854f8c775482ddd51f4238928de48026458440566cbb69502066ba9c7b3308">
+<p>The child receives only the configured agent credential, never a
+session or personal token. The token is placed in
+<code>SLATE_API_TOKEN</code>, omitted from prompts and arguments, and
+redacted from errors. Slate cannot prevent a process running as the same
+operating-system user from reading its environment or other
+user-accessible secrets. Users must run watchers only for trusted boards
+and repositories.</p>
+</div>
+<div class="source-block" data-source-block="97"
+data-source-sha256="f7f65c0c7651c8a1d9a351b0361e5b7b00c74237f0985da6e00b58eb1d0245fb">
+<p>The executor sees only its generated worktree as the working
+directory. This prevents a losing claim from changing the source
+checkout or another run, but it is not an operating-system sandbox.
+Absolute paths, network access, and other user-readable files remain
+reachable.</p>
+</div>
+<div class="source-block" data-source-block="98"
+data-source-sha256="eadce9ce8f8845d33c89e054c872b3e1e87065099c0a4f1523db39d4b783a515">
+<p>The watcher owns generated losing-run directories and may delete them
+even when the executor changed them. It never force-deletes retained
+successful, blocked, or interrupted worktrees. Registry and config files
+use owner-only permissions and contain no credentials.</p>
+</div>
+<div class="source-block" data-source-block="99"
+data-source-sha256="efbb04ffd935201f7c10621850e8a5564c556e428caf528a0dc3dcd6f975efad">
+<p>One watcher uses one executor process group and one outstanding API
+request. Idle and active monitoring use at most 12 reads per minute
+before retries. Several profiles share account limits, so 429 handling
+is required.</p>
+</div>
+<div class="source-block" data-source-block="100"
+data-source-sha256="be5a32d0589b60874bea4c3a02c583f0d28ace47cb149af60f61dff27ed2fda7">
+<p>Each retained worktree consumes repository-sized disk space. The
+per-profile limit of ten prevents unbounded local accumulation. At the
+limit, no executor starts. Users inspect <code>slate runs list</code>
+and clean committed runs explicitly.</p>
+</div>
+<div class="source-block" data-source-block="101"
+data-source-sha256="65213d4132c741bc12505bf885321f6d22195734c0c8e55ac87f0ed531b533b0">
+<p>Task descriptions and entries retain their existing 16 KiB limits,
+and a card retains its 200-entry limit. At an entry or storage limit,
+the CLI reports the server error, the task remains working, the worktree
+is retained, and the watcher stops.</p>
+</div>
+<div class="source-block" data-source-block="102"
+data-source-sha256="d14b73476c6721226476a0f38ab140b3faf006cc5e66965a76ee9de3866b14e2">
+<p>The watcher streams child output to the terminal and stores no prompt
+or execution log. Output may contain task or repository data. Executor
+tokens, duration, and provider spend remain externally controlled;
+signals are the user-controlled runtime limit.</p>
+</div>
+</div>
+<div class="document-section">
+<section id="9-acceptance-criteria"
+class="source-block role-acceptance-criteria" data-source-block="103"
+data-source-sha256="6d76b4820d002f28fcf60404f54b3b5893667240dd3e86def26e97bd7b6ad68d">
+<h2>9. Acceptance criteria</h2>
+</section>
+<div class="source-block" data-source-block="104"
+data-source-sha256="c54531cb9cc827a4d7998a8e550553b01164886a0a249951b312ff4de191d9de">
+<ul>
+<li><code>AC-1</code>: A valid profile and assigned queued task launch
+the configured executor in a unique worktree with the correct identity,
+metadata, run ID, stdin prompt, and exact Slate binary.</li>
+<li><code>AC-2</code>: Competing executors receive different worktrees;
+a failed claim causes its watcher-owned worktree and branch to be
+removed, and no run uses the source checkout as its working
+directory.</li>
+<li><code>AC-3</code>: Two watchers can offer the same task, but exactly
+one managed claim records its run ID; the losing run is fenced and
+cleaned.</li>
+<li><code>AC-4</code>: A successful run creates exactly one output
+tagged with its run ID, and that transaction leaves the task in
+<code>needs_review</code>.</li>
+<li><code>AC-5</code>: Retrying an output after an uncertain response
+returns the original entry from both <code>needs_review</code> and
+<code>done</code> without a duplicate.</li>
+<li><code>AC-6</code>: A blocked run creates one run-tagged comment,
+leaves the task working, retains its worktree, and stops its
+watcher.</li>
+<li><code>AC-7</code>: An executor that exits after claim without a run
+entry leaves the task working, retains its worktree, and stops without
+another launch.</li>
+<li><code>AC-8</code>: A normal watcher refuses to start for a scoped
+working task; v1 provides no concurrent resume path.</li>
+<li><code>AC-9</code>: A personal, revoked, missing, or mismatched
+credential fails before worktree or executor creation.</li>
+<li><code>AC-10</code>: Healthy idle polling occurs every 5 to 72
+seconds; retryable failures and 429 responses follow the specified
+independent backoff rules.</li>
+<li><code>AC-11</code>: Signals and post-output timeout terminate the
+whole executor process group on macOS and Linux without changing task
+state.</li>
+<li><code>AC-12</code>: Legacy claims retain direct status changes;
+managed runs return <code>managed_run_status_locked</code> for direct
+status changes and must post output to reach review.</li>
+<li><code>AC-13</code>: Missing or stale run identity cannot mutate a
+managed task, and output before successful managed claim fails.</li>
+<li><code>AC-14</code>: The watcher verifies success or blockage using
+only entries tagged with its exact run ID.</li>
+<li><code>AC-15</code>: <code>--board</code> scopes both queued polling
+and the working-task startup check.</li>
+<li><code>AC-16</code>: Ten retained worktrees stop new launches for
+that profile until a committed run is cleaned.</li>
+</ul>
+</div>
+</div>
+<div class="document-section">
+<section id="10-test-approach" class="source-block"
+data-source-block="105"
+data-source-sha256="c12e936da26b05f551bb9244d0b3c7384b2d3d340c374095d6baea0e971a43de">
+<h2>10. Test approach</h2>
+</section>
+<div class="source-block" data-source-block="106"
+data-source-sha256="69632806498c11bfb97ff1cee0527420185f2cb4a408ce6f773450a785b4b6ab">
+<p>CLI unit tests use <code>httptest.Server</code>, temporary Git
+repositories, fake executables, controlled clocks, and deterministic
+UUIDs. They prove profile and identity validation, capability checks,
+clean-checkout rules, worktree isolation and cleanup, registry capacity,
+stdin prompt delivery, exact binary selection, board scoping, separate
+backoffs, <code>Retry-After</code>, terminal errors, exact-run
+monitoring, and post-output timeout. These cover <code>INV-1</code>,
+<code>INV-3</code>, <code>INV-7</code> through <code>INV-10</code>,
+<code>AC-1</code>, <code>AC-2</code>, and <code>AC-7</code> through
+<code>AC-16</code>.</p>
+</div>
+<div class="source-block" data-source-block="107"
+data-source-sha256="17d49e02f221be649d96f64438900baa9bcc334459b5af2038801e3dadbad330">
+<p>Process tests on macOS and Linux start a fake executor with a child
+and grandchild. They prove signal and kill delivery to the complete
+process group for <code>AC-11</code>.</p>
+</div>
+<div class="source-block" data-source-block="108"
+data-source-sha256="53a96895256e219ebf22e27c9be93564f4b1d7831c8c676791ac3f294c44ccf4">
+<p>Command tests prove entries run filters, managed headers, comment and
+output bodies, idempotency headers, file and stdin handling, local size
+checks, and structured errors. These cover <code>INV-6</code>,
+<code>INV-9</code>, <code>AC-4</code>, <code>AC-5</code>,
+<code>AC-13</code>, and <code>AC-14</code>.</p>
+</div>
+<div class="source-block" data-source-block="109"
+data-source-sha256="58900dab5ef16d91d9e3d1f8e67775349d5d29a5abc93c00c4f47e3899d50fc8">
+<p>A two-watcher integration test gives both fake executors distinct
+worktrees and delays their claims. It proves one atomic winner, server
+fencing, losing-worktree deletion, source-checkout preservation, and no
+cross-run file collision. This covers <code>INV-1</code> through
+<code>INV-3</code>, <code>INV-12</code>, <code>AC-2</code>, and
+<code>AC-3</code>.</p>
+</div>
+<div class="source-block" data-source-block="110"
+data-source-sha256="321d7f8c37f13ac4fc806799d7376b98c2f190500e1d6d1d9bd82d50e4d43113">
+<p>PostgreSQL-backed server tests prove account and agent scoping, one
+managed claim winner, legacy compatibility, run conflict behavior, queue
+ordering, exact run filtering, idempotency-before-state validation,
+replay from review and done, and atomic output-to-review. These cover
+<code>INV-2</code>, <code>INV-4</code> through <code>INV-6</code>,
+<code>INV-11</code>, <code>INV-12</code>, <code>AC-3</code> through
+<code>AC-5</code>, and <code>AC-12</code> through
+<code>AC-15</code>.</p>
+</div>
+<div class="source-block" data-source-block="111"
+data-source-sha256="326f00cfc2b4b291ea41be982b7c5fc6bbc438e1bf79ae14fade386e5a1f5537">
+<p>Existing CLI, server, migration, integration, and browser suites
+prove legacy compatibility. The implementation gate is
+<code>just test-ci</code> and <code>just build</code>.</p>
+</div>
+<div class="source-block" data-source-block="112"
+data-source-sha256="c393a60827e5f49946ac06cb650377561e7f31293df5376fa702404317477a45">
+<p>Manual Codex and Claude smoke tests in disposable repositories verify
+current non-interactive stdin and exit behavior. Unsupported behavior
+removes that command example from documentation; it does not weaken the
+generic stdin contract.</p>
+</div>
+</div>
+<div class="document-section">
+<section id="11-risks-and-tradeoffs" class="source-block role-risks"
+data-source-block="113"
+data-source-sha256="1285aaa4ffd2e9469718aff3ada6282e941a59e9a8b79073a130a46b00ce69bd">
+<h2>11. Risks and tradeoffs</h2>
+</section>
+<div class="source-block" data-source-block="114"
+data-source-sha256="7c88d198784253085ed56e212217fa60668430167415c85ed192fe66502c807a">
+<ul>
+<li>Task content can instruct the executor to expose its environment or
+reach and change files outside the worktree. Agent credentials and
+separate working directories reduce accidental collision but do not
+provide an OS sandbox.</li>
+<li>Competing watchers may start paid executor sessions before one loses
+the claim. Isolation and server fencing protect correctness but not
+startup cost.</li>
+<li>A crash after claim leaves a working task and retained worktree.
+Manual requeue is deliberate because automatic takeover needs a lease
+design.</li>
+<li>A dirty source checkout is rejected, which may interrupt an existing
+developer workflow. This prevents silently omitting local changes from
+the worktree base.</li>
+<li>A locally configured executor command may change across tool
+versions. Startup validation and manual smoke tests expose
+incompatibility.</li>
+<li>A large conversation may consume substantial model context. Existing
+entry limits bound storage but not provider cost.</li>
+<li>Maintaining legacy and managed transition rules adds server
+complexity. The distinction is explicit, nullable, and removable in a
+later breaking release.</li>
+</ul>
+</div>
+</div>
+<div class="document-section">
+<section id="12-open-questions" class="source-block role-open-questions"
+data-source-block="115"
+data-source-sha256="9a814093a20806bc5a44c69acb6ee4c27c516199b03238efaf23de1e8b4e534d">
+<h2>12. Open questions</h2>
+</section>
+<div class="source-block" data-source-block="116"
+data-source-sha256="5736c33ab4ca10b32c8604affa4cb5efac57deb8babe8cd90b062030961878c7">
+<ul>
+<li>Should the first release include commands to create and edit
+profiles? Recommended default: document the JSON file and add editing
+commands after the shape has been used. This does not block task
+breakdown.</li>
+<li>Should <code>tasks entries</code> add pagination or a byte budget
+before watcher release? Recommended default: retain the currently
+bounded response and measure real sizes. This does not block task
+breakdown.</li>
+<li>Which current Codex and Claude argument arrays satisfy the stdin and
+exit contracts? Verify them during documentation work and publish only
+tested examples. This does not block the generic implementation.</li>
+</ul>
+</div>
+</div>
+<div class="document-section">
+<section id="13-implementation-notes" class="source-block"
+data-source-block="117"
+data-source-sha256="870b28adab77a0ef8c8ecc2ebfd2807578fd5d9d6c476a6b4ffb6091eb7f5ae6">
+<h2>13. Implementation notes</h2>
+</section>
+<div class="source-block" data-source-block="118"
+data-source-sha256="f32a763f89798e9a4c26741c267a412fb2793656f26497ec2acef4cee6f219b8">
+<p>These points were settled while building the change and differ from
+the text above as first approved. Each is deliberate and carries a
+comment in the code.</p>
+</div>
+<div class="source-block" data-source-block="119"
+data-source-sha256="8b867b966e0829d50452663ea015459afc23061808cd3010ad7847843a64d1db">
+<ul>
+<li><strong><code>Retry-After</code> is a minimum, not an exact
+delay.</strong> RFC 9110 section 10.2.3 defines the header that way.
+Honoring a shorter hint than the current backoff would let a
+<code>Retry-After: 0</code> from a misconfigured proxy become a request
+flood aimed at an account that is already rate limited.</li>
+<li><strong>HTTP 500 is retryable.</strong> The original list named 502,
+503 and 504. A single transient 500 ending a day-long session
+contradicts the stated outcome that temporary server failures do not
+stop the watcher.</li>
+<li><strong>A reply that is not the API's is terminal.</strong> A proxy
+serving an error page with a success status will keep serving it, so
+repeating the request cannot help.</li>
+<li><strong>A run the watcher could not place is retained, not
+deleted.</strong> Deleting a worktree is unrecoverable, so it requires
+positive evidence that the run never held the task. A run that was ever
+seen to own or write to its task, or whose supervision hit a read
+failure, keeps its worktree and is reported as ambiguous.</li>
+<li><strong>The prompt tells the agent to write its report outside the
+worktree.</strong> A report file left inside counts as uncommitted work
+and blocks <code>slate runs clean</code> for ever.</li>
+<li><strong><code>slate runs clean</code> releases a crashed watcher's
+record.</strong> Nothing from such a run is alive, so its worktree must
+still be removable.</li>
+</ul>
+</div>
+</div>
+<div class="document-section">
+<section id="14-out-of-scope" class="source-block"
+data-source-block="120"
+data-source-sha256="9c39aa1c5ab1bdbe5b31cf67bcf3db893ff09b3e89cd97d6f8ac221f87268c5e">
+<h2>14. Out of scope</h2>
+</section>
+<div class="source-block" data-source-block="121"
+data-source-sha256="3ad9508a92559d6a854417002ab6eaf650bb13504311d7c59168b960a99373b8">
+<ul>
+<li>Hosted or server-side executors.</li>
+<li>Non-Git workspaces in v1.</li>
+<li>Webhooks, server-sent events, or push delivery.</li>
+<li>Multiple concurrent tasks in one watcher.</li>
+<li>Automatic resume, leases, expiry, heartbeat, or takeover of working
+tasks.</li>
+<li>Automatic commits, pushes, pull requests, merges, or forced worktree
+deletion.</li>
+<li>Judging implementation quality beyond reported checks and human
+review.</li>
+<li>Hiding a credential from another process with the same
+operating-system authority.</li>
+<li>Built-in executor authentication, billing, model selection, or
+sandboxing.</li>
+</ul>
+</div>
+</div>
+
+    </main>
+  </div>
+  <footer class="document-footer">Generated from docs/agent-task-watcher/design.md by blueprint/html-doc@1. Edit the Markdown source, then regenerate.</footer>
+</body>
+</html>

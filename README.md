@@ -13,6 +13,7 @@ Cards can have one level of child cards for shared human and agent work. Agents 
 ## Docs
 
 - [Install and use the Slate CLI](docs/cli.md)
+- [Run a coding agent on your Slate tasks](docs/watcher.md)
 - [PRD](docs/prd.md)
 - [Initial static prototype](list-app-mockup.html)
 
