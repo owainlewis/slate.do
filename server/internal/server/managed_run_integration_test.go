@@ -414,6 +414,48 @@ func TestOnlyAWorkflowTransitionReleasesTheRunFence(t *testing.T) {
 	}
 }
 
+func TestTaskEditsAreFencedToTheOwningRun(t *testing.T) {
+	fixture := newManagedRunFixture(t)
+	task := fixture.readyTask(t, "Edits are fenced too")
+	runID := "12121212-1212-4121-8121-121212121212"
+	stale := "13131313-1313-4131-8131-131313131313"
+
+	if claim := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/agent/tasks/"+task.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
+	}
+
+	// The owning run may edit its task while it works.
+	owned := runRequest(t, fixture.app, fixture.token, runID, http.MethodPatch, "/api/v1/tasks/"+task.ID, `{"description":"Progress so far."}`, nil)
+	if owned.Code != http.StatusOK || !strings.Contains(owned.Body.String(), "Progress so far.") {
+		t.Fatalf("owning run edit = %d %s", owned.Code, owned.Body.String())
+	}
+
+	fenced := []struct {
+		name  string
+		runID string
+		body  string
+		code  string
+	}{
+		{"missing run edit", "", `{"description":"Unfenced."}`, "run_conflict"},
+		{"stale run edit", stale, `{"description":"Stale."}`, "run_conflict"},
+		{"owning run status", runID, `{"status":"needs_review"}`, "managed_run_status_locked"},
+	}
+	for _, attempt := range fenced {
+		recorder := runRequest(t, fixture.app, fixture.token, attempt.runID, http.MethodPatch, "/api/v1/tasks/"+task.ID, attempt.body, nil)
+		if recorder.Code != http.StatusConflict || errorCode(t, recorder.Body.String()) != attempt.code {
+			t.Errorf("%s = %d %s, want 409 %s", attempt.name, recorder.Code, recorder.Body.String(), attempt.code)
+		}
+	}
+
+	current, err := fixture.store.GetTask(context.Background(), fixture.owner.ID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Description != "Progress so far." || current.Status != boards.StatusWorking {
+		t.Fatalf("task after fenced edits = %q / %q", current.Description, current.Status)
+	}
+}
+
 func TestAnUppercaseRunIdentityStillOwnsItsTask(t *testing.T) {
 	fixture := newManagedRunFixture(t)
 	task := fixture.readyTask(t, "Uppercase run keeps ownership")
