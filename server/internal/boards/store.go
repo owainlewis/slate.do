@@ -1563,7 +1563,7 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, '')
 	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Description, current.ScheduledDate, current.Kind,
 		current.Status, current.Priority, current.SortOrder, current.AssigneeAgentID,
-		current.Status != original.Status && current.Status != StatusWorking)
+		releasesRunFence(original, current))
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
@@ -1634,6 +1634,17 @@ func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id
 		return Task{}, ErrTaskUnavailable
 	}
 	return task, err
+}
+
+// releasesRunFence reports whether an update ends the managed run that owns a
+// task. A run is bound to one task and one agent, so a workflow transition away
+// from working ends it, and so does handing the task to another agent. A
+// status-neutral edit such as a title change leaves the fence in place.
+func releasesRunFence(original Task, current Task) bool {
+	if current.AssigneeAgentID != original.AssigneeAgentID {
+		return true
+	}
+	return current.Status != original.Status && current.Status != StatusWorking
 }
 
 // checkAgentRun decides whether an agent mutation may proceed. A managed task

@@ -380,6 +380,29 @@ func TestOnlyAWorkflowTransitionReleasesTheRunFence(t *testing.T) {
 		t.Fatalf("status without a run on a fenced card = %d %s, want 409 run_conflict", statusAttempt.Code, statusAttempt.Body.String())
 	}
 
+	// Handing the card to another agent ends the run, because a run is bound to
+	// one task and one agent. Without this the new assignee would be refused
+	// with a conflict naming a run that was never its own.
+	second, err := auth.NewPGStore(fixture.db).CreateAgent(ctx, fixture.owner.ID, "Second Agent", "",
+		testTokenHash("slate_second_agent"), "slate_second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{AssigneeAgentID: &second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if held := fixture.executionRunID(t, task.ID); held != "" {
+		t.Fatalf("run ID after reassignment = %q, want cleared", held)
+	}
+	handover := runRequest(t, fixture.app, "slate_second_agent", "", http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
+		entryBody("comment", "Picking this up."), map[string]string{"Idempotency-Key": "handover"})
+	if handover.Code != http.StatusCreated {
+		t.Fatalf("new assignee comment = %d %s, want the handover to be accepted", handover.Code, handover.Body.String())
+	}
+	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{AssigneeAgentID: &fixture.agent.ID}); err != nil {
+		t.Fatal(err)
+	}
+
 	// Completing and then requeueing are transitions, and the requeue releases
 	// the fence for the next claim.
 	done := boards.StatusDone
