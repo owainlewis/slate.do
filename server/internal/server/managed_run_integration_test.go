@@ -391,6 +391,31 @@ func TestOnlyAWorkflowTransitionReleasesTheRunFence(t *testing.T) {
 	}
 }
 
+func TestAnUppercaseRunIdentityStillOwnsItsTask(t *testing.T) {
+	fixture := newManagedRunFixture(t)
+	task := fixture.readyTask(t, "Uppercase run keeps ownership")
+	upper := "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+	lower := strings.ToLower(upper)
+
+	if claim := runRequest(t, fixture.app, fixture.token, upper, http.MethodPost, "/api/v1/agent/tasks/"+task.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+		t.Fatalf("uppercase claim = %d %s", claim.Code, claim.Body.String())
+	}
+	if stored := fixture.executionRunID(t, task.ID); stored != lower {
+		t.Fatalf("stored run ID = %q, want the normalized %q", stored, lower)
+	}
+	// The same run repeating its own identity must not be fenced out.
+	output := runRequest(t, fixture.app, fixture.token, upper, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
+		entryBody("output", "Done."), map[string]string{"Idempotency-Key": "upper"})
+	if output.Code != http.StatusCreated {
+		t.Fatalf("uppercase output = %d %s, want the owning run to be accepted", output.Code, output.Body.String())
+	}
+	entries := decodeEntries(t, runRequest(t, fixture.app, fixture.token, upper, http.MethodGet,
+		"/api/v1/tasks/"+task.ID+"/entries?runId="+upper, "", nil).Body.String())
+	if len(entries) != 1 || entries[0]["runId"] != lower {
+		t.Fatalf("entries for the uppercase run = %v, want one entry tagged %q", entries, lower)
+	}
+}
+
 func TestEntryRunFilterReturnsOnlyTheExactRun(t *testing.T) {
 	fixture := newManagedRunFixture(t)
 	task := fixture.readyTask(t, "Filter entries by run")

@@ -499,7 +499,10 @@ func agentRunID(w http.ResponseWriter, r *http.Request, user auth.User) (string,
 		writeError(w, http.StatusBadRequest, "X-Slate-Run-ID must be a valid ID")
 		return "", false
 	}
-	return runID, true
+	// PostgreSQL renders a stored uuid in lowercase, so ownership is compared
+	// in one case. Otherwise a run that claimed with uppercase hex would fence
+	// itself out of its own task.
+	return strings.ToLower(runID), true
 }
 
 func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
