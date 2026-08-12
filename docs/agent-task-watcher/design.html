@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
   <meta name="document-kind" content="design">
   <meta name="source-path" content="docs/agent-task-watcher/design.md">
-  <meta name="source-sha256" content="2a87e1b2e65ff783fd15f63c87425f4dd7d813451851e49f14d4ede3ca4b9b54">
+  <meta name="source-sha256" content="f292b582ab3656aa7fa0f47211fc857bc9bbe7f962888740c61fc03273da2253">
   <meta name="generator" content="blueprint/html-doc@1">
   <title>Agent task watcher</title>
   <style>:root {
@@ -421,13 +421,13 @@ tbody tr:nth-child(even) { background: #eff3f5; }
         <div class="metadata__item"><dt>Kind</dt><dd>Technical design</dd></div>
         <div class="metadata__item"><dt>Status</dt><dd>Proposed for review</dd></div>
         <div class="metadata__item"><dt>Source</dt><dd>docs/agent-task-watcher/design.md</dd></div>
-        <div class="metadata__item"><dt>Revision</dt><dd><code title="2a87e1b2e65ff783fd15f63c87425f4dd7d813451851e49f14d4ede3ca4b9b54">2a87e1b2e65f</code></dd></div>
+        <div class="metadata__item"><dt>Revision</dt><dd><code title="f292b582ab3656aa7fa0f47211fc857bc9bbe7f962888740c61fc03273da2253">f292b582ab36</code></dd></div>
       </dl>
     </div>
   </header>
   <div class="page-shell">
-    <aside class="mobile-toc" aria-label="Document navigation"><details><summary>Contents</summary><nav aria-label="Document sections on small screens"><ol><li data-level="2"><a href="#1-executive-summary">1. Executive summary</a></li><li data-level="2"><a href="#2-context-and-scope">2. Context and scope</a></li><li data-level="2"><a href="#3-system-context">3. System context</a></li><li data-level="2"><a href="#4-proposed-design">4. Proposed design</a></li><li data-level="3"><a href="#how-it-works">How it works</a></li><li data-level="3"><a href="#components-and-responsibilities">Components and responsibilities</a></li><li data-level="3"><a href="#decisions">Decisions</a></li><li data-level="2"><a href="#5-invariants-and-requirements">5. Invariants and requirements</a></li><li data-level="3"><a href="#invariants">Invariants</a></li><li data-level="3"><a href="#requirements">Requirements</a></li><li data-level="2"><a href="#6-interfaces-and-data">6. Interfaces and data</a></li><li data-level="3"><a href="#commands">Commands</a></li><li data-level="3"><a href="#database-and-rollout">Database and rollout</a></li><li data-level="3"><a href="#local-profile-and-registry">Local profile and registry</a></li><li data-level="3"><a href="#prompt-envelope">Prompt envelope</a></li><li data-level="3"><a href="#naming-and-identity">Naming and identity</a></li><li data-level="2"><a href="#7-failure-behavior-and-lifecycle">7. Failure behavior and lifecycle</a></li><li data-level="2"><a href="#8-security-privacy-and-operations">8. Security, privacy, and operations</a></li><li data-level="2"><a href="#9-acceptance-criteria">9. Acceptance criteria</a></li><li data-level="2"><a href="#10-test-approach">10. Test approach</a></li><li data-level="2"><a href="#11-risks-and-tradeoffs">11. Risks and tradeoffs</a></li><li data-level="2"><a href="#12-open-questions">12. Open questions</a></li><li data-level="2"><a href="#13-out-of-scope">13. Out of scope</a></li></ol></nav></details></aside><nav class="toc" aria-label="Document contents"><p class="toc-title">On this page</p><ol><li data-level="2"><a href="#1-executive-summary">1. Executive summary</a></li><li data-level="2"><a href="#2-context-and-scope">2. Context and scope</a></li><li data-level="2"><a href="#3-system-context">3. System context</a></li><li data-level="2"><a href="#4-proposed-design">4. Proposed design</a></li><li data-level="3"><a href="#how-it-works">How it works</a></li><li data-level="3"><a href="#components-and-responsibilities">Components and responsibilities</a></li><li data-level="3"><a href="#decisions">Decisions</a></li><li data-level="2"><a href="#5-invariants-and-requirements">5. Invariants and requirements</a></li><li data-level="3"><a href="#invariants">Invariants</a></li><li data-level="3"><a href="#requirements">Requirements</a></li><li data-level="2"><a href="#6-interfaces-and-data">6. Interfaces and data</a></li><li data-level="3"><a href="#commands">Commands</a></li><li data-level="3"><a href="#database-and-rollout">Database and rollout</a></li><li data-level="3"><a href="#local-profile-and-registry">Local profile and registry</a></li><li data-level="3"><a href="#prompt-envelope">Prompt envelope</a></li><li data-level="3"><a href="#naming-and-identity">Naming and identity</a></li><li data-level="2"><a href="#7-failure-behavior-and-lifecycle">7. Failure behavior and lifecycle</a></li><li data-level="2"><a href="#8-security-privacy-and-operations">8. Security, privacy, and operations</a></li><li data-level="2"><a href="#9-acceptance-criteria">9. Acceptance criteria</a></li><li data-level="2"><a href="#10-test-approach">10. Test approach</a></li><li data-level="2"><a href="#11-risks-and-tradeoffs">11. Risks and tradeoffs</a></li><li data-level="2"><a href="#12-open-questions">12. Open questions</a></li><li data-level="2"><a href="#13-out-of-scope">13. Out of scope</a></li></ol></nav>
-    <main id="document-content" class="document-content" data-source-block-count="117">
+    <aside class="mobile-toc" aria-label="Document navigation"><details><summary>Contents</summary><nav aria-label="Document sections on small screens"><ol><li data-level="2"><a href="#1-executive-summary">1. Executive summary</a></li><li data-level="2"><a href="#2-context-and-scope">2. Context and scope</a></li><li data-level="2"><a href="#3-system-context">3. System context</a></li><li data-level="2"><a href="#4-proposed-design">4. Proposed design</a></li><li data-level="3"><a href="#how-it-works">How it works</a></li><li data-level="3"><a href="#components-and-responsibilities">Components and responsibilities</a></li><li data-level="3"><a href="#decisions">Decisions</a></li><li data-level="2"><a href="#5-invariants-and-requirements">5. Invariants and requirements</a></li><li data-level="3"><a href="#invariants">Invariants</a></li><li data-level="3"><a href="#requirements">Requirements</a></li><li data-level="2"><a href="#6-interfaces-and-data">6. Interfaces and data</a></li><li data-level="3"><a href="#commands">Commands</a></li><li data-level="3"><a href="#database-and-rollout">Database and rollout</a></li><li data-level="3"><a href="#local-profile-and-registry">Local profile and registry</a></li><li data-level="3"><a href="#prompt-envelope">Prompt envelope</a></li><li data-level="3"><a href="#naming-and-identity">Naming and identity</a></li><li data-level="2"><a href="#7-failure-behavior-and-lifecycle">7. Failure behavior and lifecycle</a></li><li data-level="2"><a href="#8-security-privacy-and-operations">8. Security, privacy, and operations</a></li><li data-level="2"><a href="#9-acceptance-criteria">9. Acceptance criteria</a></li><li data-level="2"><a href="#10-test-approach">10. Test approach</a></li><li data-level="2"><a href="#11-risks-and-tradeoffs">11. Risks and tradeoffs</a></li><li data-level="2"><a href="#12-open-questions">12. Open questions</a></li><li data-level="2"><a href="#13-implementation-notes">13. Implementation notes</a></li><li data-level="2"><a href="#14-out-of-scope">14. Out of scope</a></li></ol></nav></details></aside><nav class="toc" aria-label="Document contents"><p class="toc-title">On this page</p><ol><li data-level="2"><a href="#1-executive-summary">1. Executive summary</a></li><li data-level="2"><a href="#2-context-and-scope">2. Context and scope</a></li><li data-level="2"><a href="#3-system-context">3. System context</a></li><li data-level="2"><a href="#4-proposed-design">4. Proposed design</a></li><li data-level="3"><a href="#how-it-works">How it works</a></li><li data-level="3"><a href="#components-and-responsibilities">Components and responsibilities</a></li><li data-level="3"><a href="#decisions">Decisions</a></li><li data-level="2"><a href="#5-invariants-and-requirements">5. Invariants and requirements</a></li><li data-level="3"><a href="#invariants">Invariants</a></li><li data-level="3"><a href="#requirements">Requirements</a></li><li data-level="2"><a href="#6-interfaces-and-data">6. Interfaces and data</a></li><li data-level="3"><a href="#commands">Commands</a></li><li data-level="3"><a href="#database-and-rollout">Database and rollout</a></li><li data-level="3"><a href="#local-profile-and-registry">Local profile and registry</a></li><li data-level="3"><a href="#prompt-envelope">Prompt envelope</a></li><li data-level="3"><a href="#naming-and-identity">Naming and identity</a></li><li data-level="2"><a href="#7-failure-behavior-and-lifecycle">7. Failure behavior and lifecycle</a></li><li data-level="2"><a href="#8-security-privacy-and-operations">8. Security, privacy, and operations</a></li><li data-level="2"><a href="#9-acceptance-criteria">9. Acceptance criteria</a></li><li data-level="2"><a href="#10-test-approach">10. Test approach</a></li><li data-level="2"><a href="#11-risks-and-tradeoffs">11. Risks and tradeoffs</a></li><li data-level="2"><a href="#12-open-questions">12. Open questions</a></li><li data-level="2"><a href="#13-implementation-notes">13. Implementation notes</a></li><li data-level="2"><a href="#14-out-of-scope">14. Out of scope</a></li></ol></nav>
+    <main id="document-content" class="document-content" data-source-block-count="121">
 <div class="document-intro">
 <section id="agent-task-watcher" class="source-block"
 data-source-block="1"
@@ -856,7 +856,7 @@ data-source-sha256="d58a3741c408d72bf8e99cb9c99f055d7cabeda3c3b4d006597446e8412a
 <h3>Requirements</h3>
 </section>
 <div class="source-block" data-source-block="55"
-data-source-sha256="61abc63d29deaf2eb1c549322a7cf5820cccb0523dbcfe4cea28052d19af7829">
+data-source-sha256="ef0295734ab8770dd2049a95dfc3b361f16d7db813a27a0effdfd110ad0cb74e">
 <ul>
 <li><code>slate watch --profile &lt;name&gt;</code> watches assigned
 queued actions across all visible boards. <code>--board</code> scopes
@@ -871,10 +871,11 @@ first.</li>
 <li>Idle polling starts at five seconds and doubles to 60 seconds with
 up to 20 percent jitter. Healthy idle polling therefore occurs every 5
 to 72 seconds.</li>
-<li>Polling retries connection failures, timeouts, and HTTP 429, 502,
-503, and 504. It honors a valid delta-seconds <code>Retry-After</code>
-on 429 and otherwise uses five-second exponential backoff capped at 60
-seconds with 20 percent jitter.</li>
+<li>Polling retries connection failures, timeouts, and HTTP 429, 500,
+502, 503, and 504. A valid delta-seconds <code>Retry-After</code> on 429
+sets a minimum wait; the five-second exponential backoff capped at 60
+seconds with 20 percent jitter always advances, and the longer of the
+two is used.</li>
 <li>HTTP 400, 401, 403, 404, and 409 are terminal for the current
 operation. Authentication and identity failures stop the watcher.
 Candidate claim conflicts return to polling after cleanup.</li>
@@ -949,14 +950,23 @@ querying exact run state. The header must be a UUID. It is execution
 identity, not independent authority.</p>
 </div>
 <div class="source-block" data-source-block="60"
-data-source-sha256="a463b1778f5163ac9efbbed37d60c84b4837abff764426ee0e64cf900e4f155c">
+data-source-sha256="0465298393c0088019c21f5ccd3a13b98f59ec028bc26c95853e739ea08610a4">
 <p><code>POST /api/v1/agent/tasks/{id}/claim</code> accepts the optional
 run header. A managed claim writes <code>tasks.execution_run_id</code>
 in the same atomic update that writes <code>working</code>. A legacy
-claim omits it. Moving a task out of working clears it only after any
-run-tagged output is stored.</p>
+claim omits it. A task carries a run only while it is working: any
+change of status or of assignee ends the run, and so does the output
+transaction, after its entry is stored.</p>
 </div>
 <div class="source-block" data-source-block="61"
+data-source-sha256="4b09bd5328488c8ed4bc866151360c5ee35ed15fb00410380c827d46a674195d">
+<p><code>GET /api/v1/tasks/{id}</code> reports
+<code>executionRunId</code> while a managed run owns the task. A watcher
+cannot otherwise tell its own interrupted run from a claim another run
+won, and those need opposite cleanup. Collection responses do not carry
+it.</p>
+</div>
+<div class="source-block" data-source-block="62"
 data-source-sha256="1008a60994411a4e046da1fbe48e507b2565d652e90f06e11124bd0edf31f925">
 <p><code>POST /api/v1/tasks/{id}/entries</code> stores optional
 <code>run_id</code> from the authenticated managed run. For a new
@@ -966,14 +976,14 @@ idempotency replay using task, author, and key. A matching replay
 succeeds from <code>needs_review</code> or <code>done</code>; a reused
 key with different content conflicts.</p>
 </div>
-<div class="source-block" data-source-block="62"
+<div class="source-block" data-source-block="63"
 data-source-sha256="42bacca71dc206a06da2ce23ab9c18bf48ee7ca674ddf4832a6d882fa63404ff">
 <p><code>GET /api/v1/tasks/{id}/entries?runId=&lt;id&gt;</code> returns
 entries for that exact managed run. An agent credential may query only
 its assigned task. The response exposes <code>runId</code> but not the
 idempotency key.</p>
 </div>
-<div class="source-block" data-source-block="63"
+<div class="source-block" data-source-block="64"
 data-source-sha256="f044e49e82e811f80faf73b40e7960fce468c36052d8aca985815f30178f4e6a">
 <p>For a managed run, <code>PATCH /api/v1/agent/tasks/{id}/status</code>
 returns HTTP 409 <code>managed_run_status_locked</code> even with the
@@ -983,7 +993,7 @@ Account sessions and personal tokens retain their current authority,
 including requeue and completion. A human status change away from
 working clears the managed run ID.</p>
 </div>
-<div class="source-block" data-source-block="64"
+<div class="source-block" data-source-block="65"
 data-source-sha256="70ec787c562fab6a428fe983fe5f0de23842bcc97480970d7d63bab0d27a3ce5">
 <p><code>GET /api/v1/me</code> adds optional <code>agentPurpose</code>
 for agent credentials and a <code>managedRuns</code> capability boolean.
@@ -991,7 +1001,7 @@ The watcher refuses to start unless <code>managedRuns</code> is true.
 This allows the server to deploy before the new CLI without enabling an
 incomplete workflow.</p>
 </div>
-<div class="source-block" data-source-block="65"
+<div class="source-block" data-source-block="66"
 data-source-sha256="a34b30c7cdeb65fa12183e3107d80bf2c0762b16acde36ab90a81798fe2f4496">
 <p>The queue response keeps its current shape. The server changes
 <code>GET /api/v1/agent/tasks</code> ordering to priority rank,
@@ -999,22 +1009,22 @@ data-source-sha256="a34b30c7cdeb65fa12183e3107d80bf2c0762b16acde36ab90a81798fe2f
 available.</p>
 </div>
 <section id="database-and-rollout" class="source-block"
-data-source-block="66"
+data-source-block="67"
 data-source-sha256="dac1b2bdcb3e9b2ada4f96e3f066adbf3d3ae103fef9c4ccb57b1e1c3752544f">
 <h3>Database and rollout</h3>
 </section>
-<div class="source-block" data-source-block="67"
+<div class="source-block" data-source-block="68"
 data-source-sha256="1db3391ea198a29523b138e2ec8eb8ade6bb414cf40b23bfcc07a83ce59ef148">
 <p>A migration adds nullable <code>tasks.execution_run_id uuid</code>
 and nullable <code>card_entries.run_id uuid</code>, plus an index on
 <code>(task_id, run_id, created_at, id)</code>. Existing rows remain
 legacy because both values are null.</p>
 </div>
-<div class="source-block" data-source-block="68"
+<div class="source-block" data-source-block="69"
 data-source-sha256="a5584030f00c8d57c585f6cefb09614be02d9f06d97cc2365d5bddd895f7f6e7">
 <p>Rollout is additive and ordered:</p>
 </div>
-<div class="source-block" data-source-block="69"
+<div class="source-block" data-source-block="70"
 data-source-sha256="c8118552e6fd6f8f21545c617c5fc023a6a94c74acf7e7fc19275b0969685ef5">
 <ol type="1">
 <li>Deploy the migration and server support for run headers, correlation
@@ -1028,7 +1038,7 @@ runs enforce it immediately; legacy direct review remains
 compatible.</li>
 </ol>
 </div>
-<div class="source-block" data-source-block="70"
+<div class="source-block" data-source-block="71"
 data-source-sha256="649e2a1216cd928c8d381f62f258af01ecdbd535e5770f4ee409decc13bd3b92">
 <p>Rollback disables <code>managedRuns</code> first so new watchers
 refuse startup, then rolls back the CLI or server. Nullable columns
@@ -1036,17 +1046,17 @@ remain harmless to old code. Dropping them is a separate cleanup
 migration after rollback risk has passed.</p>
 </div>
 <section id="local-profile-and-registry" class="source-block"
-data-source-block="71"
+data-source-block="72"
 data-source-sha256="01ad3aaf49dad9ec83ba864ee3013fac5e0aba48cf0da8ac55f51061d2b4040f">
 <h3>Local profile and registry</h3>
 </section>
-<div class="source-block" data-source-block="72"
+<div class="source-block" data-source-block="73"
 data-source-sha256="80ca590ae96651e565a1ea45e3ace8066cb555abe858a7b9aeae3758cbdfa045">
 <p>The CLI reads JSON from <code>SLATE_CONFIG</code> when set, or
 <code>slate/config.json</code> beneath the operating system's user
 configuration directory:</p>
 </div>
-<div class="source-block" data-source-block="73"
+<div class="source-block" data-source-block="74"
 data-source-sha256="8daf2da9500e4b11faaca4243c8a4b31c197ab8ac08ed32021ecf8f6285d6efd">
 <pre class="json"><code>{
   &quot;profiles&quot;: {
@@ -1058,7 +1068,7 @@ data-source-sha256="8daf2da9500e4b11faaca4243c8a4b31c197ab8ac08ed32021ecf8f6285d
   }
 }</code></pre>
 </div>
-<div class="source-block" data-source-block="74"
+<div class="source-block" data-source-block="75"
 data-source-sha256="ce21ad46f7978ffd84bf9057d0d5450e349a6414009f0b23587e5e7a594776e3">
 <p>Required fields are <code>agentId</code>, <code>tokenEnv</code>, and
 a non-empty <code>command</code>. Unknown fields are rejected. The
@@ -1067,7 +1077,7 @@ resolved through <code>PATH</code> at startup and then invoked by
 absolute path. Relative <code>--workdir</code> values are resolved from
 the starting directory.</p>
 </div>
-<div class="source-block" data-source-block="75"
+<div class="source-block" data-source-block="76"
 data-source-sha256="090b5315551c43fe0f33e78800974619d2a60412e8f3925742731f95d5f0d0e6">
 <p>Registry records are JSON files beneath the user state directory,
 written atomically with owner-only permissions. Each record contains run
@@ -1077,11 +1087,11 @@ active, and timestamps. Child identifiers are cleared after exit. The
 registry is not used for server authorization.</p>
 </div>
 <section id="prompt-envelope" class="source-block"
-data-source-block="76"
+data-source-block="77"
 data-source-sha256="9fe3ade83ad975fbfb17808e468ae6237d260057fccda7b6ce92e96512d5ac8b">
 <h3>Prompt envelope</h3>
 </section>
-<div class="source-block" data-source-block="77"
+<div class="source-block" data-source-block="78"
 data-source-sha256="6991e51a951136749c299db5cf2fc4f65e194c7de5097f9d3004adb579fb240d">
 <p>The prompt contains authenticated agent ID, display name, purpose,
 candidate metadata, run ID, absolute worktree, claim and context
@@ -1089,30 +1099,30 @@ commands, repository-instruction requirement, verification requirement,
 blocked and output contracts, exact idempotency keys, and the rule to
 exit after reporting.</p>
 </div>
-<div class="source-block" data-source-block="78"
+<div class="source-block" data-source-block="79"
 data-source-sha256="c8a68db2c0dfc4a6514c6c2fc91f12ea2cbff1b9282cff9298617b36b8c2ff38">
 <p>The prompt does not contain the token, task description,
 conversation, source-checkout path, or unrelated environment values. The
 agent obtains task content through assigned CLI reads after claim.</p>
 </div>
 <section id="naming-and-identity" class="source-block"
-data-source-block="79"
+data-source-block="80"
 data-source-sha256="8d3d7b7a1af98b0dfa8eb94237680e19b796bb68dc456be15450d239907cc0ab">
 <h3>Naming and identity</h3>
 </section>
-<div class="source-block" data-source-block="80"
+<div class="source-block" data-source-block="81"
 data-source-sha256="4e7d2e79b491f1d766cfc0fbebeb8ce50dfab10309469432a4d867884ab2c72b">
 <p>Slate creates immutable agent UUIDs on the server. The profile stores
 the expected ID and startup fails when it is missing, malformed,
 deleted, or differs from the credential result.</p>
 </div>
-<div class="source-block" data-source-block="81"
+<div class="source-block" data-source-block="82"
 data-source-sha256="c174f8e2a4b736cdc5eccfd0027636c11924cae59e2b86e6f2aafedac027dbc9">
 <p>The watcher creates a random UUID run ID. The server binds it to one
 assigned task during atomic claim. A later display-name or profile-name
 change does not alter run ownership or stored entry authorship.</p>
 </div>
-<div class="source-block" data-source-block="82"
+<div class="source-block" data-source-block="83"
 data-source-sha256="5ba9f6a9fe6120b155281744a3335b04c0ad0bb03d93b12be7f0ede4998f1437">
 <p>Branch and worktree names derive from validated task and run UUIDs,
 not task text. If a generated path already exists or Git creation fails,
@@ -1121,11 +1131,11 @@ the watcher records no active run and starts no executor.</p>
 </div>
 <div class="document-section">
 <section id="7-failure-behavior-and-lifecycle"
-class="source-block role-failures" data-source-block="83"
+class="source-block role-failures" data-source-block="84"
 data-source-sha256="caf163a2a6ae29594c9aceec85019732d86f557465622ee179014fdfedcee686">
 <h2>7. Failure behavior and lifecycle</h2>
 </section>
-<div class="source-block" data-source-block="84"
+<div class="source-block" data-source-block="85"
 data-source-sha256="2432b6172b067689ffb4dc3519a8c4cbb474506dadfcd8fd145a48050d0ca8d6">
 <p>Startup validates configuration, identity, server capability, API
 reachability, executor, clean source checkout, Git branch, registry
@@ -1133,34 +1143,34 @@ capacity, and scoped working tasks. Invalid local state or HTTP 400,
 401, 403, 404, or 409 exits nonzero. Retryable startup failures use the
 defined failure backoff until interrupted.</p>
 </div>
-<div class="source-block" data-source-block="85"
+<div class="source-block" data-source-block="86"
 data-source-sha256="059fa8d7138002f446d9f7495203dc1ff71afd319c939eb0afcdca544d73d808">
 <p>With no eligible task, the watcher uses idle backoff. A newly
 eligible task is observed within 72 seconds while the API is healthy and
 no executor is active.</p>
 </div>
-<div class="source-block" data-source-block="86"
+<div class="source-block" data-source-block="87"
 data-source-sha256="4e0ba145aad246d662c234b369c7ba885bdf02bc4a46bb1132310d8dcc2dfdd3">
 <p>If worktree or executor creation fails before claim, the watcher
 removes any partial watcher-owned directory and branch, marks the run
 failed locally, and retries the candidate. Five consecutive local launch
 failures stop the watcher.</p>
 </div>
-<div class="source-block" data-source-block="87"
+<div class="source-block" data-source-block="88"
 data-source-sha256="8166a860786e46131c2ca9a0098fa39bf1dcd1d95cb1c1d43edb9c6c9d1618cc">
 <p>If claim fails, the executor exits. The watcher waits up to ten
 seconds, terminates its process group if needed, and removes the
 disposable worktree and branch. A claim conflict returns to polling.
 Authentication or server-capability failure stops the watcher.</p>
 </div>
-<div class="source-block" data-source-block="88"
+<div class="source-block" data-source-block="89"
 data-source-sha256="3f0589c02903677d4c8fe4329e8c50103da5e03476295f927d30f744cebf3bb3">
 <p>If an exact output request commits but its response is lost,
 repeating the same key returns the stored entry before status and run
 checks. This works after the task reaches review or done. A changed body
 with the same key conflicts.</p>
 </div>
-<div class="source-block" data-source-block="89"
+<div class="source-block" data-source-block="90"
 data-source-sha256="cd38d949edb7132a0021ee9a2ba70610fa7807f480123b536fa30bffc56b0278">
 <p>If a stale process attempts a mutation after another managed run owns
 the task, the server returns <code>run_conflict</code>. It cannot add a
@@ -1168,7 +1178,7 @@ comment, post output, or change status. A human moving a task back to
 Ready clears the old run ID; the next managed claim establishes a new
 fence.</p>
 </div>
-<div class="source-block" data-source-block="90"
+<div class="source-block" data-source-block="91"
 data-source-sha256="4ae972f45907f6c0a29768632b5f2cad81797755323293b25a74defc6bed4e87">
 <p>If the agent posts a blocked comment, exits without an entry, or
 crashes after claim, the task stays working and the worktree is
@@ -1177,7 +1187,7 @@ recovery guidance. Recovery in v1 is manual: inspect or commit useful
 changes, stop any remaining process, move the task to Ready, and let a
 new isolated run claim it. There is no automatic resume or takeover.</p>
 </div>
-<div class="source-block" data-source-block="91"
+<div class="source-block" data-source-block="92"
 data-source-sha256="9331934deaea17d9fd111e00bc629e470a00ca138ce2e9f329f2418be1ff1248">
 <p>The watcher checks exact run state every five seconds while the
 executor runs. When it observes the run output and review state, it
@@ -1187,7 +1197,7 @@ the process group, waits ten more seconds, and sends
 <code>SIGTERM</code> sent to the watcher uses the same group shutdown
 sequence and never changes task state.</p>
 </div>
-<div class="source-block" data-source-block="92"
+<div class="source-block" data-source-block="93"
 data-source-sha256="173d6543e2d988512078864d6784b15a7bccf2fc0c31905a79310a0cc58979a8">
 <p>Credential revocation makes the next operation fail authentication.
 The watcher terminates the process group and exits. Configuration is
@@ -1197,11 +1207,11 @@ after restart; entry author names use server state at write time.</p>
 </div>
 <div class="document-section">
 <section id="8-security-privacy-and-operations" class="source-block"
-data-source-block="93"
+data-source-block="94"
 data-source-sha256="d373a802adb9444e8d300217a0222856fa057b13255436c0f4709f894158a5f1">
 <h2>8. Security, privacy, and operations</h2>
 </section>
-<div class="source-block" data-source-block="94"
+<div class="source-block" data-source-block="95"
 data-source-sha256="e30390374ad0e1894253032f7be713b28eb387b311bfa1d9eea5464a25bcb9ce">
 <p>Task content, repository files, executor output, profiles, command
 arrays, API responses, and environment values are untrusted. The CLI
@@ -1209,7 +1219,7 @@ validates IDs and paths, executes arrays without a shell, restricts
 entry sizes, and relies on server account, assignment, status, and run
 fencing.</p>
 </div>
-<div class="source-block" data-source-block="95"
+<div class="source-block" data-source-block="96"
 data-source-sha256="1d854f8c775482ddd51f4238928de48026458440566cbb69502066ba9c7b3308">
 <p>The child receives only the configured agent credential, never a
 session or personal token. The token is placed in
@@ -1219,7 +1229,7 @@ operating-system user from reading its environment or other
 user-accessible secrets. Users must run watchers only for trusted boards
 and repositories.</p>
 </div>
-<div class="source-block" data-source-block="96"
+<div class="source-block" data-source-block="97"
 data-source-sha256="f7f65c0c7651c8a1d9a351b0361e5b7b00c74237f0985da6e00b58eb1d0245fb">
 <p>The executor sees only its generated worktree as the working
 directory. This prevents a losing claim from changing the source
@@ -1227,35 +1237,35 @@ checkout or another run, but it is not an operating-system sandbox.
 Absolute paths, network access, and other user-readable files remain
 reachable.</p>
 </div>
-<div class="source-block" data-source-block="97"
+<div class="source-block" data-source-block="98"
 data-source-sha256="eadce9ce8f8845d33c89e054c872b3e1e87065099c0a4f1523db39d4b783a515">
 <p>The watcher owns generated losing-run directories and may delete them
 even when the executor changed them. It never force-deletes retained
 successful, blocked, or interrupted worktrees. Registry and config files
 use owner-only permissions and contain no credentials.</p>
 </div>
-<div class="source-block" data-source-block="98"
+<div class="source-block" data-source-block="99"
 data-source-sha256="efbb04ffd935201f7c10621850e8a5564c556e428caf528a0dc3dcd6f975efad">
 <p>One watcher uses one executor process group and one outstanding API
 request. Idle and active monitoring use at most 12 reads per minute
 before retries. Several profiles share account limits, so 429 handling
 is required.</p>
 </div>
-<div class="source-block" data-source-block="99"
+<div class="source-block" data-source-block="100"
 data-source-sha256="be5a32d0589b60874bea4c3a02c583f0d28ace47cb149af60f61dff27ed2fda7">
 <p>Each retained worktree consumes repository-sized disk space. The
 per-profile limit of ten prevents unbounded local accumulation. At the
 limit, no executor starts. Users inspect <code>slate runs list</code>
 and clean committed runs explicitly.</p>
 </div>
-<div class="source-block" data-source-block="100"
+<div class="source-block" data-source-block="101"
 data-source-sha256="65213d4132c741bc12505bf885321f6d22195734c0c8e55ac87f0ed531b533b0">
 <p>Task descriptions and entries retain their existing 16 KiB limits,
 and a card retains its 200-entry limit. At an entry or storage limit,
 the CLI reports the server error, the task remains working, the worktree
 is retained, and the watcher stops.</p>
 </div>
-<div class="source-block" data-source-block="101"
+<div class="source-block" data-source-block="102"
 data-source-sha256="d14b73476c6721226476a0f38ab140b3faf006cc5e66965a76ee9de3866b14e2">
 <p>The watcher streams child output to the terminal and stores no prompt
 or execution log. Output may contain task or repository data. Executor
@@ -1265,11 +1275,11 @@ signals are the user-controlled runtime limit.</p>
 </div>
 <div class="document-section">
 <section id="9-acceptance-criteria"
-class="source-block role-acceptance-criteria" data-source-block="102"
+class="source-block role-acceptance-criteria" data-source-block="103"
 data-source-sha256="6d76b4820d002f28fcf60404f54b3b5893667240dd3e86def26e97bd7b6ad68d">
 <h2>9. Acceptance criteria</h2>
 </section>
-<div class="source-block" data-source-block="103"
+<div class="source-block" data-source-block="104"
 data-source-sha256="c54531cb9cc827a4d7998a8e550553b01164886a0a249951b312ff4de191d9de">
 <ul>
 <li><code>AC-1</code>: A valid profile and assigned queued task launch
@@ -1320,11 +1330,11 @@ that profile until a committed run is cleaned.</li>
 </div>
 <div class="document-section">
 <section id="10-test-approach" class="source-block"
-data-source-block="104"
+data-source-block="105"
 data-source-sha256="c12e936da26b05f551bb9244d0b3c7384b2d3d340c374095d6baea0e971a43de">
 <h2>10. Test approach</h2>
 </section>
-<div class="source-block" data-source-block="105"
+<div class="source-block" data-source-block="106"
 data-source-sha256="69632806498c11bfb97ff1cee0527420185f2cb4a408ce6f773450a785b4b6ab">
 <p>CLI unit tests use <code>httptest.Server</code>, temporary Git
 repositories, fake executables, controlled clocks, and deterministic
@@ -1337,13 +1347,13 @@ monitoring, and post-output timeout. These cover <code>INV-1</code>,
 <code>AC-1</code>, <code>AC-2</code>, and <code>AC-7</code> through
 <code>AC-16</code>.</p>
 </div>
-<div class="source-block" data-source-block="106"
+<div class="source-block" data-source-block="107"
 data-source-sha256="17d49e02f221be649d96f64438900baa9bcc334459b5af2038801e3dadbad330">
 <p>Process tests on macOS and Linux start a fake executor with a child
 and grandchild. They prove signal and kill delivery to the complete
 process group for <code>AC-11</code>.</p>
 </div>
-<div class="source-block" data-source-block="107"
+<div class="source-block" data-source-block="108"
 data-source-sha256="53a96895256e219ebf22e27c9be93564f4b1d7831c8c676791ac3f294c44ccf4">
 <p>Command tests prove entries run filters, managed headers, comment and
 output bodies, idempotency headers, file and stdin handling, local size
@@ -1351,7 +1361,7 @@ checks, and structured errors. These cover <code>INV-6</code>,
 <code>INV-9</code>, <code>AC-4</code>, <code>AC-5</code>,
 <code>AC-13</code>, and <code>AC-14</code>.</p>
 </div>
-<div class="source-block" data-source-block="108"
+<div class="source-block" data-source-block="109"
 data-source-sha256="58900dab5ef16d91d9e3d1f8e67775349d5d29a5abc93c00c4f47e3899d50fc8">
 <p>A two-watcher integration test gives both fake executors distinct
 worktrees and delays their claims. It proves one atomic winner, server
@@ -1360,7 +1370,7 @@ cross-run file collision. This covers <code>INV-1</code> through
 <code>INV-3</code>, <code>INV-12</code>, <code>AC-2</code>, and
 <code>AC-3</code>.</p>
 </div>
-<div class="source-block" data-source-block="109"
+<div class="source-block" data-source-block="110"
 data-source-sha256="321d7f8c37f13ac4fc806799d7376b98c2f190500e1d6d1d9bd82d50e4d43113">
 <p>PostgreSQL-backed server tests prove account and agent scoping, one
 managed claim winner, legacy compatibility, run conflict behavior, queue
@@ -1371,13 +1381,13 @@ replay from review and done, and atomic output-to-review. These cover
 <code>AC-5</code>, and <code>AC-12</code> through
 <code>AC-15</code>.</p>
 </div>
-<div class="source-block" data-source-block="110"
+<div class="source-block" data-source-block="111"
 data-source-sha256="326f00cfc2b4b291ea41be982b7c5fc6bbc438e1bf79ae14fade386e5a1f5537">
 <p>Existing CLI, server, migration, integration, and browser suites
 prove legacy compatibility. The implementation gate is
 <code>just test-ci</code> and <code>just build</code>.</p>
 </div>
-<div class="source-block" data-source-block="111"
+<div class="source-block" data-source-block="112"
 data-source-sha256="c393a60827e5f49946ac06cb650377561e7f31293df5376fa702404317477a45">
 <p>Manual Codex and Claude smoke tests in disposable repositories verify
 current non-interactive stdin and exit behavior. Unsupported behavior
@@ -1387,11 +1397,11 @@ generic stdin contract.</p>
 </div>
 <div class="document-section">
 <section id="11-risks-and-tradeoffs" class="source-block role-risks"
-data-source-block="112"
+data-source-block="113"
 data-source-sha256="1285aaa4ffd2e9469718aff3ada6282e941a59e9a8b79073a130a46b00ce69bd">
 <h2>11. Risks and tradeoffs</h2>
 </section>
-<div class="source-block" data-source-block="113"
+<div class="source-block" data-source-block="114"
 data-source-sha256="7c88d198784253085ed56e212217fa60668430167415c85ed192fe66502c807a">
 <ul>
 <li>Task content can instruct the executor to expose its environment or
@@ -1420,11 +1430,11 @@ later breaking release.</li>
 </div>
 <div class="document-section">
 <section id="12-open-questions" class="source-block role-open-questions"
-data-source-block="114"
+data-source-block="115"
 data-source-sha256="9a814093a20806bc5a44c69acb6ee4c27c516199b03238efaf23de1e8b4e534d">
 <h2>12. Open questions</h2>
 </section>
-<div class="source-block" data-source-block="115"
+<div class="source-block" data-source-block="116"
 data-source-sha256="5736c33ab4ca10b32c8604affa4cb5efac57deb8babe8cd90b062030961878c7">
 <ul>
 <li>Should the first release include commands to create and edit
@@ -1442,12 +1452,53 @@ tested examples. This does not block the generic implementation.</li>
 </div>
 </div>
 <div class="document-section">
-<section id="13-out-of-scope" class="source-block"
-data-source-block="116"
-data-source-sha256="c22168596a4b1b1829bac627abf17561e31167099a31c6893f97bddab585a496">
-<h2>13. Out of scope</h2>
+<section id="13-implementation-notes" class="source-block"
+data-source-block="117"
+data-source-sha256="870b28adab77a0ef8c8ecc2ebfd2807578fd5d9d6c476a6b4ffb6091eb7f5ae6">
+<h2>13. Implementation notes</h2>
 </section>
-<div class="source-block" data-source-block="117"
+<div class="source-block" data-source-block="118"
+data-source-sha256="f32a763f89798e9a4c26741c267a412fb2793656f26497ec2acef4cee6f219b8">
+<p>These points were settled while building the change and differ from
+the text above as first approved. Each is deliberate and carries a
+comment in the code.</p>
+</div>
+<div class="source-block" data-source-block="119"
+data-source-sha256="8b867b966e0829d50452663ea015459afc23061808cd3010ad7847843a64d1db">
+<ul>
+<li><strong><code>Retry-After</code> is a minimum, not an exact
+delay.</strong> RFC 9110 section 10.2.3 defines the header that way.
+Honoring a shorter hint than the current backoff would let a
+<code>Retry-After: 0</code> from a misconfigured proxy become a request
+flood aimed at an account that is already rate limited.</li>
+<li><strong>HTTP 500 is retryable.</strong> The original list named 502,
+503 and 504. A single transient 500 ending a day-long session
+contradicts the stated outcome that temporary server failures do not
+stop the watcher.</li>
+<li><strong>A reply that is not the API's is terminal.</strong> A proxy
+serving an error page with a success status will keep serving it, so
+repeating the request cannot help.</li>
+<li><strong>A run the watcher could not place is retained, not
+deleted.</strong> Deleting a worktree is unrecoverable, so it requires
+positive evidence that the run never held the task. A run that was ever
+seen to own or write to its task, or whose supervision hit a read
+failure, keeps its worktree and is reported as ambiguous.</li>
+<li><strong>The prompt tells the agent to write its report outside the
+worktree.</strong> A report file left inside counts as uncommitted work
+and blocks <code>slate runs clean</code> for ever.</li>
+<li><strong><code>slate runs clean</code> releases a crashed watcher's
+record.</strong> Nothing from such a run is alive, so its worktree must
+still be removable.</li>
+</ul>
+</div>
+</div>
+<div class="document-section">
+<section id="14-out-of-scope" class="source-block"
+data-source-block="120"
+data-source-sha256="9c39aa1c5ab1bdbe5b31cf67bcf3db893ff09b3e89cd97d6f8ac221f87268c5e">
+<h2>14. Out of scope</h2>
+</section>
+<div class="source-block" data-source-block="121"
 data-source-sha256="3ad9508a92559d6a854417002ab6eaf650bb13504311d7c59168b960a99373b8">
 <ul>
 <li>Hosted or server-side executors.</li>

@@ -146,7 +146,7 @@ The worktree registry owns local run ID, task ID, agent ID, branch, worktree pat
 - The source checkout must be on a named branch and have no staged, modified, deleted, or untracked files.
 - The watcher offers the highest-priority, oldest eligible task first.
 - Idle polling starts at five seconds and doubles to 60 seconds with up to 20 percent jitter. Healthy idle polling therefore occurs every 5 to 72 seconds.
-- Polling retries connection failures, timeouts, and HTTP 429, 502, 503, and 504. It honors a valid delta-seconds `Retry-After` on 429 and otherwise uses five-second exponential backoff capped at 60 seconds with 20 percent jitter.
+- Polling retries connection failures, timeouts, and HTTP 429, 500, 502, 503, and 504. A valid delta-seconds `Retry-After` on 429 sets a minimum wait; the five-second exponential backoff capped at 60 seconds with 20 percent jitter always advances, and the longer of the two is used.
 - HTTP 400, 401, 403, 404, and 409 are terminal for the current operation. Authentication and identity failures stop the watcher. Candidate claim conflicts return to polling after cleanup.
 - Mutation commands do not retry automatically. The agent repeats a comment or output with the same required idempotency key after an uncertain result.
 - Idle and failure backoff are separate. Any successful API response resets failure backoff; finding work resets idle backoff.
@@ -181,7 +181,9 @@ slate runs clean <run-id>
 
 The child commands read `SLATE_RUN_ID`. When present, claim, status, comment, and output requests send `X-Slate-Run-ID`. The watcher also sends this header when querying exact run state. The header must be a UUID. It is execution identity, not independent authority.
 
-`POST /api/v1/agent/tasks/{id}/claim` accepts the optional run header. A managed claim writes `tasks.execution_run_id` in the same atomic update that writes `working`. A legacy claim omits it. Moving a task out of working clears it only after any run-tagged output is stored.
+`POST /api/v1/agent/tasks/{id}/claim` accepts the optional run header. A managed claim writes `tasks.execution_run_id` in the same atomic update that writes `working`. A legacy claim omits it. A task carries a run only while it is working: any change of status or of assignee ends the run, and so does the output transaction, after its entry is stored.
+
+`GET /api/v1/tasks/{id}` reports `executionRunId` while a managed run owns the task. A watcher cannot otherwise tell its own interrupted run from a claim another run won, and those need opposite cleanup. Collection responses do not carry it.
 
 `POST /api/v1/tasks/{id}/entries` stores optional `run_id` from the authenticated managed run. For a new managed entry, the server locks the task and checks account, assignment, working status, and matching run ID. It first looks up an exact idempotency replay using task, author, and key. A matching replay succeeds from `needs_review` or `done`; a reused key with different content conflicts.
 
@@ -328,7 +330,18 @@ Manual Codex and Claude smoke tests in disposable repositories verify current no
 - Should `tasks entries` add pagination or a byte budget before watcher release? Recommended default: retain the currently bounded response and measure real sizes. This does not block task breakdown.
 - Which current Codex and Claude argument arrays satisfy the stdin and exit contracts? Verify them during documentation work and publish only tested examples. This does not block the generic implementation.
 
-## 13. Out of scope
+## 13. Implementation notes
+
+These points were settled while building the change and differ from the text above as first approved. Each is deliberate and carries a comment in the code.
+
+- **`Retry-After` is a minimum, not an exact delay.** RFC 9110 section 10.2.3 defines the header that way. Honoring a shorter hint than the current backoff would let a `Retry-After: 0` from a misconfigured proxy become a request flood aimed at an account that is already rate limited.
+- **HTTP 500 is retryable.** The original list named 502, 503 and 504. A single transient 500 ending a day-long session contradicts the stated outcome that temporary server failures do not stop the watcher.
+- **A reply that is not the API's is terminal.** A proxy serving an error page with a success status will keep serving it, so repeating the request cannot help.
+- **A run the watcher could not place is retained, not deleted.** Deleting a worktree is unrecoverable, so it requires positive evidence that the run never held the task. A run that was ever seen to own or write to its task, or whose supervision hit a read failure, keeps its worktree and is reported as ambiguous.
+- **The prompt tells the agent to write its report outside the worktree.** A report file left inside counts as uncommitted work and blocks `slate runs clean` for ever.
+- **`slate runs clean` releases a crashed watcher's record.** Nothing from such a run is alive, so its worktree must still be removable.
+
+## 14. Out of scope
 
 - Hosted or server-side executors.
 - Non-Git workspaces in v1.
