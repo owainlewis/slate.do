@@ -247,7 +247,12 @@ func (h *Handler) ListCardEntries(w http.ResponseWriter, r *http.Request, user a
 	if !validatePathID(w, "card", r.PathValue("id")) {
 		return
 	}
-	entries, err := h.store.ListCardEntries(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
+	if runID != "" && !validUUID(runID) {
+		writeError(w, http.StatusBadRequest, "runId must be a valid ID")
+		return
+	}
+	entries, err := h.store.ListCardEntriesForRun(r.Context(), user.ID, user.AgentID, r.PathValue("id"), runID)
 	if handleStoreError(w, err) {
 		return
 	}
@@ -277,7 +282,11 @@ func (h *Handler) CreateCardEntry(w http.ResponseWriter, r *http.Request, user a
 	if !validateTaskIdempotencyKey(w, input.IdempotencyKey) {
 		return
 	}
-	entry, err := h.store.CreateCardEntry(r.Context(), user.ID, user.AgentID, user.DisplayName, r.PathValue("id"), input)
+	runID, ok := agentRunID(w, r, user)
+	if !ok {
+		return
+	}
+	entry, err := h.store.CreateCardEntryForRun(r.Context(), user.ID, user.AgentID, user.DisplayName, r.PathValue("id"), input, runID)
 	if handleStoreError(w, err) {
 		return
 	}
@@ -292,10 +301,14 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	if !validateUpdateTaskText(w, input) {
 		return
 	}
+	runID, ok := agentRunID(w, r, user)
+	if !ok {
+		return
+	}
 	var task Task
 	var err error
 	if user.AgentID != "" {
-		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), input)
+		task, err = h.store.UpdateTaskForAgentRun(r.Context(), user.ID, user.AgentID, r.PathValue("id"), input, runID)
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), input)
 	}
@@ -402,6 +415,9 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 		filter.Status = StatusQueued
 	}
 	filter.ActionsOnly = true
+	// The server owns queue order so work outside the returned page cannot
+	// starve behind client-side sorting.
+	filter.AgentQueue = true
 	if user.AgentID != "" {
 		filter.AssigneeAgentID = user.AgentID
 	}
@@ -418,10 +434,14 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 }
 
 func (h *Handler) AgentClaim(w http.ResponseWriter, r *http.Request, user auth.User) {
+	runID, ok := agentRunID(w, r, user)
+	if !ok {
+		return
+	}
 	var task Task
 	var err error
 	if user.AgentID != "" {
-		task, err = h.store.ClaimTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+		task, err = h.store.ClaimTaskForAgentRun(r.Context(), user.ID, user.AgentID, r.PathValue("id"), runID)
 	} else {
 		task, err = h.store.ClaimTask(r.Context(), user.ID, r.PathValue("id"))
 	}
@@ -438,27 +458,24 @@ func (h *Handler) AgentStatus(w http.ResponseWriter, r *http.Request, user auth.
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	var task Task
-	var err error
-	if user.AgentID != "" {
-		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
-	} else {
-		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
-	}
-	if handleStoreError(w, err) {
-		return
-	}
-	writeJSON(w, http.StatusOK, task)
+	h.agentStatusChange(w, r, user, input.Status)
 }
 
 // AgentDone keeps the released CLI command working while status is now the
 // sole completion model.
 func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.User) {
-	status := StatusDone
+	h.agentStatusChange(w, r, user, StatusDone)
+}
+
+func (h *Handler) agentStatusChange(w http.ResponseWriter, r *http.Request, user auth.User, status string) {
+	runID, ok := agentRunID(w, r, user)
+	if !ok {
+		return
+	}
 	var task Task
 	var err error
 	if user.AgentID != "" {
-		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &status})
+		task, err = h.store.UpdateTaskForAgentRun(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &status}, runID)
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &status})
 	}
@@ -466,6 +483,23 @@ func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.Us
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
+}
+
+// agentRunID reads the managed execution identity. It is agent-only, so a human
+// credential is never fenced by a header it did not mean to send.
+func agentRunID(w http.ResponseWriter, r *http.Request, user auth.User) (string, bool) {
+	runID := strings.TrimSpace(r.Header.Get("X-Slate-Run-ID"))
+	if runID == "" {
+		return "", true
+	}
+	if user.AgentID == "" {
+		return "", true
+	}
+	if !validUUID(runID) {
+		writeError(w, http.StatusBadRequest, "X-Slate-Run-ID must be a valid ID")
+		return "", false
+	}
+	return runID, true
 }
 
 func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
@@ -652,6 +686,10 @@ func handleStoreError(w http.ResponseWriter, err error, account ...entitlements.
 			"usage": quota.Current,
 			"limit": quota.Limit,
 		})
+	case errors.Is(err, ErrManagedRunStatusLocked):
+		writeCodedError(w, http.StatusConflict, "managed_run_status_locked", err.Error())
+	case errors.Is(err, ErrRunConflict):
+		writeCodedError(w, http.StatusConflict, "run_conflict", err.Error())
 	case errors.Is(err, ErrTaskUnavailable):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrIdempotencyKey):
@@ -703,6 +741,10 @@ func limitContext(account []entitlements.Entitlement, value func(entitlements.Li
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeCodedError(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "error": message})
 }
 
 func writeInternalError(w http.ResponseWriter, err error, message string) {

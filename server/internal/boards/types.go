@@ -158,6 +158,9 @@ type TaskFilter struct {
 	ParentTaskID    string
 	TopLevelOnly    bool
 	InboxOnly       bool
+	// AgentQueue orders eligible work the way an agent should take it:
+	// P0, P1, P2, unprioritized, oldest first inside each group.
+	AgentQueue bool
 }
 
 type TaskPage struct {
@@ -173,6 +176,7 @@ type CardEntry struct {
 	AuthorKind       string    `json:"authorKind"`
 	AuthorID         string    `json:"authorId"`
 	AuthorName       string    `json:"authorName"`
+	RunID            string    `json:"runId,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
 	CardStatus       string    `json:"cardStatus,omitempty"`
 	CardReviewReason string    `json:"cardReviewReason,omitempty"`

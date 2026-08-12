@@ -28,6 +28,12 @@ var (
 	ErrIdempotencyKey  = errors.New("idempotency key already used with different data")
 	ErrIdempotencyGone = errors.New("task created by idempotency key was deleted")
 	ErrAgentTaskScope  = errors.New("agent credentials cannot move, reorder, or reassign tasks")
+	// ErrRunConflict fences a managed run. A missing, losing, or stale run
+	// identity cannot mutate a task that another managed run owns.
+	ErrRunConflict = errors.New("this task belongs to a different agent run")
+	// ErrManagedRunStatusLocked keeps a managed run on the claim and output
+	// transitions. Direct status changes stay available to legacy claims.
+	ErrManagedRunStatusLocked = errors.New("a managed agent run changes status through claim and output")
 )
 
 const (
@@ -38,9 +44,30 @@ const (
 const inboxCaptureFingerprintTarget = "account-inbox"
 
 type completedTaskCursor struct {
-	UpdatedAt time.Time `json:"updatedAt"`
+	// SortValue is the ordering timestamp of the last returned row. The wire
+	// name predates the open-item pages that reuse it for created_at.
+	SortValue time.Time `json:"updatedAt"`
 	ID        string    `json:"id"`
 	Scope     string    `json:"scope"`
+	// Rank carries the priority group of the last agent-queue row. Other
+	// orderings never issue it.
+	Rank *int `json:"rank,omitempty"`
+}
+
+// taskPriorityRankSQL orders P0, P1, P2, then unprioritized work.
+const taskPriorityRankSQL = `CASE t.priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 ELSE 3 END`
+
+func taskPriorityRank(priority string) int {
+	switch priority {
+	case PriorityP0:
+		return 0
+	case PriorityP1:
+		return 1
+	case PriorityP2:
+		return 2
+	default:
+		return 3
+	}
 }
 
 var (
@@ -1137,18 +1164,25 @@ func topLevelTaskCreateFingerprint(bucketID string, title string, description st
 }
 
 func (s *Store) UpdateTask(ctx context.Context, userID string, id string, input UpdateTaskInput) (Task, error) {
-	return s.updateTask(ctx, userID, "", id, input, false)
+	return s.updateTask(ctx, userID, "", id, input, false, "")
 }
 
 func (s *Store) UpdateTaskForHuman(ctx context.Context, userID string, id string, input UpdateTaskInput) (Task, error) {
-	return s.updateTask(ctx, userID, "", id, input, true)
+	return s.updateTask(ctx, userID, "", id, input, true, "")
 }
 
 func (s *Store) UpdateTaskForAgent(ctx context.Context, userID string, agentID string, id string, input UpdateTaskInput) (Task, error) {
+	return s.UpdateTaskForAgentRun(ctx, userID, agentID, id, input, "")
+}
+
+// UpdateTaskForAgentRun applies a managed run's fence before an agent update.
+// A managed run reaches working through claim and review through output, so its
+// direct status changes are rejected while legacy claims keep theirs.
+func (s *Store) UpdateTaskForAgentRun(ctx context.Context, userID string, agentID string, id string, input UpdateTaskInput, runID string) (Task, error) {
 	if input.BucketID != nil || input.SortOrder != nil || input.AssigneeAgentID != nil {
 		return Task{}, ErrAgentTaskScope
 	}
-	return s.updateTask(ctx, userID, agentID, id, input, false)
+	return s.updateTask(ctx, userID, agentID, id, input, false, runID)
 }
 
 func (s *Store) MoveTask(ctx context.Context, userID string, id string, input MoveTaskInput) (Task, error) {
@@ -1350,7 +1384,7 @@ func touchTask(ctx context.Context, tx pgx.Tx, taskID string) error {
 	return err
 }
 
-func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID string, id string, input UpdateTaskInput, allowWorking bool) (Task, error) {
+func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID string, id string, input UpdateTaskInput, allowWorking bool, runID string) (Task, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Task{}, err
@@ -1363,9 +1397,18 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			return Task{}, err
 		}
 	}
-	current, err := lockedTaskForAgent(ctx, tx, userID, requiredAgentID, id)
+	current, ownerRunID, err := lockedTaskForAgent(ctx, tx, userID, requiredAgentID, id)
 	if err != nil {
 		return Task{}, err
+	}
+	if requiredAgentID != "" {
+		managed, err := checkAgentRun(ownerRunID, runID)
+		if err != nil {
+			return Task{}, err
+		}
+		if managed && (input.Status != nil || input.Done != nil) {
+			return Task{}, ErrManagedRunStatusLocked
+		}
 	}
 	original := current
 	originalBucketID := current.BucketID
@@ -1502,6 +1545,10 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			scheduled_date = NULLIF($7, '')::date, kind = $8,
 			status = $9, priority = $10, sort_order = $11,
 			assignee_agent_id = NULLIF($12, '')::uuid,
+			-- Leaving working releases the managed fence so the next claim can
+			-- establish a new run. Output keeps its run because it never
+			-- travels through this update.
+			execution_run_id = CASE WHEN $9 = 'working' THEN t.execution_run_id ELSE NULL END,
 			review_reason = CASE
 				WHEN $9 <> 'needs_review' THEN ''
 				WHEN t.status <> 'needs_review' THEN ''
@@ -1546,23 +1593,29 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 }
 
 func (s *Store) ClaimTask(ctx context.Context, userID string, id string) (Task, error) {
-	return s.claimTask(ctx, userID, "", id)
+	return s.claimTask(ctx, userID, "", id, "")
 }
 
 func (s *Store) ClaimTaskForAgent(ctx context.Context, userID string, agentID string, id string) (Task, error) {
-	return s.claimTask(ctx, userID, agentID, id)
+	return s.claimTask(ctx, userID, agentID, id, "")
 }
 
-func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id string) (Task, error) {
+// ClaimTaskForAgentRun records a managed run on the same atomic update that
+// moves a queued action to working, so exactly one competing run can win.
+func (s *Store) ClaimTaskForAgentRun(ctx context.Context, userID string, agentID string, id string, runID string) (Task, error) {
+	return s.claimTask(ctx, userID, agentID, id, runID)
+}
+
+func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id string, runID string) (Task, error) {
 	agentSQL := ""
-	args := []any{userID, id, StatusWorking, StatusQueued, KindAction}
+	args := []any{userID, id, StatusWorking, StatusQueued, KindAction, runID}
 	if agentID != "" {
 		args = append(args, agentID)
-		agentSQL = " AND t.assignee_agent_id = $6"
+		agentSQL = " AND t.assignee_agent_id = $7"
 	}
 	row := s.db.QueryRow(ctx, `
 		UPDATE tasks t
-		SET status = $3, review_reason = '', updated_at = now()
+		SET status = $3, review_reason = '', execution_run_id = NULLIF($6, '')::uuid, updated_at = now()
 		FROM boards b
 		WHERE b.id = t.board_id
 			AND b.user_id = $1
@@ -1580,6 +1633,22 @@ func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id
 		return Task{}, ErrTaskUnavailable
 	}
 	return task, err
+}
+
+// checkAgentRun decides whether an agent mutation may proceed. A managed task
+// accepts only its owning run, and a run identity without a matching claim is
+// always a conflict. Legacy agents keep working while both sides are empty.
+func checkAgentRun(ownerRunID string, requestRunID string) (managed bool, err error) {
+	if ownerRunID == "" {
+		if requestRunID != "" {
+			return false, ErrRunConflict
+		}
+		return false, nil
+	}
+	if requestRunID != ownerRunID {
+		return false, ErrRunConflict
+	}
+	return true, nil
 }
 
 func (s *Store) DeleteTask(ctx context.Context, userID string, id string) error {
@@ -1660,8 +1729,18 @@ func (s *Store) GetTaskForAgent(ctx context.Context, userID string, agentID stri
 }
 
 func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID string, taskID string) ([]CardEntry, error) {
+	return s.ListCardEntriesForRun(ctx, userID, agentID, taskID, "")
+}
+
+// ListCardEntriesForRun returns the entries of one exact managed run when a run
+// ID is supplied, so a watcher can verify its own output rather than any recent
+// activity on the card.
+func (s *Store) ListCardEntriesForRun(ctx context.Context, userID string, agentID string, taskID string, runID string) ([]CardEntry, error) {
 	if !validUUID(taskID) {
 		return nil, fmt.Errorf("%w: card ID must be a valid ID", ErrInvalidData)
+	}
+	if runID != "" && !validUUID(runID) {
+		return nil, fmt.Errorf("%w: run ID must be a valid ID", ErrInvalidData)
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -1689,11 +1768,11 @@ func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID stri
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT id::text, task_id::text, kind, body,
-			author_kind, author_id::text, author_name, created_at
+			author_kind, author_id::text, author_name, COALESCE(run_id::text, ''), created_at
 		FROM card_entries
-		WHERE task_id = $1
+		WHERE task_id = $1 AND ($2 = '' OR run_id = $2::uuid)
 		ORDER BY created_at, id
-	`, taskID)
+	`, taskID, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -1702,7 +1781,7 @@ func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID stri
 	for rows.Next() {
 		var entry CardEntry
 		if err := rows.Scan(&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body,
-			&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.CreatedAt); err != nil {
+			&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.RunID, &entry.CreatedAt); err != nil {
 			return nil, err
 		}
 		entries = append(entries, entry)
@@ -1746,6 +1825,13 @@ func (s *Store) ListCardReviewKinds(ctx context.Context, userID string, agentID 
 }
 
 func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID string, authorName string, taskID string, input CreateCardEntryInput) (CardEntry, error) {
+	return s.CreateCardEntryForRun(ctx, userID, agentID, authorName, taskID, input, "")
+}
+
+// CreateCardEntryForRun stores an entry for a managed agent run. The run tag is
+// recorded with the entry, and an output still moves the card to review inside
+// the same transaction.
+func (s *Store) CreateCardEntryForRun(ctx context.Context, userID string, agentID string, authorName string, taskID string, input CreateCardEntryInput, runID string) (CardEntry, error) {
 	if !validUUID(taskID) {
 		return CardEntry{}, fmt.Errorf("%w: card ID must be a valid ID", ErrInvalidData)
 	}
@@ -1779,14 +1865,14 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		args = append(args, agentID)
 		agentSQL = " AND t.assignee_agent_id = $3"
 	}
-	var authorizedTaskID, cardStatus, cardReviewReason string
+	var authorizedTaskID, cardStatus, cardReviewReason, ownerRunID string
 	if err := tx.QueryRow(ctx, `
-		SELECT t.id::text, t.status, COALESCE(t.review_reason, '')
+		SELECT t.id::text, t.status, COALESCE(t.review_reason, ''), COALESCE(t.execution_run_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2`+agentSQL+`
 		FOR UPDATE OF t
-	`, args...).Scan(&authorizedTaskID, &cardStatus, &cardReviewReason); err != nil {
+	`, args...).Scan(&authorizedTaskID, &cardStatus, &cardReviewReason, &ownerRunID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return CardEntry{}, ErrNotFound
 		}
@@ -1824,12 +1910,12 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		var existingFingerprint string
 		err := tx.QueryRow(ctx, `
 			SELECT id::text, task_id::text, kind, body,
-				author_kind, author_id::text, author_name, created_at, request_hash
+				author_kind, author_id::text, author_name, COALESCE(run_id::text, ''), created_at, request_hash
 			FROM card_entries
 			WHERE task_id = $1 AND author_kind = $2 AND author_id = $3 AND idempotency_key = $4
 		`, taskID, authorKind, authorID, idempotencyKey).Scan(
 			&existing.ID, &existing.TaskID, &existing.Kind, &existing.Body,
-			&existing.AuthorKind, &existing.AuthorID, &existing.AuthorName, &existing.CreatedAt, &existingFingerprint,
+			&existing.AuthorKind, &existing.AuthorID, &existing.AuthorName, &existing.RunID, &existing.CreatedAt, &existingFingerprint,
 		)
 		if err == nil {
 			if existingFingerprint != fingerprint {
@@ -1843,6 +1929,23 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 			return CardEntry{}, err
 		}
 	}
+	// An exact replay is resolved above so a lost response can be repeated from
+	// review or done. Only a new entry is measured against the current status
+	// and run ownership.
+	if agentID != "" {
+		managed, err := checkAgentRun(ownerRunID, runID)
+		if err != nil {
+			return CardEntry{}, err
+		}
+		if managed && cardStatus != StatusWorking {
+			return CardEntry{}, ErrRunConflict
+		}
+		if !managed {
+			runID = ""
+		}
+	} else {
+		runID = ""
+	}
 	var entryCount int
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM card_entries WHERE task_id = $1", taskID).Scan(&entryCount); err != nil {
 		return CardEntry{}, err
@@ -1852,13 +1955,13 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	}
 	var entry CardEntry
 	err = tx.QueryRow(ctx, `
-		INSERT INTO card_entries (task_id, kind, body, author_kind, author_id, author_name, idempotency_key, request_hash)
-		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8)
+		INSERT INTO card_entries (task_id, kind, body, author_kind, author_id, author_name, idempotency_key, request_hash, run_id)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, '')::uuid)
 		RETURNING id::text, task_id::text, kind, body,
-			author_kind, author_id::text, author_name, created_at
-	`, taskID, kind, body, authorKind, authorID, authorName, idempotencyKey, fingerprint).Scan(
+			author_kind, author_id::text, author_name, COALESCE(run_id::text, ''), created_at
+	`, taskID, kind, body, authorKind, authorID, authorName, idempotencyKey, fingerprint, runID).Scan(
 		&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body,
-		&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.CreatedAt,
+		&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.RunID, &entry.CreatedAt,
 	)
 	if err != nil {
 		return CardEntry{}, err
@@ -1999,21 +2102,30 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	} else if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	orderSQL := "t.created_at DESC, t.id DESC"
-	if completedHistory {
-		orderSQL = "t.updated_at DESC, t.id DESC"
+	// One sort column drives the order, the keyset predicate, and the value
+	// stored in the cursor, so those three can never drift apart. The agent
+	// queue keeps age ordering even when it is filtered to completed work.
+	sortColumn := "t.created_at"
+	if completedHistory && !filter.AgentQueue {
+		sortColumn = "t.updated_at"
+	}
+	orderSQL := sortColumn + " DESC, t.id DESC"
+	if filter.AgentQueue {
+		orderSQL = taskPriorityRankSQL + ", " + sortColumn + ", t.id"
 	}
 	if filter.Cursor != "" {
-		cursor, err := decodeCompletedTaskCursor(filter.Cursor, taskCursorScope(userID, filter))
+		cursor, err := decodeCompletedTaskCursor(filter.Cursor, taskCursorScope(userID, filter), filter.AgentQueue)
 		if err != nil {
 			return TaskPage{}, err
 		}
-		args = append(args, cursor.UpdatedAt, cursor.ID)
-		column := "t.created_at"
-		if completedHistory {
-			column = "t.updated_at"
+		if filter.AgentQueue {
+			args = append(args, *cursor.Rank, cursor.SortValue, cursor.ID)
+			whereSQL += fmt.Sprintf(" AND (%s, %s, t.id) > ($%d, $%d, $%d::uuid)",
+				taskPriorityRankSQL, sortColumn, len(args)-2, len(args)-1, len(args))
+		} else {
+			args = append(args, cursor.SortValue, cursor.ID)
+			whereSQL += fmt.Sprintf(" AND (%s < $%d OR (%s = $%d AND t.id < $%d::uuid))", sortColumn, len(args)-1, sortColumn, len(args)-1, len(args))
 		}
-		whereSQL += fmt.Sprintf(" AND (%s < $%d OR (%s = $%d AND t.id < $%d::uuid))", column, len(args)-1, column, len(args)-1, len(args))
 	}
 	fetchLimit := limit + 1
 	args = append(args, fetchLimit)
@@ -2056,10 +2168,11 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	if len(page.Tasks) > limit {
 		page.Tasks = page.Tasks[:limit]
 		cursorTask := page.Tasks[len(page.Tasks)-1]
-		if !completedHistory {
-			cursorTask.UpdatedAt = cursorTask.CreatedAt
+		sortValue := cursorTask.CreatedAt
+		if sortColumn == "t.updated_at" {
+			sortValue = cursorTask.UpdatedAt
 		}
-		page.NextCursor, err = encodeCompletedTaskCursor(cursorTask, taskCursorScope(userID, filter))
+		page.NextCursor, err = encodeCompletedTaskCursor(cursorTask, sortValue, taskCursorScope(userID, filter), filter.AgentQueue)
 		if err != nil {
 			return TaskPage{}, err
 		}
@@ -2166,10 +2279,13 @@ func lockedBucket(ctx context.Context, tx pgx.Tx, userID string, id string) (Buc
 }
 
 func lockedTask(ctx context.Context, tx pgx.Tx, userID string, id string) (Task, error) {
-	return lockedTaskForAgent(ctx, tx, userID, "", id)
+	task, _, err := lockedTaskForAgent(ctx, tx, userID, "", id)
+	return task, err
 }
 
-func lockedTaskForAgent(ctx context.Context, tx pgx.Tx, userID string, agentID string, id string) (Task, error) {
+// lockedTaskForAgent locks the task row and returns the managed run that owns
+// it, so a caller can fence an agent mutation without a second read.
+func lockedTaskForAgent(ctx context.Context, tx pgx.Tx, userID string, agentID string, id string) (Task, string, error) {
 	agentSQL := ""
 	args := []any{userID, id}
 	if agentID != "" {
@@ -2180,18 +2296,21 @@ func lockedTaskForAgent(ctx context.Context, tx pgx.Tx, userID string, agentID s
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, '')
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, ''),
+			COALESCE(t.execution_run_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2
 			`+agentSQL+`
 		FOR UPDATE OF t
 	`, args...)
-	task, err := scanTask(row)
+	var task Task
+	var ownerRunID string
+	err := row.Scan(append(taskScanDestinations(&task), &ownerRunID)...)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Task{}, ErrNotFound
+		return Task{}, "", ErrNotFound
 	}
-	return task, err
+	return task, ownerRunID, err
 }
 
 func checkTaskCapacity(ctx context.Context, tx pgx.Tx, bucket Bucket, exceptTaskID string, overrideWorkingLimit bool) error {
@@ -2258,7 +2377,8 @@ func (s *Store) listBucketTasks(ctx context.Context, userID string, bucketID str
 	nextCursor := ""
 	if len(completed) > defaultCompletedHistoryLimit {
 		completed = completed[:defaultCompletedHistoryLimit]
-		cursor, err := encodeCompletedTaskCursor(completed[len(completed)-1], taskCursorScope(userID, TaskFilter{BucketID: bucketID, Status: StatusDone}))
+		last := completed[len(completed)-1]
+		cursor, err := encodeCompletedTaskCursor(last, last.UpdatedAt, taskCursorScope(userID, TaskFilter{BucketID: bucketID, Status: StatusDone}), false)
 		if err != nil {
 			return nil, "", err
 		}
@@ -2353,26 +2473,39 @@ func taskCursorScope(userID string, filter TaskFilter) string {
 	if filter.Done != nil && !(*filter.Done && filter.Status == StatusDone) {
 		parts = append(parts, fmt.Sprintf("done=%t", *filter.Done))
 	}
+	// Only the agent queue extends the scope, so cursors already issued for
+	// every other filter keep their existing value.
+	if filter.AgentQueue {
+		parts = append(parts, "agentQueue")
+	}
 	value := strings.Join(parts, "\x00")
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
 
-func encodeCompletedTaskCursor(task Task, scope string) (string, error) {
-	encoded, err := json.Marshal(completedTaskCursor{UpdatedAt: task.UpdatedAt.UTC(), ID: task.ID, Scope: scope})
+func encodeCompletedTaskCursor(task Task, sortValue time.Time, scope string, agentQueue bool) (string, error) {
+	cursor := completedTaskCursor{SortValue: sortValue.UTC(), ID: task.ID, Scope: scope}
+	if agentQueue {
+		rank := taskPriorityRank(task.Priority)
+		cursor.Rank = &rank
+	}
+	encoded, err := json.Marshal(cursor)
 	if err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(encoded), nil
 }
 
-func decodeCompletedTaskCursor(raw string, scope string) (completedTaskCursor, error) {
+func decodeCompletedTaskCursor(raw string, scope string, agentQueue bool) (completedTaskCursor, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
 		return completedTaskCursor{}, fmt.Errorf("%w: invalid completed-task cursor", ErrInvalidData)
 	}
 	var cursor completedTaskCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.UpdatedAt.IsZero() || !validUUIDText(cursor.ID) || cursor.Scope != scope {
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.SortValue.IsZero() || !validUUIDText(cursor.ID) || cursor.Scope != scope {
+		return completedTaskCursor{}, fmt.Errorf("%w: invalid completed-task cursor", ErrInvalidData)
+	}
+	if agentQueue != (cursor.Rank != nil) {
 		return completedTaskCursor{}, fmt.Errorf("%w: invalid completed-task cursor", ErrInvalidData)
 	}
 	return cursor, nil

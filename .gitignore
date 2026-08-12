@@ -8,3 +8,7 @@ server/internal/web/dist/*
 !server/internal/web/dist/editor.browser.test.js
 !server/internal/web/dist/cli.html
 build/
+
+# "just build" writes these binaries beside their main packages.
+/cli/slate
+/server/slate

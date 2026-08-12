@@ -55,14 +55,15 @@ var (
 )
 
 type User struct {
-	ID          string                   `json:"id"`
-	Email       string                   `json:"email"`
-	Role        string                   `json:"role"`
-	Theme       string                   `json:"theme"`
-	DisplayName string                   `json:"displayName"`
-	AgentID     string                   `json:"agentId,omitempty"`
-	Entitlement entitlements.Entitlement `json:"entitlement"`
-	Usage       entitlements.Usage       `json:"usage"`
+	ID           string                   `json:"id"`
+	Email        string                   `json:"email"`
+	Role         string                   `json:"role"`
+	Theme        string                   `json:"theme"`
+	DisplayName  string                   `json:"displayName"`
+	AgentID      string                   `json:"agentId,omitempty"`
+	AgentPurpose string                   `json:"agentPurpose,omitempty"`
+	Entitlement  entitlements.Entitlement `json:"entitlement"`
+	Usage        entitlements.Usage       `json:"usage"`
 }
 
 type UserWithPassword struct {
@@ -516,7 +517,8 @@ func (s *Service) MeForUser(w http.ResponseWriter, r *http.Request, user User) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, meResponse{Authenticated: true, User: &user})
+	capabilities := ServerCapabilities()
+	writeJSON(w, http.StatusOK, meResponse{Authenticated: true, User: &user, Capabilities: &capabilities})
 }
 
 func (s *Service) populateUsage(ctx context.Context, user *User) error {
@@ -1126,8 +1128,20 @@ type signupInput struct {
 }
 
 type meResponse struct {
-	Authenticated bool  `json:"authenticated"`
-	User          *User `json:"user,omitempty"`
+	Authenticated bool          `json:"authenticated"`
+	User          *User         `json:"user,omitempty"`
+	Capabilities  *Capabilities `json:"capabilities,omitempty"`
+}
+
+// Capabilities lets a client refuse to start against a server that has not been
+// deployed with the workflow it needs. The watcher requires managed runs.
+type Capabilities struct {
+	ManagedRuns bool `json:"managedRuns"`
+}
+
+// ServerCapabilities reports what this build supports.
+func ServerCapabilities() Capabilities {
+	return Capabilities{ManagedRuns: true}
 }
 
 type apiTokenInput struct {
