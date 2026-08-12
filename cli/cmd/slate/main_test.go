@@ -640,10 +640,33 @@ func TestHelpListsEveryCommandThatSendsTheRunHeader(t *testing.T) {
 	}
 }
 
-func TestHelpDoesNotPromiseAnUnshippedCommand(t *testing.T) {
-	joined := helpText[""] + helpText["auth"] + helpText["boards"] + helpText["lists"] + helpText["tasks"]
-	if strings.Contains(joined, "slate watch") {
-		t.Fatal("help documents a watch command this CLI does not implement")
+// TestHelpOnlyPromisesCommandsThatExist keeps help honest in both directions:
+// every command the top-level usage advertises must dispatch, and a command
+// that has not shipped yet must not be advertised.
+func TestHelpOnlyPromisesCommandsThatExist(t *testing.T) {
+	t.Setenv("SLATE_API_TOKEN", "")
+	t.Setenv("SLATE_RUN_ID", "")
+	advertised := []string{}
+	for _, line := range strings.Split(helpText[""], "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "slate" {
+			continue
+		}
+		name := fields[1]
+		if strings.HasPrefix(name, "-") || strings.HasPrefix(name, "[") || name == "help" || name == "version" {
+			continue
+		}
+		advertised = append(advertised, name)
+	}
+	if len(advertised) < 5 {
+		t.Fatalf("parsed %v from the usage block, want every resource command", advertised)
+	}
+	for _, name := range advertised {
+		// Help for a command answers locally, so a missing command is the only
+		// way this can fail.
+		if err := run([]string{"slate", name, "--help"}); err != nil {
+			t.Errorf("help advertises %q but the command does not exist: %v", name, err)
+		}
 	}
 }
 

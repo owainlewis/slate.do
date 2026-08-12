@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -35,6 +36,15 @@ type client struct {
 	token   string
 	runID   string
 	http    *http.Client
+	// ctx cancels in-flight requests. A long-lived caller sets it so an
+	// interrupt does not have to wait out the client timeout.
+	ctx context.Context
+}
+
+// withContext returns a copy whose requests are cancelled with ctx.
+func (c client) withContext(ctx context.Context) client {
+	c.ctx = ctx
+	return c
 }
 
 func main() {
@@ -73,6 +83,10 @@ func run(args []string) error {
 		return listsCmd(c, args[2:])
 	case "tasks":
 		return tasksCmd(c, args[2:])
+	case "watch":
+		return watchCmd(c, args[2:])
+	case "runs":
+		return runsCmd(args[2:])
 	default:
 		return fmt.Errorf("unknown command %q; run 'slate help'", args[1])
 	}
@@ -104,14 +118,60 @@ Configuration:
 
 Usage:
   slate version
-  slate help [auth|boards|lists|tasks]
+  slate help [auth|boards|lists|tasks|watch|runs]
   slate auth status
   slate boards <command>
   slate lists <command>
   slate tasks <command>
+  slate watch --profile <name>
+  slate runs <command>
 
 All successful command output is JSON. IDs are returned by list/get commands.
 Run "slate help <topic>" for every command and flag.
+`,
+	"watch": `Usage:
+  slate watch --profile <name> [--board <board-id>] [--workdir <git-path>]
+
+Runs one configured agent against its assigned Ready tasks. For each task the
+watcher creates a disposable Git worktree from the current commit, starts the
+profile's executor there with the task prompt on stdin, and watches that exact
+run. The agent claims the task, does the work, and reports through the Slate
+CLI. The watcher never claims or writes to the task itself.
+
+The source checkout must be on a named branch with nothing uncommitted, and
+--workdir defaults to the current directory. An executor never runs in it.
+
+--board limits both the search for work and the check for a task already in
+progress. A task already in progress stops startup: finish it or move it back
+to Ready, because this version has no automatic resume.
+
+Successful, blocked, and interrupted worktrees are kept for inspection. Only a
+run that lost its claim is deleted. A profile keeps at most 10 of them; at the
+limit no new run starts until one is released.
+
+Profiles live in SLATE_CONFIG, or slate/config.json under the user
+configuration directory:
+
+  {
+    "profiles": {
+      "codex": {
+        "agentId": "<the agent's Slate ID>",
+        "tokenEnv": "SLATE_CODEX_TOKEN",
+        "command": ["codex", "exec", "-"]
+      }
+    }
+  }
+
+The token itself is never stored, only the name of the variable holding it.
+Profile changes take effect when the watcher restarts.
+`,
+	"runs": `Usage:
+  slate runs list [--profile <name>]
+  slate runs clean <run-id>
+
+"list" shows retained runs and where their worktrees are. "clean" releases one
+worktree once nothing from the run is running and the worktree is clean. It
+never forces and it keeps the branch, so any commits stay reachable.
 `,
 	"auth": `Usage:
   slate auth status                 Verify the token and show its user
@@ -741,7 +801,11 @@ func (c client) doWithHeaders(method string, path string, body any, headers map[
 		}
 		reader = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, strings.TrimRight(c.baseURL, "/")+path, reader)
+	requestCtx := c.ctx
+	if requestCtx == nil {
+		requestCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(requestCtx, method, strings.TrimRight(c.baseURL, "/")+path, reader)
 	if err != nil {
 		return err
 	}
