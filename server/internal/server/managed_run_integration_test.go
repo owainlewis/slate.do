@@ -345,88 +345,172 @@ func TestManagedRunFencesMissingAndStaleRunIdentities(t *testing.T) {
 
 func TestOnlyAWorkflowTransitionReleasesTheRunFence(t *testing.T) {
 	fixture := newManagedRunFixture(t)
-	task := fixture.readyTask(t, "Edits must not release the fence")
-	runID := "99999999-9999-4999-8999-999999999999"
 	ctx := context.Background()
+	runID := "99999999-9999-4999-8999-999999999999"
 
+	// A status-neutral edit must not release the fence. Only a transition or a
+	// change of agent ends the run.
+	task := fixture.readyTask(t, "Edits must not release the fence")
 	if claim := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/agent/tasks/"+task.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
 		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
 	}
+	title := "Edits must not release the fence (edited)"
+	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{Title: &title}); err != nil {
+		t.Fatal(err)
+	}
+	if held := fixture.executionRunID(t, task.ID); held != runID {
+		t.Fatalf("run ID after a human edit = %q, want %q", held, runID)
+	}
+	for _, attempt := range []struct {
+		name    string
+		method  string
+		path    string
+		body    string
+		headers map[string]string
+	}{
+		{"comment without a run", http.MethodPost, "/api/v1/tasks/" + task.ID + "/entries", entryBody("comment", "No run identity."), map[string]string{"Idempotency-Key": "unfenced"}},
+		{"status without a run", http.MethodPatch, "/api/v1/agent/tasks/" + task.ID + "/status", `{"status":"done"}`, nil},
+		{"edit without a run", http.MethodPatch, "/api/v1/tasks/" + task.ID, `{"description":"No run identity."}`, nil},
+	} {
+		recorder := runRequest(t, fixture.app, fixture.token, "", attempt.method, attempt.path, attempt.body, attempt.headers)
+		if recorder.Code != http.StatusConflict || errorCode(t, recorder.Body.String()) != "run_conflict" {
+			t.Errorf("%s on a fenced card = %d %s, want 409 run_conflict", attempt.name, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	// Reaching review ends the run, so a reviewed card is never left fenced to
+	// an execution that has already reported.
 	output := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
 		entryBody("output", "Implemented."), map[string]string{"Idempotency-Key": "output"})
 	if output.Code != http.StatusCreated {
 		t.Fatalf("managed output = %d %s", output.Code, output.Body.String())
 	}
-	if held := fixture.executionRunID(t, task.ID); held != runID {
-		t.Fatalf("run ID after output = %q, want %q", held, runID)
-	}
-
-	// A reviewer editing the card is not a workflow transition, so the fence
-	// must survive it.
-	title := "Edits must not release the fence (reviewed)"
-	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{Title: &title}); err != nil {
-		t.Fatal(err)
-	}
-	if held := fixture.executionRunID(t, task.ID); held != runID {
-		t.Fatalf("run ID after a human edit of a reviewed card = %q, want %q", held, runID)
-	}
-	unfenced := runRequest(t, fixture.app, fixture.token, "", http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
-		entryBody("comment", "No run identity."), map[string]string{"Idempotency-Key": "unfenced"})
-	if unfenced.Code != http.StatusConflict || errorCode(t, unfenced.Body.String()) != "run_conflict" {
-		t.Fatalf("comment without a run on a fenced card = %d %s, want 409 run_conflict", unfenced.Code, unfenced.Body.String())
-	}
-	statusAttempt := runRequest(t, fixture.app, fixture.token, "", http.MethodPatch, "/api/v1/agent/tasks/"+task.ID+"/status", `{"status":"done"}`, nil)
-	if statusAttempt.Code != http.StatusConflict || errorCode(t, statusAttempt.Body.String()) != "run_conflict" {
-		t.Fatalf("status without a run on a fenced card = %d %s, want 409 run_conflict", statusAttempt.Code, statusAttempt.Body.String())
-	}
-
-	// Reopening a reviewed card as working is a workflow transition, so the run
-	// that already reported ends. A process still holding that run must not be
-	// able to report again on the reopened card.
-	working := boards.StatusWorking
-	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{Status: &working}); err != nil {
-		t.Fatal(err)
-	}
 	if held := fixture.executionRunID(t, task.ID); held != "" {
-		t.Fatalf("run ID after reopening review as working = %q, want cleared", held)
+		t.Fatalf("run ID after output = %q, want cleared", held)
 	}
-	reopened := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
-		entryBody("output", "Reporting again."), map[string]string{"Idempotency-Key": "reopened"})
-	if reopened.Code != http.StatusConflict || errorCode(t, reopened.Body.String()) != "run_conflict" {
-		t.Fatalf("finished run output after reopening = %d %s, want 409 run_conflict", reopened.Code, reopened.Body.String())
+	// The entry keeps its own run tag, which is what a watcher reads.
+	tagged := decodeEntries(t, runRequest(t, fixture.app, fixture.token, runID, http.MethodGet,
+		"/api/v1/tasks/"+task.ID+"/entries?runId="+runID, "", nil).Body.String())
+	if len(tagged) != 1 || tagged[0]["kind"] != "output" {
+		t.Fatalf("entries for the finished run = %v, want its one output", tagged)
+	}
+	// A finished run cannot report a second time under a new key.
+	again := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
+		entryBody("output", "Reporting again."), map[string]string{"Idempotency-Key": "again"})
+	if again.Code != http.StatusConflict || errorCode(t, again.Body.String()) != "run_conflict" {
+		t.Fatalf("second output from a finished run = %d %s, want 409 run_conflict", again.Code, again.Body.String())
 	}
 
-	// Handing the card to another agent ends the run, because a run is bound to
-	// one task and one agent. Without this the new assignee would be refused
-	// with a conflict naming a run that was never its own.
+	// A human posting the output is the same workflow transition, so it must
+	// also end the run rather than strand the card behind a dead execution.
+	humanReviewed := fixture.readyTask(t, "A human closes this one")
+	if claim := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/agent/tasks/"+humanReviewed.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
+	}
+	if _, err := fixture.store.CreateCardEntry(ctx, fixture.owner.ID, "", "Owner", humanReviewed.ID,
+		boards.CreateCardEntryInput{Kind: "output", Body: "Closing this myself."}); err != nil {
+		t.Fatal(err)
+	}
+	if held := fixture.executionRunID(t, humanReviewed.ID); held != "" {
+		t.Fatalf("run ID after a human output = %q, want cleared", held)
+	}
+	freed := runRequest(t, fixture.app, fixture.token, "", http.MethodPost, "/api/v1/tasks/"+humanReviewed.ID+"/entries",
+		entryBody("comment", "Understood."), map[string]string{"Idempotency-Key": "freed"})
+	if freed.Code != http.StatusCreated {
+		t.Fatalf("agent comment after a human output = %d %s, want the card to be released", freed.Code, freed.Body.String())
+	}
+
+	// Handing a working card to another agent ends the run, because a run is
+	// bound to one task and one agent.
+	handedOver := fixture.readyTask(t, "Handed to another agent")
+	if claim := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/agent/tasks/"+handedOver.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
+	}
 	second, err := auth.NewPGStore(fixture.db).CreateAgent(ctx, fixture.owner.ID, "Second Agent", "",
 		testTokenHash("slate_second_agent"), "slate_second")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{AssigneeAgentID: &second.ID}); err != nil {
+	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, handedOver.ID, boards.UpdateTaskInput{AssigneeAgentID: &second.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if held := fixture.executionRunID(t, task.ID); held != "" {
+	if held := fixture.executionRunID(t, handedOver.ID); held != "" {
 		t.Fatalf("run ID after reassignment = %q, want cleared", held)
 	}
-	handover := runRequest(t, fixture.app, "slate_second_agent", "", http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
+	handover := runRequest(t, fixture.app, "slate_second_agent", "", http.MethodPost, "/api/v1/tasks/"+handedOver.ID+"/entries",
 		entryBody("comment", "Picking this up."), map[string]string{"Idempotency-Key": "handover"})
 	if handover.Code != http.StatusCreated {
 		t.Fatalf("new assignee comment = %d %s, want the handover to be accepted", handover.Code, handover.Body.String())
 	}
-	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{AssigneeAgentID: &fixture.agent.ID}); err != nil {
-		t.Fatal(err)
-	}
 
-	// Completing and then requeueing are transitions, and the requeue releases
-	// the fence for the next claim.
-	done := boards.StatusDone
-	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{Status: &done}); err != nil {
+	// A requeue releases the fence for the next claim.
+	requeued := fixture.readyTask(t, "Requeued for a fresh run")
+	if claim := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/agent/tasks/"+requeued.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
+	}
+	ready := boards.StatusQueued
+	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, requeued.ID, boards.UpdateTaskInput{Status: &ready}); err != nil {
 		t.Fatal(err)
 	}
-	if released := fixture.executionRunID(t, task.ID); released != "" {
-		t.Fatalf("run ID after completion = %q, want cleared", released)
+	if held := fixture.executionRunID(t, requeued.ID); held != "" {
+		t.Fatalf("run ID after requeue = %q, want cleared", held)
+	}
+	next := "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+	if claim := runRequest(t, fixture.app, fixture.token, next, http.MethodPost, "/api/v1/agent/tasks/"+requeued.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+		t.Fatalf("fresh claim after requeue = %d %s", claim.Code, claim.Body.String())
+	}
+}
+
+// TestOnlyWorkingTasksCarryARunFence pins the property the transition rules add
+// up to: a task holds a managed run only while it is working, so no card can be
+// left behind a run that has already finished.
+func TestOnlyWorkingTasksCarryARunFence(t *testing.T) {
+	fixture := newManagedRunFixture(t)
+	ctx := context.Background()
+	runID := "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+
+	for _, route := range []struct {
+		name  string
+		close func(t *testing.T, taskID string)
+	}{
+		{"managed output", func(t *testing.T, taskID string) {
+			recorder := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/tasks/"+taskID+"/entries",
+				entryBody("output", "Done."), map[string]string{"Idempotency-Key": "close"})
+			if recorder.Code != http.StatusCreated {
+				t.Fatalf("managed output = %d %s", recorder.Code, recorder.Body.String())
+			}
+		}},
+		{"human review", func(t *testing.T, taskID string) {
+			review := boards.StatusNeedsReview
+			if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, taskID, boards.UpdateTaskInput{Status: &review}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"human completion", func(t *testing.T, taskID string) {
+			done := boards.StatusDone
+			if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, taskID, boards.UpdateTaskInput{Status: &done}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		task := fixture.readyTask(t, "Leaves working by "+route.name)
+		if claim := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/agent/tasks/"+task.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+			t.Fatalf("%s: managed claim = %d %s", route.name, claim.Code, claim.Body.String())
+		}
+		if held := fixture.executionRunID(t, task.ID); held != runID {
+			t.Fatalf("%s: run ID while working = %q, want %q", route.name, held, runID)
+		}
+		route.close(t, task.ID)
+		current, err := fixture.store.GetTask(ctx, fixture.owner.ID, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.Status == boards.StatusWorking {
+			t.Fatalf("%s: task is still working", route.name)
+		}
+		if held := fixture.executionRunID(t, task.ID); held != "" {
+			t.Fatalf("%s: run ID on a %s task = %q, want cleared", route.name, current.Status, held)
+		}
 	}
 }
 

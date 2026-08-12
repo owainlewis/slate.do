@@ -1987,9 +1987,13 @@ func (s *Store) CreateCardEntryForRun(ctx context.Context, userID string, agentI
 		return CardEntry{}, err
 	}
 	if kind == "output" {
+		// Reaching review is a workflow transition, so it ends the run that owns
+		// the task, whoever posted the output. The entry keeps its own run tag,
+		// which is what a watcher reads to verify its exact result, and an
+		// exact replay is resolved before ownership is consulted at all.
 		if _, err := tx.Exec(ctx, `
 			UPDATE tasks
-			SET status = $1, review_reason = 'output', updated_at = now()
+			SET status = $1, review_reason = 'output', execution_run_id = NULL, updated_at = now()
 			WHERE id = $2
 		`, StatusNeedsReview, taskID); err != nil {
 			return CardEntry{}, err
