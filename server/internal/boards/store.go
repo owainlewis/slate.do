@@ -1637,14 +1637,19 @@ func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id
 }
 
 // releasesRunFence reports whether an update ends the managed run that owns a
-// task. A run is bound to one task and one agent, so a workflow transition away
-// from working ends it, and so does handing the task to another agent. A
-// status-neutral edit such as a title change leaves the fence in place.
+// task. A run is bound to one task, one agent, and one stretch of working, so
+// handing the task to another agent ends it and so does any workflow
+// transition. Claim is the only operation that establishes a run and it never
+// travels through this update, so no status change reaching here belongs to a
+// live run: a managed run cannot change status at all, and a legacy claim has
+// no run to release. A status-neutral edit such as a title change leaves the
+// fence in place.
+//
+// Reopening a reviewed task as working therefore leaves it working with no run.
+// That is deliberate. The first version has no resume, so recovery is to move
+// the task back to Ready and let a new isolated run claim it.
 func releasesRunFence(original Task, current Task) bool {
-	if current.AssigneeAgentID != original.AssigneeAgentID {
-		return true
-	}
-	return current.Status != original.Status && current.Status != StatusWorking
+	return current.AssigneeAgentID != original.AssigneeAgentID || current.Status != original.Status
 }
 
 // checkAgentRun decides whether an agent mutation may proceed. A managed task

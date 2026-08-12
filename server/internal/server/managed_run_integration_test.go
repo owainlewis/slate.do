@@ -380,6 +380,22 @@ func TestOnlyAWorkflowTransitionReleasesTheRunFence(t *testing.T) {
 		t.Fatalf("status without a run on a fenced card = %d %s, want 409 run_conflict", statusAttempt.Code, statusAttempt.Body.String())
 	}
 
+	// Reopening a reviewed card as working is a workflow transition, so the run
+	// that already reported ends. A process still holding that run must not be
+	// able to report again on the reopened card.
+	working := boards.StatusWorking
+	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{Status: &working}); err != nil {
+		t.Fatal(err)
+	}
+	if held := fixture.executionRunID(t, task.ID); held != "" {
+		t.Fatalf("run ID after reopening review as working = %q, want cleared", held)
+	}
+	reopened := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
+		entryBody("output", "Reporting again."), map[string]string{"Idempotency-Key": "reopened"})
+	if reopened.Code != http.StatusConflict || errorCode(t, reopened.Body.String()) != "run_conflict" {
+		t.Fatalf("finished run output after reopening = %d %s, want 409 run_conflict", reopened.Code, reopened.Body.String())
+	}
+
 	// Handing the card to another agent ends the run, because a run is bound to
 	// one task and one agent. Without this the new assignee would be refused
 	// with a conflict naming a run that was never its own.
