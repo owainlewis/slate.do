@@ -1545,10 +1545,10 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			scheduled_date = NULLIF($7, '')::date, kind = $8,
 			status = $9, priority = $10, sort_order = $11,
 			assignee_agent_id = NULLIF($12, '')::uuid,
-			-- Leaving working releases the managed fence so the next claim can
-			-- establish a new run. Output keeps its run because it never
-			-- travels through this update.
-			execution_run_id = CASE WHEN $9 = 'working' THEN t.execution_run_id ELSE NULL END,
+			-- A workflow transition away from working releases the managed fence
+			-- so the next claim can establish a new run. A status-neutral edit
+			-- such as a title change must leave the fence in place.
+			execution_run_id = CASE WHEN $13 THEN NULL ELSE t.execution_run_id END,
 			review_reason = CASE
 				WHEN $9 <> 'needs_review' THEN ''
 				WHEN t.status <> 'needs_review' THEN ''
@@ -1562,7 +1562,8 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
 			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, '')
 	`, userID, id, current.BoardID, current.BucketID, current.Title, current.Description, current.ScheduledDate, current.Kind,
-		current.Status, current.Priority, current.SortOrder, current.AssigneeAgentID)
+		current.Status, current.Priority, current.SortOrder, current.AssigneeAgentID,
+		current.Status != original.Status && current.Status != StatusWorking)
 	task, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound

@@ -343,6 +343,54 @@ func TestManagedRunFencesMissingAndStaleRunIdentities(t *testing.T) {
 	}
 }
 
+func TestOnlyAWorkflowTransitionReleasesTheRunFence(t *testing.T) {
+	fixture := newManagedRunFixture(t)
+	task := fixture.readyTask(t, "Edits must not release the fence")
+	runID := "99999999-9999-4999-8999-999999999999"
+	ctx := context.Background()
+
+	if claim := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/agent/tasks/"+task.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
+	}
+	output := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
+		entryBody("output", "Implemented."), map[string]string{"Idempotency-Key": "output"})
+	if output.Code != http.StatusCreated {
+		t.Fatalf("managed output = %d %s", output.Code, output.Body.String())
+	}
+	if held := fixture.executionRunID(t, task.ID); held != runID {
+		t.Fatalf("run ID after output = %q, want %q", held, runID)
+	}
+
+	// A reviewer editing the card is not a workflow transition, so the fence
+	// must survive it.
+	title := "Edits must not release the fence (reviewed)"
+	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{Title: &title}); err != nil {
+		t.Fatal(err)
+	}
+	if held := fixture.executionRunID(t, task.ID); held != runID {
+		t.Fatalf("run ID after a human edit of a reviewed card = %q, want %q", held, runID)
+	}
+	unfenced := runRequest(t, fixture.app, fixture.token, "", http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
+		entryBody("comment", "No run identity."), map[string]string{"Idempotency-Key": "unfenced"})
+	if unfenced.Code != http.StatusConflict || errorCode(t, unfenced.Body.String()) != "run_conflict" {
+		t.Fatalf("comment without a run on a fenced card = %d %s, want 409 run_conflict", unfenced.Code, unfenced.Body.String())
+	}
+	statusAttempt := runRequest(t, fixture.app, fixture.token, "", http.MethodPatch, "/api/v1/agent/tasks/"+task.ID+"/status", `{"status":"done"}`, nil)
+	if statusAttempt.Code != http.StatusConflict || errorCode(t, statusAttempt.Body.String()) != "run_conflict" {
+		t.Fatalf("status without a run on a fenced card = %d %s, want 409 run_conflict", statusAttempt.Code, statusAttempt.Body.String())
+	}
+
+	// Completing and then requeueing are transitions, and the requeue releases
+	// the fence for the next claim.
+	done := boards.StatusDone
+	if _, err := fixture.store.UpdateTaskForHuman(ctx, fixture.owner.ID, task.ID, boards.UpdateTaskInput{Status: &done}); err != nil {
+		t.Fatal(err)
+	}
+	if released := fixture.executionRunID(t, task.ID); released != "" {
+		t.Fatalf("run ID after completion = %q, want cleared", released)
+	}
+}
+
 func TestEntryRunFilterReturnsOnlyTheExactRun(t *testing.T) {
 	fixture := newManagedRunFixture(t)
 	task := fixture.readyTask(t, "Filter entries by run")
