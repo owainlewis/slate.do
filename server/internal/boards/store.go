@@ -2032,13 +2032,15 @@ func (s *Store) getTask(ctx context.Context, userID string, agentID string, id s
 		SELECT t.id::text, t.board_id::text, t.bucket_id::text, t.title, t.description,
 			COALESCE(t.scheduled_date::text, ''), t.kind,
 			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
-			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, '')
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, ''),
+			COALESCE(t.execution_run_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2
 			`+agentSQL+`
 	`, args...)
-	task, err := scanTask(row)
+	var task Task
+	err := row.Scan(append(taskScanDestinations(&task), &task.ExecutionRunID)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
 	}

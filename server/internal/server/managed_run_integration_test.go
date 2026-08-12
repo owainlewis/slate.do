@@ -514,6 +514,53 @@ func TestOnlyWorkingTasksCarryARunFence(t *testing.T) {
 	}
 }
 
+// TestTheSingleTaskResponseNamesTheOwningRun gives a watcher the one fact it
+// cannot otherwise learn: whether the task it offered is being worked by its
+// own run or by a run that beat it to the claim. Without it a losing run and an
+// interrupted run look identical, and they need opposite cleanup.
+func TestTheSingleTaskResponseNamesTheOwningRun(t *testing.T) {
+	fixture := newManagedRunFixture(t)
+	task := fixture.readyTask(t, "Ownership is visible")
+	runID := "cccccccc-3333-4333-8333-cccccccccccc"
+
+	before := runRequest(t, fixture.app, fixture.token, "", http.MethodGet, "/api/v1/tasks/"+task.ID, "", nil)
+	if before.Code != http.StatusOK || strings.Contains(before.Body.String(), "executionRunId") {
+		t.Fatalf("queued task response = %d %s, want no run", before.Code, before.Body.String())
+	}
+
+	if claim := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/agent/tasks/"+task.ID+"/claim", `{}`, nil); claim.Code != http.StatusOK {
+		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
+	}
+	working := runRequest(t, fixture.app, fixture.token, "", http.MethodGet, "/api/v1/tasks/"+task.ID, "", nil)
+	var owned struct {
+		ExecutionRunID string `json:"executionRunId"`
+		Status         string `json:"status"`
+	}
+	if err := json.Unmarshal(working.Body.Bytes(), &owned); err != nil {
+		t.Fatal(err)
+	}
+	if owned.ExecutionRunID != runID || owned.Status != boards.StatusWorking {
+		t.Fatalf("working task response = %+v, want run %q", owned, runID)
+	}
+
+	// A collection response stays unchanged, so the queue payload does not grow.
+	queue := runRequest(t, fixture.app, fixture.token, "", http.MethodGet, "/api/v1/tasks?status=working", "", nil)
+	if strings.Contains(queue.Body.String(), "executionRunId") {
+		t.Fatalf("task collection exposed a run: %s", queue.Body.String())
+	}
+
+	// Once the run ends the field disappears, matching the fence itself.
+	output := runRequest(t, fixture.app, fixture.token, runID, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries",
+		entryBody("output", "Done."), map[string]string{"Idempotency-Key": "done"})
+	if output.Code != http.StatusCreated {
+		t.Fatalf("managed output = %d %s", output.Code, output.Body.String())
+	}
+	after := runRequest(t, fixture.app, fixture.token, "", http.MethodGet, "/api/v1/tasks/"+task.ID, "", nil)
+	if strings.Contains(after.Body.String(), "executionRunId") {
+		t.Fatalf("reviewed task still names a run: %s", after.Body.String())
+	}
+}
+
 func TestTaskEditsAreFencedToTheOwningRun(t *testing.T) {
 	fixture := newManagedRunFixture(t)
 	task := fixture.readyTask(t, "Edits are fenced too")

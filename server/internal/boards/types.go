@@ -49,24 +49,29 @@ type Bucket struct {
 }
 
 type Task struct {
-	ID                string    `json:"id"`
-	BoardID           string    `json:"boardId"`
-	BucketID          string    `json:"bucketId"`
-	Title             string    `json:"title"`
-	Description       string    `json:"description,omitempty"`
-	ScheduledDate     string    `json:"scheduledDate"`
-	Kind              string    `json:"kind"`
-	Status            string    `json:"status"`
-	Priority          string    `json:"priority"`
-	AssigneeAgentID   string    `json:"assigneeAgentId,omitempty"`
-	AssigneeAgentName string    `json:"assigneeAgentName,omitempty"`
-	ParentTaskID      string    `json:"parentTaskId,omitempty"`
-	ParentTaskTitle   string    `json:"parentTaskTitle,omitempty"`
-	BucketName        string    `json:"listName,omitempty"`
-	BoardName         string    `json:"boardName,omitempty"`
-	SortOrder         int       `json:"sortOrder"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	ID                string `json:"id"`
+	BoardID           string `json:"boardId"`
+	BucketID          string `json:"bucketId"`
+	Title             string `json:"title"`
+	Description       string `json:"description,omitempty"`
+	ScheduledDate     string `json:"scheduledDate"`
+	Kind              string `json:"kind"`
+	Status            string `json:"status"`
+	Priority          string `json:"priority"`
+	AssigneeAgentID   string `json:"assigneeAgentId,omitempty"`
+	AssigneeAgentName string `json:"assigneeAgentName,omitempty"`
+	ParentTaskID      string `json:"parentTaskId,omitempty"`
+	// ExecutionRunID names the managed run that currently owns this task. Only
+	// the single-task response carries it, so a watcher can tell its own
+	// interrupted run apart from a claim another run won. It is empty for every
+	// task that is not being worked by a managed run.
+	ExecutionRunID  string    `json:"executionRunId,omitempty"`
+	ParentTaskTitle string    `json:"parentTaskTitle,omitempty"`
+	BucketName      string    `json:"listName,omitempty"`
+	BoardName       string    `json:"boardName,omitempty"`
+	SortOrder       int       `json:"sortOrder"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 // MarshalJSON keeps the released done field available during the status
