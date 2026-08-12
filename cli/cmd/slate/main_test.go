@@ -218,7 +218,7 @@ func TestAPIErrorPreservesStructureRetryAfterAndRedactsToken(t *testing.T) {
 	defer server.Close()
 	c := client{baseURL: server.URL, token: token, http: server.Client()}
 	err := c.do(http.MethodGet, "/api/v1/me", nil, nil)
-	var apiErr *apiError
+	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("error = %T %v", err, err)
 	}
@@ -359,7 +359,7 @@ func TestManagedWorkingStatusUsesStatusEndpointAndPreservesCodedError(t *testing
 	defer server.Close()
 
 	err := tasksCmd(client{baseURL: server.URL, token: "test", http: server.Client()}, []string{"status", "task-1", "working"})
-	var apiErr *apiError
+	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != "managed_run_status_locked" || apiErr.StatusCode != http.StatusConflict {
 		t.Fatalf("managed working error = %T %#v", err, err)
 	}
