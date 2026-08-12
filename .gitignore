@@ -12,3 +12,4 @@ build/
 # "just build" writes these binaries beside their main packages.
 /cli/slate
 /server/slate
+/cli/slate.exe

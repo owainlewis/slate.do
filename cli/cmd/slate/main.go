@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -13,15 +14,26 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const defaultBaseURL = "https://slate.do"
+
+// cardEntryBytes matches the server limit so an oversized comment or output
+// fails locally instead of spending a request.
+const cardEntryBytes = 16 * 1024
+
+// runIDHeader carries managed execution identity. It is not authority on its
+// own; the server decides what the run may change.
+const runIDHeader = "X-Slate-Run-ID"
 
 var version = "dev"
 
 type client struct {
 	baseURL string
 	token   string
+	runID   string
 	http    *http.Client
 }
 
@@ -36,9 +48,12 @@ func run(args []string) error {
 	if len(args) < 2 {
 		return printHelp("")
 	}
+	// The environment is checked where a request is built, not here, so every
+	// form of help still answers when a value is malformed.
 	c := client{
 		baseURL: env("SLATE_BASE_URL", defaultBaseURL),
 		token:   os.Getenv("SLATE_API_TOKEN"),
+		runID:   strings.TrimSpace(os.Getenv("SLATE_RUN_ID")),
 		http:    &http.Client{Timeout: 30 * time.Second},
 	}
 	switch args[1] {
@@ -85,6 +100,7 @@ var helpText = map[string]string{
 Configuration:
   SLATE_API_TOKEN   Required API token created in Slate settings
   SLATE_BASE_URL    API URL (default: https://slate.do)
+  SLATE_RUN_ID      Managed run identity set for an invoked coding agent
 
 Usage:
   slate version
@@ -130,14 +146,30 @@ items per list. Use "tasks list --status done" to page older completed work.
   slate tasks reorder --list <list-id> <task-id>...
   slate tasks claim <task-id>
   slate tasks status <task-id> new|queued|working|needs_review|done
+  slate tasks entries <task-id> [--run <run-id>]
+  slate tasks comment <task-id> (--body <text> | --file <path>) --idempotency-key <key>
+  slate tasks output <task-id> (--body <text> | --file <path>) --idempotency-key <key>
 
-"pull" returns open queued tasks. Claim before starting work. Use an empty
---description or --date value to clear that field, or an empty --priority to
-clear the priority. "working" uses the atomic claim operation, so only one
-agent can successfully claim a queued task.
+"pull" returns open queued tasks, highest priority and oldest first. Claim
+before starting work. Use an empty --description or --date value to clear that
+field, or an empty --priority to clear the priority. "working" uses the atomic
+claim operation, so only one agent can successfully claim a queued task.
 Reuse --idempotency-key when retrying task creation after an uncertain result.
 Task collections omit descriptions. Use "tasks get" for complete task detail.
 Completed pages default to 20 items and return nextCursor for --cursor.
+
+"comment" records progress and leaves the card in place. "output" records the
+completion report and moves the card to review in the same operation. Both take
+exactly one of --body or --file; "--file -" reads stdin. Bodies are limited to
+16 KiB. Both require --idempotency-key: reuse the same value to retry safely
+after an uncertain result.
+
+When SLATE_RUN_ID is set, claim, status, update, comment, and output identify
+their managed run to the server. A managed run reaches working through claim
+and review through output, so its direct status changes are refused with
+managed_run_status_locked. A losing or stale run receives run_conflict, and so
+does any command aimed at a task the run did not claim. "entries --run" returns
+only the entries of that exact run.
 `,
 }
 
@@ -431,7 +463,9 @@ func tasksCmd(c client, args []string) error {
 		if len(body) == 0 {
 			return errors.New("at least one update flag is required")
 		}
-		return c.sendJSON(http.MethodPatch, "/api/v1/tasks/"+url.PathEscape(id), body)
+		// The server fences this route too, so a managed run must identify
+		// itself or it cannot edit the task it claimed.
+		return c.sendJSONWithHeaders(http.MethodPatch, "/api/v1/tasks/"+url.PathEscape(id), body, c.runHeaders(nil))
 	case "delete":
 		id, err := singleID("slate tasks delete <task-id>", args[1:])
 		if err != nil {
@@ -453,7 +487,7 @@ func tasksCmd(c client, args []string) error {
 		if err != nil {
 			return err
 		}
-		return c.sendJSON(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(id)+"/claim", map[string]any{})
+		return c.sendJSONWithHeaders(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(id)+"/claim", map[string]any{}, c.runHeaders(nil))
 	case "status":
 		if len(args) != 3 {
 			return errors.New("usage: slate tasks status <task-id> new|queued|working|needs_review|done")
@@ -462,12 +496,195 @@ func tasksCmd(c client, args []string) error {
 			return fmt.Errorf("invalid status %q; choose new, queued, working, needs_review, or done", args[2])
 		}
 		if args[2] == "working" {
-			return c.sendJSON(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/claim", map[string]any{})
+			return c.sendJSONWithHeaders(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/claim", map[string]any{}, c.runHeaders(nil))
 		}
-		return c.sendJSON(http.MethodPatch, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/status", map[string]any{"status": args[2]})
+		return c.sendJSONWithHeaders(http.MethodPatch, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/status", map[string]any{"status": args[2]}, c.runHeaders(nil))
+	case "entries":
+		if len(args) < 2 {
+			return errors.New("usage: slate tasks entries <task-id> [--run <run-id>]")
+		}
+		id := args[1]
+		fs := newFlagSet("tasks entries")
+		run := fs.String("run", "", "return only entries from this managed run")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 || strings.TrimSpace(id) == "" {
+			return errors.New("usage: slate tasks entries <task-id> [--run <run-id>]")
+		}
+		q := url.Values{}
+		if selected := strings.TrimSpace(*run); selected != "" {
+			if !validUUID(selected) {
+				return fmt.Errorf("invalid run ID %q", selected)
+			}
+			q.Set("runId", selected)
+		}
+		return c.getJSON("/api/v1/tasks/"+url.PathEscape(id)+"/entries", q)
+	case "comment", "output":
+		return c.entryCmd(args[0], args[1:])
 	default:
 		return fmt.Errorf("unknown tasks command %q; run 'slate help tasks'", args[0])
 	}
+}
+
+// entryCmd posts a comment or an output. Both carry the managed run when one is
+// set, and both require a stable key so an uncertain result can be repeated.
+func (c client) entryCmd(kind string, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: slate tasks %s <task-id> (--body <text> | --file <path>) --idempotency-key <key>", kind)
+	}
+	id := strings.TrimSpace(args[0])
+	if id == "" {
+		return fmt.Errorf("usage: slate tasks %s <task-id> (--body <text> | --file <path>) --idempotency-key <key>", kind)
+	}
+	fs := newFlagSet("tasks " + kind)
+	body := fs.String("body", "", "entry text")
+	file := fs.String("file", "", "read the entry from a file, or - for stdin")
+	idempotencyKey := fs.String("idempotency-key", "", "stable key for safe retries")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("unexpected arguments")
+	}
+	// Everything that makes the command invalid is checked before the body is
+	// read, because a stdin or FIFO source may never finish and reading first
+	// would hang instead of reporting the mistake.
+	key := strings.TrimSpace(*idempotencyKey)
+	if key == "" {
+		return fmt.Errorf("--idempotency-key is required; reuse the same value when retrying a %s", kind)
+	}
+	if err := c.ready(); err != nil {
+		return err
+	}
+	text, err := entryText(fs, *body, *file, os.Stdin)
+	if err != nil {
+		return err
+	}
+	headers := c.runHeaders(map[string]string{"Idempotency-Key": key})
+	return c.sendJSONWithHeaders(http.MethodPost, "/api/v1/tasks/"+url.PathEscape(id)+"/entries",
+		map[string]any{"kind": kind, "body": text}, headers)
+}
+
+// entryText resolves exactly one body source and enforces the stored size limit
+// before a request is spent.
+func entryText(fs *flag.FlagSet, body string, file string, stdin io.Reader) (string, error) {
+	usedBody := false
+	usedFile := false
+	fs.Visit(func(item *flag.Flag) {
+		switch item.Name {
+		case "body":
+			usedBody = true
+		case "file":
+			usedFile = true
+		}
+	})
+	if usedBody == usedFile {
+		return "", errors.New("choose exactly one of --body or --file")
+	}
+	text := body
+	if usedFile {
+		source := stdin
+		if file != "-" {
+			opened, err := os.Open(file)
+			if err != nil {
+				return "", err
+			}
+			defer opened.Close()
+			source = opened
+		}
+		raw, err := readTrimmedEntry(source, cardEntryBytes)
+		if err != nil {
+			return "", err
+		}
+		text = raw
+	}
+	// The server trims before it measures and stores, so measuring the trimmed
+	// text here keeps a file that ends in a newline from failing locally when
+	// the server would have accepted it.
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", errors.New("entry body is required")
+	}
+	if len([]byte(text)) > cardEntryBytes {
+		return "", fmt.Errorf("entry body must be %d UTF-8 bytes or fewer", cardEntryBytes)
+	}
+	return text, nil
+}
+
+// entryStreamCap stops an endless source. Only whitespace can legitimately run
+// past the stored limit, and no real report is followed by megabytes of it.
+const entryStreamCap = 8 << 20
+
+// readTrimmedEntry reads a body source, trimming as it goes, so an unbounded
+// stdin or a mistakenly chosen artifact cannot exhaust memory. It holds no more
+// than the stored limit of content plus the run of whitespace it has not yet
+// decided about, and it accepts exactly what the server would: the body after
+// trimming, however much removable whitespace surrounds it. Whitespace means
+// what strings.TrimSpace means, so a non-breaking space trims here too.
+func readTrimmedEntry(source io.Reader, limit int) (string, error) {
+	tooLarge := fmt.Errorf("entry body must be %d UTF-8 bytes or fewer", limit)
+	reader := bufio.NewReaderSize(source, 32*1024)
+	var body []byte
+	// Whitespace is held back until something follows it. Trailing whitespace
+	// is dropped at the end; interior whitespace is part of the body.
+	var pending []byte
+	pendingOverflowed := false
+	total := 0
+	for {
+		r, size, err := reader.ReadRune()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", err
+		}
+		total += size
+		if total > entryStreamCap {
+			// Only whitespace can legitimately run this far, since content is
+			// capped at the stored limit, so say that rather than blame a body
+			// size the caller cannot see.
+			return "", fmt.Errorf("entry body could not be read: more than %d MiB of surrounding whitespace", entryStreamCap>>20)
+		}
+		if unicode.IsSpace(r) {
+			if len(body) == 0 {
+				// Leading whitespace is dropped outright.
+				continue
+			}
+			if pendingOverflowed {
+				continue
+			}
+			pending = utf8.AppendRune(pending, r)
+			if len(pending) > limit {
+				// Whatever this run turns out to be, keeping it would put the
+				// body over the limit, so stop storing it.
+				pendingOverflowed = true
+				pending = nil
+			}
+			continue
+		}
+		if pendingOverflowed || len(body)+len(pending)+size > limit {
+			return "", tooLarge
+		}
+		body = append(body, pending...)
+		pending = nil
+		body = utf8.AppendRune(body, r)
+	}
+	return string(body), nil
+}
+
+// runHeaders adds managed execution identity to a mutation without disturbing
+// the caller's own headers.
+func (c client) runHeaders(headers map[string]string) map[string]string {
+	if c.runID == "" {
+		return headers
+	}
+	combined := make(map[string]string, len(headers)+1)
+	for name, value := range headers {
+		combined[name] = value
+	}
+	combined[runIDHeader] = c.runID
+	return combined
 }
 
 func (c client) getJSON(path string, q url.Values) error {
@@ -497,9 +714,24 @@ func (c client) do(method string, path string, body any, target any) error {
 	return c.doWithHeaders(method, path, body, nil, target)
 }
 
-func (c client) doWithHeaders(method string, path string, body any, headers map[string]string, target any) error {
+// ready reports whether the environment can produce a request at all. It is
+// checked before a body source is consumed as well as before a request is sent,
+// so an already-invalid command never blocks on a source that may not end.
+func (c client) ready() error {
 	if c.token == "" {
 		return errors.New("SLATE_API_TOKEN is required; create one in Slate settings")
+	}
+	if c.runID != "" && !validUUID(c.runID) {
+		return errors.New("SLATE_RUN_ID must be a valid run ID")
+	}
+	return nil
+}
+
+func (c client) doWithHeaders(method string, path string, body any, headers map[string]string, target any) error {
+	// Checked here too so a malformed value fails before anything is sent,
+	// while help, version, and local argument errors still work.
+	if err := c.ready(); err != nil {
+		return err
 	}
 	var reader io.Reader
 	if body != nil {
@@ -532,12 +764,82 @@ func (c client) doWithHeaders(method string, path string, body any, headers map[
 		return err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("slate API %d: %s", res.StatusCode, strings.TrimSpace(string(raw)))
+		return newAPIError(res, raw)
 	}
 	if target != nil && len(raw) > 0 {
 		return json.Unmarshal(raw, target)
 	}
 	return nil
+}
+
+// APIError keeps the parts of a failed response a caller can act on: the HTTP
+// status, the server's error code, its message, and any Retry-After. It carries
+// only the response, never the request, so no credential can reach a log.
+type APIError struct {
+	Status     int
+	Code       string
+	Message    string
+	Body       string
+	RetryAfter string
+}
+
+func (e *APIError) Error() string {
+	message := e.Message
+	if message == "" {
+		message = e.Body
+	}
+	text := fmt.Sprintf("slate API %d", e.Status)
+	if e.Code != "" {
+		text += " " + e.Code
+	}
+	if message != "" {
+		text += ": " + message
+	}
+	if e.RetryAfter != "" {
+		// Retry-After is delta-seconds or an HTTP date. Only the numeric form
+		// takes a unit, so a proxy sending a date still reads correctly.
+		if _, err := strconv.Atoi(e.RetryAfter); err == nil {
+			text += " (retry after " + e.RetryAfter + "s)"
+		} else {
+			text += " (retry after " + e.RetryAfter + ")"
+		}
+	}
+	return text
+}
+
+func newAPIError(res *http.Response, raw []byte) *APIError {
+	failure := &APIError{
+		Status:     res.StatusCode,
+		Body:       strings.TrimSpace(string(raw)),
+		RetryAfter: strings.TrimSpace(res.Header.Get("Retry-After")),
+	}
+	var payload struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		failure.Code = strings.TrimSpace(payload.Code)
+		failure.Message = strings.TrimSpace(payload.Error)
+	}
+	return failure
+}
+
+// validUUID accepts the canonical form the server issues for task, agent, and
+// run identifiers.
+func validUUID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	for index, char := range value {
+		switch index {
+		case 8, 13, 18, 23:
+			continue
+		}
+		if !(char >= '0' && char <= '9') && !(char >= 'a' && char <= 'f') && !(char >= 'A' && char <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func printJSON(value any) error {
