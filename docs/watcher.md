@@ -234,7 +234,8 @@ Order matters, because the CLI refuses to run against a server that does not
 support it:
 
 1. Apply the migration and deploy the server.
-2. Confirm it advertises the capability: `slate auth status` shows
+2. Confirm it advertises the capability using an agent token:
+   `SLATE_API_TOKEN="$SLATE_CODEX_TOKEN" slate auth status` shows
    `"managedRuns": true`.
 3. Release the CLI.
 4. Publish profiles for your agents.
