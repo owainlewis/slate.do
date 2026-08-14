@@ -158,6 +158,30 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	if outputCount != 1 {
 		t.Fatalf("managed output count = %d, want 1", outputCount)
 	}
+	var replacementAgentID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO agents (owner_user_id, name)
+		VALUES ($1, 'Replacement Builder')
+		RETURNING id::text
+	`, ownerID).Scan(&replacementAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE tasks SET assignee_agent_id = $1 WHERE id = $2`, replacementAgentID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, outputInput); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("replay after reassignment error = %v, want ErrNotFound", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE tasks
+		SET assignee_agent_id = $1, execution_run_id = $2, status = $3
+		WHERE id = $4
+	`, agentID, loser, StatusWorking, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, outputInput); !errors.Is(err, ErrManagedRunMismatch) {
+		t.Fatalf("replay after newer run error = %v, want ErrManagedRunMismatch", err)
+	}
 
 	preclaim, err := store.CreateTask(ctx, ownerID, bucket.ID, CreateTaskInput{Title: "Not claimed", AssigneeAgentID: agentID})
 	if err != nil {

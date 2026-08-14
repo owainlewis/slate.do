@@ -1833,6 +1833,18 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
 			return CardEntry{}, err
 		}
+		replayArgs := []any{userID, taskID, authorKind, authorID, idempotencyKey}
+		replayAgentSQL := ""
+		if agentID != "" {
+			replayArgs = append(replayArgs, agentID)
+			replayAgentSQL = " AND t.assignee_agent_id = $6"
+			if runID == "" {
+				replayAgentSQL += " AND t.execution_run_id IS NULL"
+			} else {
+				replayArgs = append(replayArgs, runID)
+				replayAgentSQL += " AND t.execution_run_id = $7"
+			}
+		}
 		var existing CardEntry
 		var existingFingerprint string
 		err := tx.QueryRow(ctx, `
@@ -1843,8 +1855,8 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 			JOIN tasks t ON t.id = e.task_id
 			JOIN boards b ON b.id = t.board_id
 			WHERE b.user_id = $1 AND e.task_id = $2 AND e.author_kind = $3
-				AND e.author_id = $4 AND e.idempotency_key = $5
-		`, userID, taskID, authorKind, authorID, idempotencyKey).Scan(
+				AND e.author_id = $4 AND e.idempotency_key = $5`+replayAgentSQL+`
+		`, replayArgs...).Scan(
 			&existing.ID, &existing.TaskID, &existing.Kind, &existing.Body,
 			&existing.AuthorKind, &existing.AuthorID, &existing.AuthorName, &existing.RunID, &existing.CreatedAt,
 			&existingFingerprint, &existing.CardStatus, &existing.CardReviewReason,
