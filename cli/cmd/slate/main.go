@@ -48,7 +48,11 @@ func (e *APIError) Error() string {
 	if status == 0 {
 		status = e.Status
 	}
-	return fmt.Sprintf("slate API %d: %s", status, e.Body)
+	detail := e.Body
+	if detail == "" {
+		detail = e.Message
+	}
+	return fmt.Sprintf("slate API %d: %s", status, detail)
 }
 
 // withContext returns a copy whose requests are cancelled with ctx.

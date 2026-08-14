@@ -933,10 +933,8 @@ func retryReadWith(ctx context.Context, failure *backoff, sleep func(context.Con
 // retryableStatuses are the responses worth waiting out rather than giving up
 // on. Everything else is a decision the server has already made.
 var retryableStatuses = map[int]bool{
-	// 500 is not in the design's list, which names 502, 503 and 504. It is
-	// included because it is the commonest transient server error and the
-	// stated outcome of the resilience work is that a brief server problem
-	// does not stop an unattended watcher. Raised on #183.
+	// The approved design treats 500 and the gateway/service-unavailable
+	// responses as transient server failures.
 	http.StatusInternalServerError: true,
 	http.StatusTooManyRequests:     true,
 	http.StatusBadGateway:          true,
