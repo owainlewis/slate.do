@@ -1730,7 +1730,7 @@ func TestAReadFailureThatOverlapsExecutorExitMarksTheRunUncertain(t *testing.T) 
 		defer aliveMu.Unlock()
 		return alive
 	}
-	if _, decided, err := w.inspectRun(context.Background(), supervision, testTaskID, "12341234-1234-4234-8234-123412341234", false, stillAlive); decided || err != nil {
+	if _, decided, err := w.inspectRun(context.Background(), supervision, testTaskID, "12341234-1234-4234-8234-123412341234", false, stillAlive); decided || !retryableError(err) {
 		t.Fatalf("decided = %v err = %v, want a retryable uncertain read", decided, err)
 	}
 	if !supervision.readFailed {

@@ -48,7 +48,11 @@ func (e *APIError) Error() string {
 	if status == 0 {
 		status = e.Status
 	}
-	return fmt.Sprintf("slate API %d: %s", status, e.Body)
+	detail := e.Body
+	if detail == "" {
+		detail = e.Message
+	}
+	return fmt.Sprintf("slate API %d: %s", status, detail)
 }
 
 // withContext returns a copy whose requests are cancelled with ctx.
@@ -713,7 +717,10 @@ func (c client) doWithHeaders(method string, path string, body any, headers map[
 	}
 	req, err := http.NewRequestWithContext(requestCtx, method, strings.TrimRight(c.baseURL, "/")+path, reader)
 	if err != nil {
-		return err
+		return &requestBuildError{err: err}
+	}
+	if (req.URL.Scheme != "http" && req.URL.Scheme != "https") || req.URL.Host == "" {
+		return &requestBuildError{err: fmt.Errorf("SLATE_BASE_URL must be an absolute http or https URL")}
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	for name, value := range headers {
@@ -752,7 +759,9 @@ func (c client) doWithHeaders(method string, path string, body any, headers map[
 		}
 	}
 	if target != nil && len(raw) > 0 {
-		return json.Unmarshal(raw, target)
+		if err := json.Unmarshal(raw, target); err != nil {
+			return &responseFormatError{Status: res.StatusCode, err: err}
+		}
 	}
 	return nil
 }
@@ -834,6 +843,31 @@ func setQuery(q url.Values, key string, value string) {
 		q.Set(key, value)
 	}
 }
+
+// requestBuildError marks a request that could not be formed at all, which in
+// practice means SLATE_BASE_URL is not a usable address. It is permanent, so a
+// caller that retries transient failures must not retry this.
+type requestBuildError struct{ err error }
+
+func (e *requestBuildError) Error() string {
+	return fmt.Sprintf("SLATE_BASE_URL is not a usable address: %v", e.err)
+}
+
+func (e *requestBuildError) Unwrap() error { return e.err }
+
+// responseFormatError marks a reply that was not the API's, such as an error
+// page from a proxy served with a success status. Repeating the request will
+// keep producing it, so callers treat it as final rather than transient.
+type responseFormatError struct {
+	Status int
+	err    error
+}
+
+func (e *responseFormatError) Error() string {
+	return fmt.Sprintf("slate API %d returned a reply that is not JSON: %v", e.Status, e.err)
+}
+
+func (e *responseFormatError) Unwrap() error { return e.err }
 
 func validStatus(status string) bool {
 	switch status {

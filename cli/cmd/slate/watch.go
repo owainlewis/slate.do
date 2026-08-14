@@ -41,6 +41,9 @@ const (
 	// launchFailureLimit stops a watcher that cannot create local runs, rather
 	// than spinning against a broken disk or repository.
 	launchFailureLimit = 5
+	// postExitReadAttempts is how many times a failing read is retried after the
+	// executor has gone, before the run is recorded as interrupted.
+	postExitReadAttempts = 5
 )
 
 type watchOptions struct {
@@ -68,6 +71,12 @@ type watcher struct {
 	// loop consumes that check for its first round, then repeats it before each
 	// later offer because another task may have started in the meantime.
 	workingScopeChecked bool
+	// idle waits between polls that found nothing; failure waits out a server
+	// that cannot answer. They are separate because finding work and reaching
+	// the server are different things to recover from, and recovering from one
+	// should not reset the other.
+	idle    *backoff
+	failure *backoff
 }
 
 func watchCmd(c client, args []string) error {
@@ -99,6 +108,11 @@ func watchCmd(c client, args []string) error {
 	defer stop()
 	w, err := newWatcher(ctx, c, options, os.Stdout)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// Interrupting a startup that is waiting out an unreachable server
+			// is how someone abandons it, not a failure.
+			return nil
+		}
 		return err
 	}
 	return w.run(ctx)
@@ -135,9 +149,19 @@ func newWatcher(ctx context.Context, c client, options watchOptions, out io.Writ
 		return nil, err
 	}
 
-	who, err := c.identity()
-	if err != nil {
-		return nil, fmt.Errorf("could not verify the profile credential: %w", err)
+	var who identity
+	startupFailure := newBackoff()
+	if err := retryReadWith(ctx, startupFailure, sleepContext, func(format string, args ...any) {
+		fmt.Fprintf(out, format+"\n", args...)
+	}, "verify the profile credential", func() error {
+		found, err := c.withContext(ctx).identity()
+		if err != nil {
+			return err
+		}
+		who = found
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	if !who.Authenticated || who.User.AgentID == "" {
 		return nil, fmt.Errorf("%s holds a personal credential; a watcher needs an agent token", selected.TokenEnv)
@@ -180,6 +204,8 @@ func newWatcher(ctx context.Context, c client, options watchOptions, out io.Writ
 		out:          out,
 		now:          time.Now,
 		sleep:        sleepContext,
+		idle:         newBackoff(),
+		failure:      newBackoff(),
 	}
 	if err := w.refuseWhileWorkTaskExists(ctx); err != nil {
 		return nil, err
@@ -192,7 +218,15 @@ func newWatcher(ctx context.Context, c client, options watchOptions, out io.Writ
 // progress. The first version has no resume, so a person decides what happens
 // to an in-flight task.
 func (w *watcher) refuseWhileWorkTaskExists(ctx context.Context) error {
-	working, err := w.client.agentTasks("working", w.boardID, 1)
+	var working []taskView
+	err := w.retryRead(ctx, "check for work already in progress", func() error {
+		found, err := w.client.withContext(ctx).agentTasks("working", w.boardID, 1)
+		if err != nil {
+			return err
+		}
+		working = found
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -237,6 +271,9 @@ func (w *watcher) run(ctx context.Context) error {
 		if w.workingScopeChecked {
 			w.workingScopeChecked = false
 		} else if err := w.refuseWhileWorkTaskExists(ctx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
 			return err
 		}
 		// Retention is re-checked every round, not only at startup, because a
@@ -249,16 +286,33 @@ func (w *watcher) run(ctx context.Context) error {
 			return fmt.Errorf("profile %q is holding %d retained worktrees, the limit; release one with 'slate runs clean <run-id>' to continue",
 				w.profileName, retained)
 		}
-		candidates, err := w.client.agentTasks("queued", w.boardID, 1)
+		var candidates []taskView
+		err = w.retryRead(ctx, "look for assigned work", func() error {
+			found, err := w.client.withContext(ctx).agentTasks("queued", w.boardID, 1)
+			if err != nil {
+				return err
+			}
+			candidates = found
+			return nil
+		})
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
 			return err
 		}
 		if len(candidates) == 0 {
-			w.sleep(ctx, pollInterval)
+			w.sleep(ctx, w.idle.next())
 			continue
 		}
+		// Work resets only the idle wait. A server that has been failing stays
+		// on its own recovery schedule.
+		w.idle.reset()
 		outcome, err := w.attempt(ctx, candidates[0])
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
 			if !recoverableAttemptError(err) {
 				// The server has answered in a way that repeating cannot
 				// change, or a process could not be stopped. Either way the
@@ -517,8 +571,53 @@ func (w *watcher) superviseRun(ctx context.Context, command *exec.Cmd, taskID st
 
 	supervision := &runSupervision{}
 	exited := false
+	postExitAttempts := 0
 	for {
 		state, decided, err := w.inspectRun(ctx, supervision, taskID, runID, exited, stillAlive)
+		retryWait, retryable := time.Duration(0), false
+		if err != nil {
+			retryWait, retryable = retryDelay(err, w.failure)
+		}
+		if err != nil && ctx.Err() != nil {
+			// A reading that failed because the watcher is stopping is an
+			// interrupt, not a monitoring failure, and must read as one.
+			//
+			// The guard deliberately does not cover a reading that succeeded.
+			// That result is already known, and discarding it would report a
+			// finished run as interrupted and tell the operator to re-run work
+			// that is already in review. The interrupt is caught on the next
+			// round instead. No test distinguishes the two, because the reads
+			// carry this context: a cancellation before or during one makes the
+			// read itself fail and land here correctly, leaving only the
+			// microseconds after a response is parsed.
+			return runStateInterrupted, w.stopExecutorGroup(processGroupID, exited, &remnant), nil
+		}
+		if err != nil && retryable {
+			// The executor may have finished while the server was unreachable.
+			select {
+			case <-finished:
+				exited = true
+			default:
+			}
+			if exited {
+				// The run is over, so its outcome is already decided on the
+				// server and the watcher simply cannot read it. That is worth a
+				// few more attempts, because an output posted just before the
+				// exit would otherwise be recorded as an interruption. It is not
+				// worth waiting for ever, which is what polling a dead run used
+				// to do.
+				postExitAttempts++
+				if postExitAttempts > postExitReadAttempts {
+					w.logf("Run %s ended and the server did not answer in %d attempts.", runID, postExitAttempts-1)
+					return runStateInterrupted, w.stopExecutorGroup(processGroupID, true, &remnant), nil
+				}
+			}
+			// Monitoring is polling too, so it has to wait out a struggling
+			// server rather than keep asking. Without this a rate limit turns
+			// into a tight loop that makes the rate limit worse.
+			w.sleep(ctx, retryWait)
+			continue
+		}
 		if err != nil {
 			// The server has answered in a way that repeating cannot change,
 			// so the executor must not be left running against it.
@@ -614,27 +713,18 @@ func (w *watcher) inspectRun(ctx context.Context, s *runSupervision, taskID stri
 	taskReadStartedAlive := aliveThrough()
 	task, err := reader.task(taskID)
 	if err != nil {
-		if terminal := terminalReadError(err); terminal != nil {
-			return "", false, terminal
-		}
-		w.logf("Could not read task %s: %v", taskID, err)
-		if taskReadStartedAlive {
-			s.readFailed = true
-		}
-		return "", false, nil
+		w.noteReadFailure(s, taskReadStartedAlive, "task "+taskID, err)
+		return "", false, err
 	}
 	entriesReadStartedAlive := aliveThrough()
 	entries, err := reader.entriesForRun(taskID, runID)
 	if err != nil {
-		if terminal := terminalReadError(err); terminal != nil {
-			return "", false, terminal
-		}
-		w.logf("Could not read run %s: %v", runID, err)
-		if entriesReadStartedAlive {
-			s.readFailed = true
-		}
-		return "", false, nil
+		w.noteReadFailure(s, entriesReadStartedAlive, "run "+runID, err)
+		return "", false, err
 	}
+	// One inspection consists of both reads. Reset only after the pair succeeds
+	// so one persistently failing endpoint still receives exponential backoff.
+	w.failure.reset()
 	owned := strings.EqualFold(task.ExecutionRunID, runID)
 	outcome := classifyRunEntries(entries, runID)
 	s.everOwned = s.everOwned || owned
@@ -790,25 +880,64 @@ func sleepContext(ctx context.Context, d time.Duration) {
 	}
 }
 
-// terminalReadError returns the error when the server has given an answer that
-// repeating cannot change. A revoked credential or a task that no longer exists
-// must stop the run rather than be polled forever with an executor still alive.
-func terminalReadError(err error) error {
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
-		return nil
+// noteReadFailure records an unseen stretch and says what happened, using the
+// same classifier that decides the wait, so the log and the behavior cannot
+// disagree about whether a failure was transient.
+func (w *watcher) noteReadFailure(s *runSupervision, alive bool, what string, err error) {
+	if !retryableError(err) {
+		// The caller reports this one, so saying it twice would only be noise.
+		return
 	}
-	if retryableStatuses[apiErr.Status] {
-		return nil
+	w.logf("Could not read %s: %v", what, err)
+	if alive {
+		// The run may have held the task through a stretch the watcher could
+		// not see.
+		s.readFailed = true
 	}
-	return err
+}
+
+// retryRead repeats a read until it succeeds or the server gives an answer that
+// repeating cannot change. Only reads go through here: a mutation is never
+// retried automatically, because the agent owns its own idempotency keys and
+// the watcher must not decide on its behalf that a write is safe to repeat.
+func (w *watcher) retryRead(ctx context.Context, describe string, attempt func() error) error {
+	return retryReadWith(ctx, w.failure, w.sleep, w.logf, describe, attempt)
+}
+
+// retryReadWith is the same policy without a watcher, so the startup identity
+// check can wait out an unreachable server before one exists.
+func retryReadWith(ctx context.Context, failure *backoff, sleep func(context.Context, time.Duration), logf func(string, ...any), describe string, attempt func() error) error {
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err := attempt()
+		if err == nil {
+			// Any answer at all means the server is reachable again.
+			failure.reset()
+			return nil
+		}
+		if ctx.Err() != nil {
+			// Stopping is not a failure to wait out, and promising a retry
+			// while shutting down would be a lie.
+			return ctx.Err()
+		}
+		wait, retryable := retryDelay(err, failure)
+		if !retryable {
+			return fmt.Errorf("could not %s: %w", describe, err)
+		}
+		logf("Could not %s (%v). Trying again in %s.", describe, err, wait.Round(time.Second))
+		sleep(ctx, wait)
+	}
 }
 
 // retryableStatuses are the responses worth waiting out rather than giving up
 // on. Everything else is a decision the server has already made.
 var retryableStatuses = map[int]bool{
-	http.StatusTooManyRequests:     true,
+	// The approved design treats 500 and the gateway/service-unavailable
+	// responses as transient server failures.
 	http.StatusInternalServerError: true,
+	http.StatusTooManyRequests:     true,
 	http.StatusBadGateway:          true,
 	http.StatusServiceUnavailable:  true,
 	http.StatusGatewayTimeout:      true,
@@ -818,11 +947,13 @@ var retryableStatuses = map[int]bool{
 // setup failure is worth retrying a few times; a terminal server answer or a
 // process group that would not stop is not.
 func recoverableAttemptError(err error) bool {
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
-		return retryableStatuses[apiErr.Status]
+	if errors.Is(err, errGroupSurvived) || errors.Is(err, errRunRecordRemoval) || errors.Is(err, errUndiscoverableRun) {
+		return false
 	}
-	return !errors.Is(err, errGroupSurvived) && !errors.Is(err, errRunRecordRemoval) && !errors.Is(err, errUndiscoverableRun)
+	// The same classifier that decides whether a read is worth repeating decides
+	// whether the watcher may offer another candidate, so a malformed reply or a
+	// bad address cannot be terminal for the read and recoverable for the loop.
+	return retryableError(err)
 }
 
 // errGroupSurvived marks a run whose processes could not be ended.
