@@ -1777,7 +1777,6 @@ function workspaceListLabel(list) {
 function workspaceDetailHTML(task) {
   const list = state.workspaceLists.find(item => item.id === task.bucketId);
   const completed = state.selectedSubtasks.filter(item => item.status === "done").length;
-  const latestOutput = [...state.selectedEntries].reverse().find(entry => entry.kind === "output");
   const entries = state.selectedEntries.map(entry => `<article class="card-entry card-entry-${entry.kind}">
     <header><span class="card-entry-author ${entry.authorKind === "agent" ? "agent" : ""}">${entry.authorKind === "agent" ? icon("bot") : icon("user")}<strong>${escapeHTML(entry.authorName)}</strong></span><time>${new Date(entry.createdAt).toLocaleString()}</time></header>
     <p>${escapeHTML(entry.body).replace(/\n/g, "<br>")}</p>
@@ -1798,7 +1797,6 @@ function workspaceDetailHTML(task) {
         <div class="workspace-detail-main">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
           <label class="workspace-brief-label" for="workspace-detail-description">Prompt and context</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…">${escapeHTML(task.description || "")}</textarea>
-          ${latestOutput ? `<section class="card-latest-output"><header>${icon("bot")}<div><span>Latest output</span><strong>${escapeHTML(latestOutput.authorName)}</strong></div></header><p>${escapeHTML(latestOutput.body).replace(/\n/g, "<br>")}</p></section>` : ""}
           <section class="card-conversation" aria-labelledby="card-conversation-heading">
             <header><div><h3 id="card-conversation-heading">Conversation</h3><span>${state.selectedEntries.length}</span></div></header>
             ${entries ? `<div class="card-entry-list">${entries}</div>` : `<p class="card-conversation-empty">Comments and agent outputs will appear here.</p>`}
