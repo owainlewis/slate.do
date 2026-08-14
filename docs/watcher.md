@@ -167,7 +167,7 @@ slate runs clean <run-id>          # release one
 
 `clean` removes the worktree and keeps the branch, so any commits stay reachable.
 It refuses if anything from the run is still running, or if the worktree has
-uncommitted changes — it will never throw work away for you. Commit it or discard
+uncommitted changes. It will never throw work away for you. Commit it or discard
 it yourself first.
 
 Each profile keeps at most ten. At the limit the watcher stops and tells you to
@@ -186,8 +186,9 @@ You should not need to think about this, but it explains the messages.
 A quiet queue is polled every five seconds, backing off to about a minute so an
 idle watcher is cheap. Connection failures, timeouts and 429, 500, 502, 503 and
 504 are waited out and retried. If a rate-limited response names a delay, it
-waits at least that long, up to five minutes. Anything else — a bad token, a deleted task — stops the
-watcher with a message naming what happened, because retrying cannot help.
+waits at least that long, up to five minutes. Anything else, such as a bad token
+or a deleted task, stops the watcher with a message naming what happened because
+retrying cannot help.
 
 It never repeats a write on its own. Only the agent decides to resubmit its own
 report, and it does that with a key that makes a duplicate impossible.
@@ -208,24 +209,24 @@ the repository it came from.
 
 ## Troubleshooting
 
-**"is already in progress"** — a task assigned to this agent is In Progress.
+**"is already in progress":** a task assigned to this agent is In Progress.
 Finish it or move it back to Ready. If a previous run left it there, that is the
 manual recovery described above.
 
-**"has uncommitted changes"** — your checkout is dirty. The watcher branches from
+**"has uncommitted changes":** your checkout is dirty. The watcher branches from
 your current commit, and refuses rather than quietly leaving your changes out.
 
-**"is not on a named branch"** — you are on a detached HEAD. Check out a branch.
+**"is not on a named branch":** you are on a detached HEAD. Check out a branch.
 
-**"belongs to agent … but profile expects …"** — the token and `agentId` do not
+**"belongs to agent … but profile expects …":** the token and `agentId` do not
 match. Nothing was created; fix the profile.
 
-**"does not support managed runs yet"** — the server is older than the CLI. Deploy
+**"does not support managed runs yet":** the server is older than the CLI. Deploy
 the server first; see below.
 
-**"is holding 10 retained worktrees"** — clean one with `slate runs clean`.
+**"is holding 10 retained worktrees":** clean one with `slate runs clean`.
 
-**The executor exits immediately** — usually its own credentials are missing from
+**The executor exits immediately:** usually its own credentials are missing from
 the environment. Run the same command by hand in the same shell to confirm.
 
 ## Releasing this
