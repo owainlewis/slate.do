@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
   <meta name="document-kind" content="design">
   <meta name="source-path" content="docs/agent-task-watcher/design.md">
-  <meta name="source-sha256" content="1ac89be1e536bbf4c9699916696b8a8890c106ee8ad40258c305bea360c881c8">
+  <meta name="source-sha256" content="89fa186722cdd88faec46649d519dda5f1f15c5b8d5aa11a5a0e960e8d3e6a42">
   <meta name="generator" content="blueprint/html-doc@1">
   <title>Agent task watcher</title>
   <style>:root {
@@ -421,7 +421,7 @@ tbody tr:nth-child(even) { background: #eff3f5; }
         <div class="metadata__item"><dt>Kind</dt><dd>Technical design</dd></div>
         <div class="metadata__item"><dt>Status</dt><dd>Implemented</dd></div>
         <div class="metadata__item"><dt>Source</dt><dd>docs/agent-task-watcher/design.md</dd></div>
-        <div class="metadata__item"><dt>Revision</dt><dd><code title="1ac89be1e536bbf4c9699916696b8a8890c106ee8ad40258c305bea360c881c8">1ac89be1e536</code></dd></div>
+        <div class="metadata__item"><dt>Revision</dt><dd><code title="89fa186722cdd88faec46649d519dda5f1f15c5b8d5aa11a5a0e960e8d3e6a42">89fa186722cd</code></dd></div>
       </dl>
     </div>
   </header>
@@ -742,13 +742,13 @@ pre-claim changes disposable. The cost is requiring Git and managing
 local worktrees.</p>
 </div>
 <div class="source-block" data-source-block="43"
-data-source-sha256="66c226bf7ac3893f020ced2a5ae85f01146b0bc30a15e74fb46efb1051da15c6">
+data-source-sha256="886bb91cabfed21eb824a88e01b2bc8ce795e110355c0b8b9586cb2299f797d6">
 <p><strong>Managed runs use server fencing.</strong> The run ID is
 recorded during claim and required on later agent mutations for that
-task. A stale or losing run receives <code>run_conflict</code>. Relying
-only on local locks was rejected because watchers can run on different
-machines. Automatic resume was rejected for v1 because safe takeover
-needs leases, expiry, and heartbeat policy.</p>
+task. A stale or losing run receives <code>managed_run_mismatch</code>.
+Relying only on local locks was rejected because watchers can run on
+different machines. Automatic resume was rejected for v1 because safe
+takeover needs leases, expiry, and heartbeat policy.</p>
 </div>
 <div class="source-block" data-source-block="44"
 data-source-sha256="614491d8639d4706045c57cc61af8638c1ec4ef83db4d7dca7082b51b30e4135">
@@ -856,7 +856,7 @@ data-source-sha256="d58a3741c408d72bf8e99cb9c99f055d7cabeda3c3b4d006597446e8412a
 <h3>Requirements</h3>
 </section>
 <div class="source-block" data-source-block="55"
-data-source-sha256="ca30b2ba82c4311a8d86dd558f69d62481a7b22641503a2a0a5ab628523dc6bf">
+data-source-sha256="07b281b2b7bd6dc4a849ca7df31d95cff45238d94a2e541134511dd3496e8803">
 <ul>
 <li><code>slate watch --profile &lt;name&gt;</code> watches assigned
 queued actions across all visible boards. <code>--board</code> scopes
@@ -908,7 +908,7 @@ reject empty or over-16-KiB bodies locally.</li>
 <code>managed_run_status_locked</code>. The same status changes remain
 valid for legacy claims.</li>
 <li>A managed mutation with a missing or different run ID returns HTTP
-409 <code>run_conflict</code>.</li>
+409 <code>managed_run_mismatch</code>.</li>
 <li>The watcher retains successful, blocked, interrupted, and uncertain
 worktrees. It automatically deletes a run only after proving that it
 lost the claim or exited without ever claiming.</li>
@@ -989,14 +989,14 @@ its assigned task. The response exposes <code>runId</code> but not the
 idempotency key.</p>
 </div>
 <div class="source-block" data-source-block="64"
-data-source-sha256="d111add76acfc64172c7848b1d5fef472ab67894a806a5a6b9f8d19eedece7cf">
+data-source-sha256="10275196228213cf0ce2cc8a92c856127b13e975e8594cbceb4d58b3e85429b5">
 <p>For a managed run, <code>PATCH /api/v1/agent/tasks/{id}/status</code>
 returns HTTP 409 <code>managed_run_status_locked</code> even with the
 matching run header. A stale or missing run identity returns
-<code>run_conflict</code>. Legacy agent claims retain current behavior.
-Account sessions and personal tokens retain their current authority,
-including requeue and completion. Human changes do not clear the stored
-correlation ID; a later managed claim replaces it.</p>
+<code>managed_run_mismatch</code>. Legacy agent claims retain current
+behavior. Account sessions and personal tokens retain their current
+authority, including requeue and completion. Human changes do not clear
+the stored correlation ID; a later managed claim replaces it.</p>
 </div>
 <div class="source-block" data-source-block="65"
 data-source-sha256="70ec787c562fab6a428fe983fe5f0de23842bcc97480970d7d63bab0d27a3ce5">
@@ -1182,12 +1182,13 @@ checks. This works after the task reaches review or done. A changed body
 with the same key conflicts.</p>
 </div>
 <div class="source-block" data-source-block="90"
-data-source-sha256="a1334930d3d1d870fa34714cb21c4504b470ad323759b2c2e8dbc481ce5b4893">
+data-source-sha256="d0a331d8914a6b5b536b98917b87474ff848329fbc26c5a6874f6bf2833b18a1">
 <p>If a stale process attempts a mutation after another managed run owns
-the task, the server returns <code>run_conflict</code>. It cannot add a
-comment, post output, or change status. A human can move a task back to
-Ready; the stored old run ID remains correlation metadata until the next
-managed claim overwrites it and establishes the new fence.</p>
+the task, the server returns <code>managed_run_mismatch</code>. It
+cannot add a comment, post output, or change status. A human can move a
+task back to Ready; the stored old run ID remains correlation metadata
+until the next managed claim overwrites it and establishes the new
+fence.</p>
 </div>
 <div class="source-block" data-source-block="91"
 data-source-sha256="4ae972f45907f6c0a29768632b5f2cad81797755323293b25a74defc6bed4e87">

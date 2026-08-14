@@ -106,7 +106,7 @@ The worktree registry owns local run ID, task ID, agent ID, branch, worktree pat
 
 **The coding agent claims the task inside an isolated worktree.** Having the watcher claim was rejected because it splits the visible workflow across two actors. Giving competing agents the source checkout was rejected because prompt compliance cannot protect it. Isolation preserves agent-owned claiming while making pre-claim changes disposable. The cost is requiring Git and managing local worktrees.
 
-**Managed runs use server fencing.** The run ID is recorded during claim and required on later agent mutations for that task. A stale or losing run receives `run_conflict`. Relying only on local locks was rejected because watchers can run on different machines. Automatic resume was rejected for v1 because safe takeover needs leases, expiry, and heartbeat policy.
+**Managed runs use server fencing.** The run ID is recorded during claim and required on later agent mutations for that task. A stale or losing run receives `managed_run_mismatch`. Relying only on local locks was rejected because watchers can run on different machines. Automatic resume was rejected for v1 because safe takeover needs leases, expiry, and heartbeat policy.
 
 **Managed and legacy claims coexist.** Existing agents that claim without a run ID keep their current status authority, including direct `needs_review`. A managed run must use output to enter review. A global breaking change was rejected because released CLI guidance and clients use the direct transition. The cost is maintaining two transition rules until a later version retires legacy claims.
 
@@ -158,7 +158,7 @@ The worktree registry owns local run ID, task ID, agent ID, branch, worktree pat
 - `slate tasks comment` and `tasks output` accept exactly one of `--body` or `--file`; `--file -` reads stdin.
 - Comment and output commands require a non-empty idempotency key and reject empty or over-16-KiB bodies locally.
 - Any managed direct status change returns HTTP 409 `managed_run_status_locked`. The same status changes remain valid for legacy claims.
-- A managed mutation with a missing or different run ID returns HTTP 409 `run_conflict`.
+- A managed mutation with a missing or different run ID returns HTTP 409 `managed_run_mismatch`.
 - The watcher retains successful, blocked, interrupted, and uncertain worktrees. It automatically deletes a run only after proving that it lost the claim or exited without ever claiming.
 - The local registry holds at most ten retained worktrees per profile. Startup stops with cleanup instructions at the limit.
 - `slate runs list` lists retained runs. `slate runs clean <run-id>` removes a worktree only when no child is active and the worktree is clean; it refuses dirty worktrees, never forces deletion, and retains the branch.
@@ -189,7 +189,7 @@ The child commands read `SLATE_RUN_ID`. When present, claim, status, comment, an
 
 `GET /api/v1/tasks/{id}/entries?runId=<id>` returns entries for that exact managed run. An agent credential may query only its assigned task. The response exposes `runId` but not the idempotency key.
 
-For a managed run, `PATCH /api/v1/agent/tasks/{id}/status` returns HTTP 409 `managed_run_status_locked` even with the matching run header. A stale or missing run identity returns `run_conflict`. Legacy agent claims retain current behavior. Account sessions and personal tokens retain their current authority, including requeue and completion. Human changes do not clear the stored correlation ID; a later managed claim replaces it.
+For a managed run, `PATCH /api/v1/agent/tasks/{id}/status` returns HTTP 409 `managed_run_status_locked` even with the matching run header. A stale or missing run identity returns `managed_run_mismatch`. Legacy agent claims retain current behavior. Account sessions and personal tokens retain their current authority, including requeue and completion. Human changes do not clear the stored correlation ID; a later managed claim replaces it.
 
 `GET /api/v1/me` adds optional `agentPurpose` for agent credentials and a `managedRuns` capability boolean. The watcher refuses to start unless `managedRuns` is true. This allows the server to deploy before the new CLI without enabling an incomplete workflow.
 
@@ -253,7 +253,7 @@ If claim fails, the executor exits. The watcher waits up to ten seconds, termina
 
 If an exact output request commits but its response is lost, repeating the same key returns the stored entry before status and run checks. This works after the task reaches review or done. A changed body with the same key conflicts.
 
-If a stale process attempts a mutation after another managed run owns the task, the server returns `run_conflict`. It cannot add a comment, post output, or change status. A human can move a task back to Ready; the stored old run ID remains correlation metadata until the next managed claim overwrites it and establishes the new fence.
+If a stale process attempts a mutation after another managed run owns the task, the server returns `managed_run_mismatch`. It cannot add a comment, post output, or change status. A human can move a task back to Ready; the stored old run ID remains correlation metadata until the next managed claim overwrites it and establishes the new fence.
 
 If the agent posts a blocked comment, exits without an entry, or crashes after claim, the task stays working and the worktree is retained. The watcher stops with task, run, branch, worktree, and recovery guidance. Recovery in v1 is manual: inspect or commit useful changes, stop any remaining process, move the task to Ready, and let a new isolated run claim it. There is no automatic resume or takeover.
 
