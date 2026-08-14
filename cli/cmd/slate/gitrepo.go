@@ -88,6 +88,21 @@ func runBranchName(taskID string, runID string) string {
 	return "slate/" + taskID + "-" + shortRunID(runID)
 }
 
+// lockRepositoryWorktrees serializes Git worktree metadata changes across
+// watcher processes using a lock inside the repository's common Git directory.
+// Worktree paths remain independent; only the short add/remove operation is
+// serialized so Git never observes another process's half-written metadata.
+func lockRepositoryWorktrees(ctx context.Context, repositoryRoot string) (func(), error) {
+	commonDir, err := runGit(ctx, repositoryRoot, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repositoryRoot, commonDir)
+	}
+	return lockFile(ctx, filepath.Join(filepath.Clean(commonDir), "slate-worktrees.lock"))
+}
+
 func shortRunID(runID string) string {
 	compact := strings.ReplaceAll(runID, "-", "")
 	if len(compact) > 8 {
@@ -113,6 +128,11 @@ func createRunWorktree(ctx context.Context, source sourceCheckout, profileName s
 		return "", "", err
 	}
 	branch = runBranchName(taskID, runID)
+	unlock, err := lockRepositoryWorktrees(ctx, source.Root)
+	if err != nil {
+		return "", "", err
+	}
+	defer unlock()
 	// The branch is checked first for the same reason as the path: cleanup
 	// after a failure must never remove a ref this run did not create.
 	if existing, err := runGit(ctx, source.Root, "branch", "--list", branch); err == nil && strings.TrimSpace(existing) != "" {
@@ -130,7 +150,7 @@ func createRunWorktree(ctx context.Context, source sourceCheckout, profileName s
 		// being created at all.
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if discardErr := discardRunWorktree(cleanupCtx, source.Root, path, branch); discardErr != nil {
+		if discardErr := discardRunWorktreeLocked(cleanupCtx, source.Root, path, branch); discardErr != nil {
 			return "", "", fmt.Errorf("%w (cleaning up also failed: %v)", err, discardErr)
 		}
 		return "", "", err
@@ -142,6 +162,15 @@ func createRunWorktree(ctx context.Context, source sourceCheckout, profileName s
 // when the executor changed them. It is only ever called for a run that failed
 // to claim, so nothing a human wants to keep is at risk.
 func discardRunWorktree(ctx context.Context, repositoryRoot string, path string, branch string) error {
+	unlock, err := lockRepositoryWorktrees(ctx, repositoryRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return discardRunWorktreeLocked(ctx, repositoryRoot, path, branch)
+}
+
+func discardRunWorktreeLocked(ctx context.Context, repositoryRoot string, path string, branch string) error {
 	var problems []string
 	if path != "" {
 		if _, err := runGit(ctx, repositoryRoot, "worktree", "remove", "--force", path); err != nil {
@@ -170,6 +199,11 @@ func discardRunWorktree(ctx context.Context, repositoryRoot string, path string,
 // never forces, so uncommitted work is reported rather than destroyed, and it
 // keeps the branch so any commits remain reachable.
 func releaseRetainedWorktree(ctx context.Context, repositoryRoot string, path string) error {
+	unlock, err := lockRepositoryWorktrees(ctx, repositoryRoot)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	status, err := runGit(ctx, path, "status", "--porcelain")
 	if err != nil {
 		return err
