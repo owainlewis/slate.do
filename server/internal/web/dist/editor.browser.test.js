@@ -1200,6 +1200,100 @@ test("a board can be created from the primary navigation", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("desktop navigation collapses with the keyboard and stays collapsed across routes", async t => {
+  const { page, pageErrors } = await startWorkspace(t);
+  const sidebar = page.locator("#primary-navigation");
+  const main = page.locator(".workspace-main");
+  const expandedSidebarWidth = (await sidebar.boundingBox()).width;
+  const initialMainWidth = (await main.boundingBox()).width;
+  const hideNavigation = page.getByRole("button", { name: "Hide navigation" });
+
+  assert.equal(await hideNavigation.getAttribute("aria-expanded"), "true");
+  await hideNavigation.focus();
+  await page.keyboard.press("Enter");
+  const showNavigation = page.getByRole("button", { name: "Show navigation" });
+  await showNavigation.waitFor();
+  await page.waitForTimeout(350);
+  const collapsedMetrics = await sidebar.evaluate(element => ({
+    classes: element.className,
+    width: element.getBoundingClientRect().width,
+    computedWidth: getComputedStyle(element).width,
+    flexBasis: getComputedStyle(element).flexBasis,
+    paddingLeft: getComputedStyle(element).paddingLeft,
+    paddingRight: getComputedStyle(element).paddingRight,
+  }));
+
+  assert.ok(expandedSidebarWidth >= 220, `expanded sidebar width=${expandedSidebarWidth}`);
+  assert.ok(collapsedMetrics.width < 1, JSON.stringify(collapsedMetrics));
+  assert.ok((await main.boundingBox()).width >= initialMainWidth + 220);
+  assert.equal(await showNavigation.getAttribute("aria-expanded"), "false");
+  assert.equal(await sidebar.getAttribute("inert"), "");
+  assert.equal(await sidebar.getAttribute("aria-hidden"), "true");
+  const collapsedToggleBounds = await showNavigation.boundingBox();
+  const workspaceHeadingBounds = await page.getByRole("heading", { name: "All cards", exact: true }).boundingBox();
+  assert.ok(collapsedToggleBounds.x + collapsedToggleBounds.width < workspaceHeadingBounds.x,
+    `toggle=${JSON.stringify(collapsedToggleBounds)} heading=${JSON.stringify(workspaceHeadingBounds)}`);
+
+  await navigateApp(page, "/app/boards/board-one");
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  const boardShowNavigation = page.getByRole("button", { name: "Show navigation" });
+  assert.equal(await boardShowNavigation.getAttribute("aria-expanded"), "false");
+  assert.ok((await sidebar.boundingBox()).width < 1);
+  const boardToggleBounds = await boardShowNavigation.boundingBox();
+  const boardHeadingBounds = await page.getByRole("heading", { name: "Workspace", exact: true }).boundingBox();
+  assert.ok(boardToggleBounds.x + boardToggleBounds.width < boardHeadingBounds.x,
+    `toggle=${JSON.stringify(boardToggleBounds)} heading=${JSON.stringify(boardHeadingBounds)}`);
+
+  await navigateApp(page, "/app/agents");
+  await page.getByRole("heading", { name: "Agents", exact: true, level: 1 }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Show navigation" }).getAttribute("aria-expanded"), "false");
+
+  await navigateApp(page, "/app/settings/profile");
+  await page.getByRole("heading", { name: "Profile", exact: true, level: 1 }).waitFor();
+  const settingsShowNavigation = page.getByRole("button", { name: "Show navigation" });
+  assert.equal(await settingsShowNavigation.getAttribute("aria-expanded"), "false");
+  const darkToggleStyle = await settingsShowNavigation.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, color: style.color };
+  });
+  await page.locator(".settings-page").evaluate(element => element.classList.replace("theme-dark", "theme-light"));
+  const lightToggleStyle = await settingsShowNavigation.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, color: style.color };
+  });
+  assert.notDeepEqual(lightToggleStyle, darkToggleStyle);
+  assert.notEqual(lightToggleStyle.color, "rgba(0, 0, 0, 0)");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  assert.deepEqual(await page.locator("#primary-navigation, #desktop-sidebar-toggle").evaluateAll(elements => elements.map(element => getComputedStyle(element).transitionDuration)), ["0s", "0s"]);
+  await settingsShowNavigation.click();
+  await page.getByRole("button", { name: "Hide navigation" }).waitFor();
+  await page.waitForFunction(() => document.querySelector("#primary-navigation").getBoundingClientRect().width >= 220);
+  assert.equal(await sidebar.getAttribute("inert"), null);
+  assert.equal(await sidebar.getAttribute("aria-hidden"), "false");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("mobile navigation keeps its existing closed dropdown behaviour", async t => {
+  const { page, pageErrors } = await startWorkspace(t, { width: 390, height: 844 });
+  const sidebar = page.getByRole("complementary", { name: "Primary navigation" });
+  const content = page.locator("#sidebar-content");
+  const openNavigation = page.getByRole("button", { name: "Open navigation" });
+
+  assert.equal(await page.getByRole("button", { name: "Hide navigation" }).count(), 0);
+  assert.equal(await openNavigation.getAttribute("aria-expanded"), "false");
+  assert.equal(await content.isVisible(), false);
+  assert.equal(await sidebar.getAttribute("inert"), null);
+  await openNavigation.focus();
+  await page.keyboard.press("Enter");
+  const closeNavigation = page.getByRole("button", { name: "Close navigation" });
+  await closeNavigation.waitFor();
+  assert.equal(await closeNavigation.getAttribute("aria-expanded"), "true");
+  assert.equal(await content.isVisible(), true);
+  await closeNavigation.click();
+  assert.equal(await content.isVisible(), false);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a delayed board creation cannot override newer navigation", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 

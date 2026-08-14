@@ -150,6 +150,23 @@ test("sidebar makes cards, boards, and agents the primary control plane", () => 
   vm.runInContext(`state.boards = [];`, app);
 });
 
+test("desktop navigation exposes a persistent accessible collapse control", () => {
+  vm.runInContext(`state.sidebarCollapsed = false;`, app);
+  const expanded = app.appSidebarHTML();
+  assert.match(expanded, /id="primary-navigation" aria-label="Primary navigation"/);
+  assert.match(expanded, /id="desktop-sidebar-toggle"[^>]*aria-label="Hide navigation"[^>]*aria-controls="primary-navigation"[^>]*aria-expanded="true"/);
+  assert.match(expanded, /<rect x="3" y="4" width="18" height="16" rx="2\.5"\/><path d="M9\.5 4v16"\/>/);
+
+  vm.runInContext(`state.sidebarCollapsed = true;`, app);
+  const collapsed = app.appSidebarHTML();
+  assert.match(collapsed, /class="sidebar collapsed"/);
+  assert.match(collapsed, /id="desktop-sidebar-toggle"[^>]*aria-label="Show navigation"[^>]*aria-expanded="false"/);
+  assert.match(app.settingsHTML(), /class="sidebar settings-sidebar collapsed"[^>]*id="primary-navigation"/);
+  assert.match(styles, /@media \(min-width: 901px\) \{[\s\S]*?\.sidebar\.collapsed \{[\s\S]*?width: 0;[\s\S]*?flex-basis: 0;/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.sidebar, \.desktop-sidebar-toggle \{ transition: none !important; \}/);
+  vm.runInContext(`state.sidebarCollapsed = false;`, app);
+});
+
 test("shared-shell routes load one account-wide list index and discard stale responses", async () => {
   let resolveListIndex;
   app.pendingListIndex = new Promise(resolve => { resolveListIndex = resolve; });
