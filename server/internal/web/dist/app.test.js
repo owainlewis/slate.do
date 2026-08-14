@@ -660,6 +660,20 @@ test("subtask detail keeps its list fixed to the parent", () => {
   assert.match(html, /Child cards stay with their parent card\./);
 });
 
+test("card detail shows outputs once in the conversation", () => {
+  vm.runInContext(`
+    state.workspaceLists = [{ id: "list-one", name: "Product", isInbox: false }];
+    state.selectedSubtasks = [];
+    state.selectedEntries = [{ id: "output-one", kind: "output", body: "Draft ready", authorKind: "agent", authorName: "Research agent", createdAt: "2026-08-10T12:00:00Z" }];
+  `, app);
+  const html = vm.runInContext(`workspaceDetailHTML({ id: "card-one", bucketId: "list-one", title: "Prepare launch", description: "", status: "needs_review", priority: "", assigneeAgentId: "", scheduledDate: "" })`, app);
+  assert.doesNotMatch(html, /Latest output|card-latest-output/);
+  assert.match(html, /id="card-conversation-heading">Conversation<\/h3>/);
+  assert.equal((html.match(/Draft ready/g) || []).length, 1);
+  assert.match(html, /class="card-entry-kind">Output<\/span>/);
+  vm.runInContext(`state.selectedEntries = []; state.workspaceLists = [];`, app);
+});
+
 test("agent work renders the shared inline task detail with parent context", () => {
   vm.runInContext(`
     state.view = "agent-work";

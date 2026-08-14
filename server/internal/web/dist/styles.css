@@ -1074,13 +1074,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .workspace-detail .field input, .workspace-detail .field select { min-height: 40px; padding: 9px 11px; font-size: 13px; }
 .workspace-detail .detail-actions { grid-column: 1 / -1; min-height: 64px; padding: 12px 18px; }
 .workspace-detail .detail-actions button { min-height: 38px; font-size: 13px; }
-.card-latest-output { margin: 0 0 28px; padding: 15px; border: 1px solid color-mix(in srgb, var(--review) 28%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--review) 6%, var(--card)); }
-.card-latest-output header { display: flex; align-items: center; gap: 9px; }
-.card-latest-output header .icon { color: var(--review); }
-.card-latest-output header div { display: flex; align-items: baseline; gap: 7px; }
-.card-latest-output header span { color: var(--review); font-size: 11px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
-.card-latest-output header strong { font-size: 12px; }
-.card-latest-output > p { margin: 13px 0 0; color: var(--soft); font-size: 13px; line-height: 1.55; }
 .card-conversation { margin-top: 30px; padding-top: 25px; border-top: 1px solid var(--line); }
 .card-conversation > header > div { display: flex; align-items: baseline; gap: 8px; }
 .card-conversation h3 { margin: 0; font-size: 16px; }

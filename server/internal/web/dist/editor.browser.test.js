@@ -1671,6 +1671,13 @@ test("Review separates agent outputs from cards manually placed in review", asyn
   await outputGroup.getByText(assigned.title, { exact: true }).waitFor();
   assert.equal(await responseGroup.getByText(assigned.title, { exact: true }).count(), 0);
   assert.equal(await outputGroup.getByText(unassigned.title, { exact: true }).count(), 0);
+  await outputGroup.getByRole("button", { name: `Open card: ${assigned.title}`, exact: true }).click();
+  const conversation = page.locator(".card-conversation");
+  await conversation.getByText("Draft ready", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Latest output", { exact: true }).count(), 0);
+  assert.equal(await page.locator(".card-latest-output").count(), 0);
+  assert.equal(await conversation.getByText("Draft ready", { exact: true }).count(), 1);
+  assert.equal(await conversation.locator(".card-entry-kind").getByText("Output", { exact: true }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 

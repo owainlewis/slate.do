@@ -75,7 +75,7 @@ A conversation entry belongs to a card and is one of:
 - Comment: feedback, context, or a question.
 - Output: a result, link, deliverable, or summary returned by a human or agent.
 
-An output moves the card to Review. The latest output is pinned in card detail while the full conversation remains visible.
+An output moves the card to Review and remains visible in the card conversation.
 
 ### Agent
 
@@ -102,7 +102,7 @@ Every view reads and edits the same card records:
 - Table: card, list, status, priority, owner, and planned date.
 - Week: planned cards grouped Monday through Sunday.
 
-Opening a card uses a right drawer so its list remains visible as context. Card detail contains Prompt and context, Act with agent, latest Output, Conversation, Child cards, and Properties.
+Opening a card uses a right drawer so its list remains visible as context. Card detail contains Prompt and context, Conversation, Child cards, and Properties.
 
 Review separates outputs waiting for judgment from cards manually placed in Review.
 
