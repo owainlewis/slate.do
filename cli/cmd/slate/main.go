@@ -17,12 +17,27 @@ import (
 
 const defaultBaseURL = "https://slate.do"
 
+const maxTaskEntryBodyBytes = 16 * 1024
+
 var version = "dev"
 
 type client struct {
 	baseURL string
 	token   string
 	http    *http.Client
+	stdin   io.Reader
+}
+
+type apiError struct {
+	StatusCode         int
+	Code               string
+	Body               string
+	RetryAfter         string
+	RetryAfterDuration time.Duration
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("slate API %d: %s", e.StatusCode, e.Body)
 }
 
 func main() {
@@ -40,6 +55,7 @@ func run(args []string) error {
 		baseURL: env("SLATE_BASE_URL", defaultBaseURL),
 		token:   os.Getenv("SLATE_API_TOKEN"),
 		http:    &http.Client{Timeout: 30 * time.Second},
+		stdin:   os.Stdin,
 	}
 	switch args[1] {
 	case "help", "-h", "--help":
@@ -85,6 +101,7 @@ var helpText = map[string]string{
 Configuration:
   SLATE_API_TOKEN   Required API token created in Slate settings
   SLATE_BASE_URL    API URL (default: https://slate.do)
+  SLATE_RUN_ID      Managed execution run ID supplied by the watcher
 
 Usage:
   slate version
@@ -129,6 +146,9 @@ items per list. Use "tasks list --status done" to page older completed work.
   slate tasks delete <task-id>
   slate tasks reorder --list <list-id> <task-id>...
   slate tasks claim <task-id>
+  slate tasks entries <task-id> [--run <run-id>]
+  slate tasks comment <task-id> (--body <text> | --file <path>) [--idempotency-key <key>]
+  slate tasks output <task-id> (--body <text> | --file <path>) --idempotency-key <key>
   slate tasks status <task-id> new|queued|working|needs_review|done
 
 "pull" returns open queued tasks. Claim before starting work. Use an empty
@@ -136,6 +156,8 @@ items per list. Use "tasks list --status done" to page older completed work.
 clear the priority. "working" uses the atomic claim operation, so only one
 agent can successfully claim a queued task.
 Reuse --idempotency-key when retrying task creation after an uncertain result.
+Use --file - to read a comment or output from stdin. Managed comments require
+an idempotency key. Reuse the same key when retrying a comment or output.
 Task collections omit descriptions. Use "tasks get" for complete task detail.
 Completed pages default to 20 items and return nextCursor for --cursor.
 `,
@@ -431,7 +453,7 @@ func tasksCmd(c client, args []string) error {
 		if len(body) == 0 {
 			return errors.New("at least one update flag is required")
 		}
-		return c.sendJSON(http.MethodPatch, "/api/v1/tasks/"+url.PathEscape(id), body)
+		return c.sendJSONWithHeaders(http.MethodPatch, "/api/v1/tasks/"+url.PathEscape(id), body, managedRunHeaders())
 	case "delete":
 		id, err := singleID("slate tasks delete <task-id>", args[1:])
 		if err != nil {
@@ -453,7 +475,25 @@ func tasksCmd(c client, args []string) error {
 		if err != nil {
 			return err
 		}
-		return c.sendJSON(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(id)+"/claim", map[string]any{})
+		return c.sendJSONWithHeaders(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(id)+"/claim", map[string]any{}, managedRunHeaders())
+	case "entries":
+		if len(args) < 2 {
+			return errors.New("usage: slate tasks entries <task-id> [--run <run-id>]")
+		}
+		id := args[1]
+		fs := newFlagSet("tasks entries")
+		runID := fs.String("run", "", "exact managed run id")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 || strings.TrimSpace(id) == "" {
+			return errors.New("usage: slate tasks entries <task-id> [--run <run-id>]")
+		}
+		q := url.Values{}
+		setQuery(q, "runId", *runID)
+		return c.getJSON("/api/v1/tasks/"+url.PathEscape(id)+"/entries", q)
+	case "comment", "output":
+		return taskEntryCmd(c, args[0], args[1:])
 	case "status":
 		if len(args) != 3 {
 			return errors.New("usage: slate tasks status <task-id> new|queued|working|needs_review|done")
@@ -461,13 +501,103 @@ func tasksCmd(c client, args []string) error {
 		if !validStatus(args[2]) {
 			return fmt.Errorf("invalid status %q; choose new, queued, working, needs_review, or done", args[2])
 		}
-		if args[2] == "working" {
-			return c.sendJSON(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/claim", map[string]any{})
+		if args[2] == "working" && env("SLATE_RUN_ID", "") == "" {
+			return c.sendJSONWithHeaders(http.MethodPost, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/claim", map[string]any{}, managedRunHeaders())
 		}
-		return c.sendJSON(http.MethodPatch, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/status", map[string]any{"status": args[2]})
+		return c.sendJSONWithHeaders(http.MethodPatch, "/api/v1/agent/tasks/"+url.PathEscape(args[1])+"/status", map[string]any{"status": args[2]}, managedRunHeaders())
 	default:
 		return fmt.Errorf("unknown tasks command %q; run 'slate help tasks'", args[0])
 	}
+}
+
+func taskEntryCmd(c client, kind string, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: slate tasks %s <task-id> (--body <text> | --file <path>) --idempotency-key <key>", kind)
+	}
+	id := args[0]
+	fs := newFlagSet("tasks " + kind)
+	bodyValue := fs.String("body", "", "entry body")
+	fileValue := fs.String("file", "", "read entry body from a file, or - for stdin")
+	idempotencyKey := fs.String("idempotency-key", "", "stable key for safe retries")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(id) == "" {
+		return errors.New("unexpected arguments")
+	}
+	bodySet := false
+	fileSet := false
+	fs.Visit(func(item *flag.Flag) {
+		switch item.Name {
+		case "body":
+			bodySet = true
+		case "file":
+			fileSet = true
+		}
+	})
+	if bodySet == fileSet {
+		return errors.New("exactly one of --body or --file is required")
+	}
+	if kind == "output" && strings.TrimSpace(*idempotencyKey) == "" {
+		return errors.New("--idempotency-key is required for output")
+	}
+	if env("SLATE_RUN_ID", "") != "" && strings.TrimSpace(*idempotencyKey) == "" {
+		return errors.New("--idempotency-key is required for managed comments and outputs")
+	}
+	body := []byte(*bodyValue)
+	if fileSet {
+		var err error
+		body, err = c.readTaskEntryBody(*fileValue)
+		if err != nil {
+			return err
+		}
+	}
+	if len(body) > maxTaskEntryBodyBytes {
+		return fmt.Errorf("entry body is %d bytes; limit is %d bytes", len(body), maxTaskEntryBodyBytes)
+	}
+	if strings.TrimSpace(string(body)) == "" {
+		return errors.New("entry body is required")
+	}
+	headers := managedRunHeaders()
+	headers["Idempotency-Key"] = strings.TrimSpace(*idempotencyKey)
+	return c.sendJSONWithHeaders(http.MethodPost, "/api/v1/tasks/"+url.PathEscape(id)+"/entries", map[string]any{
+		"kind": kind,
+		"body": string(body),
+	}, headers)
+}
+
+func (c client) readTaskEntryBody(path string) ([]byte, error) {
+	if path == "-" {
+		reader := c.stdin
+		if reader == nil {
+			reader = os.Stdin
+		}
+		return readBoundedTaskEntryBody(reader)
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("--file requires a path or - for stdin")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readBoundedTaskEntryBody(file)
+}
+
+func readBoundedTaskEntryBody(reader io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, maxTaskEntryBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxTaskEntryBodyBytes {
+		return nil, fmt.Errorf("entry body exceeds %d bytes", maxTaskEntryBodyBytes)
+	}
+	return body, nil
+}
+
+func managedRunHeaders() map[string]string {
+	return map[string]string{"X-Slate-Run-ID": env("SLATE_RUN_ID", "")}
 }
 
 func (c client) getJSON(path string, q url.Values) error {
@@ -532,12 +662,46 @@ func (c client) doWithHeaders(method string, path string, body any, headers map[
 		return err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("slate API %d: %s", res.StatusCode, strings.TrimSpace(string(raw)))
+		body := safeAPIErrorBody(raw, c.token)
+		var payload struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(raw, &payload)
+		retryAfter := strings.TrimSpace(res.Header.Get("Retry-After"))
+		return &apiError{
+			StatusCode:         res.StatusCode,
+			Code:               strings.TrimSpace(payload.Code),
+			Body:               body,
+			RetryAfter:         retryAfter,
+			RetryAfterDuration: parseRetryAfter(retryAfter, time.Now()),
+		}
 	}
 	if target != nil && len(raw) > 0 {
 		return json.Unmarshal(raw, target)
 	}
 	return nil
+}
+
+func safeAPIErrorBody(raw []byte, token string) string {
+	body := strings.TrimSpace(string(raw))
+	if token != "" {
+		body = strings.ReplaceAll(body, token, "[REDACTED]")
+	}
+	const maxErrorBodyBytes = 4096
+	if len(body) > maxErrorBodyBytes {
+		body = body[:maxErrorBodyBytes] + "..."
+	}
+	return body
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if retryAt, err := http.ParseTime(value); err == nil && retryAt.After(now) {
+		return retryAt.Sub(now)
+	}
+	return 0
 }
 
 func printJSON(value any) error {
