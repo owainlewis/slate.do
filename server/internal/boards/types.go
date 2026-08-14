@@ -134,6 +134,7 @@ type UpdateTaskInput struct {
 	Priority        *string `json:"priority"`
 	AssigneeAgentID *string `json:"assigneeAgentId"`
 	SortOrder       *int    `json:"sortOrder"`
+	RunID           string  `json:"-"`
 }
 
 type MoveTaskInput struct {

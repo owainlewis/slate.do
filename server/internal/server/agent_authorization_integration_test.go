@@ -279,6 +279,28 @@ func TestManagedAgentRunHTTPContract(t *testing.T) {
 	if comment.Code != http.StatusCreated || !strings.Contains(comment.Body.String(), `"runId":"`+runID+`"`) {
 		t.Fatalf("managed comment = %d %s", comment.Code, comment.Body.String())
 	}
+	currentEdit := agentRequestWithHeaders(t, app, token, http.MethodPatch, "/api/v1/tasks/"+task.ID, `{"title":"Current run edit"}`, map[string]string{"X-Slate-Run-ID": runID})
+	if currentEdit.Code != http.StatusOK || !strings.Contains(currentEdit.Body.String(), `"title":"Current run edit"`) {
+		t.Fatalf("current managed run edit = %d %s", currentEdit.Code, currentEdit.Body.String())
+	}
+	newerRunID := "44444444-4444-4444-8444-444444444444"
+	if _, err := db.Exec(ctx, `UPDATE tasks SET execution_run_id = $1 WHERE id = $2`, newerRunID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	staleEdit := agentRequestWithHeaders(t, app, token, http.MethodPatch, "/api/v1/tasks/"+task.ID, `{"title":"Stale run edit"}`, map[string]string{"X-Slate-Run-ID": runID})
+	if staleEdit.Code != http.StatusConflict || !strings.Contains(staleEdit.Body.String(), `"code":"managed_run_mismatch"`) {
+		t.Fatalf("stale managed run edit = %d %s", staleEdit.Code, staleEdit.Body.String())
+	}
+	var storedTitle string
+	if err := db.QueryRow(ctx, `SELECT title FROM tasks WHERE id = $1`, task.ID).Scan(&storedTitle); err != nil {
+		t.Fatal(err)
+	}
+	if storedTitle != "Current run edit" {
+		t.Fatalf("title after stale managed run edit = %q", storedTitle)
+	}
+	if _, err := db.Exec(ctx, `UPDATE tasks SET execution_run_id = $1 WHERE id = $2`, runID, task.ID); err != nil {
+		t.Fatal(err)
+	}
 	status := agentRequestWithHeaders(t, app, token, http.MethodPatch, "/api/v1/agent/tasks/"+task.ID+"/status", `{"status":"needs_review"}`, map[string]string{"X-Slate-Run-ID": runID})
 	if status.Code != http.StatusConflict || !strings.Contains(status.Body.String(), `"code":"managed_run_status_locked"`) {
 		t.Fatalf("managed status = %d %s", status.Code, status.Body.String())

@@ -133,7 +133,7 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	}
 
 	done := StatusDone
-	if _, err := store.UpdateTaskForAgent(ctx, ownerID, agentID, task.ID, UpdateTaskInput{Status: &done}); !errors.Is(err, ErrManagedRunStatusLocked) {
+	if _, err := store.UpdateTaskForAgent(ctx, ownerID, agentID, task.ID, UpdateTaskInput{Status: &done, RunID: winner}); !errors.Is(err, ErrManagedRunStatusLocked) {
 		t.Fatalf("managed direct status error = %v, want ErrManagedRunStatusLocked", err)
 	}
 	if _, err := store.UpdateTaskForHuman(ctx, ownerID, task.ID, UpdateTaskInput{Status: &done}); err != nil {

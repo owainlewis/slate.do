@@ -305,6 +305,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	var task Task
 	var err error
 	if user.AgentID != "" {
+		input.RunID = strings.TrimSpace(r.Header.Get("X-Slate-Run-ID"))
 		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), input)
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), input)
@@ -457,7 +458,10 @@ func (h *Handler) AgentStatus(w http.ResponseWriter, r *http.Request, user auth.
 	var task Task
 	var err error
 	if user.AgentID != "" {
-		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
+		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{
+			Status: &input.Status,
+			RunID:  strings.TrimSpace(r.Header.Get("X-Slate-Run-ID")),
+		})
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
 	}
@@ -474,7 +478,10 @@ func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.Us
 	var task Task
 	var err error
 	if user.AgentID != "" {
-		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &status})
+		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{
+			Status: &status,
+			RunID:  strings.TrimSpace(r.Header.Get("X-Slate-Run-ID")),
+		})
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &status})
 	}

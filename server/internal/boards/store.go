@@ -1376,12 +1376,19 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	if err != nil {
 		return Task{}, err
 	}
-	if requiredAgentID != "" && (input.Status != nil || input.Done != nil) {
-		var managed bool
-		if err := tx.QueryRow(ctx, "SELECT execution_run_id IS NOT NULL FROM tasks WHERE id = $1", current.ID).Scan(&managed); err != nil {
+	if requiredAgentID != "" {
+		var executionRunID string
+		if err := tx.QueryRow(ctx, "SELECT COALESCE(execution_run_id::text, '') FROM tasks WHERE id = $1", current.ID).Scan(&executionRunID); err != nil {
 			return Task{}, err
 		}
-		if managed {
+		requestedRunID := strings.TrimSpace(input.RunID)
+		if executionRunID != "" && requestedRunID != executionRunID {
+			return Task{}, ErrManagedRunMismatch
+		}
+		if executionRunID == "" && requestedRunID != "" {
+			return Task{}, ErrManagedRunMismatch
+		}
+		if executionRunID != "" && (input.Status != nil || input.Done != nil) {
 			return Task{}, ErrManagedRunStatusLocked
 		}
 	}
