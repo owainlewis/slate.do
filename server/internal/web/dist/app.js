@@ -8,6 +8,7 @@ const ICON_PATHS = {
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chevronLeft: '<path d="M15 6l-6 6 6 6"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  sidebar: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9.5 4v16"/>',
   rows: '<path d="M8.5 6h11.5M8.5 12h11.5M8.5 18h11.5"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
   kanban: '<rect x="4" y="4.5" width="6.4" height="15" rx="1.6"/><rect x="13.6" y="4.5" width="6.4" height="10" rx="1.6"/>',
   columns: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M9 5v14M15 5v14"/>',
@@ -183,6 +184,7 @@ const state = {
   workspaceRefreshOnDetailClose: false,
   agentRefreshOnDetailClose: "",
   workspaceFiltersOpen: false,
+  sidebarCollapsed: false,
   theme: "",
   moveNotice: null,
   routeError: null,
@@ -888,6 +890,7 @@ function resetAuthenticatedState() {
   state.workspaceRefreshOnDetailClose = false;
   state.agentRefreshOnDetailClose = "";
   state.workspaceFiltersOpen = false;
+  state.sidebarCollapsed = false;
   state.theme = "";
   state.routeError = null;
 }
@@ -1829,7 +1832,7 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
   const route = parseRoute(globalThis.location?.pathname || APP_PATH);
   const workspaceOn = name => route.name === "workspace" && state.workspaceScope === name;
   return `
-    <aside class="sidebar">
+    <aside class="sidebar ${state.sidebarCollapsed ? "collapsed" : ""}" id="primary-navigation" aria-label="Primary navigation">
       <div class="sidebar-head">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         <button class="icon-btn sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar-content" aria-expanded="false">${icon("menu")}</button>
@@ -1855,7 +1858,12 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
           <button class="plain-btn icon-label" id="logout">${icon("signOut")}<span>Sign out</span></button>
         </section>
       </div>
-    </aside>${workspaceListDialogHTML()}`;
+    </aside>${desktopSidebarToggleHTML()}${workspaceListDialogHTML()}`;
+}
+
+function desktopSidebarToggleHTML() {
+  const expanded = !state.sidebarCollapsed;
+  return `<button class="icon-btn desktop-sidebar-toggle" id="desktop-sidebar-toggle" type="button" aria-label="${expanded ? "Hide" : "Show"} navigation" aria-controls="primary-navigation" aria-expanded="${expanded}">${icon("sidebar")}</button>`;
 }
 
 function boardsNavigationHTML() {
@@ -2860,7 +2868,7 @@ function settingsHTML() {
   }
   return `
     <section class="settings-page theme-${theme}">
-      <aside class="sidebar settings-sidebar">
+      <aside class="sidebar settings-sidebar ${state.sidebarCollapsed ? "collapsed" : ""}" id="primary-navigation" aria-label="Primary navigation">
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         ${globalNewTaskButtonHTML()}
         ${newTaskRecoveryNoticeHTML()}
@@ -2880,6 +2888,7 @@ function settingsHTML() {
           <button class="plain-btn icon-label" id="settings-logout">${icon("signOut")}<span>Sign out</span></button>
         </section>
       </aside>
+      ${desktopSidebarToggleHTML()}
       <main class="settings-main">
         <section class="settings-panel">
           <div class="settings-head">
@@ -4318,6 +4327,7 @@ function bindAppShell() {
   }));
   const sidebar = document.querySelector(".sidebar");
   const sidebarToggle = document.querySelector("#sidebar-toggle");
+  bindDesktopSidebarToggle();
   sidebarToggle.onclick = () => {
     const open = sidebar.classList.toggle("open");
     sidebarToggle.setAttribute("aria-expanded", String(open));
@@ -4336,6 +4346,32 @@ function bindAppShell() {
   document.querySelector("#logout").onclick = logout;
   return sidebar;
 }
+
+const desktopNavigationMedia = globalThis.window?.matchMedia?.("(min-width: 901px)") || null;
+
+function syncDesktopSidebar() {
+  const sidebar = document.querySelector("#primary-navigation");
+  const toggle = document.querySelector("#desktop-sidebar-toggle");
+  if (!sidebar || !toggle) return;
+  const collapsed = state.sidebarCollapsed && (desktopNavigationMedia?.matches ?? true);
+  sidebar.classList.toggle("collapsed", collapsed);
+  sidebar.toggleAttribute("inert", collapsed);
+  sidebar.setAttribute("aria-hidden", String(collapsed));
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.setAttribute("aria-label", collapsed ? "Show navigation" : "Hide navigation");
+}
+
+function bindDesktopSidebarToggle() {
+  const toggle = document.querySelector("#desktop-sidebar-toggle");
+  if (!toggle) return;
+  syncDesktopSidebar();
+  toggle.onclick = () => {
+    state.sidebarCollapsed = !state.sidebarCollapsed;
+    syncDesktopSidebar();
+  };
+}
+
+desktopNavigationMedia?.addEventListener?.("change", syncDesktopSidebar);
 
 function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar")) {
   document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
@@ -4809,6 +4845,7 @@ function boardCanBeDeleted(boardID) {
 
 async function bindSettings() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
+  bindDesktopSidebarToggle();
   bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   bindWorkspaceListControl();
