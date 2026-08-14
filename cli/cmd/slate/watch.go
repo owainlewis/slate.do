@@ -319,7 +319,14 @@ func (w *watcher) attempt(ctx context.Context, candidate taskView) (string, erro
 		WatcherPID: os.Getpid(),
 	}
 	if err := w.registry.save(record); err != nil {
-		_ = discardRunWorktree(ctx, w.source.Root, worktree, branch)
+		if cleanupErr := discardRunWorktree(ctx, w.source.Root, worktree, branch); cleanupErr != nil {
+			record.State = runStateAmbiguous
+			if retainErr := w.registry.save(record); retainErr != nil {
+				return runStateAmbiguous, fmt.Errorf("record run %s: %w; cleanup also failed: %v; retaining %s on %s also failed: %v",
+					runID, err, cleanupErr, worktree, branch, retainErr)
+			}
+			return runStateAmbiguous, fmt.Errorf("record run %s: %w; cleanup also failed, so it remains in 'slate runs list': %v", runID, err, cleanupErr)
+		}
 		return "", err
 	}
 	// Several watchers can share one profile's registry, so the capacity check
@@ -336,7 +343,7 @@ func (w *watcher) attempt(ctx context.Context, candidate taskView) (string, erro
 				w.profileName, runID, cleanupErr)
 		}
 		if err := w.registry.remove(runID); err != nil {
-			return "", fmt.Errorf("remove run %s after releasing its over-limit worktree: %w", runID, err)
+			return "", fmt.Errorf("%w: remove run %s after releasing its over-limit worktree: %v", errRunRecordRemoval, runID, err)
 		}
 		return "", fmt.Errorf("profile %q is holding %d worktrees, over the limit of %d; release one with 'slate runs clean <run-id>'",
 			w.profileName, retained, maxRetainedRuns)
@@ -353,7 +360,7 @@ func (w *watcher) attempt(ctx context.Context, candidate taskView) (string, erro
 			return runStateAmbiguous, fmt.Errorf("%w; run %s could not be removed and remains in 'slate runs list': %v", err, runID, cleanupErr)
 		}
 		if removeErr := w.registry.remove(runID); removeErr != nil {
-			return "", fmt.Errorf("%w; remove released run record %s: %v", err, runID, removeErr)
+			return "", fmt.Errorf("%w: launch failed (%v); remove released run record %s: %v", errRunRecordRemoval, err, runID, removeErr)
 		}
 		return "", err
 	}
@@ -404,7 +411,9 @@ func (w *watcher) attempt(ctx context.Context, candidate taskView) (string, erro
 			}
 			return runStateAmbiguous, nil
 		}
-		_ = w.registry.remove(runID)
+		if removeErr := w.registry.remove(runID); removeErr != nil {
+			return state, fmt.Errorf("%w: remove released run %s: %v", errRunRecordRemoval, runID, removeErr)
+		}
 		if state == outcomeLostRace {
 			w.logf("Another run claimed task %s. Removed %s.", candidate.ID, worktree)
 		} else {
@@ -813,8 +822,13 @@ func recoverableAttemptError(err error) bool {
 	if errors.As(err, &apiErr) {
 		return retryableStatuses[apiErr.Status]
 	}
-	return !errors.Is(err, errGroupSurvived)
+	return !errors.Is(err, errGroupSurvived) && !errors.Is(err, errRunRecordRemoval)
 }
 
 // errGroupSurvived marks a run whose processes could not be ended.
 var errGroupSurvived = errors.New("the executor process group did not stop")
+
+// errRunRecordRemoval stops dispatch after a worktree was released but its
+// bookkeeping could not be removed. Continuing could accumulate stale records
+// until the retention guard blocks unrelated work.
+var errRunRecordRemoval = errors.New("the released run record could not be removed")

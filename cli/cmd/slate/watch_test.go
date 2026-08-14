@@ -1009,6 +1009,61 @@ func TestLaunchCleanupFailureKeepsTheRunDiscoverable(t *testing.T) {
 	}
 }
 
+func TestInitialRecordAndCleanupFailuresKeepTheRunDiscoverable(t *testing.T) {
+	executor := writeExecutor(t, "unused-initial-save", "cat >/dev/null\n")
+	fixture := newWatcherFixture(t, executor)
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writes := 0
+	w.registry.beforeSave = func(record runRecord) error {
+		writes++
+		if writes == 1 {
+			cancel()
+			return errors.New("state directory rejected the first write")
+		}
+		return nil
+	}
+	state, err := w.attempt(ctx, fixture.fake.queued[0])
+	if err == nil || !strings.Contains(err.Error(), "remains in 'slate runs list'") {
+		t.Fatalf("state = %q err = %v, want both failures reported", state, err)
+	}
+	if state != runStateAmbiguous {
+		t.Fatalf("state = %q, want ambiguous", state)
+	}
+	records := fixture.runs(t)
+	if len(records) != 1 || records[0].State != runStateAmbiguous || records[0].TaskID != testTaskID {
+		t.Fatalf("records = %+v, want the orphan risk retained", records)
+	}
+}
+
+func TestDisposableRecordRemovalFailureStopsDispatch(t *testing.T) {
+	executor := writeExecutor(t, "losing-remove", "cat >/dev/null\nexit 1\n")
+	fixture := newWatcherFixture(t, executor)
+	fixture.fake.status = "working"
+	fixture.fake.owningRun = "aaaaaaaa-8888-4888-8888-aaaaaaaaaaaa"
+	fixture.fake.workingTasks = nil
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.registry.beforeRemove = func(string) error { return errors.New("state directory is read-only") }
+
+	state, err := w.attempt(context.Background(), fixture.fake.queued[0])
+	if err == nil || !errors.Is(err, errRunRecordRemoval) {
+		t.Fatalf("state = %q err = %v, want the removal failure propagated", state, err)
+	}
+	if recoverableAttemptError(err) {
+		t.Fatal("the watcher would continue and accumulate stale retained records")
+	}
+	if records := fixture.runs(t); len(records) != 1 {
+		t.Fatalf("records = %+v, want the stale record visible for cleanup", records)
+	}
+}
+
 // TestTwoWatchersRaceAndOnlyTheClaimantContinues drives two real watchers with
 // real worktrees against one task, which is the isolation the design exists for.
 func TestTwoWatchersRaceAndOnlyTheClaimantContinues(t *testing.T) {

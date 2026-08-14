@@ -64,7 +64,8 @@ type registry struct {
 	now func() time.Time
 	// beforeSave lets a test make one write fail at a chosen point in a run's
 	// life. Production leaves it nil.
-	beforeSave func(runRecord) error
+	beforeSave   func(runRecord) error
+	beforeRemove func(string) error
 }
 
 // registryDir keeps run records under the user state directory, following
@@ -148,6 +149,11 @@ func (r *registry) load(runID string) (runRecord, error) {
 }
 
 func (r *registry) remove(runID string) error {
+	if r.beforeRemove != nil {
+		if err := r.beforeRemove(runID); err != nil {
+			return err
+		}
+	}
 	err := os.Remove(r.path(runID))
 	if err != nil && os.IsNotExist(err) {
 		return nil
