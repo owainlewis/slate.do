@@ -145,10 +145,11 @@ Run "slate help <topic>" for every command and flag.
 	"watch": `Usage:
   slate watch --profile <name> [--board <board-id>] [--workdir <git-path>]
 
-Runs one configured agent against its assigned Ready tasks. For each task the
-watcher creates a disposable Git worktree from the current commit, starts the
-profile's executor there with the task prompt on stdin, and watches that exact
-run. The agent claims the task, does the work, and reports through the Slate
+Runs one configured agent against its assigned Ready tasks. The watcher pins
+the source commit at startup. For each task it creates a disposable Git
+worktree from that commit, starts the profile's executor there with the task
+prompt on stdin, and watches that exact run. Restart after updating the source
+branch. The agent claims the task, does the work, and reports through the Slate
 CLI. The watcher never claims or writes to the task itself.
 
 The source checkout must be on a named branch with nothing uncommitted, and
@@ -158,9 +159,10 @@ The source checkout must be on a named branch with nothing uncommitted, and
 progress. A task already in progress stops startup: finish it or move it back
 to Ready, because this version has no automatic resume.
 
-Successful, blocked, and interrupted worktrees are kept for inspection. Only a
-run that lost its claim is deleted. A profile keeps at most 10 of them; at the
-limit no new run starts until one is released.
+Successful, blocked, interrupted, and uncertain worktrees are kept for
+inspection. Runs that lose the claim or exit before ever claiming are deleted.
+A profile keeps at most 10 retained worktrees; at the limit no new run starts
+until one is released.
 
 Profiles live in SLATE_CONFIG, or slate/config.json under the user
 configuration directory:

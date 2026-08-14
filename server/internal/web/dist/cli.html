@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Install the Slate CLI</title>
-  <meta name="description" content="Install the Slate CLI and connect Claude Code, Codex, and other coding agents to your Slate plan.">
+  <meta name="description" content="Install the Slate CLI, connect Claude Code and Codex, and run a watcher that works your assigned tasks in isolated Git worktrees.">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,6 +28,7 @@
         <a href="#authenticate">Authenticate</a>
         <a href="#commands">Basic commands</a>
         <a href="#agents">Coding agents</a>
+        <a href="#watch">Watcher</a>
         <a href="#upgrade">Upgrade</a>
         <a href="#troubleshooting">Troubleshooting</a>
       </aside>
@@ -109,6 +110,26 @@ claude</code></pre>
 - Treat output as JSON and preserve IDs exactly.</code></pre>
           <p>Claims are atomic. If another agent already claimed the task, Slate rejects the second claim so the agent can select different work.</p>
           <p>Poll no faster than once every five seconds, slow down while idle, and add jitter when several agents start together. After a 429 response, wait for the <code>Retry-After</code> interval before trying again.</p>
+        </section>
+
+        <section id="report" class="docs-section">
+          <h2>Report through the card</h2>
+          <p>Outside a watcher, <code>comment</code> records progress and leaves the card where it is. Under a watcher, a run-tagged comment observed while the task is still In Progress is a terminal blocked report: the executor stops and the watcher retains the worktree. Executors should therefore use managed comments only to report blockage and then exit. If an output reaches Review before the watcher observes the comment, the output result takes precedence. <code>output</code> records the completion report and moves the card to Review in the same operation.</p>
+          <pre><code>slate tasks entries &lt;task-id&gt;
+slate tasks comment &lt;task-id&gt; --file "${TMPDIR:-/tmp}/note.md" --idempotency-key blocked-1
+slate tasks output &lt;task-id&gt; --file "${TMPDIR:-/tmp}/report.md" --idempotency-key output-1</code></pre>
+          <p>Give exactly one of <code>--body</code> or <code>--file</code>; <code>--file -</code> reads standard input. Every output and every watcher-managed comment needs <code>--idempotency-key</code>; a manual comment outside a managed run may omit it. Reuse the same value to retry after an uncertain result and no duplicate is created. Write the file outside the repository so it does not sit in your working tree as an uncommitted change.</p>
+          <p>Under a watcher, an agent cannot set the status itself. While a run owns a task, Slate refuses direct status changes with <code>managed_run_status_locked</code>; claim reaches In Progress and output reaches Review.</p>
+        </section>
+
+        <section id="watch" class="docs-section">
+          <h2>Let a watcher run the agent for you</h2>
+          <p>Everything above assumes you start the agent yourself. <code>slate watch</code> does it for you: it takes tasks assigned to one agent, runs your coding agent on each in an isolated copy of the repository, and moves finished work to Review.</p>
+          <pre><code>slate watch --profile codex
+slate runs list
+slate runs clean &lt;run-id&gt;</code></pre>
+          <p>Each run gets its own Git worktree, so your checkout is never used as an agent's working directory. The watcher pins the source commit when it starts; restart it after updating the source branch. Successful, blocked and interrupted runs keep their worktree for you to review, up to ten per profile.</p>
+          <p>See <a href="https://github.com/owainlewis/slate.do/blob/main/docs/watcher.md">Run a coding agent on your Slate tasks</a> for profiles, recovery, and the release order.</p>
         </section>
 
         <section id="upgrade" class="docs-section">

@@ -44,7 +44,7 @@ func TestHelpDocumentsEveryResource(t *testing.T) {
 	if !strings.Contains(helpText[""], "slate version") {
 		t.Fatal("help does not document version command")
 	}
-	for _, topic := range []string{"", "auth", "boards", "lists", "tasks"} {
+	for _, topic := range []string{"", "auth", "boards", "lists", "tasks", "watch", "runs"} {
 		if strings.TrimSpace(helpText[topic]) == "" {
 			t.Fatalf("missing help for %q", topic)
 		}
@@ -53,6 +53,16 @@ func TestHelpDocumentsEveryResource(t *testing.T) {
 		joined := helpText["boards"] + helpText["lists"] + helpText["tasks"]
 		if !strings.Contains(joined, command) {
 			t.Errorf("help does not document %q", command)
+		}
+	}
+	for _, statement := range []string{
+		"exit before ever claiming are deleted",
+		"at most 10 retained worktrees",
+		"slate runs clean <run-id>",
+	} {
+		joined := helpText["watch"] + helpText["runs"]
+		if !strings.Contains(joined, statement) {
+			t.Errorf("watcher help does not document %q", statement)
 		}
 	}
 }

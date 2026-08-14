@@ -76,6 +76,29 @@ test("the CLI guide covers installation, authentication, and agent workflows", (
   assert.match(cliGuide, /Retry-After/);
 });
 
+test("the published CLI guide documents every command the CLI ships", () => {
+  // The guide is the first thing a new operator reads, so it must not fall
+  // behind the binary. Each command here exists in cli/cmd/slate.
+  for (const command of [
+    "slate tasks entries",
+    "slate tasks comment",
+    "slate tasks output",
+    "slate watch --profile",
+    "slate runs list",
+    "slate runs clean",
+  ]) {
+    assert.match(cliGuide, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `the CLI guide does not document ${command}`);
+  }
+  // A managed run cannot set status directly, which surprises anyone writing
+  // their own executor if the guide does not say so.
+  assert.match(cliGuide, /managed_run_status_locked/);
+  // Every in-page nav target must exist.
+  const targets = new Set([...cliGuide.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
+  for (const [, href] of cliGuide.matchAll(/href="#([^"]+)"/g)) {
+    assert.ok(targets.has(href), `the CLI guide links to #${href}, which does not exist`);
+  }
+});
+
 test("early access form shows every required field and password requirements", () => {
   const html = app.earlyAccessHTML();
   assert.match(html, /id="early-access-form" method="post" action="\/api\/v1\/auth\/register"/);
