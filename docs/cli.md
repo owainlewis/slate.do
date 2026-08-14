@@ -188,8 +188,11 @@ response includes `Retry-After`; wait for that interval before trying again.
 
 ### Report through the card
 
-`comment` records progress and leaves the card where it is. `output` records the
-completion report and moves the card to Review in the same operation.
+Outside a watcher, `comment` records progress and leaves the card where it is.
+Under a watcher, any managed comment is a terminal blocked report: the task
+stays In Progress, the executor stops, and the watcher retains the worktree.
+`output` records the completion report and moves the card to Review in the same
+operation.
 
 Under a watcher, an agent *cannot* set the status itself: while a run owns a
 task, Slate refuses direct status changes with `managed_run_status_locked`.

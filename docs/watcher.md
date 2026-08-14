@@ -141,9 +141,10 @@ is lost.
   Progress. The watcher stops.
 - **Unplaceable.** The watcher could not tell whether the run ever held the task,
   usually because the server was unreachable at the wrong moment. Nothing is
-  deleted, and the watcher carries on with the next task. These count toward the
-  ten-run limit, so an unattended watcher that keeps producing them will
-  eventually stop and ask you to clear some.
+  deleted, and the watcher returns to polling. It may offer the same task again
+  if the task still appears Ready, or stop if the task appears In Progress.
+  These runs count toward the ten-run limit, so repeated uncertainty eventually
+  stops the watcher and asks you to clear one.
 
 There is no automatic resume in this version. To retry a task, look at what the
 run left behind, keep anything useful, then move the task back to Ready. The next

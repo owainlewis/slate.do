@@ -114,7 +114,7 @@ claude</code></pre>
 
         <section id="report" class="docs-section">
           <h2>Report through the card</h2>
-          <p><code>comment</code> records progress and leaves the card where it is. <code>output</code> records the completion report and moves the card to Review in the same operation.</p>
+          <p>Outside a watcher, <code>comment</code> records progress and leaves the card where it is. Under a watcher, any managed comment is a terminal blocked report: the task stays In Progress, the executor stops, and the watcher retains the worktree. <code>output</code> records the completion report and moves the card to Review in the same operation.</p>
           <pre><code>slate tasks entries &lt;task-id&gt;
 slate tasks comment &lt;task-id&gt; --file "${TMPDIR:-/tmp}/note.md" --idempotency-key blocked-1
 slate tasks output &lt;task-id&gt; --file "${TMPDIR:-/tmp}/report.md" --idempotency-key output-1</code></pre>
