@@ -109,7 +109,9 @@ Options:
 1. The watcher finds the highest-priority, oldest Ready task assigned to that
    agent.
 2. It creates a branch, `slate/<task-id>-<run>`, and a fresh worktree from your
-   current commit, under your user cache directory.
+   source commit as it existed when the watcher started, under your user cache
+   directory. Restart the watcher after updating the source branch so later
+   tasks use the new commit.
 3. It starts your coding agent there and hands it the task on standard input.
 4. The agent claims the task, which moves it to In Progress. Only one run can win
    a claim, so two machines watching the same agent cannot both work the task.
@@ -217,8 +219,9 @@ the repository it came from.
 Finish it or move it back to Ready. If a previous run left it there, that is the
 manual recovery described above.
 
-**"has uncommitted changes":** your checkout is dirty. The watcher branches from
-your current commit, and refuses rather than quietly leaving your changes out.
+**"has uncommitted changes":** your checkout is dirty. The watcher pins the
+source commit when it starts and refuses rather than quietly leaving your
+changes out.
 
 **"is not on a named branch":** you are on a detached HEAD. Check out a branch.
 

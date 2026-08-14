@@ -54,7 +54,7 @@ The watcher checks for assigned working tasks inside its selected scope. `--boar
 
 During a normal run, the watcher polls for one assigned queued action. The server orders eligible work by priority, then age: P0, P1, P2, no priority, with the oldest task first inside each group.
 
-When a candidate appears, the watcher creates a cryptographically random run ID, branch `slate/<task-id>-<run-short-id>`, and worktree beneath the operating system's user cache directory. Creation uses the verified source `HEAD`. Each run has a unique directory and branch, including when several machines or processes offer the same task.
+When a candidate appears, the watcher creates a cryptographically random run ID, branch `slate/<task-id>-<run-short-id>`, and worktree beneath the operating system's user cache directory. Creation uses the source commit captured when the watcher started. The watcher does not refresh that commit while running, so it must be restarted after the source branch advances. Each run has a unique directory and branch, including when several machines or processes offer the same task.
 
 The watcher launches the executor in that worktree as a new process group. It writes the complete prompt to stdin and then closes stdin. The child receives `SLATE_API_TOKEN`, `SLATE_BASE_URL`, `SLATE_RUN_ID`, and `SLATE_BIN`. `SLATE_BIN` is the absolute path of the running Slate binary. Its directory is prepended to the inherited `PATH`. The prompt uses `$SLATE_BIN` for every Slate command.
 
@@ -144,6 +144,7 @@ The worktree registry owns local run ID, task ID, agent ID, branch, worktree pat
 - `slate watch --profile <name>` watches assigned queued actions across all visible boards. `--board` scopes both queued polling and the working-task startup check.
 - `--workdir` selects the source Git checkout and defaults to the current directory. The executor runs only in the generated worktree.
 - The source checkout must be on a named branch and have no staged, modified, deleted, or untracked files.
+- The source commit is captured once at watcher startup. Later worktrees use that commit until the watcher restarts.
 - The watcher offers the highest-priority, oldest eligible task first.
 - Idle polling starts at five seconds and doubles to 60 seconds with up to 20 percent jitter. Healthy idle polling therefore occurs every 5 to 72 seconds.
 - Polling retries connection failures, timeouts, and HTTP 429, 500, 502, 503, and 504. A valid delta-seconds `Retry-After` on 429 sets a minimum wait; the five-second exponential backoff capped at 60 seconds with 20 percent jitter always advances, and the longer of the two is used.

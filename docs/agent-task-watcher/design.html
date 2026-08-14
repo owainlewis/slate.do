@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
   <meta name="document-kind" content="design">
   <meta name="source-path" content="docs/agent-task-watcher/design.md">
-  <meta name="source-sha256" content="89fa186722cdd88faec46649d519dda5f1f15c5b8d5aa11a5a0e960e8d3e6a42">
+  <meta name="source-sha256" content="70a026eb9a91273adb697a7cc6a87fdd47f12c08d45c700cd09682e07f42c0ff">
   <meta name="generator" content="blueprint/html-doc@1">
   <title>Agent task watcher</title>
   <style>:root {
@@ -421,7 +421,7 @@ tbody tr:nth-child(even) { background: #eff3f5; }
         <div class="metadata__item"><dt>Kind</dt><dd>Technical design</dd></div>
         <div class="metadata__item"><dt>Status</dt><dd>Implemented</dd></div>
         <div class="metadata__item"><dt>Source</dt><dd>docs/agent-task-watcher/design.md</dd></div>
-        <div class="metadata__item"><dt>Revision</dt><dd><code title="89fa186722cdd88faec46649d519dda5f1f15c5b8d5aa11a5a0e960e8d3e6a42">89fa186722cd</code></dd></div>
+        <div class="metadata__item"><dt>Revision</dt><dd><code title="70a026eb9a91273adb697a7cc6a87fdd47f12c08d45c700cd09682e07f42c0ff">70a026eb9a91</code></dd></div>
       </dl>
     </div>
   </header>
@@ -591,14 +591,15 @@ action. The server orders eligible work by priority, then age: P0, P1,
 P2, no priority, with the oldest task first inside each group.</p>
 </div>
 <div class="source-block" data-source-block="22"
-data-source-sha256="1062197ffed8bef4edee840f88f831f1def20ad1b123bb4ccd97ef661fc52785">
+data-source-sha256="3cfdec1ac639651ff243c6abae0fddb6fb09b72245881e42c8da06560e762823">
 <p>When a candidate appears, the watcher creates a cryptographically
 random run ID, branch
 <code>slate/&lt;task-id&gt;-&lt;run-short-id&gt;</code>, and worktree
 beneath the operating system's user cache directory. Creation uses the
-verified source <code>HEAD</code>. Each run has a unique directory and
-branch, including when several machines or processes offer the same
-task.</p>
+source commit captured when the watcher started. The watcher does not
+refresh that commit while running, so it must be restarted after the
+source branch advances. Each run has a unique directory and branch,
+including when several machines or processes offer the same task.</p>
 </div>
 <div class="source-block" data-source-block="23"
 data-source-sha256="88b33e82254efa22de16e76bbeb58c51f3a1d6b96243e83b05f015cd6e4d9f03">
@@ -856,7 +857,7 @@ data-source-sha256="d58a3741c408d72bf8e99cb9c99f055d7cabeda3c3b4d006597446e8412a
 <h3>Requirements</h3>
 </section>
 <div class="source-block" data-source-block="55"
-data-source-sha256="07b281b2b7bd6dc4a849ca7df31d95cff45238d94a2e541134511dd3496e8803">
+data-source-sha256="33a64d032ca0abc9a4a7f08d7c4633083ccaa290a78a507120349fac0257b733">
 <ul>
 <li><code>slate watch --profile &lt;name&gt;</code> watches assigned
 queued actions across all visible boards. <code>--board</code> scopes
@@ -866,6 +867,8 @@ to the current directory. The executor runs only in the generated
 worktree.</li>
 <li>The source checkout must be on a named branch and have no staged,
 modified, deleted, or untracked files.</li>
+<li>The source commit is captured once at watcher startup. Later
+worktrees use that commit until the watcher restarts.</li>
 <li>The watcher offers the highest-priority, oldest eligible task
 first.</li>
 <li>Idle polling starts at five seconds and doubles to 60 seconds with

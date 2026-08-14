@@ -128,7 +128,7 @@ slate tasks output &lt;task-id&gt; --file "${TMPDIR:-/tmp}/report.md" --idempote
           <pre><code>slate watch --profile codex
 slate runs list
 slate runs clean &lt;run-id&gt;</code></pre>
-          <p>Each run gets its own Git worktree, so your checkout is never used as an agent's working directory. Successful, blocked and interrupted runs keep their worktree for you to review, up to ten per profile.</p>
+          <p>Each run gets its own Git worktree, so your checkout is never used as an agent's working directory. The watcher pins the source commit when it starts; restart it after updating the source branch. Successful, blocked and interrupted runs keep their worktree for you to review, up to ten per profile.</p>
           <p>See <a href="https://github.com/owainlewis/slate.do/blob/main/docs/watcher.md">Run a coding agent on your Slate tasks</a> for profiles, recovery, and the release order.</p>
         </section>
 

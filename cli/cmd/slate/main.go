@@ -145,10 +145,11 @@ Run "slate help <topic>" for every command and flag.
 	"watch": `Usage:
   slate watch --profile <name> [--board <board-id>] [--workdir <git-path>]
 
-Runs one configured agent against its assigned Ready tasks. For each task the
-watcher creates a disposable Git worktree from the current commit, starts the
-profile's executor there with the task prompt on stdin, and watches that exact
-run. The agent claims the task, does the work, and reports through the Slate
+Runs one configured agent against its assigned Ready tasks. The watcher pins
+the source commit at startup. For each task it creates a disposable Git
+worktree from that commit, starts the profile's executor there with the task
+prompt on stdin, and watches that exact run. Restart after updating the source
+branch. The agent claims the task, does the work, and reports through the Slate
 CLI. The watcher never claims or writes to the task itself.
 
 The source checkout must be on a named branch with nothing uncommitted, and
