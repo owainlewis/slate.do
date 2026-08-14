@@ -175,6 +175,83 @@ func TestAReadRecoversWithoutStartingARun(t *testing.T) {
 	}
 }
 
+func TestCancelDuringWorkingTaskRetryStopsCleanly(t *testing.T) {
+	executor := writeExecutor(t, "unused-cancel-working", "cat >/dev/null\n")
+	fixture := newWatcherFixture(t, executor)
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/agent/tasks" && request.URL.Query().Get("status") == "working" {
+			out.Header().Set("Content-Type", "application/json")
+			out.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = out.Write([]byte(`{"error":"unavailable"}`))
+			return
+		}
+		fixture.fake.serve(out, request)
+	}))
+	t.Cleanup(server.Close)
+	w.client = client{baseURL: server.URL, http: server.Client()}
+	w.workingScopeChecked = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.sleep = func(context.Context, time.Duration) { cancel() }
+	if err := w.run(ctx); err != nil {
+		t.Fatalf("run after cancellation = %v, want a clean stop", err)
+	}
+}
+
+func TestMonitoringBackoffGrowsWhenOnlyEntriesKeepFailing(t *testing.T) {
+	executor := writeExecutor(t, "unused-entry-failure", "cat >/dev/null\n")
+	fixture := newWatcherFixture(t, executor)
+	server := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, request *http.Request) {
+		if strings.HasSuffix(request.URL.Path, "/entries") && request.Method == http.MethodGet {
+			out.Header().Set("Content-Type", "application/json")
+			out.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = out.Write([]byte(`{"error":"unavailable"}`))
+			return
+		}
+		fixture.fake.serve(out, request)
+	}))
+	t.Cleanup(server.Close)
+
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.client = client{baseURL: server.URL, http: server.Client()}
+	w.failure.random = fixedRandom(0)
+	supervision := &runSupervision{}
+	want := []time.Duration{5, 10, 20, 40, 60}
+	for index, seconds := range want {
+		_, decided, err := w.inspectRun(context.Background(), supervision, testTaskID, resilienceTestRunID, false, func() bool { return true })
+		if decided || err == nil {
+			t.Fatalf("inspection %d: decided=%v err=%v, want a retryable entries failure", index, decided, err)
+		}
+		wait, retryable := retryDelay(err, w.failure)
+		if !retryable || wait != seconds*time.Second {
+			t.Fatalf("inspection %d: retryable=%v wait=%s, want true and %ds", index, retryable, wait, seconds)
+		}
+	}
+}
+
+func TestUnsupportedBaseURLIsTerminalBeforeTransport(t *testing.T) {
+	c := client{baseURL: "ftp://example.invalid", token: "test", http: http.DefaultClient}
+	_, err := c.agentTasks("queued", "", 1)
+	if err == nil {
+		t.Fatal("ftp base URL succeeded")
+	}
+	var buildErr *requestBuildError
+	if !errors.As(err, &buildErr) {
+		t.Fatalf("error = %T %v, want requestBuildError", err, err)
+	}
+	if retryableError(err) {
+		t.Fatalf("unsupported base URL was classified as retryable: %v", err)
+	}
+}
+
 func TestATerminalReadStopsWithAnActionableError(t *testing.T) {
 	executor := writeExecutor(t, "unused-terminal", "cat >/dev/null\n")
 	fixture := newWatcherFixture(t, executor)

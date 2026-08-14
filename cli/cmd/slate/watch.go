@@ -271,6 +271,9 @@ func (w *watcher) run(ctx context.Context) error {
 		if w.workingScopeChecked {
 			w.workingScopeChecked = false
 		} else if err := w.refuseWhileWorkTaskExists(ctx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
 			return err
 		}
 		// Retention is re-checked every round, not only at startup, because a
@@ -713,16 +716,14 @@ func (w *watcher) inspectRun(ctx context.Context, s *runSupervision, taskID stri
 		w.noteReadFailure(s, taskReadStartedAlive, "task "+taskID, err)
 		return "", false, err
 	}
-	// Every answer counts as progress. Resetting only when a whole pair
-	// succeeds would let one flaky endpoint push the wait to a minute while the
-	// other kept replying.
-	w.failure.reset()
 	entriesReadStartedAlive := aliveThrough()
 	entries, err := reader.entriesForRun(taskID, runID)
 	if err != nil {
 		w.noteReadFailure(s, entriesReadStartedAlive, "run "+runID, err)
 		return "", false, err
 	}
+	// One inspection consists of both reads. Reset only after the pair succeeds
+	// so one persistently failing endpoint still receives exponential backoff.
 	w.failure.reset()
 	owned := strings.EqualFold(task.ExecutionRunID, runID)
 	outcome := classifyRunEntries(entries, runID)

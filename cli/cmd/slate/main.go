@@ -719,6 +719,9 @@ func (c client) doWithHeaders(method string, path string, body any, headers map[
 	if err != nil {
 		return &requestBuildError{err: err}
 	}
+	if (req.URL.Scheme != "http" && req.URL.Scheme != "https") || req.URL.Host == "" {
+		return &requestBuildError{err: fmt.Errorf("SLATE_BASE_URL must be an absolute http or https URL")}
+	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	for name, value := range headers {
 		if strings.TrimSpace(value) != "" {
