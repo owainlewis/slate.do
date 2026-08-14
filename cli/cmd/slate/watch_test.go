@@ -1583,6 +1583,46 @@ func TestAnExitDuringAReadIsNotASighting(t *testing.T) {
 	}
 }
 
+func TestAReadFailureThatOverlapsExecutorExitMarksTheRunUncertain(t *testing.T) {
+	executor := writeExecutor(t, "unused-overlap", "cat >/dev/null\n")
+	fixture := newWatcherFixture(t, executor)
+	alive := true
+	var aliveMu sync.Mutex
+	base := fixture.fake
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/tasks/") && !strings.HasSuffix(r.URL.Path, "/entries") {
+			aliveMu.Lock()
+			alive = false
+			aliveMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"temporary"}`))
+			return
+		}
+		base.serve(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.client.baseURL = server.URL
+	w.client.http = server.Client()
+	supervision := &runSupervision{}
+	stillAlive := func() bool {
+		aliveMu.Lock()
+		defer aliveMu.Unlock()
+		return alive
+	}
+	if _, decided, err := w.inspectRun(context.Background(), supervision, testTaskID, "12341234-1234-4234-8234-123412341234", false, stillAlive); decided || err != nil {
+		t.Fatalf("decided = %v err = %v, want a retryable uncertain read", decided, err)
+	}
+	if !supervision.readFailed {
+		t.Fatal("a failed read that began while the executor was alive was not recorded")
+	}
+}
+
 // TestATerminalMonitoringErrorStopsTheExecutor covers a credential revoked
 // mid-run. Polling forever would leave an unauthenticated agent running.
 func TestATerminalMonitoringErrorStopsTheExecutor(t *testing.T) {

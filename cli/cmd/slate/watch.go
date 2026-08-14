@@ -594,24 +594,26 @@ func (w *watcher) inspectRun(ctx context.Context, s *runSupervision, taskID stri
 	// post-mortem answers recorded as though they were taken while it ran.
 	aliveThrough := func() bool { return !executorExited && stillAlive() }
 
+	taskReadStartedAlive := aliveThrough()
 	task, err := reader.task(taskID)
 	if err != nil {
 		if terminal := terminalReadError(err); terminal != nil {
 			return "", false, terminal
 		}
 		w.logf("Could not read task %s: %v", taskID, err)
-		if aliveThrough() {
+		if taskReadStartedAlive {
 			s.readFailed = true
 		}
 		return "", false, nil
 	}
+	entriesReadStartedAlive := aliveThrough()
 	entries, err := reader.entriesForRun(taskID, runID)
 	if err != nil {
 		if terminal := terminalReadError(err); terminal != nil {
 			return "", false, terminal
 		}
 		w.logf("Could not read run %s: %v", runID, err)
-		if aliveThrough() {
+		if entriesReadStartedAlive {
 			s.readFailed = true
 		}
 		return "", false, nil
