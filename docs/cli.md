@@ -198,8 +198,8 @@ without a run, keep using `slate tasks status` as before.
 
 ```bash
 slate tasks entries <task-id>
-slate tasks comment <task-id> --file "$TMPDIR/note.md" --idempotency-key blocked-1
-slate tasks output <task-id> --file "$TMPDIR/report.md" --idempotency-key output-1
+slate tasks comment <task-id> --file "${TMPDIR:-/tmp}/note.md" --idempotency-key blocked-1
+slate tasks output <task-id> --file "${TMPDIR:-/tmp}/report.md" --idempotency-key output-1
 ```
 
 Give exactly one of `--body` or `--file`; `--file -` reads standard input. Both

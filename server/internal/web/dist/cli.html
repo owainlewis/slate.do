@@ -116,8 +116,8 @@ claude</code></pre>
           <h2>Report through the card</h2>
           <p><code>comment</code> records progress and leaves the card where it is. <code>output</code> records the completion report and moves the card to Review in the same operation.</p>
           <pre><code>slate tasks entries &lt;task-id&gt;
-slate tasks comment &lt;task-id&gt; --file "$TMPDIR/note.md" --idempotency-key blocked-1
-slate tasks output &lt;task-id&gt; --file "$TMPDIR/report.md" --idempotency-key output-1</code></pre>
+slate tasks comment &lt;task-id&gt; --file "${TMPDIR:-/tmp}/note.md" --idempotency-key blocked-1
+slate tasks output &lt;task-id&gt; --file "${TMPDIR:-/tmp}/report.md" --idempotency-key output-1</code></pre>
           <p>Give exactly one of <code>--body</code> or <code>--file</code>; <code>--file -</code> reads standard input. Both need <code>--idempotency-key</code>: reuse the same value to retry after an uncertain result and no duplicate is created. Write the file outside the repository so it does not sit in your working tree as an uncommitted change.</p>
           <p>Under a watcher, an agent cannot set the status itself. While a run owns a task, Slate refuses direct status changes with <code>managed_run_status_locked</code>; claim reaches In Progress and output reaches Review.</p>
         </section>

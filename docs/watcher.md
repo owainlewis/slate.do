@@ -22,9 +22,18 @@ You need:
 
 ## Set up a profile
 
-A profile is one agent identity plus the command that runs it. Put it in
-`slate/config.json` under your user configuration directory, or point
-`SLATE_CONFIG` at a file of your own.
+A profile is one agent identity plus the command that runs it. The simplest
+portable setup is to choose the file explicitly and keep that export in the
+shell that starts the watcher:
+
+```bash
+mkdir -p "$HOME/.config/slate"
+export SLATE_CONFIG="$HOME/.config/slate/config.json"
+```
+
+Save the following JSON at that path. Without `SLATE_CONFIG`, Slate instead
+uses `slate/config.json` under the operating system's user configuration
+directory.
 
 ```json
 {
@@ -52,7 +61,8 @@ has a task in progress.
   instead of running work as the wrong identity.
 - `tokenEnv` is the **name of the environment variable** holding the token, never
   the token itself. Nothing in the profile or in the run records ever contains a
-  credential.
+  credential. A missing, invalid, or expired token stops the watcher before it
+  creates a worktree or starts the coding agent.
 - `command` is the executor as an argument list. It is never passed through a
   shell, so nothing in it is expanded or interpreted.
 
