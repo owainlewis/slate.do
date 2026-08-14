@@ -51,6 +51,9 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if identity, err := authStore.FindUserByAPITokenHash(ctx, testTokenHash(agentAToken), time.Now()); err != nil || identity.AgentID != agentA.ID {
+		t.Fatalf("resolve agent A credential = %#v, %v", identity, err)
+	}
 
 	boardStore := boards.NewStore(db)
 	board, err := boardStore.CreateBoard(ctx, owner.ID, boards.CreateBoardInput{Name: "Private board"})
@@ -219,12 +222,94 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	}
 }
 
+func TestManagedAgentRunHTTPContract(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run server integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if _, err := migrations.Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	authStore := auth.NewPGStore(db)
+	owner, err := authStore.CreateAdmin(ctx, fmt.Sprintf("managed-agent-route-%d@slate.test", time.Now().UnixNano()), "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", owner.ID) })
+	token := fmt.Sprintf("slate_managed_agent_%d", time.Now().UnixNano())
+	agent, err := authStore.CreateAgent(ctx, owner.ID, "Managed Agent", "Implements assigned tasks", testTokenHash(token), "slate_managed_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := boards.NewStore(db)
+	board, err := store.CreateBoard(ctx, owner.ID, boards.CreateBoardInput{Name: "Managed board"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, owner.ID, board.ID, boards.CreateBucketInput{Name: "Ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, owner.ID, bucket.ID, boards.CreateTaskInput{Title: "Managed HTTP task", AssigneeAgentID: agent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp(fstest.MapFS{"index.html": {Data: []byte("app")}}, db, false, auth.Options{}).Routes()
+
+	me := agentRequest(t, app, token, http.MethodGet, "/api/v1/me", "")
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"agentPurpose":"Implements assigned tasks"`) || !strings.Contains(me.Body.String(), `"managedRuns":true`) {
+		t.Fatalf("managed agent me = %d %s", me.Code, me.Body.String())
+	}
+	runID := "33333333-3333-4333-8333-333333333333"
+	claim := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/agent/tasks/"+task.ID+"/claim", `{}`, map[string]string{"X-Slate-Run-ID": runID})
+	if claim.Code != http.StatusOK || !strings.Contains(claim.Body.String(), `"status":"working"`) {
+		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
+	}
+	missingRun := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries", `{"kind":"comment","body":"missing run"}`, map[string]string{"Idempotency-Key": "missing-run"})
+	if missingRun.Code != http.StatusConflict || !strings.Contains(missingRun.Body.String(), `"code":"managed_run_mismatch"`) {
+		t.Fatalf("missing run comment = %d %s", missingRun.Code, missingRun.Body.String())
+	}
+	comment := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries", `{"kind":"comment","body":"working"}`, map[string]string{"Idempotency-Key": "managed-comment", "X-Slate-Run-ID": runID})
+	if comment.Code != http.StatusCreated || !strings.Contains(comment.Body.String(), `"runId":"`+runID+`"`) {
+		t.Fatalf("managed comment = %d %s", comment.Code, comment.Body.String())
+	}
+	status := agentRequestWithHeaders(t, app, token, http.MethodPatch, "/api/v1/agent/tasks/"+task.ID+"/status", `{"status":"needs_review"}`, map[string]string{"X-Slate-Run-ID": runID})
+	if status.Code != http.StatusConflict || !strings.Contains(status.Body.String(), `"code":"managed_run_status_locked"`) {
+		t.Fatalf("managed status = %d %s", status.Code, status.Body.String())
+	}
+	output := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries", `{"kind":"output","body":"done"}`, map[string]string{"Idempotency-Key": "managed-output", "X-Slate-Run-ID": runID})
+	if output.Code != http.StatusCreated || !strings.Contains(output.Body.String(), `"cardStatus":"needs_review"`) {
+		t.Fatalf("managed output = %d %s", output.Code, output.Body.String())
+	}
+	entries := agentRequest(t, app, token, http.MethodGet, "/api/v1/tasks/"+task.ID+"/entries?runId="+runID, "")
+	if entries.Code != http.StatusOK || strings.Count(entries.Body.String(), `"runId":"`+runID+`"`) != 2 {
+		t.Fatalf("managed run entries = %d %s", entries.Code, entries.Body.String())
+	}
+	replay := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries", `{"kind":"output","body":"done"}`, map[string]string{"Idempotency-Key": "managed-output", "X-Slate-Run-ID": runID})
+	if replay.Code != http.StatusCreated || replay.Body.String() != output.Body.String() {
+		t.Fatalf("managed output replay = %d %s, want %s", replay.Code, replay.Body.String(), output.Body.String())
+	}
+}
+
 func agentRequest(t *testing.T, handler http.Handler, token string, method string, path string, body string) *httptest.ResponseRecorder {
+	return agentRequestWithHeaders(t, handler, token, method, path, body, nil)
+}
+
+func agentRequestWithHeaders(t *testing.T, handler http.Handler, token string, method string, path string, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+token)
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)

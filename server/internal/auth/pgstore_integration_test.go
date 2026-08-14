@@ -696,7 +696,7 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.ID != owner.ID || identity.AgentID != agent.ID || identity.Role != "agent" || identity.DisplayName != agent.DisplayName || identity.Email != "" {
+	if identity.ID != owner.ID || identity.AgentID != agent.ID || identity.Role != "agent" || identity.DisplayName != agent.DisplayName || identity.AgentPurpose != agent.Purpose || identity.Email != "" {
 		t.Fatalf("agent identity = %#v", identity)
 	}
 	if identity.Entitlement.Plan != entitlements.PlanPro {

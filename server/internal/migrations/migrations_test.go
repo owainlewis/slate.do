@@ -12,6 +12,47 @@ import (
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
 
+func TestManagedRunMigrationAddsFencingColumnsAndLookupIndex(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	for table, column := range map[string]string{"tasks": "execution_run_id", "card_entries": "run_id"} {
+		var dataType string
+		if err := db.QueryRow(ctx, `
+			SELECT data_type
+			FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+		`, table, column).Scan(&dataType); err != nil {
+			t.Fatalf("%s.%s: %v", table, column, err)
+		}
+		if dataType != "uuid" {
+			t.Fatalf("%s.%s type = %q, want uuid", table, column, dataType)
+		}
+	}
+	var indexDefinition string
+	if err := db.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = 'public' AND indexname = 'card_entries_task_run_created_idx'
+	`).Scan(&indexDefinition); err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"task_id", "run_id", "created_at", "id"} {
+		if !strings.Contains(indexDefinition, column) {
+			t.Fatalf("managed run index missing %s: %s", column, indexDefinition)
+		}
+	}
+}
+
 func TestEnsureAccountInboxMigrationSkipsAnInFlightBoardCreation(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
