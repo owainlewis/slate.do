@@ -55,14 +55,15 @@ var (
 )
 
 type User struct {
-	ID          string                   `json:"id"`
-	Email       string                   `json:"email"`
-	Role        string                   `json:"role"`
-	Theme       string                   `json:"theme"`
-	DisplayName string                   `json:"displayName"`
-	AgentID     string                   `json:"agentId,omitempty"`
-	Entitlement entitlements.Entitlement `json:"entitlement"`
-	Usage       entitlements.Usage       `json:"usage"`
+	ID           string                   `json:"id"`
+	Email        string                   `json:"email"`
+	Role         string                   `json:"role"`
+	Theme        string                   `json:"theme"`
+	DisplayName  string                   `json:"displayName"`
+	AgentID      string                   `json:"agentId,omitempty"`
+	AgentPurpose string                   `json:"agentPurpose,omitempty"`
+	Entitlement  entitlements.Entitlement `json:"entitlement"`
+	Usage        entitlements.Usage       `json:"usage"`
 }
 
 type UserWithPassword struct {
@@ -516,7 +517,11 @@ func (s *Service) MeForUser(w http.ResponseWriter, r *http.Request, user User) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, meResponse{Authenticated: true, User: &user})
+	writeJSON(w, http.StatusOK, meResponse{
+		Authenticated: true,
+		User:          &user,
+		Capabilities:  map[string]bool{"managedRuns": true},
+	})
 }
 
 func (s *Service) populateUsage(ctx context.Context, user *User) error {
@@ -1126,8 +1131,9 @@ type signupInput struct {
 }
 
 type meResponse struct {
-	Authenticated bool  `json:"authenticated"`
-	User          *User `json:"user,omitempty"`
+	Authenticated bool            `json:"authenticated"`
+	User          *User           `json:"user,omitempty"`
+	Capabilities  map[string]bool `json:"capabilities,omitempty"`
 }
 
 type apiTokenInput struct {

@@ -18,16 +18,18 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("not found")
-	ErrLimitFull       = errors.New("working limit reached")
-	ErrBoardLimit      = errors.New("board limit reached")
-	ErrListLimit       = errors.New("list limit reached")
-	ErrActiveItemLimit = errors.New("active item limit reached")
-	ErrInvalidData     = errors.New("invalid data")
-	ErrTaskUnavailable = errors.New("task is not available")
-	ErrIdempotencyKey  = errors.New("idempotency key already used with different data")
-	ErrIdempotencyGone = errors.New("task created by idempotency key was deleted")
-	ErrAgentTaskScope  = errors.New("agent credentials cannot move, reorder, or reassign tasks")
+	ErrNotFound               = errors.New("not found")
+	ErrLimitFull              = errors.New("working limit reached")
+	ErrBoardLimit             = errors.New("board limit reached")
+	ErrListLimit              = errors.New("list limit reached")
+	ErrActiveItemLimit        = errors.New("active item limit reached")
+	ErrInvalidData            = errors.New("invalid data")
+	ErrTaskUnavailable        = errors.New("task is not available")
+	ErrIdempotencyKey         = errors.New("idempotency key already used with different data")
+	ErrIdempotencyGone        = errors.New("task created by idempotency key was deleted")
+	ErrAgentTaskScope         = errors.New("agent credentials cannot move, reorder, or reassign tasks")
+	ErrManagedRunMismatch     = errors.New("managed run does not own this task")
+	ErrManagedRunStatusLocked = errors.New("managed run status is controlled by output")
 )
 
 const (
@@ -41,6 +43,13 @@ type completedTaskCursor struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	ID        string    `json:"id"`
 	Scope     string    `json:"scope"`
+}
+
+type agentQueueCursor struct {
+	PriorityRank int       `json:"priorityRank"`
+	CreatedAt    time.Time `json:"createdAt"`
+	ID           string    `json:"id"`
+	Scope        string    `json:"scope"`
 }
 
 var (
@@ -1367,6 +1376,22 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 	if err != nil {
 		return Task{}, err
 	}
+	if requiredAgentID != "" {
+		var executionRunID string
+		if err := tx.QueryRow(ctx, "SELECT COALESCE(execution_run_id::text, '') FROM tasks WHERE id = $1", current.ID).Scan(&executionRunID); err != nil {
+			return Task{}, err
+		}
+		requestedRunID := strings.TrimSpace(input.RunID)
+		if executionRunID != "" && requestedRunID != executionRunID {
+			return Task{}, ErrManagedRunMismatch
+		}
+		if executionRunID == "" && requestedRunID != "" {
+			return Task{}, ErrManagedRunMismatch
+		}
+		if executionRunID != "" && (input.Status != nil || input.Done != nil) {
+			return Task{}, ErrManagedRunStatusLocked
+		}
+	}
 	original := current
 	originalBucketID := current.BucketID
 	originalActive := current.Kind == KindAction && current.Status != StatusDone
@@ -1546,23 +1571,30 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 }
 
 func (s *Store) ClaimTask(ctx context.Context, userID string, id string) (Task, error) {
-	return s.claimTask(ctx, userID, "", id)
+	return s.claimTask(ctx, userID, "", id, "")
 }
 
 func (s *Store) ClaimTaskForAgent(ctx context.Context, userID string, agentID string, id string) (Task, error) {
-	return s.claimTask(ctx, userID, agentID, id)
+	return s.claimTask(ctx, userID, agentID, id, "")
 }
 
-func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id string) (Task, error) {
+func (s *Store) ClaimTaskForManagedRun(ctx context.Context, userID string, agentID string, id string, runID string) (Task, error) {
+	if !validUUID(runID) {
+		return Task{}, fmt.Errorf("%w: run ID must be a valid ID", ErrInvalidData)
+	}
+	return s.claimTask(ctx, userID, agentID, id, runID)
+}
+
+func (s *Store) claimTask(ctx context.Context, userID string, agentID string, id string, runID string) (Task, error) {
 	agentSQL := ""
-	args := []any{userID, id, StatusWorking, StatusQueued, KindAction}
+	args := []any{userID, id, StatusWorking, StatusQueued, KindAction, runID}
 	if agentID != "" {
 		args = append(args, agentID)
-		agentSQL = " AND t.assignee_agent_id = $6"
+		agentSQL = " AND t.assignee_agent_id = $7"
 	}
 	row := s.db.QueryRow(ctx, `
 		UPDATE tasks t
-		SET status = $3, review_reason = '', updated_at = now()
+		SET status = $3, review_reason = '', execution_run_id = NULLIF($6, '')::uuid, updated_at = now()
 		FROM boards b
 		WHERE b.id = t.board_id
 			AND b.user_id = $1
@@ -1660,6 +1692,17 @@ func (s *Store) GetTaskForAgent(ctx context.Context, userID string, agentID stri
 }
 
 func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID string, taskID string) ([]CardEntry, error) {
+	return s.listCardEntries(ctx, userID, agentID, taskID, "")
+}
+
+func (s *Store) ListCardEntriesForRun(ctx context.Context, userID string, agentID string, taskID string, runID string) ([]CardEntry, error) {
+	if !validUUID(runID) {
+		return nil, fmt.Errorf("%w: run ID must be a valid ID", ErrInvalidData)
+	}
+	return s.listCardEntries(ctx, userID, agentID, taskID, runID)
+}
+
+func (s *Store) listCardEntries(ctx context.Context, userID string, agentID string, taskID string, runID string) ([]CardEntry, error) {
 	if !validUUID(taskID) {
 		return nil, fmt.Errorf("%w: card ID must be a valid ID", ErrInvalidData)
 	}
@@ -1687,13 +1730,19 @@ func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID stri
 		}
 		return nil, err
 	}
+	entryArgs := []any{taskID}
+	runSQL := ""
+	if runID != "" {
+		entryArgs = append(entryArgs, runID)
+		runSQL = " AND run_id = $2"
+	}
 	rows, err := tx.Query(ctx, `
 		SELECT id::text, task_id::text, kind, body,
-			author_kind, author_id::text, author_name, created_at
+			author_kind, author_id::text, author_name, COALESCE(run_id::text, ''), created_at
 		FROM card_entries
-		WHERE task_id = $1
+		WHERE task_id = $1`+runSQL+`
 		ORDER BY created_at, id
-	`, taskID)
+	`, entryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -1702,7 +1751,7 @@ func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID stri
 	for rows.Next() {
 		var entry CardEntry
 		if err := rows.Scan(&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body,
-			&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.CreatedAt); err != nil {
+			&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.RunID, &entry.CreatedAt); err != nil {
 			return nil, err
 		}
 		entries = append(entries, entry)
@@ -1752,6 +1801,7 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	body := strings.TrimSpace(input.Body)
 	kind := strings.TrimSpace(input.Kind)
 	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
+	runID := strings.TrimSpace(input.RunID)
 	if body == "" {
 		return CardEntry{}, fmt.Errorf("%w: entry body is required", ErrInvalidData)
 	}
@@ -1764,11 +1814,78 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	if len([]byte(idempotencyKey)) > httpapi.TaskIdempotencyBytes {
 		return CardEntry{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
 	}
+	if runID != "" && !validUUID(runID) {
+		return CardEntry{}, fmt.Errorf("%w: run ID must be a valid ID", ErrInvalidData)
+	}
+	if runID != "" && idempotencyKey == "" {
+		return CardEntry{}, fmt.Errorf("%w: managed run entries require an idempotency key", ErrInvalidData)
+	}
+	authorKind := "human"
+	authorID := userID
+	if agentID != "" {
+		authorKind = "agent"
+		authorID = agentID
+	}
+	fingerprint, err := cardEntryFingerprint(kind, body)
+	if err != nil {
+		return CardEntry{}, err
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return CardEntry{}, err
 	}
 	defer tx.Rollback(ctx)
+	if idempotencyKey != "" {
+		lockKey := strings.Join([]string{userID, "card-entry", taskID, authorKind, authorID, idempotencyKey}, ":")
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
+			return CardEntry{}, err
+		}
+		replayArgs := []any{userID, taskID, authorKind, authorID, idempotencyKey}
+		replayAgentSQL := ""
+		if agentID != "" {
+			replayArgs = append(replayArgs, agentID)
+			replayAgentSQL = " AND t.assignee_agent_id = $6"
+			if runID == "" {
+				replayAgentSQL += " AND t.execution_run_id IS NULL"
+			} else {
+				replayArgs = append(replayArgs, runID)
+				replayAgentSQL += " AND t.execution_run_id = $7"
+			}
+		}
+		var existing CardEntry
+		var existingFingerprint string
+		err := tx.QueryRow(ctx, `
+			SELECT e.id::text, e.task_id::text, e.kind, e.body,
+				e.author_kind, e.author_id::text, e.author_name, COALESCE(e.run_id::text, ''), e.created_at,
+				e.request_hash, t.status, COALESCE(t.review_reason, '')
+			FROM card_entries e
+			JOIN tasks t ON t.id = e.task_id
+			JOIN boards b ON b.id = t.board_id
+			WHERE b.user_id = $1 AND e.task_id = $2 AND e.author_kind = $3
+				AND e.author_id = $4 AND e.idempotency_key = $5`+replayAgentSQL+`
+		`, replayArgs...).Scan(
+			&existing.ID, &existing.TaskID, &existing.Kind, &existing.Body,
+			&existing.AuthorKind, &existing.AuthorID, &existing.AuthorName, &existing.RunID, &existing.CreatedAt,
+			&existingFingerprint, &existing.CardStatus, &existing.CardReviewReason,
+		)
+		if err == nil {
+			if existingFingerprint != fingerprint || existing.RunID != runID {
+				return CardEntry{}, ErrIdempotencyKey
+			}
+			if existing.RunID != "" {
+				existing.CardStatus = StatusWorking
+				existing.CardReviewReason = ""
+				if existing.Kind == "output" {
+					existing.CardStatus = StatusNeedsReview
+					existing.CardReviewReason = "output"
+				}
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return CardEntry{}, err
+		}
+	}
 	quota, err := lockStorageQuota(ctx, tx, userID)
 	if err != nil {
 		return CardEntry{}, err
@@ -1779,24 +1896,30 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		args = append(args, agentID)
 		agentSQL = " AND t.assignee_agent_id = $3"
 	}
-	var authorizedTaskID, cardStatus, cardReviewReason string
+	var authorizedTaskID, cardStatus, cardReviewReason, executionRunID string
 	if err := tx.QueryRow(ctx, `
-		SELECT t.id::text, t.status, COALESCE(t.review_reason, '')
+		SELECT t.id::text, t.status, COALESCE(t.review_reason, ''), COALESCE(t.execution_run_id::text, '')
 		FROM tasks t
 		JOIN boards b ON b.id = t.board_id
 		WHERE b.user_id = $1 AND t.id = $2`+agentSQL+`
 		FOR UPDATE OF t
-	`, args...).Scan(&authorizedTaskID, &cardStatus, &cardReviewReason); err != nil {
+	`, args...).Scan(&authorizedTaskID, &cardStatus, &cardReviewReason, &executionRunID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return CardEntry{}, ErrNotFound
 		}
 		return CardEntry{}, err
 	}
-	authorKind := "human"
-	authorID := userID
 	if agentID != "" {
-		authorKind = "agent"
-		authorID = agentID
+		if executionRunID != "" {
+			if runID == "" || runID != executionRunID {
+				return CardEntry{}, ErrManagedRunMismatch
+			}
+			if cardStatus != StatusWorking {
+				return CardEntry{}, ErrTaskUnavailable
+			}
+		} else if runID != "" {
+			return CardEntry{}, ErrManagedRunMismatch
+		}
 		if err := tx.QueryRow(ctx, `
 			SELECT name FROM agents
 			WHERE id = $1 AND owner_user_id = $2 AND archived_at IS NULL
@@ -1811,38 +1934,6 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	if authorName == "" {
 		authorName = "You"
 	}
-	fingerprint, err := cardEntryFingerprint(kind, body)
-	if err != nil {
-		return CardEntry{}, err
-	}
-	if idempotencyKey != "" {
-		lockKey := strings.Join([]string{userID, "card-entry", taskID, authorKind, authorID, idempotencyKey}, ":")
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
-			return CardEntry{}, err
-		}
-		var existing CardEntry
-		var existingFingerprint string
-		err := tx.QueryRow(ctx, `
-			SELECT id::text, task_id::text, kind, body,
-				author_kind, author_id::text, author_name, created_at, request_hash
-			FROM card_entries
-			WHERE task_id = $1 AND author_kind = $2 AND author_id = $3 AND idempotency_key = $4
-		`, taskID, authorKind, authorID, idempotencyKey).Scan(
-			&existing.ID, &existing.TaskID, &existing.Kind, &existing.Body,
-			&existing.AuthorKind, &existing.AuthorID, &existing.AuthorName, &existing.CreatedAt, &existingFingerprint,
-		)
-		if err == nil {
-			if existingFingerprint != fingerprint {
-				return CardEntry{}, ErrIdempotencyKey
-			}
-			existing.CardStatus = cardStatus
-			existing.CardReviewReason = cardReviewReason
-			return existing, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return CardEntry{}, err
-		}
-	}
 	var entryCount int
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM card_entries WHERE task_id = $1", taskID).Scan(&entryCount); err != nil {
 		return CardEntry{}, err
@@ -1852,13 +1943,13 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	}
 	var entry CardEntry
 	err = tx.QueryRow(ctx, `
-		INSERT INTO card_entries (task_id, kind, body, author_kind, author_id, author_name, idempotency_key, request_hash)
-		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8)
+		INSERT INTO card_entries (task_id, kind, body, author_kind, author_id, author_name, idempotency_key, request_hash, run_id)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, '')::uuid)
 		RETURNING id::text, task_id::text, kind, body,
-			author_kind, author_id::text, author_name, created_at
-	`, taskID, kind, body, authorKind, authorID, authorName, idempotencyKey, fingerprint).Scan(
+			author_kind, author_id::text, author_name, COALESCE(run_id::text, ''), created_at
+	`, taskID, kind, body, authorKind, authorID, authorName, idempotencyKey, fingerprint, runID).Scan(
 		&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body,
-		&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.CreatedAt,
+		&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.RunID, &entry.CreatedAt,
 	)
 	if err != nil {
 		return CardEntry{}, err
@@ -1867,12 +1958,22 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		return CardEntry{}, err
 	}
 	if kind == "output" {
-		if _, err := tx.Exec(ctx, `
+		query := `
 			UPDATE tasks
 			SET status = $1, review_reason = 'output', updated_at = now()
 			WHERE id = $2
-		`, StatusNeedsReview, taskID); err != nil {
+		`
+		updateArgs := []any{StatusNeedsReview, taskID}
+		if runID != "" {
+			query += " AND status = 'working' AND execution_run_id = $3"
+			updateArgs = append(updateArgs, runID)
+		}
+		tag, err := tx.Exec(ctx, query, updateArgs...)
+		if err != nil {
 			return CardEntry{}, err
+		}
+		if tag.RowsAffected() != 1 {
+			return CardEntry{}, ErrManagedRunMismatch
 		}
 		cardStatus = StatusNeedsReview
 		cardReviewReason = "output"
@@ -1999,21 +2100,37 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	} else if limit <= 0 || limit > 200 {
 		limit = 100
 	}
+	const agentQueuePrioritySQL = "CASE t.priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 ELSE 3 END"
 	orderSQL := "t.created_at DESC, t.id DESC"
+	if filter.AgentQueue {
+		orderSQL = agentQueuePrioritySQL + ", t.created_at, t.id"
+	}
 	if completedHistory {
 		orderSQL = "t.updated_at DESC, t.id DESC"
 	}
 	if filter.Cursor != "" {
-		cursor, err := decodeCompletedTaskCursor(filter.Cursor, taskCursorScope(userID, filter))
-		if err != nil {
-			return TaskPage{}, err
+		if filter.AgentQueue {
+			cursor, err := decodeAgentQueueCursor(filter.Cursor, taskCursorScope(userID, filter))
+			if err != nil {
+				return TaskPage{}, err
+			}
+			args = append(args, cursor.PriorityRank, cursor.CreatedAt, cursor.ID)
+			whereSQL += fmt.Sprintf(
+				" AND (%s > $%d OR (%s = $%d AND (t.created_at > $%d OR (t.created_at = $%d AND t.id > $%d::uuid))))",
+				agentQueuePrioritySQL, len(args)-2, agentQueuePrioritySQL, len(args)-2, len(args)-1, len(args)-1, len(args),
+			)
+		} else {
+			cursor, err := decodeCompletedTaskCursor(filter.Cursor, taskCursorScope(userID, filter))
+			if err != nil {
+				return TaskPage{}, err
+			}
+			args = append(args, cursor.UpdatedAt, cursor.ID)
+			column := "t.created_at"
+			if completedHistory {
+				column = "t.updated_at"
+			}
+			whereSQL += fmt.Sprintf(" AND (%s < $%d OR (%s = $%d AND t.id < $%d::uuid))", column, len(args)-1, column, len(args)-1, len(args))
 		}
-		args = append(args, cursor.UpdatedAt, cursor.ID)
-		column := "t.created_at"
-		if completedHistory {
-			column = "t.updated_at"
-		}
-		whereSQL += fmt.Sprintf(" AND (%s < $%d OR (%s = $%d AND t.id < $%d::uuid))", column, len(args)-1, column, len(args)-1, len(args))
 	}
 	fetchLimit := limit + 1
 	args = append(args, fetchLimit)
@@ -2056,12 +2173,19 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	if len(page.Tasks) > limit {
 		page.Tasks = page.Tasks[:limit]
 		cursorTask := page.Tasks[len(page.Tasks)-1]
-		if !completedHistory {
-			cursorTask.UpdatedAt = cursorTask.CreatedAt
-		}
-		page.NextCursor, err = encodeCompletedTaskCursor(cursorTask, taskCursorScope(userID, filter))
-		if err != nil {
-			return TaskPage{}, err
+		if filter.AgentQueue {
+			page.NextCursor, err = encodeAgentQueueCursor(cursorTask, taskCursorScope(userID, filter))
+			if err != nil {
+				return TaskPage{}, err
+			}
+		} else {
+			if !completedHistory {
+				cursorTask.UpdatedAt = cursorTask.CreatedAt
+			}
+			page.NextCursor, err = encodeCompletedTaskCursor(cursorTask, taskCursorScope(userID, filter))
+			if err != nil {
+				return TaskPage{}, err
+			}
 		}
 	}
 	return page, nil
@@ -2347,6 +2471,7 @@ func taskCursorScope(userID string, filter TaskFilter) string {
 		fmt.Sprint(filter.ActionsOnly), filter.AssigneeAgentID, fmt.Sprint(filter.Unassigned),
 		filter.Query, filter.ScheduledFrom, filter.ScheduledTo, filter.ParentTaskID, fmt.Sprint(filter.TopLevelOnly),
 		fmt.Sprint(filter.InboxOnly),
+		fmt.Sprint(filter.AgentQueue),
 	}
 	// done=true is the released spelling of status=done and must share its
 	// existing cursor scope. The open-only alias does not issue history cursors.
@@ -2364,6 +2489,44 @@ func encodeCompletedTaskCursor(task Task, scope string) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func encodeAgentQueueCursor(task Task, scope string) (string, error) {
+	encoded, err := json.Marshal(agentQueueCursor{
+		PriorityRank: agentQueuePriorityRank(task.Priority),
+		CreatedAt:    task.CreatedAt.UTC(),
+		ID:           task.ID,
+		Scope:        scope,
+	})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func decodeAgentQueueCursor(raw string, scope string) (agentQueueCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return agentQueueCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+	}
+	var cursor agentQueueCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || !validUUID(cursor.ID) || cursor.Scope != scope || cursor.PriorityRank < 0 || cursor.PriorityRank > 3 {
+		return agentQueueCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+	}
+	return cursor, nil
+}
+
+func agentQueuePriorityRank(priority string) int {
+	switch priority {
+	case PriorityP0:
+		return 0
+	case PriorityP1:
+		return 1
+	case PriorityP2:
+		return 2
+	default:
+		return 3
+	}
 }
 
 func decodeCompletedTaskCursor(raw string, scope string) (completedTaskCursor, error) {

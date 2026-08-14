@@ -508,17 +508,17 @@ func (s *PGStore) FindUserByAPITokenHash(ctx context.Context, tokenHash string, 
 			WHERE c.agent_id = a.id
 				AND u.disabled_at IS NULL
 				AND c.token_hash = $1 AND c.revoked_at IS NULL AND a.archived_at IS NULL
-			RETURNING u.id, u.theme, a.id AS agent_id, a.name AS display_name,
+			RETURNING u.id, u.theme, a.id AS agent_id, a.name AS display_name, COALESCE(a.purpose, '') AS agent_purpose,
 				CASE WHEN u.role = 'admin' THEN 'pro' ELSE COALESCE(e.plan, '') END AS plan,
 				CASE WHEN u.role = 'admin' THEN 'admin' ELSE COALESCE(e.source, '') END AS source
 		)
-		SELECT id::text, email, role, theme, display_name, '' AS agent_id, plan, source
+		SELECT id::text, email, role, theme, display_name, '' AS agent_id, '' AS agent_purpose, plan, source
 		FROM human_token
 		UNION ALL
-		SELECT id::text, '', 'agent', theme, display_name, agent_id::text, plan, source
+		SELECT id::text, '', 'agent', theme, display_name, agent_id::text, agent_purpose, plan, source
 		FROM agent_token
 		LIMIT 1
-	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName, &user.AgentID,
+	`, tokenHash, now).Scan(&user.ID, &user.Email, &user.Role, &user.Theme, &user.DisplayName, &user.AgentID, &user.AgentPurpose,
 		&user.Entitlement.Plan, &user.Entitlement.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUnauthorized

@@ -134,6 +134,7 @@ type UpdateTaskInput struct {
 	Priority        *string `json:"priority"`
 	AssigneeAgentID *string `json:"assigneeAgentId"`
 	SortOrder       *int    `json:"sortOrder"`
+	RunID           string  `json:"-"`
 }
 
 type MoveTaskInput struct {
@@ -158,6 +159,7 @@ type TaskFilter struct {
 	ParentTaskID    string
 	TopLevelOnly    bool
 	InboxOnly       bool
+	AgentQueue      bool
 }
 
 type TaskPage struct {
@@ -173,6 +175,7 @@ type CardEntry struct {
 	AuthorKind       string    `json:"authorKind"`
 	AuthorID         string    `json:"authorId"`
 	AuthorName       string    `json:"authorName"`
+	RunID            string    `json:"runId,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
 	CardStatus       string    `json:"cardStatus,omitempty"`
 	CardReviewReason string    `json:"cardReviewReason,omitempty"`
@@ -182,6 +185,7 @@ type CreateCardEntryInput struct {
 	Kind           string `json:"kind"`
 	Body           string `json:"body"`
 	IdempotencyKey string `json:"-"`
+	RunID          string `json:"-"`
 }
 
 const MaxCardEntries = 200

@@ -247,7 +247,14 @@ func (h *Handler) ListCardEntries(w http.ResponseWriter, r *http.Request, user a
 	if !validatePathID(w, "card", r.PathValue("id")) {
 		return
 	}
-	entries, err := h.store.ListCardEntries(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
+	var entries []CardEntry
+	var err error
+	if runID != "" {
+		entries, err = h.store.ListCardEntriesForRun(r.Context(), user.ID, user.AgentID, r.PathValue("id"), runID)
+	} else {
+		entries, err = h.store.ListCardEntries(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+	}
 	if handleStoreError(w, err) {
 		return
 	}
@@ -277,6 +284,9 @@ func (h *Handler) CreateCardEntry(w http.ResponseWriter, r *http.Request, user a
 	if !validateTaskIdempotencyKey(w, input.IdempotencyKey) {
 		return
 	}
+	if user.AgentID != "" {
+		input.RunID = strings.TrimSpace(r.Header.Get("X-Slate-Run-ID"))
+	}
 	entry, err := h.store.CreateCardEntry(r.Context(), user.ID, user.AgentID, user.DisplayName, r.PathValue("id"), input)
 	if handleStoreError(w, err) {
 		return
@@ -295,6 +305,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request, user auth.U
 	var task Task
 	var err error
 	if user.AgentID != "" {
+		input.RunID = strings.TrimSpace(r.Header.Get("X-Slate-Run-ID"))
 		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), input)
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), input)
@@ -402,6 +413,7 @@ func (h *Handler) AgentTasks(w http.ResponseWriter, r *http.Request, user auth.U
 		filter.Status = StatusQueued
 	}
 	filter.ActionsOnly = true
+	filter.AgentQueue = filter.Status == StatusQueued
 	if user.AgentID != "" {
 		filter.AssigneeAgentID = user.AgentID
 	}
@@ -421,7 +433,12 @@ func (h *Handler) AgentClaim(w http.ResponseWriter, r *http.Request, user auth.U
 	var task Task
 	var err error
 	if user.AgentID != "" {
-		task, err = h.store.ClaimTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+		runID := strings.TrimSpace(r.Header.Get("X-Slate-Run-ID"))
+		if runID != "" {
+			task, err = h.store.ClaimTaskForManagedRun(r.Context(), user.ID, user.AgentID, r.PathValue("id"), runID)
+		} else {
+			task, err = h.store.ClaimTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+		}
 	} else {
 		task, err = h.store.ClaimTask(r.Context(), user.ID, r.PathValue("id"))
 	}
@@ -441,7 +458,10 @@ func (h *Handler) AgentStatus(w http.ResponseWriter, r *http.Request, user auth.
 	var task Task
 	var err error
 	if user.AgentID != "" {
-		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
+		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{
+			Status: &input.Status,
+			RunID:  strings.TrimSpace(r.Header.Get("X-Slate-Run-ID")),
+		})
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &input.Status})
 	}
@@ -458,7 +478,10 @@ func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.Us
 	var task Task
 	var err error
 	if user.AgentID != "" {
-		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{Status: &status})
+		task, err = h.store.UpdateTaskForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"), UpdateTaskInput{
+			Status: &status,
+			RunID:  strings.TrimSpace(r.Header.Get("X-Slate-Run-ID")),
+		})
 	} else {
 		task, err = h.store.UpdateTask(r.Context(), user.ID, r.PathValue("id"), UpdateTaskInput{Status: &status})
 	}
@@ -660,6 +683,10 @@ func handleStoreError(w http.ResponseWriter, err error, account ...entitlements.
 		writeError(w, http.StatusGone, err.Error())
 	case errors.Is(err, ErrAgentTaskScope):
 		writeError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, ErrManagedRunStatusLocked):
+		writeCodedError(w, http.StatusConflict, "managed_run_status_locked", err.Error())
+	case errors.Is(err, ErrManagedRunMismatch):
+		writeCodedError(w, http.StatusConflict, "managed_run_mismatch", err.Error())
 	case errors.Is(err, ErrInvalidData):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
@@ -703,6 +730,10 @@ func limitContext(account []entitlements.Entitlement, value func(entitlements.Li
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeCodedError(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "error": message})
 }
 
 func writeInternalError(w http.ResponseWriter, err error, message string) {

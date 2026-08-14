@@ -242,6 +242,9 @@ func TestMeDoesNotLoadAccountUsageForAgentCredentials(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), `"storedTasks":12`) {
 		t.Fatalf("agent response exposed account usage: %s", recorder.Body.String())
 	}
+	if !strings.Contains(recorder.Body.String(), `"agentPurpose":"Ship assigned tasks"`) || !strings.Contains(recorder.Body.String(), `"managedRuns":true`) {
+		t.Fatalf("agent response missing managed-run identity: %s", recorder.Body.String())
+	}
 }
 
 func TestUpdateThemePersistsUserPreference(t *testing.T) {
@@ -918,7 +921,7 @@ func (s *agentUsageAuthStore) FindUserByAPITokenHash(_ context.Context, tokenHas
 	if tokenHash != hashToken("agent_ok") {
 		return User{}, ErrUnauthorized
 	}
-	return User{ID: "owner", Role: "agent", AgentID: "agent-1", Entitlement: entitlements.Free()}, nil
+	return User{ID: "owner", Role: "agent", AgentID: "agent-1", AgentPurpose: "Ship assigned tasks", Entitlement: entitlements.Free()}, nil
 }
 
 func (s *agentUsageAuthStore) AccountUsage(context.Context, string) (entitlements.Usage, error) {
