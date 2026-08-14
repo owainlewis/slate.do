@@ -926,6 +926,54 @@ func TestRetentionIsRecheckedEveryRound(t *testing.T) {
 	}
 }
 
+func TestOverLimitCleanupFailureKeepsTheRunDiscoverable(t *testing.T) {
+	executor := writeExecutor(t, "unused-over-limit", "cat >/dev/null\n")
+	fixture := newWatcherFixture(t, executor)
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxRetainedRuns; index++ {
+		runID, err := newRunID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.registry.save(runRecord{RunID: runID, Profile: w.profileName, State: runStateSuccess}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.registry.beforeSave = func(record runRecord) error {
+		if record.TaskID == testTaskID && record.State == runStateLaunching {
+			cancel()
+		}
+		return nil
+	}
+	state, err := w.attempt(ctx, fixture.fake.queued[0])
+	if err == nil || !strings.Contains(err.Error(), "remains in 'slate runs list'") {
+		t.Fatalf("state = %q err = %v, want a discoverable cleanup failure", state, err)
+	}
+	if state != runStateAmbiguous {
+		t.Fatalf("state = %q, want ambiguous", state)
+	}
+	records := fixture.runs(t)
+	var retained *runRecord
+	for index := range records {
+		if records[index].TaskID == testTaskID {
+			retained = &records[index]
+			break
+		}
+	}
+	if retained == nil || retained.State != runStateAmbiguous {
+		t.Fatalf("records = %+v, want the failed cleanup retained as ambiguous", records)
+	}
+	branches, gitErr := runGit(context.Background(), fixture.source, "branch", "--list", retained.Branch)
+	if gitErr != nil || !strings.Contains(branches, retained.Branch) {
+		t.Fatalf("retained branch is not inspectable: %q %v", branches, gitErr)
+	}
+}
+
 // TestTwoWatchersRaceAndOnlyTheClaimantContinues drives two real watchers with
 // real worktrees against one task, which is the isolation the design exists for.
 func TestTwoWatchersRaceAndOnlyTheClaimantContinues(t *testing.T) {

@@ -327,8 +327,17 @@ func (w *watcher) attempt(ctx context.Context, candidate taskView) (string, erro
 	// written, so re-counting sees every reservation and one of them backs out.
 	// Nothing has been launched yet, so backing out costs nothing.
 	if retained, err := w.registry.retainedCount(w.profileName); err == nil && retained > maxRetainedRuns {
-		_ = discardRunWorktree(ctx, w.source.Root, worktree, branch)
-		_ = w.registry.remove(runID)
+		if cleanupErr := discardRunWorktree(ctx, w.source.Root, worktree, branch); cleanupErr != nil {
+			record.State = runStateAmbiguous
+			if saveErr := w.registry.save(record); saveErr != nil {
+				w.logf("Could not record retained run %s after cleanup failed: %v", runID, saveErr)
+			}
+			return runStateAmbiguous, fmt.Errorf("profile %q exceeded its worktree limit and run %s could not be removed; it remains in 'slate runs list': %w",
+				w.profileName, runID, cleanupErr)
+		}
+		if err := w.registry.remove(runID); err != nil {
+			return "", fmt.Errorf("remove run %s after releasing its over-limit worktree: %w", runID, err)
+		}
 		return "", fmt.Errorf("profile %q is holding %d worktrees, over the limit of %d; release one with 'slate runs clean <run-id>'",
 			w.profileName, retained, maxRetainedRuns)
 	}
