@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
   <meta name="document-kind" content="design">
   <meta name="source-path" content="docs/agent-task-watcher/design.md">
-  <meta name="source-sha256" content="70a026eb9a91273adb697a7cc6a87fdd47f12c08d45c700cd09682e07f42c0ff">
+  <meta name="source-sha256" content="14b8340083d21b0410efee1d7dbf4f059edf895eb0cc17056e4840b2661489b2">
   <meta name="generator" content="blueprint/html-doc@1">
   <title>Agent task watcher</title>
   <style>:root {
@@ -421,7 +421,7 @@ tbody tr:nth-child(even) { background: #eff3f5; }
         <div class="metadata__item"><dt>Kind</dt><dd>Technical design</dd></div>
         <div class="metadata__item"><dt>Status</dt><dd>Implemented</dd></div>
         <div class="metadata__item"><dt>Source</dt><dd>docs/agent-task-watcher/design.md</dd></div>
-        <div class="metadata__item"><dt>Revision</dt><dd><code title="70a026eb9a91273adb697a7cc6a87fdd47f12c08d45c700cd09682e07f42c0ff">70a026eb9a91</code></dd></div>
+        <div class="metadata__item"><dt>Revision</dt><dd><code title="14b8340083d21b0410efee1d7dbf4f059edf895eb0cc17056e4840b2661489b2">14b8340083d2</code></dd></div>
       </dl>
     </div>
   </header>
@@ -857,7 +857,7 @@ data-source-sha256="d58a3741c408d72bf8e99cb9c99f055d7cabeda3c3b4d006597446e8412a
 <h3>Requirements</h3>
 </section>
 <div class="source-block" data-source-block="55"
-data-source-sha256="33a64d032ca0abc9a4a7f08d7c4633083ccaa290a78a507120349fac0257b733">
+data-source-sha256="619e753535906766f9500217d1f71128e7f1665cf7f3ff6f2f53e4a5c6c622af">
 <ul>
 <li><code>slate watch --profile &lt;name&gt;</code> watches assigned
 queued actions across all visible boards. <code>--board</code> scopes
@@ -905,7 +905,8 @@ that managed run.</li>
 <li><code>slate tasks comment</code> and <code>tasks output</code>
 accept exactly one of <code>--body</code> or <code>--file</code>;
 <code>--file -</code> reads stdin.</li>
-<li>Comment and output commands require a non-empty idempotency key and
+<li>Output commands and managed comments require a non-empty idempotency
+key. Manual comments outside a managed run may omit it. Both commands
 reject empty or over-16-KiB bodies locally.</li>
 <li>Any managed direct status change returns HTTP 409
 <code>managed_run_status_locked</code>. The same status changes remain

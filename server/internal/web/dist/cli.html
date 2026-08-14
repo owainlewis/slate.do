@@ -114,11 +114,11 @@ claude</code></pre>
 
         <section id="report" class="docs-section">
           <h2>Report through the card</h2>
-          <p>Outside a watcher, <code>comment</code> records progress and leaves the card where it is. Under a watcher, any managed comment is a terminal blocked report: the task stays In Progress, the executor stops, and the watcher retains the worktree. <code>output</code> records the completion report and moves the card to Review in the same operation.</p>
+          <p>Outside a watcher, <code>comment</code> records progress and leaves the card where it is. Under a watcher, a run-tagged comment observed while the task is still In Progress is a terminal blocked report: the executor stops and the watcher retains the worktree. Executors should therefore use managed comments only to report blockage and then exit. If an output reaches Review before the watcher observes the comment, the output result takes precedence. <code>output</code> records the completion report and moves the card to Review in the same operation.</p>
           <pre><code>slate tasks entries &lt;task-id&gt;
 slate tasks comment &lt;task-id&gt; --file "${TMPDIR:-/tmp}/note.md" --idempotency-key blocked-1
 slate tasks output &lt;task-id&gt; --file "${TMPDIR:-/tmp}/report.md" --idempotency-key output-1</code></pre>
-          <p>Give exactly one of <code>--body</code> or <code>--file</code>; <code>--file -</code> reads standard input. Both need <code>--idempotency-key</code>: reuse the same value to retry after an uncertain result and no duplicate is created. Write the file outside the repository so it does not sit in your working tree as an uncommitted change.</p>
+          <p>Give exactly one of <code>--body</code> or <code>--file</code>; <code>--file -</code> reads standard input. Every output and every watcher-managed comment needs <code>--idempotency-key</code>; a manual comment outside a managed run may omit it. Reuse the same value to retry after an uncertain result and no duplicate is created. Write the file outside the repository so it does not sit in your working tree as an uncommitted change.</p>
           <p>Under a watcher, an agent cannot set the status itself. While a run owns a task, Slate refuses direct status changes with <code>managed_run_status_locked</code>; claim reaches In Progress and output reaches Review.</p>
         </section>
 

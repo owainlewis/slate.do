@@ -157,7 +157,7 @@ The worktree registry owns local run ID, task ID, agent ID, branch, worktree pat
 - The prompt identifies agent, task metadata, run ID, worktree, claim rule, context commands, repository instructions, checks, blocked workflow, output workflow, and exact idempotency keys.
 - `slate tasks entries` accepts optional `--run <run-id>` and returns only entries tagged with that managed run.
 - `slate tasks comment` and `tasks output` accept exactly one of `--body` or `--file`; `--file -` reads stdin.
-- Comment and output commands require a non-empty idempotency key and reject empty or over-16-KiB bodies locally.
+- Output commands and managed comments require a non-empty idempotency key. Manual comments outside a managed run may omit it. Both commands reject empty or over-16-KiB bodies locally.
 - Any managed direct status change returns HTTP 409 `managed_run_status_locked`. The same status changes remain valid for legacy claims.
 - A managed mutation with a missing or different run ID returns HTTP 409 `managed_run_mismatch`.
 - The watcher retains successful, blocked, interrupted, and uncertain worktrees. It automatically deletes a run only after proving that it lost the claim or exited without ever claiming.

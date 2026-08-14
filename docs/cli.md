@@ -189,10 +189,12 @@ response includes `Retry-After`; wait for that interval before trying again.
 ### Report through the card
 
 Outside a watcher, `comment` records progress and leaves the card where it is.
-Under a watcher, any managed comment is a terminal blocked report: the task
-stays In Progress, the executor stops, and the watcher retains the worktree.
-`output` records the completion report and moves the card to Review in the same
-operation.
+Under a watcher, a run-tagged comment observed while the task is still In
+Progress is a terminal blocked report: the executor stops and the watcher
+retains the worktree. Executors should therefore use managed comments only to
+report blockage and then exit. If an output reaches Review before the watcher
+observes the comment, the output result takes precedence. `output` records the
+completion report and moves the card to Review in the same operation.
 
 Under a watcher, an agent *cannot* set the status itself: while a run owns a
 task, Slate refuses direct status changes with `managed_run_status_locked`.
@@ -205,9 +207,10 @@ slate tasks comment <task-id> --file "${TMPDIR:-/tmp}/note.md" --idempotency-key
 slate tasks output <task-id> --file "${TMPDIR:-/tmp}/report.md" --idempotency-key output-1
 ```
 
-Give exactly one of `--body` or `--file`; `--file -` reads standard input. Both
-commands need `--idempotency-key`: reuse the same value to retry after an
-uncertain result and no duplicate is created. Write the file outside the
+Give exactly one of `--body` or `--file`; `--file -` reads standard input. Every
+output and every watcher-managed comment needs `--idempotency-key`; a manual
+comment outside a managed run may omit it. Reuse the same value to retry after
+an uncertain result and no duplicate is created. Write the file outside the
 repository so it does not sit in your working tree as an uncommitted change.
 
 ### Let a watcher run the agent for you
