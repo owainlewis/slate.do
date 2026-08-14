@@ -64,6 +64,10 @@ type watcher struct {
 	out          io.Writer
 	now          func() time.Time
 	sleep        func(context.Context, time.Duration)
+	// newWatcher checks the working-task guard once before returning. The run
+	// loop consumes that check for its first round, then repeats it before each
+	// later offer because another task may have started in the meantime.
+	workingScopeChecked bool
 }
 
 func watchCmd(c client, args []string) error {
@@ -180,6 +184,7 @@ func newWatcher(ctx context.Context, c client, options watchOptions, out io.Writ
 	if err := w.refuseWhileWorkTaskExists(ctx); err != nil {
 		return nil, err
 	}
+	w.workingScopeChecked = true
 	return w, nil
 }
 
@@ -228,6 +233,11 @@ func (w *watcher) run(ctx context.Context) error {
 	for {
 		if ctx.Err() != nil {
 			return nil
+		}
+		if w.workingScopeChecked {
+			w.workingScopeChecked = false
+		} else if err := w.refuseWhileWorkTaskExists(ctx); err != nil {
+			return err
 		}
 		// Retention is re-checked every round, not only at startup, because a
 		// long session keeps a worktree for every task it finishes.

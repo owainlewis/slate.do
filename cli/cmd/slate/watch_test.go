@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,19 +27,20 @@ const (
 // fakeSlate is a Slate server with just enough behavior to drive a watcher:
 // one queue, one claim that only the first run wins, and run-tagged entries.
 type fakeSlate struct {
-	mu           sync.Mutex
-	t            *testing.T
-	managedRuns  bool
-	agentID      string
-	purpose      string
-	queued       []taskView
-	status       string
-	owningRun    string
-	entries      []entryView
-	claims       int
-	seenRunIDs   []string
-	seenTokens   []string
-	workingTasks []taskView
+	mu                sync.Mutex
+	t                 *testing.T
+	managedRuns       bool
+	agentID           string
+	purpose           string
+	queued            []taskView
+	status            string
+	owningRun         string
+	entries           []entryView
+	claims            int
+	seenRunIDs        []string
+	seenTokens        []string
+	workingTasks      []taskView
+	workingAfterClaim bool
 }
 
 func newFakeSlate(t *testing.T) *fakeSlate {
@@ -80,6 +82,9 @@ func (f *fakeSlate) serve(w http.ResponseWriter, r *http.Request) {
 		tasks := []taskView{}
 		if wanted == "working" {
 			tasks = f.workingTasks
+			if f.workingAfterClaim && f.claims > 0 {
+				tasks = []taskView{{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Title: "Started elsewhere"}}
+			}
 		} else if f.status == "queued" {
 			tasks = f.queued
 		}
@@ -841,6 +846,32 @@ func TestAnExecutorThatNeverClaimsDoesNotSpin(t *testing.T) {
 	}
 }
 
+// TestTheWorkingGuardIsRecheckedBeforeEveryOffer covers a task entering the
+// scoped working set after this watcher completed its first run. No second
+// executor may start until a person resolves that in-progress task.
+func TestTheWorkingGuardIsRecheckedBeforeEveryOffer(t *testing.T) {
+	executor := writeExecutor(t, "one-run-codex", fmt.Sprintf(`
+cat >/dev/null
+"$SLATE_BIN" tasks claim %s >/dev/null || exit 1
+"$SLATE_BIN" tasks output %s --body "Done." --idempotency-key "out" >/dev/null
+`, testTaskID, testTaskID))
+	fixture := newWatcherFixture(t, executor)
+	fixture.fake.workingAfterClaim = true
+
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.slateBinary = buildTestSlateBinary(t)
+	err = w.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "already in progress") {
+		t.Fatalf("run returned %v, want the later working task to stop dispatch", err)
+	}
+	if _, _, _, claims := fixture.fake.snapshot(); claims != 1 {
+		t.Fatalf("claims = %d, want exactly one executor launch", claims)
+	}
+}
+
 // TestALostRaceIsNotAnExecutorFailure keeps the other half honest: losing to a
 // competing watcher is normal and must not count toward the failure limit.
 func TestALostRaceIsNotAnExecutorFailure(t *testing.T) {
@@ -996,6 +1027,102 @@ echo "work" > implementation.txt
 	}
 	if !slices.Contains(named, winner.Branch) {
 		t.Fatalf("branches = %q, want the winner's %s kept", branches, winner.Branch)
+	}
+}
+
+// TestTwoWatcherProcessesCompeteForOneTask exercises the CLI boundary that an
+// operator uses: two independent watcher processes, each with its own startup,
+// polling loop, process state, and executor. The barrier makes both executors
+// reach the claim before either can finish the task.
+func TestTwoWatcherProcessesCompeteForOneTask(t *testing.T) {
+	barrier := filepath.Join(t.TempDir(), "executor-starts")
+	executor := writeExecutor(t, "process-racing-codex", fmt.Sprintf(`
+cat >/dev/null
+echo started >> %q
+while [ "$(wc -l < %q)" -lt 2 ]; do sleep 0.02; done
+"$SLATE_BIN" tasks claim %s >/dev/null 2>&1 || exit 1
+echo "work" > implementation.txt
+"$SLATE_BIN" tasks output %s --body "Done." --idempotency-key "out-$SLATE_RUN_ID" >/dev/null 2>&1
+`, barrier, barrier, testTaskID, testTaskID))
+	fixture := newWatcherFixture(t, executor)
+	binary := buildTestSlateBinary(t)
+
+	type runningWatcher struct {
+		command *exec.Cmd
+		output  bytes.Buffer
+	}
+	watchers := make([]runningWatcher, 2)
+	for index := range watchers {
+		command := exec.Command(binary, "watch", "--profile", fixture.profile, "--workdir", fixture.source)
+		command.Env = append(os.Environ(), "SLATE_BASE_URL="+fixture.server.URL)
+		command.Stdout = &watchers[index].output
+		command.Stderr = &watchers[index].output
+		watchers[index].command = command
+		if err := command.Start(); err != nil {
+			t.Fatalf("start watcher %d: %v", index, err)
+		}
+		t.Cleanup(func() {
+			if command.ProcessState == nil {
+				_ = command.Process.Kill()
+				_ = command.Wait()
+			}
+		})
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		_, _, entries, claims := fixture.fake.snapshot()
+		records := fixture.runs(t)
+		successes := 0
+		for _, record := range records {
+			if record.State == runStateSuccess {
+				successes++
+			}
+		}
+		if entries == 1 && claims >= 2 && successes == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			for _, watcher := range watchers {
+				_ = watcher.command.Process.Kill()
+			}
+			t.Fatalf("watchers did not settle: claims=%d entries=%d", claims, entries)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	for index := range watchers {
+		if err := watchers[index].command.Process.Signal(os.Interrupt); err != nil {
+			t.Fatalf("interrupt watcher %d: %v", index, err)
+		}
+	}
+	for index := range watchers {
+		done := make(chan error, 1)
+		go func(command *exec.Cmd) { done <- command.Wait() }(watchers[index].command)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("watcher %d exited with %v:\n%s", index, err, watchers[index].output.String())
+			}
+		case <-time.After(5 * time.Second):
+			_ = watchers[index].command.Process.Kill()
+			t.Fatalf("watcher %d did not stop after interrupt:\n%s", index, watchers[index].output.String())
+		}
+	}
+
+	status, _, entries, claims := fixture.fake.snapshot()
+	if status != "needs_review" || entries != 1 || claims != 2 {
+		t.Fatalf("server state = %s, claims=%d entries=%d; want one output from two claims", status, claims, entries)
+	}
+	records := fixture.runs(t)
+	successes := 0
+	for _, record := range records {
+		if record.State == runStateSuccess {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("records = %+v, want exactly one successful process", records)
 	}
 }
 
@@ -1335,10 +1462,18 @@ func TestTheLoopCarriesTheBoardScope(t *testing.T) {
 	if queries[0] != "working:"+boardID {
 		t.Fatalf("first query = %q, want the scoped working check", queries[0])
 	}
+	queuedQueries := 0
 	for _, query := range queries[1:] {
-		if query != "queued:"+boardID {
+		if query == "queued:"+boardID {
+			queuedQueries++
+			continue
+		}
+		if query != "working:"+boardID {
 			t.Fatalf("loop query %q is not scoped to board %s", query, boardID)
 		}
+	}
+	if queuedQueries == 0 {
+		t.Fatalf("queries = %v, want a scoped queued poll", queries)
 	}
 }
 
@@ -1352,8 +1487,8 @@ func TestThePromptKeepsTheWorktreeCleanable(t *testing.T) {
 	})
 	for _, expected := range []string{
 		"OUTSIDE this worktree",
-		"$TMPDIR/slate-report.md",
-		"$TMPDIR/slate-note.md",
+		"${TMPDIR:-/tmp}/slate-report-$SLATE_RUN_ID.md",
+		"${TMPDIR:-/tmp}/slate-note-$SLATE_RUN_ID.md",
 		"leave nothing",
 	} {
 		if !strings.Contains(prompt, expected) {
