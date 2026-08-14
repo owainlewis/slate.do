@@ -322,8 +322,8 @@ func (w *watcher) attempt(ctx context.Context, candidate taskView) (string, erro
 		if cleanupErr := discardRunWorktree(ctx, w.source.Root, worktree, branch); cleanupErr != nil {
 			record.State = runStateAmbiguous
 			if retainErr := w.registry.save(record); retainErr != nil {
-				return runStateAmbiguous, fmt.Errorf("record run %s: %w; cleanup also failed: %v; retaining %s on %s also failed: %v",
-					runID, err, cleanupErr, worktree, branch, retainErr)
+				return runStateAmbiguous, fmt.Errorf("%w: record run %s: %v; cleanup also failed: %v; retaining %s on %s also failed: %v",
+					errUndiscoverableRun, runID, err, cleanupErr, worktree, branch, retainErr)
 			}
 			return runStateAmbiguous, fmt.Errorf("record run %s: %w; cleanup also failed, so it remains in 'slate runs list': %v", runID, err, cleanupErr)
 		}
@@ -822,7 +822,7 @@ func recoverableAttemptError(err error) bool {
 	if errors.As(err, &apiErr) {
 		return retryableStatuses[apiErr.Status]
 	}
-	return !errors.Is(err, errGroupSurvived) && !errors.Is(err, errRunRecordRemoval)
+	return !errors.Is(err, errGroupSurvived) && !errors.Is(err, errRunRecordRemoval) && !errors.Is(err, errUndiscoverableRun)
 }
 
 // errGroupSurvived marks a run whose processes could not be ended.
@@ -832,3 +832,7 @@ var errGroupSurvived = errors.New("the executor process group did not stop")
 // bookkeeping could not be removed. Continuing could accumulate stale records
 // until the retention guard blocks unrelated work.
 var errRunRecordRemoval = errors.New("the released run record could not be removed")
+
+// errUndiscoverableRun stops dispatch when local state could neither be cleaned
+// nor recorded. Starting another run would create more untracked resources.
+var errUndiscoverableRun = errors.New("the run could not be cleaned or recorded")

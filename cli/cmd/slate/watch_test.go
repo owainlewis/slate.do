@@ -1040,6 +1040,31 @@ func TestInitialRecordAndCleanupFailuresKeepTheRunDiscoverable(t *testing.T) {
 	}
 }
 
+func TestUnrecordedCleanupFailureStopsDispatch(t *testing.T) {
+	executor := writeExecutor(t, "unused-unrecorded", "cat >/dev/null\n")
+	fixture := newWatcherFixture(t, executor)
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.registry.beforeSave = func(runRecord) error {
+		cancel()
+		return errors.New("state directory stays unavailable")
+	}
+	state, err := w.attempt(ctx, fixture.fake.queued[0])
+	if state != runStateAmbiguous || !errors.Is(err, errUndiscoverableRun) {
+		t.Fatalf("state = %q err = %v, want an undiscoverable ambiguous run", state, err)
+	}
+	if recoverableAttemptError(err) {
+		t.Fatal("the watcher would continue after it could neither clean nor record a run")
+	}
+	if !strings.Contains(err.Error(), "worktrees") || !strings.Contains(err.Error(), "slate/") {
+		t.Fatalf("error does not name the orphan paths: %v", err)
+	}
+}
+
 func TestDisposableRecordRemovalFailureStopsDispatch(t *testing.T) {
 	executor := writeExecutor(t, "losing-remove", "cat >/dev/null\nexit 1\n")
 	fixture := newWatcherFixture(t, executor)
