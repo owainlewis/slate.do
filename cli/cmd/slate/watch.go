@@ -779,10 +779,11 @@ func terminalReadError(err error) error {
 // retryableStatuses are the responses worth waiting out rather than giving up
 // on. Everything else is a decision the server has already made.
 var retryableStatuses = map[int]bool{
-	http.StatusTooManyRequests:    true,
-	http.StatusBadGateway:         true,
-	http.StatusServiceUnavailable: true,
-	http.StatusGatewayTimeout:     true,
+	http.StatusTooManyRequests:     true,
+	http.StatusInternalServerError: true,
+	http.StatusBadGateway:          true,
+	http.StatusServiceUnavailable:  true,
+	http.StatusGatewayTimeout:      true,
 }
 
 // recoverableAttemptError reports whether another candidate may follow. A local

@@ -271,6 +271,10 @@ func TestManagedAgentRunHTTPContract(t *testing.T) {
 	if claim.Code != http.StatusOK || !strings.Contains(claim.Body.String(), `"status":"working"`) {
 		t.Fatalf("managed claim = %d %s", claim.Code, claim.Body.String())
 	}
+	claimedTask := agentRequest(t, app, token, http.MethodGet, "/api/v1/tasks/"+task.ID, "")
+	if claimedTask.Code != http.StatusOK || !strings.Contains(claimedTask.Body.String(), `"executionRunId":"`+runID+`"`) {
+		t.Fatalf("managed task ownership = %d %s", claimedTask.Code, claimedTask.Body.String())
+	}
 	missingRun := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries", `{"kind":"comment","body":"missing run"}`, map[string]string{"Idempotency-Key": "missing-run"})
 	if missingRun.Code != http.StatusConflict || !strings.Contains(missingRun.Body.String(), `"code":"managed_run_mismatch"`) {
 		t.Fatalf("missing run comment = %d %s", missingRun.Code, missingRun.Body.String())

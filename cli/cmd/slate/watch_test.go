@@ -1762,6 +1762,7 @@ func TestARecoverableFailureIsNotTerminal(t *testing.T) {
 	}{
 		{"disk problem", errors.New("mkdir: read-only file system"), true},
 		{"rate limited", &APIError{Status: http.StatusTooManyRequests}, true},
+		{"internal server error", &APIError{Status: http.StatusInternalServerError}, true},
 		{"gateway", &APIError{Status: http.StatusBadGateway}, true},
 		{"task deleted", &APIError{Status: http.StatusNotFound}, false},
 		{"credential revoked", &APIError{Status: http.StatusUnauthorized}, false},
