@@ -345,8 +345,16 @@ func (w *watcher) attempt(ctx context.Context, candidate taskView) (string, erro
 	w.logf("Task %s (%q) offered to run %s in %s.", candidate.ID, candidate.Title, runID, worktree)
 	command, err := w.startExecutor(ctx, candidate, runID, worktree, branch)
 	if err != nil {
-		_ = discardRunWorktree(ctx, w.source.Root, worktree, branch)
-		_ = w.registry.remove(runID)
+		if cleanupErr := discardRunWorktree(ctx, w.source.Root, worktree, branch); cleanupErr != nil {
+			record.State = runStateAmbiguous
+			if saveErr := w.registry.save(record); saveErr != nil {
+				w.logf("Could not record retained run %s after launch cleanup failed: %v", runID, saveErr)
+			}
+			return runStateAmbiguous, fmt.Errorf("%w; run %s could not be removed and remains in 'slate runs list': %v", err, runID, cleanupErr)
+		}
+		if removeErr := w.registry.remove(runID); removeErr != nil {
+			return "", fmt.Errorf("%w; remove released run record %s: %v", err, runID, removeErr)
+		}
 		return "", err
 	}
 	processGroupID := command.Process.Pid

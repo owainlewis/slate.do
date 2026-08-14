@@ -974,6 +974,41 @@ func TestOverLimitCleanupFailureKeepsTheRunDiscoverable(t *testing.T) {
 	}
 }
 
+func TestLaunchCleanupFailureKeepsTheRunDiscoverable(t *testing.T) {
+	executor := writeExecutor(t, "vanishing-executor", "cat >/dev/null\n")
+	fixture := newWatcherFixture(t, executor)
+	w, err := fixture.newWatcher(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(executor); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.registry.beforeSave = func(record runRecord) error {
+		if record.TaskID == testTaskID && record.State == runStateLaunching {
+			cancel()
+		}
+		return nil
+	}
+	state, err := w.attempt(ctx, fixture.fake.queued[0])
+	if err == nil || !strings.Contains(err.Error(), "remains in 'slate runs list'") {
+		t.Fatalf("state = %q err = %v, want a discoverable launch cleanup failure", state, err)
+	}
+	if state != runStateAmbiguous {
+		t.Fatalf("state = %q, want ambiguous", state)
+	}
+	records := fixture.runs(t)
+	if len(records) != 1 || records[0].TaskID != testTaskID || records[0].State != runStateAmbiguous {
+		t.Fatalf("records = %+v, want the failed launch cleanup retained", records)
+	}
+	branches, gitErr := runGit(context.Background(), fixture.source, "branch", "--list", records[0].Branch)
+	if gitErr != nil || !strings.Contains(branches, records[0].Branch) {
+		t.Fatalf("retained branch is not inspectable: %q %v", branches, gitErr)
+	}
+}
+
 // TestTwoWatchersRaceAndOnlyTheClaimantContinues drives two real watchers with
 // real worktrees against one task, which is the isolation the design exists for.
 func TestTwoWatchersRaceAndOnlyTheClaimantContinues(t *testing.T) {
