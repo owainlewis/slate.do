@@ -1,6 +1,6 @@
 # Agent task watcher
 
-> **Status:** Proposed for review
+> **Status:** Implemented
 
 ## 1. Executive summary
 
@@ -149,7 +149,7 @@ The worktree registry owns local run ID, task ID, agent ID, branch, worktree pat
 - Polling retries connection failures, timeouts, and HTTP 429, 500, 502, 503, and 504. A valid delta-seconds `Retry-After` on 429 sets a minimum wait; the five-second exponential backoff capped at 60 seconds with 20 percent jitter always advances, and the longer of the two is used.
 - HTTP 400, 401, 403, 404, and 409 are terminal for the current operation. Authentication and identity failures stop the watcher. Candidate claim conflicts return to polling after cleanup.
 - Mutation commands do not retry automatically. The agent repeats a comment or output with the same required idempotency key after an uncertain result.
-- Idle and failure backoff are separate. Any successful API response resets failure backoff; finding work resets idle backoff.
+- Idle and failure backoff are separate. A complete successful polling operation resets failure backoff; monitoring resets it only after both the task and exact-run entries reads succeed. Finding work resets idle backoff.
 - The watcher generates a random UUID run ID before worktree creation and passes it through `SLATE_RUN_ID`.
 - The watcher writes the prompt to executor stdin and closes it. Executor commands must be argument arrays and are never passed through a shell.
 - The watcher creates a new process group on macOS and Linux and signals the whole group on shutdown or post-output termination.
@@ -159,7 +159,7 @@ The worktree registry owns local run ID, task ID, agent ID, branch, worktree pat
 - Comment and output commands require a non-empty idempotency key and reject empty or over-16-KiB bodies locally.
 - Any managed direct status change returns HTTP 409 `managed_run_status_locked`. The same status changes remain valid for legacy claims.
 - A managed mutation with a missing or different run ID returns HTTP 409 `run_conflict`.
-- The watcher retains successful, blocked, and interrupted worktrees. It automatically deletes only a run that failed to claim.
+- The watcher retains successful, blocked, interrupted, and uncertain worktrees. It automatically deletes a run only after proving that it lost the claim or exited without ever claiming.
 - The local registry holds at most ten retained worktrees per profile. Startup stops with cleanup instructions at the limit.
 - `slate runs list` lists retained runs. `slate runs clean <run-id>` removes a worktree only when no child is active and the worktree is clean; it refuses dirty worktrees, never forces deletion, and retains the branch.
 - Profile changes are loaded only at startup. Applying a change requires restarting the watcher.
@@ -179,17 +179,17 @@ slate runs list [--profile <name>]
 slate runs clean <run-id>
 ```
 
-The child commands read `SLATE_RUN_ID`. When present, claim, status, comment, and output requests send `X-Slate-Run-ID`. The watcher also sends this header when querying exact run state. The header must be a UUID. It is execution identity, not independent authority.
+The child commands read `SLATE_RUN_ID`. When present, claim, status, comment, and output requests send `X-Slate-Run-ID`. The watcher reads normal task detail and filters entries with `?runId=<run-id>` when querying exact run state. The header and query value must be UUIDs. They are execution identity, not independent authority.
 
-`POST /api/v1/agent/tasks/{id}/claim` accepts the optional run header. A managed claim writes `tasks.execution_run_id` in the same atomic update that writes `working`. A legacy claim omits it. A task carries a run only while it is working: any change of status or of assignee ends the run, and so does the output transaction, after its entry is stored.
+`POST /api/v1/agent/tasks/{id}/claim` accepts the optional run header. A managed claim writes `tasks.execution_run_id` in the same atomic update that writes `working`. A legacy claim omits it. The stored ID remains as correlation metadata after output, human status changes, or reassignment. It no longer grants an active managed mutation once the task leaves `working`, and a later managed claim overwrites it.
 
-`GET /api/v1/tasks/{id}` reports `executionRunId` while a managed run owns the task. A watcher cannot otherwise tell its own interrupted run from a claim another run won, and those need opposite cleanup. Collection responses do not carry it.
+`GET /api/v1/tasks/{id}` reports the stored `executionRunId`, including after the managed working phase ends. A watcher uses it with task status and exact-run entries to distinguish its interrupted run from a claim another run won, because those need opposite cleanup. Collection responses do not carry it.
 
 `POST /api/v1/tasks/{id}/entries` stores optional `run_id` from the authenticated managed run. For a new managed entry, the server locks the task and checks account, assignment, working status, and matching run ID. It first looks up an exact idempotency replay using task, author, and key. A matching replay succeeds from `needs_review` or `done`; a reused key with different content conflicts.
 
 `GET /api/v1/tasks/{id}/entries?runId=<id>` returns entries for that exact managed run. An agent credential may query only its assigned task. The response exposes `runId` but not the idempotency key.
 
-For a managed run, `PATCH /api/v1/agent/tasks/{id}/status` returns HTTP 409 `managed_run_status_locked` even with the matching run header. A stale or missing run identity returns `run_conflict`. Legacy agent claims retain current behavior. Account sessions and personal tokens retain their current authority, including requeue and completion. A human status change away from working clears the managed run ID.
+For a managed run, `PATCH /api/v1/agent/tasks/{id}/status` returns HTTP 409 `managed_run_status_locked` even with the matching run header. A stale or missing run identity returns `run_conflict`. Legacy agent claims retain current behavior. Account sessions and personal tokens retain their current authority, including requeue and completion. Human changes do not clear the stored correlation ID; a later managed claim replaces it.
 
 `GET /api/v1/me` adds optional `agentPurpose` for agent credentials and a `managedRuns` capability boolean. The watcher refuses to start unless `managedRuns` is true. This allows the server to deploy before the new CLI without enabling an incomplete workflow.
 
@@ -205,7 +205,7 @@ Rollout is additive and ordered:
 2. Release the CLI with `tasks entries`, `tasks comment`, `tasks output`, managed headers, worktree registry, and watcher.
 3. Update CLI documentation to recommend output for all agents. Managed runs enforce it immediately; legacy direct review remains compatible.
 
-Rollback disables `managedRuns` first so new watchers refuse startup, then rolls back the CLI or server. Nullable columns remain harmless to old code. Dropping them is a separate cleanup migration after rollback risk has passed.
+The current server advertises `managedRuns: true` without a runtime toggle. A safe rollback therefore starts with a compatibility server deploy that changes the advertised capability to false while retaining the managed endpoints and columns. Stop or drain already-running watchers, then roll back the CLI or remove server support. Nullable columns remain harmless to old code. Dropping them is a separate cleanup migration after rollback risk has passed.
 
 ### Local profile and registry
 
@@ -225,7 +225,7 @@ The CLI reads JSON from `SLATE_CONFIG` when set, or `slate/config.json` beneath 
 
 Required fields are `agentId`, `tokenEnv`, and a non-empty `command`. Unknown fields are rejected. The command is an example, not a built-in default. The executable is resolved through `PATH` at startup and then invoked by absolute path. Relative `--workdir` values are resolved from the starting directory.
 
-Registry records are JSON files beneath the user state directory, written atomically with owner-only permissions. Each record contains run ID, profile name, agent ID, task ID, board ID, branch, worktree, source repository, source commit, state, child PID and process-group ID while active, and timestamps. Child identifiers are cleared after exit. The registry is not used for server authorization.
+Registry records are JSON files beneath the user state directory, written atomically with owner-only permissions. Each record contains run ID, profile name, agent ID, task ID, board ID, branch, worktree, source repository, source commit, state, child PID and process-group ID while active, and timestamps. Child identifiers are cleared after exit. The registry is not used for server authorization. The CLI opens the user-supplied profile file but does not enforce its mode; users should protect it with normal owner-only configuration permissions even though it contains token variable names rather than token values.
 
 ### Prompt envelope
 
@@ -253,7 +253,7 @@ If claim fails, the executor exits. The watcher waits up to ten seconds, termina
 
 If an exact output request commits but its response is lost, repeating the same key returns the stored entry before status and run checks. This works after the task reaches review or done. A changed body with the same key conflicts.
 
-If a stale process attempts a mutation after another managed run owns the task, the server returns `run_conflict`. It cannot add a comment, post output, or change status. A human moving a task back to Ready clears the old run ID; the next managed claim establishes a new fence.
+If a stale process attempts a mutation after another managed run owns the task, the server returns `run_conflict`. It cannot add a comment, post output, or change status. A human can move a task back to Ready; the stored old run ID remains correlation metadata until the next managed claim overwrites it and establishes the new fence.
 
 If the agent posts a blocked comment, exits without an entry, or crashes after claim, the task stays working and the worktree is retained. The watcher stops with task, run, branch, worktree, and recovery guidance. Recovery in v1 is manual: inspect or commit useful changes, stop any remaining process, move the task to Ready, and let a new isolated run claim it. There is no automatic resume or takeover.
 
@@ -269,9 +269,9 @@ The child receives only the configured agent credential, never a session or pers
 
 The executor sees only its generated worktree as the working directory. This prevents a losing claim from changing the source checkout or another run, but it is not an operating-system sandbox. Absolute paths, network access, and other user-readable files remain reachable.
 
-The watcher owns generated losing-run directories and may delete them even when the executor changed them. It never force-deletes retained successful, blocked, or interrupted worktrees. Registry and config files use owner-only permissions and contain no credentials.
+The watcher owns generated losing and never-claimed run directories and may delete them even when the executor changed them. It never force-deletes retained successful, blocked, interrupted, or uncertain worktrees. Registry files use owner-only permissions. Config files contain variable names rather than credentials, and their permissions remain the user's responsibility.
 
-One watcher uses one executor process group and one outstanding API request. Idle and active monitoring use at most 12 reads per minute before retries. Several profiles share account limits, so 429 handling is required.
+One watcher uses one executor process group and one outstanding API request. Active monitoring normally performs a task read and an entries read every five seconds, or about 24 reads per minute before retries. Several profiles share account limits, so 429 handling is required.
 
 Each retained worktree consumes repository-sized disk space. The per-profile limit of ten prevents unbounded local accumulation. At the limit, no executor starts. Users inspect `slate runs list` and clean committed runs explicitly.
 
@@ -338,6 +338,8 @@ These points were settled while building the change and differ from the text abo
 - **HTTP 500 is retryable.** The original list named 502, 503 and 504. A single transient 500 ending a day-long session contradicts the stated outcome that temporary server failures do not stop the watcher.
 - **A reply that is not the API's is terminal.** A proxy serving an error page with a success status will keep serving it, so repeating the request cannot help.
 - **A run the watcher could not place is retained, not deleted.** Deleting a worktree is unrecoverable, so it requires positive evidence that the run never held the task. A run that was ever seen to own or write to its task, or whose supervision hit a read failure, keeps its worktree and is reported as ambiguous.
+- **The task keeps its last managed run ID as correlation metadata.** Output and human changes do not clear it. Managed mutation authority still requires the task to be working, and the next successful managed claim overwrites the old ID.
+- **Capability rollback is a deploy, not a runtime switch.** The shipped server hard-codes `managedRuns: true`. A rollback must first deploy a compatibility build that advertises false while retaining the contract, then stop active watchers before removing support.
 - **The prompt tells the agent to write its report outside the worktree.** A report file left inside counts as uncommitted work and blocks `slate runs clean` for ever.
 - **`slate runs clean` releases a crashed watcher's record.** Nothing from such a run is alive, so its worktree must still be removable.
 

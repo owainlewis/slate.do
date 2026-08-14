@@ -52,6 +52,9 @@ directory.
 }
 ```
 
+Protect the file with `chmod 600 "$SLATE_CONFIG"`. It stores token variable
+names rather than token values, but it is still local agent configuration.
+
 Give each profile its own Slate agent. Two profiles sharing one agent compete
 for the same queue, and the second to start refuses because the first already
 has a task in progress.
@@ -241,7 +244,9 @@ support it:
 3. Release the CLI.
 4. Publish profiles for your agents.
 
-To roll back, turn the server capability off first. New watchers then refuse to
-start, instead of running against a server that has lost the contract underneath
-them. The database columns are nullable and harmless to older code; dropping them
-is a separate step once you are sure.
+The current server has no runtime capability switch. To roll back safely, first
+deploy a compatibility server build that advertises `managedRuns: false` while
+keeping the managed endpoints in place. Stop or drain watchers that are already
+running, then roll back the CLI or remove server support. The database columns
+are nullable and harmless to older code; dropping them is a separate step once
+you are sure.
