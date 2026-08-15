@@ -571,6 +571,136 @@ test("Board changes list membership and Flow changes status", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("a board card exposes a copyable task ID and a reloadable permalink", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+  await page.goto(`${origin}/app/boards/board-one`);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/boards/board-one?task=task-parent");
+  assert.equal(await page.locator("#workspace-task-id").textContent(), "task-parent");
+
+  await page.goBack();
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/boards/board-one");
+  await page.goForward();
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+
+  await page.getByRole("button", { name: "Copy task ID", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "task-parent");
+  await page.getByText("Task ID copied.", { exact: true }).waitFor();
+
+  await page.getByRole("button", { name: "Copy link", exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `${origin}/app/boards/board-one?task=task-parent`);
+  await page.reload();
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+  assert.equal(await page.locator("#workspace-task-id").textContent(), "task-parent");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("denied"); } } });
+    document.execCommand = () => {
+      window.__legacyCopiedTaskLink = window.getSelection().toString();
+      return true;
+    };
+  });
+  await page.getByRole("button", { name: "Copy link", exact: true }).click();
+  assert.equal(await page.evaluate(() => window.__legacyCopiedTaskLink), `${origin}/app/boards/board-one?task=task-parent`);
+
+  await page.getByRole("button", { name: "Back to board", exact: true }).click();
+  await page.getByRole("region", { name: "Card detail" }).waitFor({ state: "detached" });
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/boards/board-one");
+  await page.goBack();
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/app/tasks");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("closing a directly loaded task permalink replaces it with its list", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one?task=task-parent`);
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+  await page.getByRole("button", { name: "Back to board", exact: true }).click();
+  await page.getByRole("region", { name: "Card detail" }).waitFor({ state: "detached" });
+
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/boards/board-one");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("task references remain usable on a mobile card detail", async t => {
+  const { page, pageErrors } = await startWorkspace(t, { width: 390, height: 844 });
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  const taskID = page.locator("#workspace-task-id");
+  await taskID.waitFor();
+  const bounds = await taskID.boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390, JSON.stringify(bounds));
+  assert.equal(await page.getByRole("button", { name: "Copy task ID", exact: true }).isVisible(), true);
+  assert.equal(await page.getByRole("button", { name: "Copy link", exact: true }).isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("an unknown task permalink replaces an existing detail with a board error", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+  await page.evaluate(() => {
+    history.pushState({}, "", "/app/boards/board-one?task=missing-task");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await page.getByRole("alert").getByText("not found", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Workspace", exact: true }).isVisible(), true);
+  assert.equal(await page.getByRole("region", { name: "Card detail" }).count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("task history restores unsaved parent and child drafts", async t => {
+  const { page, pageErrors } = await startWorkspace(t);
+  await page.locator('[data-board="board-one"]').click();
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByLabel("Title", { exact: true }).fill("Unsaved parent through history");
+  await page.locator("#card-entry-body").fill("Unsaved parent comment");
+  await page.getByLabel("Child card title", { exact: true }).fill("Unsaved parent child card");
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent card", exact: true }).waitFor();
+  await page.getByLabel("Title", { exact: true }).fill("Unsaved child through history");
+  await page.locator("#card-entry-body").fill("Unsaved child comment");
+
+  await page.goBack();
+  await page.getByText("Child cards", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent through history");
+  assert.equal(await page.locator("#card-entry-body").inputValue(), "Unsaved parent comment");
+  assert.equal(await page.getByLabel("Child card title", { exact: true }).inputValue(), "Unsaved parent child card");
+  await page.goForward();
+  await page.getByRole("button", { name: "Back to parent card", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved child through history");
+  assert.equal(await page.locator("#card-entry-body").inputValue(), "Unsaved child comment");
+
+  await page.goBack();
+  await page.getByText("Child cards", { exact: true }).waitFor();
+  await page.goBack();
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  await page.goBack();
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.goForward();
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  await page.goForward();
+  await page.getByText("Child cards", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent through history");
+  assert.equal(await page.locator("#card-entry-body").inputValue(), "Unsaved parent comment");
+  assert.equal(await page.getByLabel("Child card title", { exact: true }).inputValue(), "Unsaved parent child card");
+  await page.goForward();
+  await page.getByRole("button", { name: "Back to parent card", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved child through history");
+  assert.equal(await page.locator("#card-entry-body").inputValue(), "Unsaved child comment");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("global filters can hide and restore child cards", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
@@ -1697,6 +1827,50 @@ test("a lost conversation response retries without duplicating the entry", async
   assert.deepEqual(pageErrors, []);
 });
 
+test("conversation attempts reconcile across task history", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const entryResponse = () => page.waitForResponse(response => response.request().method() === "POST"
+    && response.url().endsWith("/api/v1/cards/task-parent/entries"));
+
+  await page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true }).click();
+  await page.locator("#card-entry-body").fill("Completed while viewing a child");
+  state.delayNextEntry = true;
+  let response = entryResponse();
+  await page.getByRole("button", { name: "Add comment", exact: true }).click();
+  await waitFor(() => typeof state.releaseEntry === "function");
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent card", exact: true }).waitFor();
+  state.releaseEntry();
+  await response;
+  await page.goBack();
+  await page.getByText("Child cards", { exact: true }).waitFor();
+
+  assert.equal(await page.locator("#card-entry-body").inputValue(), "");
+  assert.equal(await page.locator(".card-entry").filter({ hasText: "Completed while viewing a child" }).count(), 1);
+
+  await page.locator("#card-entry-body").fill("Retry after returning from a child");
+  state.delayNextEntry = true;
+  state.failNextEntryResponse = true;
+  response = entryResponse();
+  await page.getByRole("button", { name: "Add comment", exact: true }).click();
+  await waitFor(() => typeof state.releaseEntry === "function");
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent card", exact: true }).waitFor();
+  state.releaseEntry();
+  await response;
+  await page.goBack();
+  await page.locator(".card-entry-error").filter({ hasText: "Response was lost" }).waitFor();
+
+  assert.equal(await page.locator("#card-entry-body").inputValue(), "Retry after returning from a child");
+  const attemptCount = Object.keys(state.entryAttempts).length;
+  await page.getByRole("button", { name: "Add comment", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("#card-entry-body")?.value === "");
+
+  assert.equal(Object.keys(state.entryAttempts).length, attemptCount);
+  assert.equal(state.entries["task-parent"].filter(entry => entry.body === "Retry after returning from a child").length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("an output replay keeps a newer card status", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
   const task = state.tasks.find(item => item.id === "task-parent");
@@ -2096,7 +2270,7 @@ test("agent work uses the shared inline task detail and returns to the exact wor
 
   const detail = page.getByRole("region", { name: "Card detail" });
   await detail.waitFor();
-  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2&task=task-parent");
   assert.equal(await page.getByRole("dialog").count(), 0);
   assert.equal(await page.locator(".detail-overlay").count(), 0);
   assert.equal(await page.getByText("1 of 1 done", { exact: true }).isVisible(), true);
@@ -2667,7 +2841,7 @@ test("an in-flight work refresh preserves edits in a newer task detail", async t
 
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Newest child draft");
   assert.equal(await page.getByLabel("Title", { exact: true }).evaluate(element => element === document.activeElement), true);
-  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2&task=task-child");
   assert.deepEqual(pageErrors, []);
 });
 
@@ -3493,6 +3667,7 @@ test("a parent cascade closes a child detail opened during deletion", async t =>
 
   assert.equal(state.tasks.some(item => item.id === "task-parent"), false);
   assert.equal(state.subtasks.some(item => item.parentTaskId === "task-parent"), false);
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/agents/agent-research/work?page=2");
   assert.equal(await page.getByRole("button", { name: "Assign work", exact: true }).evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
@@ -3620,6 +3795,50 @@ test("a lost child-card response retries with one idempotency key and no duplica
   assert.equal(state.subtasks.filter(task => task.title === "Verify final copy").length, 1);
   assert.equal(state.subtaskRequestKeys.length, 2);
   assert.equal(state.subtaskRequestKeys[1], state.subtaskRequestKeys[0]);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("child-card attempts reconcile across task history", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  const subtaskResponse = () => page.waitForResponse(response => response.request().method() === "POST"
+    && response.url().endsWith("/api/v1/tasks/task-parent/subtasks"));
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByLabel("Child card title", { exact: true }).fill("Completed while viewing a child");
+  state.delayNextSubtask = true;
+  let response = subtaskResponse();
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent card", exact: true }).waitFor();
+  state.releaseSubtask();
+  await response;
+  await page.goBack();
+  await page.getByText("Child cards", { exact: true }).waitFor();
+
+  assert.equal(await page.getByLabel("Child card title", { exact: true }).inputValue(), "");
+  assert.equal(state.subtasks.filter(task => task.title === "Completed while viewing a child").length, 1);
+
+  await page.getByLabel("Child card title", { exact: true }).fill("Retry after returning from a child");
+  state.delayNextSubtask = true;
+  state.commitNextSubtaskThenFail = true;
+  response = subtaskResponse();
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  await page.getByText("Research examples", { exact: true }).click();
+  await page.getByRole("button", { name: "Back to parent card", exact: true }).waitFor();
+  state.releaseSubtask();
+  await response;
+  await page.goBack();
+  await page.getByText("Response lost after commit", { exact: true }).waitFor();
+
+  assert.equal(await page.getByLabel("Child card title", { exact: true }).inputValue(), "Retry after returning from a child");
+  const failedAttemptKey = state.subtaskRequestKeys.at(-1);
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await page.locator(".workspace-subtask-list").getByText("Retry after returning from a child", { exact: true }).waitFor();
+
+  assert.equal(state.subtaskRequestKeys.at(-1), failedAttemptKey);
+  assert.equal(state.subtasks.filter(task => task.title === "Retry after returning from a child").length, 1);
   assert.deepEqual(pageErrors, []);
 });
 
