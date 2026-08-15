@@ -1862,6 +1862,51 @@ test("an authenticated-state reset abandons old serialized task mutations", asyn
   assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), false);
 });
 
+test("a completed list rename survives navigation and an older list-index response", async () => {
+  let releaseRename;
+  let releaseStaleLists;
+  app.pendingRename = new Promise(resolve => { releaseRename = resolve; });
+  app.pendingStaleLists = new Promise(resolve => { releaseStaleLists = resolve; });
+  app.listNameElement = { dataset: { bucketName: "youtube" }, value: "Published", disabled: false };
+  vm.runInContext(`
+    savedRenameAPIGet = api.get;
+    savedRenameAPIPatch = api.patch;
+    authVersion = 65;
+    routeVersion = 115;
+    workspaceListVersion = 0;
+    workspaceListLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.board = { id: "board-one", buckets: [{ id: "youtube", name: "YouTube", tasks: [] }] };
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    api.patch = async () => pendingRename;
+    api.get = async path => {
+      if (path !== "/api/v1/lists") throw new Error("unexpected request " + path);
+      return pendingStaleLists;
+    };
+  `, app);
+
+  const renaming = app.renameWorkspaceList(app.listNameElement);
+  vm.runInContext(`routeVersion = 116;`, app);
+  const staleLoad = app.loadWorkspaceListIndex(116);
+  releaseRename({ id: "youtube", name: "Published" });
+  assert.equal(await renaming, true);
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "Published");
+
+  releaseStaleLists({ lists: [{ id: "youtube", boardId: "board-one", name: "YouTube" }] });
+  assert.equal(await staleLoad, true);
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "Published");
+  vm.runInContext(`
+    api.get = savedRenameAPIGet;
+    api.patch = savedRenameAPIPatch;
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+  delete app.pendingRename;
+  delete app.pendingStaleLists;
+  delete app.listNameElement;
+});
+
 test("an older list-index response cannot overwrite a newer count", async () => {
   let releaseOlderLists;
   app.pendingOlderLists = new Promise(resolve => { releaseOlderLists = resolve; });

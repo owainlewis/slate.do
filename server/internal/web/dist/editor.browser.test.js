@@ -35,7 +35,7 @@ function workspaceFixture() {
   const agents = [
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
+  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, delayNextListRename: false, releaseListRename: null, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -331,6 +331,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const bucketMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)$/);
     if (bucketMatch && request.method === "PATCH") {
       const input = await requestJSON(request);
+      if (state.delayNextListRename && "name" in input) {
+        state.delayNextListRename = false;
+        await new Promise(resolve => { state.releaseListRename = resolve; });
+      }
       if (state.failNextListRename && "name" in input) {
         state.failNextListRename = false;
         return json(response, { error: "Could not rename list" }, 500);
@@ -1165,6 +1169,36 @@ test("boards own their lists and support create, rename, and delete", async t =>
   await page.locator('input[data-bucket-name][value="Planning"]').waitFor({ state: "detached" });
   assert.equal(state.lists.some(list => list.name === "Planning"), false);
   assert.equal(await page.locator('input[data-bucket-name][value="Planning"]').count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list renamed while switching boards keeps its new name in the move control", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 1 });
+  state.tasks.push({
+    id: "task-other", boardId: "board-two", bucketId: "list-other", listName: "Backlog",
+    title: "Move this card", description: "", scheduledDate: "", kind: "action", status: "new",
+    priority: "", assigneeAgentId: "",
+  });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  const listName = page.getByLabel("List name").nth(1);
+  state.delayNextListRename = true;
+  await listName.fill("Published");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+
+  await page.getByRole("button", { name: /Move this card/ }).click();
+  const listControl = page.getByLabel("List", { exact: true });
+  assert.equal(await listControl.locator('option[value="list-youtube"]').textContent(), "Published");
+  await listControl.selectOption("list-youtube");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => state.tasks.find(task => task.id === "task-other")?.bucketId === "list-youtube");
+  assert.equal(state.tasks.find(task => task.id === "task-other")?.listName, "Published");
   assert.deepEqual(pageErrors, []);
 });
 

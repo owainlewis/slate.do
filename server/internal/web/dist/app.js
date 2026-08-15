@@ -4414,6 +4414,8 @@ async function renameWorkspaceList(element) {
   const list = state.board?.buckets?.find(item => item.id === id);
   if (!list) return false;
   const name = element.value.trim();
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
   const expectedRouteVersion = routeVersion;
   if (!name) {
     state.error = "List name is required.";
@@ -4428,7 +4430,7 @@ async function renameWorkspaceList(element) {
   element.disabled = true;
   try {
     const updated = await api.patch(`/api/v1/buckets/${id}`, { name });
-    if (expectedRouteVersion !== routeVersion) return false;
+    if (!sessionIsCurrent(sessionVersion, userID)) return false;
     const nextName = updated.name || name;
     const rename = item => item.id === id ? {
       ...item,
@@ -4436,14 +4438,18 @@ async function renameWorkspaceList(element) {
       name: nextName,
       tasks: (item.tasks || []).map(task => ({ ...task, listName: nextName, bucketName: nextName })),
     } : item;
-    state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
+    workspaceListVersion += 1;
+    if (state.board?.buckets?.some(item => item.id === id)) {
+      state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
+    }
     state.workspaceLists = state.workspaceLists.map(rename);
+    if (expectedRouteVersion !== routeVersion) return true;
     state.error = "";
     render();
     document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
     return true;
   } catch (err) {
-    if (expectedRouteVersion !== routeVersion) return false;
+    if (!sessionIsCurrent(sessionVersion, userID) || expectedRouteVersion !== routeVersion) return false;
     state.error = err.message;
     render();
     const restored = document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`);
