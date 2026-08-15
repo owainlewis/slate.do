@@ -1297,22 +1297,25 @@ test("a cross-board list rename preserves a focused list-name draft", async t =>
   await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
 
   const destinationName = page.getByLabel("List name", { exact: true });
-  await destinationName.fill(" Unsubmitted destination name ");
-  await destinationName.focus();
+  await destinationName.fill(" Draft destination ");
+  await destinationName.evaluate(input => input.setSelectionRange(7, 7));
   assert.equal(state.lists.find(list => list.id === "list-other")?.name, "Backlog");
   const previousInput = await destinationName.elementHandle();
   state.releaseListRename();
   await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
   await page.waitForFunction(element => !element.isConnected, previousInput);
 
-  assert.equal(await destinationName.inputValue(), " Unsubmitted destination name ");
+  assert.equal(await destinationName.inputValue(), " Draft destination ");
   assert.equal(await destinationName.evaluate(element => element === document.activeElement), true);
+  assert.equal(await destinationName.evaluate(element => element.selectionStart), 7);
   assert.equal(state.lists.find(list => list.id === "list-other")?.name, "Backlog");
   assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-other").length, 0);
+  await page.keyboard.type("updated ");
+  assert.equal(await destinationName.inputValue(), " Draft updated destination ");
   await destinationName.press("Tab");
-  await waitFor(() => state.lists.find(list => list.id === "list-other")?.name === "Unsubmitted destination name");
-  await page.waitForFunction(() => document.querySelector('[data-bucket-name="list-other"]')?.value === "Unsubmitted destination name");
-  assert.equal(await destinationName.inputValue(), "Unsubmitted destination name");
+  await waitFor(() => state.lists.find(list => list.id === "list-other")?.name === "Draft updated destination");
+  await page.waitForFunction(() => document.querySelector('[data-bucket-name="list-other"]')?.value === "Draft updated destination");
+  assert.equal(await destinationName.inputValue(), "Draft updated destination");
   assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-other").length, 1);
   assert.deepEqual(pageErrors, []);
 });

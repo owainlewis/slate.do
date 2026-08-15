@@ -4547,6 +4547,8 @@ function renderAfterBackgroundListRename() {
   const listNameDraft = listNameInput ? {
     listID: listNameInput.dataset.bucketName,
     name: listNameInput.value,
+    selectionStart: listNameInput.selectionStart,
+    selectionEnd: listNameInput.selectionEnd,
   } : null;
   const listGoalFocus = active?.matches?.("[data-bucket-goal]") ? {
     listID: active.dataset.bucketGoal,
@@ -4589,8 +4591,12 @@ function renderAfterBackgroundListRename() {
     }
   }
   if (listNameDraft) {
-    [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
-      .find(item => item.dataset.bucketName === listNameDraft.listID)?.focus();
+    const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
+      .find(item => item.dataset.bucketName === listNameDraft.listID);
+    input?.focus();
+    if (input && listNameDraft.selectionStart !== null && listNameDraft.selectionEnd !== null) {
+      input.setSelectionRange(listNameDraft.selectionStart, listNameDraft.selectionEnd);
+    }
   } else if (listGoalFocus) {
     const input = [...(documentRef?.querySelectorAll?.("[data-bucket-goal]") || [])]
       .find(item => item.dataset.bucketGoal === listGoalFocus.listID);
