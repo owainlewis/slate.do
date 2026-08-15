@@ -35,7 +35,7 @@ function workspaceFixture() {
   const agents = [
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
+  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, delayNextListRename: false, releaseListRename: null, failNextBucketTaskCreate: false, delayNextBucketTaskCreate: false, releaseBucketTaskCreate: null, failNextBoardRename: false, delayNextBoardRename: false, releaseBoardRename: null, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -83,6 +83,21 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         await new Promise(resolve => { state.releaseBoardDetail = resolve; });
       }
       return json(response, { ...board, buckets });
+    }
+    if (boardMatch && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      if (state.delayNextBoardRename) {
+        state.delayNextBoardRename = false;
+        await new Promise(resolve => { state.releaseBoardRename = resolve; });
+      }
+      if (state.failNextBoardRename) {
+        state.failNextBoardRename = false;
+        return json(response, { error: "Could not rename board" }, 500);
+      }
+      const board = state.boards.find(item => item.id === boardMatch[1]);
+      if (!board) return json(response, { error: "board not found" }, 404);
+      Object.assign(board, input);
+      return json(response, board);
     }
     if (boardMatch && request.method === "DELETE") {
       if (state.delayNextBoardDelete) {
@@ -320,6 +335,14 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const bucketTaskMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)\/tasks$/);
     if (bucketTaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
+      if (state.delayNextBucketTaskCreate) {
+        state.delayNextBucketTaskCreate = false;
+        await new Promise(resolve => { state.releaseBucketTaskCreate = resolve; });
+      }
+      if (state.failNextBucketTaskCreate) {
+        state.failNextBucketTaskCreate = false;
+        return json(response, { error: "Could not assign item" }, 500);
+      }
       const list = state.lists.find(item => item.id === bucketTaskMatch[1]);
       if (!list) return json(response, { error: "list not found" }, 404);
       const created = { id: `task-created-${state.created.length + 1}`, boardId: list.boardId, bucketId: list.id, listName: list.name, title: input.title, description: input.description || "", scheduledDate: input.scheduledDate || "", kind: "action", status: input.assigneeAgentId ? "queued" : "new", priority: "", assigneeAgentId: input.assigneeAgentId || "" };
@@ -331,6 +354,10 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const bucketMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)$/);
     if (bucketMatch && request.method === "PATCH") {
       const input = await requestJSON(request);
+      if (state.delayNextListRename && "name" in input) {
+        state.delayNextListRename = false;
+        await new Promise(resolve => { state.releaseListRename = resolve; });
+      }
       if (state.failNextListRename && "name" in input) {
         state.failNextListRename = false;
         return json(response, { error: "Could not rename list" }, 500);
@@ -1295,6 +1322,757 @@ test("boards own their lists and support create, rename, and delete", async t =>
   await page.locator('input[data-bucket-name][value="Planning"]').waitFor({ state: "detached" });
   assert.equal(state.lists.some(list => list.name === "Planning"), false);
   assert.equal(await page.locator('input[data-bucket-name][value="Planning"]').count(), 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list renamed while switching boards keeps its new name in the move control", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 1 });
+  state.tasks.push({
+    id: "task-other", boardId: "board-two", bucketId: "list-other", listName: "Backlog",
+    title: "Move this card", description: "", scheduledDate: "", kind: "action", status: "new",
+    priority: "", assigneeAgentId: "",
+  });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  const listName = page.getByLabel("List name").nth(1);
+  state.delayNextListRename = true;
+  await listName.fill("Published");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  await page.getByRole("button", { name: /Move this card/ }).click();
+  const listControl = page.getByLabel("List", { exact: true });
+  assert.equal(await listControl.locator('option[value="list-youtube"]').textContent(), "YouTube");
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Unsaved move title");
+  await title.focus();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(() => document.querySelector('#workspace-detail-list option[value="list-youtube"]')?.textContent === "Published");
+  assert.equal(await listControl.locator('option[value="list-youtube"]').textContent(), "Published");
+  assert.equal(await title.inputValue(), "Unsaved move title");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  await listControl.selectOption("list-youtube");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await waitFor(() => state.tasks.find(task => task.id === "task-other")?.bucketId === "list-youtube");
+  assert.equal(state.tasks.find(task => task.id === "task-other")?.listName, "Published");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a cross-board list rename preserves a focused quick-add draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 0 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+
+  const quickAdd = page.locator('[data-add-task="list-other"] input[name="title"]');
+  await quickAdd.fill("Unsubmitted quick add");
+  await quickAdd.focus();
+  const previousInput = await quickAdd.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousInput);
+
+  assert.equal(await quickAdd.inputValue(), "Unsubmitted quick add");
+  assert.equal(await quickAdd.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a cross-board list rename preserves focused goal editing", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 0 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+
+  const goal = page.getByLabel("Goal for Backlog", { exact: true });
+  await goal.fill("weekly videos");
+  await goal.evaluate(input => input.setSelectionRange(7, 7));
+  const previousInput = await goal.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousInput);
+
+  assert.equal(await goal.inputValue(), "weekly videos");
+  assert.equal(await goal.evaluate(element => element === document.activeElement), true);
+  assert.equal(await goal.evaluate(element => element.selectionStart), 7);
+  await page.keyboard.type("useful ");
+  assert.equal(await goal.inputValue(), "weekly useful videos");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a cross-board list rename preserves a focused list-name draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 0 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+
+  const destinationName = page.getByLabel("List name", { exact: true });
+  await destinationName.fill(" Draft destination ");
+  await destinationName.evaluate(input => input.setSelectionRange(7, 7));
+  assert.equal(state.lists.find(list => list.id === "list-other")?.name, "Backlog");
+  const previousInput = await destinationName.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousInput);
+
+  assert.equal(await destinationName.inputValue(), " Draft destination ");
+  assert.equal(await destinationName.evaluate(element => element === document.activeElement), true);
+  assert.equal(await destinationName.evaluate(element => element.selectionStart), 7);
+  assert.equal(state.lists.find(list => list.id === "list-other")?.name, "Backlog");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-other").length, 0);
+  await page.keyboard.type("updated ");
+  assert.equal(await destinationName.inputValue(), " Draft updated destination ");
+  await destinationName.press("Tab");
+  await waitFor(() => state.lists.find(list => list.id === "list-other")?.name === "Draft updated destination");
+  await page.waitForFunction(() => document.querySelector('[data-bucket-name="list-other"]')?.value === "Draft updated destination");
+  assert.equal(await destinationName.inputValue(), "Draft updated destination");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-other").length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a returning source board cannot restore or resubmit a stale list name", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await navigateApp(page, "/app/boards/board-one");
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+
+  let sourceName = page.getByLabel("List name").nth(1);
+  assert.equal(await sourceName.inputValue(), "YouTube");
+  await sourceName.focus();
+  let previousSourceName = await sourceName.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousSourceName);
+  assert.equal(await sourceName.inputValue(), "Published");
+  assert.equal(await sourceName.evaluate(element => element === document.activeElement), true);
+  await sourceName.press("Tab");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-youtube").length, 1);
+
+  state.releaseListRename = null;
+  state.delayNextListRename = true;
+  await sourceName.fill("Videos");
+  await sourceName.press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await navigateApp(page, "/app/boards/board-one");
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+
+  sourceName = page.getByLabel("List name").nth(1);
+  assert.equal(await sourceName.inputValue(), "Published");
+  await sourceName.fill("Draft after return");
+  previousSourceName = await sourceName.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Videos");
+  await page.waitForFunction(element => !element.isConnected, previousSourceName);
+  assert.equal(await sourceName.inputValue(), "Draft after return");
+  assert.equal(await sourceName.evaluate(element => element === document.activeElement), true);
+  await sourceName.press("Tab");
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Draft after return");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-youtube").length, 3);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("overlapping list renames cannot mark a pristine stale name as edited", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(0).fill("Capture");
+  await page.getByLabel("List name").nth(0).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  const releaseInboxRename = state.releaseListRename;
+
+  state.delayNextListRename = true;
+  state.releaseListRename = null;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  const releaseYouTubeRename = state.releaseListRename;
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await navigateApp(page, "/app/boards/board-one");
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+
+  let youtubeName = page.getByLabel("List name").nth(1);
+  assert.equal(await youtubeName.inputValue(), "YouTube");
+  await youtubeName.focus();
+  let previousYouTubeName = await youtubeName.elementHandle();
+  releaseInboxRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-inbox")?.name === "Capture");
+  await page.waitForFunction(element => !element.isConnected, previousYouTubeName);
+  assert.equal(await youtubeName.inputValue(), "YouTube");
+  assert.equal(await youtubeName.evaluate(element => element === document.activeElement), true);
+
+  previousYouTubeName = await youtubeName.elementHandle();
+  releaseYouTubeRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousYouTubeName);
+  assert.equal(await youtubeName.inputValue(), "Published");
+  assert.equal(await youtubeName.evaluate(element => element === document.activeElement), true);
+  await youtubeName.press("Tab");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-youtube").length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a cross-board list rename preserves every destination form draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.locator('[data-start-rename-board="board-two"]').click();
+  await page.locator("#workspace-filter-toggle").click();
+  const boardName = page.getByLabel("Board name", { exact: true });
+  const search = page.getByLabel("Search", { exact: true });
+  const status = page.locator('#workspace-filters select[name="status"]');
+  const hideChildren = page.locator('#workspace-filters input[name="children"]');
+  await boardName.fill("Unsubmitted board name");
+  await search.fill("unsubmitted search");
+  await status.selectOption("working");
+  await hideChildren.check();
+  await search.focus();
+  const previousSearch = await search.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousSearch);
+
+  assert.equal(await boardName.inputValue(), "Unsubmitted board name");
+  assert.equal(await search.inputValue(), "unsubmitted search");
+  assert.equal(await status.inputValue(), "working");
+  assert.equal(await hideChildren.isChecked(), true);
+  assert.equal(await search.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.boards.find(board => board.id === "board-two")?.name, "Other");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/boards/board-two").length, 0);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list rename preserves a focused agent assignment draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  const listName = page.getByLabel("List name").nth(1);
+  await listName.fill("Published");
+  await listName.press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research");
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Assign work", exact: true }).click();
+  const title = page.getByLabel("Title", { exact: true });
+  const description = page.getByLabel("Description", { exact: true });
+  await title.fill("Unsubmitted assignment");
+  await description.fill("Keep this assignment draft");
+  await description.focus();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(() => document.querySelector('#assign-list option[value="list-youtube"]')?.textContent === "Published");
+
+  assert.equal(await title.inputValue(), "Unsubmitted assignment");
+  assert.equal(await description.inputValue(), "Keep this assignment draft");
+  assert.equal(await description.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("agent settings list refreshes preserve drafts and task permalinks", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research/settings");
+  const name = page.locator("#agent-settings-name");
+  const purpose = page.locator("#agent-settings-purpose");
+  await purpose.fill("Unsaved settings purpose");
+  await name.fill("");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByText("Agent name is required.", { exact: true }).waitFor();
+  const previousName = await name.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousName);
+  assert.equal(await name.inputValue(), "");
+  assert.equal(await purpose.inputValue(), "Unsaved settings purpose");
+  assert.equal(await name.getAttribute("aria-invalid"), "true");
+  assert.equal(await page.getByText("Agent name is required.", { exact: true }).isVisible(), true);
+  assert.equal(await name.evaluate(element => element === document.activeElement), true);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Videos");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research/settings?task=task-parent");
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+  const title = page.getByLabel("Title", { exact: true });
+  const list = page.getByLabel("List", { exact: true });
+  assert.equal(await list.locator("option:checked").textContent(), "Published");
+  await title.fill("Unsaved permalink title");
+  const previousList = await list.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(item => item.id === "list-youtube")?.name === "Videos");
+  await page.waitForFunction(element => !element.isConnected, previousList);
+  assert.equal(await list.locator("option:checked").textContent(), "Videos");
+  assert.equal(await title.inputValue(), "Unsaved permalink title");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list rename keeps a pending destination form locked and retryable", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research");
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Assign work", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Pending assignment");
+  state.failNextBucketTaskCreate = true;
+  state.delayNextBucketTaskCreate = true;
+  const create = page.getByRole("button", { name: "Create item", exact: true });
+  const previousCreate = await create.elementHandle();
+  await create.click();
+  await waitFor(() => typeof state.releaseBucketTaskCreate === "function");
+  assert.equal(await previousCreate.evaluate(element => element.disabled), true);
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousCreate);
+
+  const pendingCreate = page.getByRole("button", { name: "Creating…", exact: true });
+  assert.equal(await pendingCreate.isDisabled(), true);
+  assert.equal(await page.getByLabel("Title", { exact: true }).isDisabled(), true);
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Pending assignment");
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/buckets/list-inbox/tasks").length, 1);
+
+  state.releaseBucketTaskCreate();
+  await page.getByText("Could not assign item", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).isEnabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Create item", exact: true }).isEnabled(), true);
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/buckets/list-inbox/tasks").length, 1);
+  await page.getByRole("button", { name: "Create item", exact: true }).click();
+  await page.getByText('"Pending assignment" was assigned to Research agent.', { exact: true }).waitFor();
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/buckets/list-inbox/tasks").length, 2);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list rename keeps pending child creation read-only and reusable", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.locator('[data-open-task="task-parent"]').click();
+  const childTitle = page.getByLabel("Child card title", { exact: true });
+  await childTitle.fill("Pending child");
+  state.delayNextSubtask = true;
+  const previousInput = await childTitle.elementHandle();
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  assert.equal(await previousInput.evaluate(element => element.readOnly), true);
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousInput);
+
+  const pendingTitle = page.getByLabel("Child card title", { exact: true });
+  assert.equal(await pendingTitle.evaluate(element => element.readOnly), true);
+  assert.equal(await pendingTitle.isDisabled(), false);
+  assert.equal(await pendingTitle.inputValue(), "Pending child");
+  assert.equal(await page.getByRole("button", { name: "Adding…", exact: true }).isDisabled(), true);
+
+  state.releaseSubtask();
+  await page.getByText("Pending child", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Add child", exact: true }).waitFor();
+  assert.equal(await pendingTitle.evaluate(element => element.readOnly), false);
+  await pendingTitle.fill("Next child");
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await page.getByText("Next child", { exact: true }).waitFor();
+  assert.equal(state.subtaskRequestKeys.length, 2);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list rename keeps a failed pending board rename retryable", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.locator('[data-start-rename-board="board-two"]').click();
+  const boardName = page.getByLabel("Board name", { exact: true });
+  await boardName.fill("Unsubmitted board name");
+  state.failNextBoardRename = true;
+  state.delayNextBoardRename = true;
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await waitFor(() => typeof state.releaseBoardRename === "function");
+  const previousName = await boardName.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousName);
+  assert.equal(await boardName.isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Save board name", exact: true }).isDisabled(), true);
+
+  state.releaseBoardRename();
+  await page.getByText("Could not rename board", { exact: true }).waitFor();
+  assert.equal(await boardName.isEnabled(), true);
+  assert.equal(await boardName.inputValue(), "Unsubmitted board name");
+  assert.equal(state.boards.find(board => board.id === "board-two")?.name, "Other");
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await waitFor(() => state.boards.find(board => board.id === "board-two")?.name === "Unsubmitted board name");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/boards/board-two").length, 2);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list rename preserves destination board validation", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.locator('[data-start-rename-board="board-two"]').click();
+  const boardName = page.getByLabel("Board name", { exact: true });
+  await boardName.fill(" ");
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await page.getByText("Board name is required.", { exact: true }).waitFor();
+  assert.equal(await boardName.getAttribute("aria-invalid"), "true");
+  const previousName = await boardName.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousName);
+
+  assert.equal(await boardName.inputValue(), " ");
+  assert.equal(await boardName.getAttribute("aria-invalid"), "true");
+  assert.equal(await boardName.evaluate(element => element === document.activeElement), true);
+  await page.getByText("Board name is required.", { exact: true }).waitFor();
+  await boardName.fill("Recovered board");
+  assert.equal(await boardName.getAttribute("aria-invalid"), null);
+  assert.equal(await page.getByText("Board name is required.", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await waitFor(() => state.boards.find(board => board.id === "board-two")?.name === "Recovered board");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/boards/board-two").length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a background list rename keeps mobile navigation open", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t, { width: 390, height: 844 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+  const previousSidebar = await page.locator(".sidebar").elementHandle();
+  assert.equal(await page.locator("#sidebar-content").isVisible(), true);
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousSidebar);
+
+  const closeNavigation = page.getByRole("button", { name: "Close navigation", exact: true });
+  assert.equal(await closeNavigation.getAttribute("aria-expanded"), "true");
+  assert.equal(await page.locator("#sidebar-content").isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a background list rename preserves standalone board filter focus", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Flow", exact: true }).click();
+  const flowList = page.locator("#flow-list-filter");
+  await flowList.focus();
+  const previousFlowList = await flowList.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousFlowList);
+  assert.equal(await flowList.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("background list renames preserve task-row, view-tab, and task-control focus", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  const task = page.locator('.workspace-flow-card [data-open-task="task-parent"]');
+  await task.waitFor();
+  await task.focus();
+  const previousTask = await task.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousTask);
+  const taskFocus = await page.evaluate(() => ({
+    tagName: document.activeElement?.tagName,
+    id: document.activeElement?.id,
+    openTask: document.activeElement?.dataset?.openTask,
+    ariaLabel: document.activeElement?.getAttribute?.("aria-label"),
+  }));
+  assert.equal(await task.evaluate(element => element === document.activeElement), true, JSON.stringify(taskFocus));
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Videos");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks?view=flow");
+  const flowTab = page.getByRole("tab", { name: "Flow", selected: true });
+  await page.locator('.workspace-flow.grouped-by-status [data-task="task-parent"]').waitFor();
+  await flowTab.focus();
+  const previousFlowTab = await flowTab.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Videos");
+  await page.waitForFunction(element => !element.isConnected, previousFlowTab);
+  assert.equal(await flowTab.evaluate(element => element === document.activeElement), true);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Clips");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true }).click();
+  await page.getByText("Research examples", { exact: true }).click();
+  const parentButton = page.getByRole("button", { name: "Back to parent card", exact: true });
+  await parentButton.focus();
+  const previousParentButton = await parentButton.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Clips");
+  await page.waitForFunction(element => !element.isConnected, previousParentButton);
+  assert.equal(await parentButton.evaluate(element => element === document.activeElement), true);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Footage");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research");
+  const viewAllWork = page.getByRole("link", { name: "View all work", exact: true });
+  await viewAllWork.focus();
+  const previousViewAllWork = await viewAllWork.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Footage");
+  await page.waitForFunction(element => !element.isConnected, previousViewAllWork);
+  assert.equal(await viewAllWork.evaluate(element => element === document.activeElement), true);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Assets");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true }).click();
+  const addChild = page.getByRole("button", { name: "Add child", exact: true });
+  await addChild.focus();
+  const previousAddChild = await addChild.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Assets");
+  await page.waitForFunction(element => !element.isConnected, previousAddChild);
+  assert.equal(await addChild.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("background list renames preserve route scroll positions", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t, { width: 600, height: 480 });
+  for (let index = 0; index < 24; index += 1) {
+    state.tasks.push({
+      ...state.tasks[1],
+      id: `task-scroll-${index}`,
+      title: `Scroll fixture card ${index}`,
+    });
+  }
+  state.lists.push({
+    id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Inbox", goal: "", isInbox: true, openCount: 24,
+  });
+  for (let index = 0; index < 24; index += 1) {
+    state.tasks.push({
+      ...state.tasks[1],
+      id: `task-other-scroll-${index}`,
+      boardId: "board-two",
+      bucketId: "list-other-inbox",
+      title: `Other scroll fixture card ${index}`,
+    });
+  }
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  const workspaceContent = page.locator(".workspace-content");
+  const offscreenTask = page.locator('[data-open-task="task-parent"]');
+  await offscreenTask.focus();
+  const previousOffscreenTask = await offscreenTask.elementHandle();
+  await workspaceContent.evaluate(element => { element.scrollTop = 240; });
+  assert.equal(await workspaceContent.evaluate(element => element.scrollTop), 240);
+  assert.equal(await offscreenTask.evaluate(element => element === document.activeElement), true);
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousOffscreenTask);
+  assert.equal(await workspaceContent.evaluate(element => element.scrollTop), 240);
+  const restoredTaskFocus = await page.evaluate(() => ({
+    tagName: document.activeElement?.tagName,
+    openTask: document.activeElement?.dataset?.openTask,
+    id: document.activeElement?.id,
+  }));
+  assert.equal(await page.locator('[data-open-task="task-parent"]').evaluate(element => element === document.activeElement), true, JSON.stringify(restoredTaskFocus));
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Videos");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await navigateApp(page, "/app/boards/board-two");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  await page.addStyleTag({ content: ".flow-cards { max-height: 120px !important; }" });
+  await page.getByRole("button", { name: "Flow", exact: true }).click();
+  const boardFlow = page.locator(".flow");
+  const newCards = page.locator('[data-flow-status="new"] .flow-cards');
+  await boardFlow.evaluate(element => { element.scrollLeft = 180; });
+  await newCards.evaluate(element => { element.scrollTop = 160; });
+  assert.equal(await boardFlow.evaluate(element => element.scrollLeft), 180);
+  assert.equal(await newCards.evaluate(element => element.scrollTop), 160);
+  const previousFlow = await boardFlow.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Videos");
+  await page.waitForFunction(element => !element.isConnected, previousFlow);
+  assert.equal(await boardFlow.evaluate(element => element.scrollLeft), 180);
+  assert.equal(await newCards.evaluate(element => element.scrollTop), 160);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("background list renames preserve an open card action menu", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  const card = page.locator('.workspace-flow-card[data-task="task-parent"]');
+  await card.click({ button: "right" });
+  let menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
+  const previousMenu = await menu.elementHandle();
+  assert.equal(await menu.getByRole("menuitem", { name: "Delete card" }).evaluate(element => element === document.activeElement), true);
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousMenu);
+  menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
+  await menu.waitFor();
+  assert.equal(await menu.getByRole("menuitem", { name: "Delete card" }).evaluate(element => element === document.activeElement), true);
+  assert.equal(await card.evaluate(element => element.classList.contains("context-open")), true);
+
+  await page.keyboard.press("Escape");
+  await menu.waitFor({ state: "detached" });
+  assert.equal(await card.locator("[data-open-task]").evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
 

@@ -451,9 +451,11 @@ let workspaceListVersion = 0;
 let workspaceListLoadVersion = 0;
 let workspaceLoadVersion = 0;
 let boardLoadVersion = 0;
+let suppressListRenameChange = false;
 let taskHistoryReturnPath = "";
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
+const workspaceListRenameTurns = new Map();
 let cardContextMenu = null;
 
 async function serializeTaskMutation(taskID, mutation) {
@@ -470,6 +472,22 @@ async function serializeTaskMutation(taskID, mutation) {
   } finally {
     release();
     if (taskMutationTurns.get(taskID) === turn) taskMutationTurns.delete(taskID);
+  }
+}
+
+async function serializeWorkspaceListRename(listID, mutation) {
+  const sessionVersion = authVersion;
+  const previous = workspaceListRenameTurns.get(listID) || Promise.resolve();
+  let release;
+  const turn = new Promise(resolve => { release = resolve; });
+  workspaceListRenameTurns.set(listID, turn);
+  await previous.catch(() => {});
+  try {
+    if (sessionVersion !== authVersion) return false;
+    return await mutation();
+  } finally {
+    release();
+    if (workspaceListRenameTurns.get(listID) === turn) workspaceListRenameTurns.delete(listID);
   }
 }
 
@@ -753,6 +771,7 @@ async function loadWorkspaceListIndex(expectedRouteVersion) {
   if (!loadIsCurrent()) return false;
   if (expectedListVersion !== workspaceListVersion) return true;
   state.workspaceLists = data.lists || [];
+  resolveCachedTaskLocations();
   return true;
 }
 
@@ -818,7 +837,7 @@ async function loadWorkspace(route, expectedRouteVersion) {
     throw err;
   }
   if (!loadIsCurrent()) return null;
-  state.workspaceTasks = taskData.tasks || [];
+  state.workspaceTasks = (taskData.tasks || []).map(taskWithResolvedLocation);
   state.workspaceReviewKinds = {};
   if (route.scope === "review") {
     let reviewData;
@@ -858,7 +877,7 @@ async function loadMoreWorkspaceTasks() {
     const data = await api.get(`/api/v1/tasks?${query}`);
     if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
     const known = new Set(state.workspaceTasks.map(task => task.id));
-    state.workspaceTasks = [...state.workspaceTasks, ...(data.tasks || []).filter(task => !known.has(task.id))];
+    state.workspaceTasks = [...state.workspaceTasks, ...(data.tasks || []).filter(task => !known.has(task.id)).map(taskWithResolvedLocation)];
     state.workspaceNextCursor = data.nextCursor || "";
     state.error = "";
   } catch (err) {
@@ -873,6 +892,7 @@ async function loadMoreWorkspaceTasks() {
 function resetAuthenticatedState() {
   goalSaveChains.clear();
   taskMutationTurns.clear();
+  workspaceListRenameTurns.clear();
   themeSaveChain = Promise.resolve();
   themeChangeVersion += 1;
   state.me = null;
@@ -1012,19 +1032,25 @@ async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion)
     && sessionVersion === authVersion
     && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
   const previousBoardID = state.board?.id || "";
-  let board = await api.get(`/api/v1/boards/${id}`);
-  if (!loadIsCurrent()) return false;
-  const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
-  if (staleNames.length) {
-    try {
-      await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
-      if (!loadIsCurrent()) return false;
-      board = await api.get(`/api/v1/boards/${id}`);
-    } catch (err) {
-      if (!loadIsCurrent()) return false;
-      throw err;
-    }
+  let expectedListVersion = workspaceListVersion;
+  let board;
+  while (true) {
+    board = await api.get(`/api/v1/boards/${id}`);
     if (!loadIsCurrent()) return false;
+    const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
+    if (staleNames.length) {
+      try {
+        await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
+        if (!loadIsCurrent()) return false;
+        board = await api.get(`/api/v1/boards/${id}`);
+      } catch (err) {
+        if (!loadIsCurrent()) return false;
+        throw err;
+      }
+      if (!loadIsCurrent()) return false;
+    }
+    if (expectedListVersion === workspaceListVersion) break;
+    expectedListVersion = workspaceListVersion;
   }
   const changedBoard = previousBoardID && previousBoardID !== board.id;
   state.board = board;
@@ -1196,9 +1222,14 @@ async function loadCompletedHistory(listID, trigger) {
   try {
     const page = await api.get(`/api/v1/tasks?bucketId=${encodeURIComponent(listID)}&status=done&limit=20&cursor=${encodeURIComponent(list.completedNextCursor)}`);
     if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || state.board?.id !== boardID) return;
-    const known = new Set((list.tasks || []).map(task => task.id));
-    list.tasks = [...(list.tasks || []), ...(page.tasks || []).filter(task => !known.has(task.id))];
-    list.completedNextCursor = page.nextCursor || "";
+    const currentList = state.board.buckets.find(item => item.id === listID);
+    if (!currentList) return;
+    const known = new Set((currentList.tasks || []).map(task => task.id));
+    currentList.tasks = [
+      ...(currentList.tasks || []),
+      ...(page.tasks || []).filter(task => !known.has(task.id)).map(taskWithResolvedLocation),
+    ];
+    currentList.completedNextCursor = page.nextCursor || "";
     state.error = "";
     render();
     document.querySelector(`[data-load-completed="${CSS.escape(listID)}"]`)?.focus();
@@ -1221,7 +1252,7 @@ async function loadAllSubtasks(taskID, isCurrent) {
     for (const task of page.tasks || []) {
       if (known.has(task.id)) continue;
       known.add(task.id);
-      tasks.push(task);
+      tasks.push(taskWithResolvedLocation(task));
     }
     cursor = page.nextCursor || "";
   } while (cursor);
@@ -1264,8 +1295,8 @@ async function openTaskDetail(taskID, trigger, options = {}) {
       subtaskError = "",
       ...taskDraft
     } = savedDraft;
-    state.selectedTask = { ...summary, ...detail, ...taskDraft };
-    state.selectedSubtasks = subtasks;
+    state.selectedTask = taskWithResolvedLocation({ ...summary, ...detail, ...taskDraft });
+    state.selectedSubtasks = subtasks.map(taskWithResolvedLocation);
     state.selectedEntries = entryPage.entries || [];
     state.cardEntryDraft = cardEntryDraft;
     state.cardEntryKind = cardEntryKind === "output" ? "output" : "comment";
@@ -3218,51 +3249,66 @@ function closeCardContextMenu({ restoreFocus = false } = {}) {
   if (restoreFocus) trigger?.focus?.();
 }
 
+function captureCardContextMenuState() {
+  if (!cardContextMenu?.card?.dataset?.task) return null;
+  return { taskID: cardContextMenu.card.dataset.task, x: cardContextMenu.x, y: cardContextMenu.y };
+}
+
+function restoreCardContextMenuState(snapshot) {
+  if (!snapshot) return;
+  const card = document.querySelector(`[data-task="${CSS.escape(snapshot.taskID)}"]`);
+  const task = findTask(snapshot.taskID);
+  if (card && task) openCardContextMenu(card, task, snapshot.x, snapshot.y);
+}
+
+function openCardContextMenu(card, task, clientX = 0, clientY = 0) {
+  closeCardContextMenu();
+  const trigger = card.matches("button, a") ? card : card.querySelector("[data-open-task], button, a") || card;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = cardContextMenuHTML(task);
+  const menu = wrapper.firstElementChild;
+  const menuHost = document.querySelector("#app > .theme-dark, #app > .theme-light") || document.body;
+  menuHost.append(menu);
+
+  let x = clientX;
+  let y = clientY;
+  if (!x && !y) {
+    const bounds = trigger.getBoundingClientRect();
+    x = bounds.left;
+    y = bounds.bottom;
+  }
+  const position = cardContextMenuPosition(x, y, menu.offsetWidth, menu.offsetHeight, window.innerWidth, window.innerHeight);
+  menu.style.left = `${position.left}px`;
+  menu.style.top = `${position.top}px`;
+  card.classList.add("context-open");
+
+  const onPointerDown = pointerEvent => {
+    if (!menu.contains(pointerEvent.target)) closeCardContextMenu();
+  };
+  const onKeyDown = keyEvent => {
+    if (keyEvent.key === "Escape") {
+      keyEvent.preventDefault();
+      closeCardContextMenu({ restoreFocus: true });
+    } else if (keyEvent.key === "Tab") {
+      closeCardContextMenu();
+    }
+  };
+  cardContextMenu = { menu, card, trigger, onPointerDown, onKeyDown, x, y };
+  document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  menu.querySelector("[data-context-delete]").addEventListener("click", async () => {
+    closeCardContextMenu({ restoreFocus: true });
+    await deleteCardFromContext(task.id);
+  });
+  menu.querySelector("[role=menuitem]").focus();
+}
+
 function bindCardContextMenus() {
   document.querySelectorAll("[data-task]").forEach(card => card.addEventListener("contextmenu", event => {
     const task = findTask(card.dataset.task);
     if (!task) return;
     event.preventDefault();
-    closeCardContextMenu();
-
-    const trigger = card.matches("button, a") ? card : card.querySelector("[data-open-task], button, a") || card;
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = cardContextMenuHTML(task);
-    const menu = wrapper.firstElementChild;
-    const menuHost = document.querySelector("#app > .theme-dark, #app > .theme-light") || document.body;
-    menuHost.append(menu);
-
-    let x = event.clientX;
-    let y = event.clientY;
-    if (!x && !y) {
-      const bounds = trigger.getBoundingClientRect();
-      x = bounds.left;
-      y = bounds.bottom;
-    }
-    const position = cardContextMenuPosition(x, y, menu.offsetWidth, menu.offsetHeight, window.innerWidth, window.innerHeight);
-    menu.style.left = `${position.left}px`;
-    menu.style.top = `${position.top}px`;
-    card.classList.add("context-open");
-
-    const onPointerDown = pointerEvent => {
-      if (!menu.contains(pointerEvent.target)) closeCardContextMenu();
-    };
-    const onKeyDown = keyEvent => {
-      if (keyEvent.key === "Escape") {
-        keyEvent.preventDefault();
-        closeCardContextMenu({ restoreFocus: true });
-      } else if (keyEvent.key === "Tab") {
-        closeCardContextMenu();
-      }
-    };
-    cardContextMenu = { menu, card, trigger, onPointerDown, onKeyDown };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    menu.querySelector("[data-context-delete]").addEventListener("click", async () => {
-      closeCardContextMenu({ restoreFocus: true });
-      await deleteCardFromContext(task.id);
-    });
-    menu.querySelector("[role=menuitem]").focus();
+    openCardContextMenu(card, task, event.clientX, event.clientY);
   }));
 }
 
@@ -3467,7 +3513,27 @@ function taskWithResolvedLocation(task) {
     boardId: boardID,
     boardName: board?.name || task.boardName,
     bucketName: list.name,
+    listName: list.name,
   };
+}
+
+function resolveAgentTaskLocations(detail, workPage) {
+  if (detail?.work) {
+    for (const group of ["ready", "working", "review", "recentlyCompleted"]) {
+      detail.work[group] = (detail.work[group] || []).map(taskWithResolvedLocation);
+    }
+  }
+  if (workPage) workPage.items = (workPage.items || []).map(taskWithResolvedLocation);
+}
+
+function resolveCachedTaskLocations() {
+  state.workspaceTasks = state.workspaceTasks.map(taskWithResolvedLocation);
+  state.selectedSubtasks = state.selectedSubtasks.map(taskWithResolvedLocation);
+  if (state.selectedTask) state.selectedTask = taskWithResolvedLocation(state.selectedTask);
+  for (const list of state.board?.buckets || []) {
+    list.tasks = (list.tasks || []).map(taskWithResolvedLocation);
+  }
+  resolveAgentTaskLocations(state.agentDetail, state.agentWorkPage);
 }
 
 function reconcileAgentTaskCaches(task, { deleted = false, previousTask = null } = {}) {
@@ -4329,7 +4395,12 @@ function bindApp() {
     state.weekStart = dateKey(addDays(startOfWeek(new Date()), 7));
     render();
   });
-  document.querySelectorAll("[data-bucket-name]").forEach(element => element.addEventListener("change", () => renameWorkspaceList(element)));
+  document.querySelectorAll("[data-bucket-name]").forEach(element => {
+    element.addEventListener("input", () => { element.dataset.listNameDirty = "true"; });
+    element.addEventListener("change", () => {
+      if (!suppressListRenameChange && !element.disabled) renameWorkspaceList(element);
+    });
+  });
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
     const id = el.dataset.bucketGoal;
@@ -4579,11 +4650,272 @@ function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar"
   };
 }
 
+function renameCachedTaskListMetadata(listID, listName) {
+  const renameTask = task => task?.bucketId === listID ? { ...task, listName, bucketName: listName } : task;
+  state.workspaceTasks = state.workspaceTasks.map(renameTask);
+  state.selectedSubtasks = state.selectedSubtasks.map(renameTask);
+  if (state.selectedTask) state.selectedTask = renameTask(state.selectedTask);
+  if (state.agentWorkPage) state.agentWorkPage.items = (state.agentWorkPage.items || []).map(renameTask);
+  const work = state.agentDetail?.work;
+  if (!work) return;
+  for (const group of ["ready", "working", "review", "recentlyCompleted"]) {
+    work[group] = (work[group] || []).map(renameTask);
+  }
+}
+
+function editableFormIdentity(form) {
+  if (form.id) return { kind: "id", value: form.id };
+  for (const attribute of ["data-add-task", "data-rename-board"]) {
+    if (form.hasAttribute(attribute)) return { kind: "attribute", attribute, value: form.getAttribute(attribute) };
+  }
+  return null;
+}
+
+function editableFormControls(form) {
+  return [...(form?.elements || [])].filter(control => control.matches?.("input, textarea, select, button"));
+}
+
+function stableFocusIdentity(element) {
+  if (!element?.matches?.("button, a, input, textarea, select, [tabindex]")) return null;
+  if (element.id) return { id: element.id };
+  const dataAttributes = [...element.attributes]
+    .filter(attribute => attribute.name.startsWith("data-"))
+    .map(attribute => ({ name: attribute.name, value: attribute.value }));
+  const ariaLabel = element.getAttribute("aria-label");
+  const text = element.textContent?.trim() || "";
+  if (!dataAttributes.length && !ariaLabel && !text) return null;
+  return {
+    tagName: element.tagName,
+    dataAttributes,
+    href: element.getAttribute("href"),
+    ariaLabel,
+    text,
+  };
+}
+
+function restoreStableFocus(documentRef, identity) {
+  if (!identity) return false;
+  if (identity.id) {
+    const control = documentRef?.getElementById?.(identity.id);
+    control?.focus();
+    return Boolean(control);
+  }
+  let controls = [...(documentRef?.querySelectorAll?.(identity.tagName) || [])]
+    .filter(item => identity.dataAttributes.length
+      ? identity.dataAttributes.every(attribute => item.getAttribute(attribute.name) === attribute.value)
+      : identity.ariaLabel
+        ? item.getAttribute("aria-label") === identity.ariaLabel
+        : item.textContent?.trim() === identity.text);
+  for (const [attribute, value] of [["href", identity.href], ["aria-label", identity.ariaLabel]]) {
+    if (controls.length <= 1) break;
+    if (value === null) continue;
+    controls = controls.filter(item => item.getAttribute(attribute) === value);
+  }
+  if (controls.length > 1 && identity.text) {
+    controls = controls.filter(item => item.textContent?.trim() === identity.text);
+  }
+  const control = controls.length === 1 ? controls[0] : null;
+  control?.focus();
+  return Boolean(control);
+}
+
+function captureRenderScroll(documentRef) {
+  const root = documentRef?.querySelector?.("#app");
+  const positions = [...(root?.querySelectorAll?.("*") || [])].flatMap(element => {
+    if (element.scrollTop === 0 && element.scrollLeft === 0) return [];
+    const path = [];
+    for (let current = element; current && current !== root; current = current.parentElement) {
+      const index = [...current.parentElement.children].indexOf(current);
+      if (index < 0) return [];
+      path.unshift(index);
+    }
+    return [{ path, top: element.scrollTop, left: element.scrollLeft }];
+  });
+  const page = documentRef?.scrollingElement;
+  return { positions, pageTop: page?.scrollTop || 0, pageLeft: page?.scrollLeft || 0 };
+}
+
+function restoreRenderScroll(documentRef, snapshot) {
+  const root = documentRef?.querySelector?.("#app");
+  for (const saved of snapshot?.positions || []) {
+    const element = saved.path.reduce((parent, index) => parent?.children?.[index], root);
+    if (!element) continue;
+    element.scrollTop = saved.top;
+    element.scrollLeft = saved.left;
+  }
+  const page = documentRef?.scrollingElement;
+  if (page) {
+    page.scrollTop = snapshot?.pageTop || 0;
+    page.scrollLeft = snapshot?.pageLeft || 0;
+  }
+}
+
+function captureEditableFormDrafts(documentRef, active) {
+  return [...(documentRef?.querySelectorAll?.("form") || [])].flatMap(form => {
+    const identity = editableFormIdentity(form);
+    if (!identity) return [];
+    const formControls = editableFormControls(form);
+    const controls = formControls.map((control, index) => ({
+      index,
+      tagName: control.tagName,
+      name: control.name,
+      type: control.type,
+      value: control.matches("input, textarea, select") ? control.value : null,
+      checked: ["checkbox", "radio"].includes(control.type) ? control.checked : null,
+      disabled: control.disabled,
+      readOnly: "readOnly" in control ? control.readOnly : null,
+      ariaInvalid: control.getAttribute("aria-invalid"),
+      innerHTML: control.tagName === "BUTTON" && control.disabled ? control.innerHTML : null,
+      active: control === active,
+      selectionStart: control === active && ["text", "search", "url", "tel", "password", "textarea"].includes(control.type)
+        ? control.selectionStart : null,
+      selectionEnd: control === active && ["text", "search", "url", "tel", "password", "textarea"].includes(control.type)
+        ? control.selectionEnd : null,
+    }));
+    const alerts = [...form.querySelectorAll('[role="alert"]')].map((alert, index) => ({
+      index,
+      textContent: alert.textContent,
+    }));
+    const describedErrors = [...new Set(formControls.flatMap(control => (control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean)))]
+      .flatMap(id => {
+        const element = documentRef?.getElementById?.(id);
+        return element?.matches?.(".error") ? [{ id, textContent: element.textContent }] : [];
+      });
+    return [{ identity, controls, alerts, describedErrors }];
+  });
+}
+
+function restoreEditableFormDrafts(documentRef, drafts) {
+  let focus = null;
+  const forms = [...(documentRef?.querySelectorAll?.("form") || [])];
+  for (const draft of drafts) {
+    const form = forms.find(item => {
+      const identity = editableFormIdentity(item);
+      return identity?.kind === draft.identity.kind && identity.value === draft.identity.value
+        && identity.attribute === draft.identity.attribute;
+    });
+    const controls = editableFormControls(form);
+    for (const saved of draft.controls) {
+      const control = controls[saved.index];
+      if (!control || control.tagName !== saved.tagName || control.name !== saved.name || control.type !== saved.type) continue;
+      if (saved.value !== null) control.value = saved.value;
+      if (saved.checked !== null) control.checked = saved.checked;
+      control.disabled = saved.disabled;
+      if (saved.readOnly !== null) control.readOnly = saved.readOnly;
+      if (saved.ariaInvalid === null) control.removeAttribute("aria-invalid");
+      else control.setAttribute("aria-invalid", saved.ariaInvalid);
+      if (saved.innerHTML !== null) control.innerHTML = saved.innerHTML;
+      if (saved.active) focus = { control, selectionStart: saved.selectionStart, selectionEnd: saved.selectionEnd };
+    }
+    const alerts = [...(form?.querySelectorAll?.('[role="alert"]') || [])];
+    for (const saved of draft.alerts) {
+      const alert = alerts[saved.index];
+      if (alert) alert.textContent = saved.textContent;
+    }
+    for (const saved of draft.describedErrors || []) {
+      const element = documentRef?.getElementById?.(saved.id);
+      if (element) element.textContent = saved.textContent;
+    }
+  }
+  return focus;
+}
+
+function renderAfterBackgroundListRename() {
+  const route = parseRoute(globalThis.location?.pathname || "");
+  const mounted = route.name === "workspace" ? state.view === "app"
+    : route.name === "board" ? state.view === "board" && state.board?.id === route.boardId
+      : ["agent-detail", "agent-work", "agent-settings"].includes(route.name)
+        && state.view === route.name && state.agentDetail?.agent?.id === route.agentId;
+  if (!mounted) return;
+
+  const documentRef = globalThis.document;
+  const active = documentRef?.activeElement;
+  const sidebarOpen = Boolean(documentRef?.querySelector?.(".sidebar")?.classList.contains("open"));
+  const scrollSnapshot = captureRenderScroll(documentRef);
+  const contextMenuSnapshot = captureCardContextMenuState();
+  const stableFocus = stableFocusIdentity(active);
+  const listNameInput = active?.matches?.("[data-bucket-name]") ? active : null;
+  const listNameDraft = listNameInput ? {
+    listID: listNameInput.dataset.bucketName,
+    name: listNameInput.value,
+    dirty: listNameInput.dataset.listNameDirty === "true",
+    selectionStart: listNameInput.selectionStart,
+    selectionEnd: listNameInput.selectionEnd,
+  } : null;
+  const listGoalFocus = active?.matches?.("[data-bucket-goal]") ? {
+    listID: active.dataset.bucketGoal,
+    selectionStart: active.selectionStart,
+    selectionEnd: active.selectionEnd,
+  } : null;
+  const formDrafts = captureEditableFormDrafts(documentRef, active);
+  const disabledListNameDrafts = [...(documentRef?.querySelectorAll?.("[data-bucket-name]:disabled") || [])].map(input => ({
+    listID: input.dataset.bucketName,
+    name: input.value,
+  }));
+  const assignForm = documentRef?.querySelector?.("#assign-work-form");
+  const taskDetailFocus = captureTaskDetailFocus();
+  if (state.agentAssignOpen && assignForm) state.agentAssignDraft = assignDraftFromForm(assignForm);
+  preserveCurrentTaskDraft();
+  suppressListRenameChange = true;
+  try {
+    renderKeepingSidebarOpen(sidebarOpen);
+  } finally {
+    suppressListRenameChange = false;
+  }
+  restoreCardContextMenuState(contextMenuSnapshot);
+  const formFocus = restoreEditableFormDrafts(documentRef, formDrafts);
+  for (const draft of disabledListNameDrafts) {
+    const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
+      .find(item => item.dataset.bucketName === draft.listID);
+    if (input) {
+      input.value = draft.name;
+      input.disabled = true;
+    }
+  }
+  if (listNameDraft) {
+    const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
+      .find(item => item.dataset.bucketName === listNameDraft.listID);
+    if (input && listNameDraft.dirty) {
+      input.value = listNameDraft.name;
+      input.dataset.listNameDirty = "true";
+      input.addEventListener("blur", () => {
+        const list = state.board?.buckets?.find(item => item.id === listNameDraft.listID);
+        if (!suppressListRenameChange && !input.disabled && list) renameWorkspaceList(input);
+      }, { once: true });
+    }
+  }
+  if (listNameDraft) {
+    const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
+      .find(item => item.dataset.bucketName === listNameDraft.listID);
+    input?.focus();
+    if (input && listNameDraft.selectionStart !== null && listNameDraft.selectionEnd !== null) {
+      input.setSelectionRange(listNameDraft.selectionStart, listNameDraft.selectionEnd);
+    }
+  } else if (listGoalFocus) {
+    const input = [...(documentRef?.querySelectorAll?.("[data-bucket-goal]") || [])]
+      .find(item => item.dataset.bucketGoal === listGoalFocus.listID);
+    input?.focus();
+    if (input && listGoalFocus.selectionStart !== null && listGoalFocus.selectionEnd !== null) {
+      input.setSelectionRange(listGoalFocus.selectionStart, listGoalFocus.selectionEnd);
+    }
+  } else if (formFocus) {
+    formFocus.control.focus();
+    if (formFocus.selectionStart !== null && formFocus.selectionEnd !== null) {
+      formFocus.control.setSelectionRange(formFocus.selectionStart, formFocus.selectionEnd);
+    }
+  } else if (!restoreStableFocus(documentRef, stableFocus)) {
+    restoreTaskDetailFocus(taskDetailFocus);
+  }
+  restoreRenderScroll(documentRef, scrollSnapshot);
+}
+
 async function renameWorkspaceList(element) {
   const id = element.dataset.bucketName;
   const list = state.board?.buckets?.find(item => item.id === id);
   if (!list) return false;
   const name = element.value.trim();
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
   const expectedRouteVersion = routeVersion;
   if (!name) {
     state.error = "List name is required.";
@@ -4596,31 +4928,41 @@ async function renameWorkspaceList(element) {
     return true;
   }
   element.disabled = true;
-  try {
-    const updated = await api.patch(`/api/v1/buckets/${id}`, { name });
-    if (expectedRouteVersion !== routeVersion) return false;
-    const nextName = updated.name || name;
-    const rename = item => item.id === id ? {
-      ...item,
-      ...updated,
-      name: nextName,
-      tasks: (item.tasks || []).map(task => ({ ...task, listName: nextName, bucketName: nextName })),
-    } : item;
-    state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
-    state.workspaceLists = state.workspaceLists.map(rename);
-    state.error = "";
-    render();
-    document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
-    return true;
-  } catch (err) {
-    if (expectedRouteVersion !== routeVersion) return false;
-    state.error = err.message;
-    render();
-    const restored = document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`);
-    restored?.focus();
-    restored?.select();
-    return false;
-  }
+  return serializeWorkspaceListRename(id, async () => {
+    try {
+      const updated = await api.patch(`/api/v1/buckets/${id}`, { name });
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      const nextName = updated.name || name;
+      const rename = item => item.id === id ? {
+        ...item,
+        ...updated,
+        name: nextName,
+        tasks: (item.tasks || []).map(task => ({ ...task, listName: nextName, bucketName: nextName })),
+      } : item;
+      workspaceListVersion += 1;
+      if (state.board?.buckets?.some(item => item.id === id)) {
+        state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
+      }
+      state.workspaceLists = state.workspaceLists.map(rename);
+      renameCachedTaskListMetadata(id, nextName);
+      if (expectedRouteVersion !== routeVersion) {
+        renderAfterBackgroundListRename();
+        return true;
+      }
+      state.error = "";
+      render();
+      document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
+      return true;
+    } catch (err) {
+      if (!sessionIsCurrent(sessionVersion, userID) || expectedRouteVersion !== routeVersion) return false;
+      state.error = err.message;
+      render();
+      const restored = document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`);
+      restored?.focus();
+      restored?.select();
+      return false;
+    }
+  });
 }
 
 function bindWorkspaceListControl() {
@@ -4851,7 +5193,6 @@ function bindBoardRename(form) {
   const id = form.dataset.renameBoard;
   const sidebarIsOpen = () => Boolean(form.closest(".sidebar")?.classList.contains("open"));
   const input = form.querySelector('input[name="name"]');
-  const error = form.querySelector(".board-rename-error");
   const controls = [...form.querySelectorAll("input, button")];
   const cancel = () => {
     const keepSidebarOpen = sidebarIsOpen();
@@ -4860,9 +5201,11 @@ function bindBoardRename(form) {
     document.querySelector(`[data-start-rename-board="${id}"]`)?.focus();
   };
   const showError = message => {
-    error.textContent = message;
-    input.setAttribute("aria-invalid", "true");
-    input.focus();
+    const currentForm = document.querySelector(`[data-rename-board="${CSS.escape(id)}"]`) || form;
+    const currentInput = currentForm.querySelector('input[name="name"]');
+    currentForm.querySelector(".board-rename-error").textContent = message;
+    currentInput.setAttribute("aria-invalid", "true");
+    currentInput.focus();
   };
   form.querySelector("[data-cancel-rename-board]").onclick = cancel;
   input.addEventListener("keydown", event => {
@@ -4871,7 +5214,7 @@ function bindBoardRename(form) {
     cancel();
   });
   input.addEventListener("input", () => {
-    error.textContent = "";
+    form.querySelector(".board-rename-error").textContent = "";
     input.removeAttribute("aria-invalid");
   });
   form.addEventListener("submit", async event => {
@@ -4888,7 +5231,8 @@ function bindBoardRename(form) {
       renderKeepingSidebarOpen(keepSidebarOpen);
       document.querySelector(`[data-start-rename-board="${id}"]`)?.focus();
     } catch (err) {
-      controls.forEach(control => { control.disabled = false; });
+      const currentForm = document.querySelector(`[data-rename-board="${CSS.escape(id)}"]`) || form;
+      [...currentForm.querySelectorAll("input, button")].forEach(control => { control.disabled = false; });
       showError(err.message);
     }
   });
@@ -5721,9 +6065,10 @@ function bindAssignWork() {
       if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || !state.agentAssignOpen) return;
       if (handleAgentUnauthorized(err)) return;
       state.agentAssignError = err.message;
-      [...form.elements].forEach(control => { control.disabled = false; });
-      form.querySelector('button[type="submit"]').textContent = "Create item";
-      error.textContent = err.message;
+      const currentForm = document.querySelector("#assign-work-form") || form;
+      [...currentForm.elements].forEach(control => { control.disabled = false; });
+      currentForm.querySelector('button[type="submit"]').textContent = "Create item";
+      currentForm.querySelector("#assign-error").textContent = err.message;
     }
   });
 }
@@ -6341,6 +6686,7 @@ async function loadAgentDetail(agentID, options = {}) {
     throw err;
   }
   if (!loadIsCurrent()) return false;
+  resolveAgentTaskLocations(detail, workPage);
   state.agentDetail = detail;
   state.agentWorkPage = options.includeWorkPage ? workPage : null;
   const index = state.agents.findIndex(agent => agent.id === detail.agent.id);

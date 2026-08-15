@@ -729,6 +729,48 @@ test("completed history pages append to a list and preserve the next cursor", as
   `, app);
 });
 
+test("completed history resolves list names after a concurrent rename", async () => {
+  let releaseHistory;
+  app.pendingRenamedListHistory = new Promise(resolve => { releaseHistory = resolve; });
+  vm.runInContext(`
+    savedRenamedHistoryRender = render;
+    savedRenamedHistoryGet = api.get;
+    render = () => {};
+    authVersion = 5;
+    routeVersion = 8;
+    state.me = { id: "owner" };
+    state.workspaceLists = [{ id: "list-one", boardId: "board-one", name: "YouTube" }];
+    state.board = {
+      id: "board-one",
+      buckets: [{ id: "list-one", name: "YouTube", completedNextCursor: "cursor-one", tasks: [] }],
+    };
+    api.get = async () => pendingRenamedListHistory;
+  `, app);
+
+  const loading = app.loadCompletedHistory("list-one");
+  vm.runInContext(`
+    workspaceListVersion += 1;
+    state.workspaceLists[0] = { ...state.workspaceLists[0], name: "Published" };
+    state.board = { ...state.board, buckets: state.board.buckets.map(list => ({ ...list, name: "Published" })) };
+  `, app);
+  releaseHistory({
+    tasks: [{ id: "older", bucketId: "list-one", listName: "YouTube", status: "done" }],
+    nextCursor: "",
+  });
+
+  await loading;
+  assert.equal(vm.runInContext("state.board.buckets[0].tasks[0].listName", app), "Published");
+
+  vm.runInContext(`
+    render = savedRenamedHistoryRender;
+    api.get = savedRenamedHistoryGet;
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+  delete app.pendingRenamedListHistory;
+});
+
 test("opening a task loads its full description and subtasks", async () => {
   vm.runInContext(`
     savedDetailRender = render;
@@ -787,6 +829,53 @@ test("opening a task loads its full description and subtasks", async () => {
     state.board = null;
     state.selectedTask = null;
   `, app);
+});
+
+test("opening a task re-resolves subtasks after a list rename completes", async () => {
+  let releaseDetail;
+  let releaseSubtasks;
+  app.pendingRenamedListDetail = new Promise(resolve => { releaseDetail = resolve; });
+  app.pendingRenamedListSubtasks = new Promise(resolve => { releaseSubtasks = resolve; });
+  vm.runInContext(`
+    savedRenamedListDetailRender = render;
+    savedRenamedListDetailGet = api.get;
+    render = () => {};
+    authVersion = 10;
+    routeVersion = 12;
+    state.me = { id: "owner" };
+    state.workspaceLists = [{ id: "list-one", boardId: "board-one", name: "YouTube" }];
+    state.board = { id: "board-one", buckets: [{ id: "list-one", name: "YouTube", tasks: [{ id: "task-one", bucketId: "list-one", title: "Summary" }] }] };
+    api.get = async path => {
+      if (path === "/api/v1/tasks/task-one") return pendingRenamedListDetail;
+      if (path.includes("parentTaskId=task-one")) return pendingRenamedListSubtasks;
+      if (path === "/api/v1/cards/task-one/entries") return { entries: [] };
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+
+  const opening = app.openTaskDetail("task-one");
+  releaseSubtasks({ tasks: [{ id: "subtask-one", parentTaskId: "task-one", bucketId: "list-one", listName: "YouTube" }] });
+  await new Promise(resolve => setImmediate(resolve));
+  vm.runInContext(`
+    workspaceListVersion += 1;
+    state.workspaceLists[0].name = "Published";
+  `, app);
+  releaseDetail({ id: "task-one", bucketId: "list-one", title: "Summary" });
+
+  assert.equal(await opening, true);
+  assert.equal(vm.runInContext("state.selectedSubtasks[0].listName", app), "Published");
+
+  vm.runInContext(`
+    render = savedRenamedListDetailRender;
+    api.get = savedRenamedListDetailGet;
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+  `, app);
+  delete app.pendingRenamedListDetail;
+  delete app.pendingRenamedListSubtasks;
 });
 
 test("loading more tasks cannot append an old list response after navigation", async () => {
@@ -1860,6 +1949,292 @@ test("an authenticated-state reset abandons old serialized task mutations", asyn
   assert.equal(await staleQueuedMutation, null);
   assert.equal(app.staleQueuedMutationCalled, false);
   assert.equal(vm.runInContext("taskMutationTurns.has('task-session-boundary')", app), false);
+});
+
+test("a completed list rename survives navigation and an older list-index response", async () => {
+  let releaseRename;
+  let releaseStaleBoard;
+  let releaseStaleLists;
+  app.pendingRename = new Promise(resolve => { releaseRename = resolve; });
+  app.pendingStaleBoard = new Promise(resolve => { releaseStaleBoard = resolve; });
+  app.pendingStaleLists = new Promise(resolve => { releaseStaleLists = resolve; });
+  app.listNameElement = { dataset: { bucketName: "youtube" }, value: "Published", disabled: false };
+  vm.runInContext(`
+    savedRenameAPIGet = api.get;
+    savedRenameAPIPatch = api.patch;
+    authVersion = 65;
+    routeVersion = 115;
+    workspaceListVersion = 0;
+    workspaceListLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.board = { id: "board-one", buckets: [{ id: "youtube", name: "YouTube", tasks: [] }] };
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    state.workspaceTasks = [{ id: "workspace-task", bucketId: "youtube", listName: "YouTube" }];
+    state.selectedTask = { id: "selected-task", bucketId: "youtube", listName: "YouTube" };
+    state.selectedSubtasks = [{ id: "selected-subtask", bucketId: "youtube", listName: "YouTube" }];
+    state.agentWorkPage = { items: [{ id: "page-task", bucketId: "youtube", bucketName: "YouTube" }] };
+    state.agentDetail = { work: {
+      ready: [{ id: "ready-task", bucketId: "youtube", listName: "YouTube" }],
+      working: [], review: [], recentlyCompleted: [],
+    } };
+    api.patch = async () => pendingRename;
+    let renameBoardRequests = 0;
+    api.get = async path => {
+      if (path === "/api/v1/lists") return pendingStaleLists;
+      if (path === "/api/v1/boards/board-one") {
+        renameBoardRequests += 1;
+        return renameBoardRequests === 1
+          ? pendingStaleBoard
+          : { id: "board-one", name: "Workspace", buckets: [{ id: "youtube", boardId: "board-one", name: "Published", tasks: [] }] };
+      }
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+
+  const renaming = app.renameWorkspaceList(app.listNameElement);
+  vm.runInContext(`routeVersion = 116;`, app);
+  const staleLoad = app.loadWorkspaceListIndex(116);
+  const staleBoardLoad = app.loadBoard("board-one", 65, 116);
+  releaseRename({ id: "youtube", name: "Published" });
+  assert.equal(await renaming, true);
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "Published");
+  assert.deepEqual(
+    JSON.parse(vm.runInContext(`JSON.stringify([
+      state.workspaceTasks[0].listName,
+      state.selectedTask.listName,
+      state.selectedSubtasks[0].listName,
+      state.agentWorkPage.items[0].bucketName,
+      state.agentDetail.work.ready[0].listName,
+    ])`, app)),
+    ["Published", "Published", "Published", "Published", "Published"],
+  );
+
+  releaseStaleBoard({ id: "board-one", name: "Workspace", buckets: [{ id: "youtube", boardId: "board-one", name: "YouTube", tasks: [] }] });
+  assert.equal(await staleBoardLoad, true);
+  assert.equal(vm.runInContext("state.board.buckets[0].name", app), "Published");
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "Published");
+  assert.equal(vm.runInContext("renameBoardRequests", app), 2);
+
+  releaseStaleLists({ lists: [{ id: "youtube", boardId: "board-one", name: "YouTube" }] });
+  assert.equal(await staleLoad, true);
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "Published");
+  vm.runInContext(`
+    api.get = savedRenameAPIGet;
+    api.patch = savedRenameAPIPatch;
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    state.agentWorkPage = null;
+    state.agentDetail = null;
+  `, app);
+  delete app.pendingRename;
+  delete app.pendingStaleBoard;
+  delete app.pendingStaleLists;
+  delete app.listNameElement;
+});
+
+test("an older list rename response cannot overwrite a newer rename", async () => {
+  let releaseFirstRename;
+  let releaseSecondRename;
+  app.pendingFirstListRename = new Promise(resolve => { releaseFirstRename = resolve; });
+  app.pendingSecondListRename = new Promise(resolve => { releaseSecondRename = resolve; });
+  app.firstListNameElement = { dataset: { bucketName: "youtube" }, value: "First name", disabled: false };
+  app.secondListNameElement = { dataset: { bucketName: "youtube" }, value: "Published", disabled: false };
+  vm.runInContext(`
+    savedOverlappingRenameRender = render;
+    savedOverlappingRenamePatch = api.patch;
+    savedOverlappingRenameDocument = globalThis.document;
+    render = () => {};
+    globalThis.document = { querySelector() { return null; } };
+    authVersion = 67;
+    routeVersion = 119;
+    workspaceListRenameTurns.clear();
+    state.me = { id: "owner" };
+    state.board = { id: "board-one", buckets: [{ id: "youtube", name: "YouTube", tasks: [] }] };
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    overlappingRenameRequests = [];
+    api.patch = async (_path, input) => {
+      overlappingRenameRequests.push(input.name);
+      return input.name === "First name" ? pendingFirstListRename : pendingSecondListRename;
+    };
+  `, app);
+
+  const firstRename = app.renameWorkspaceList(app.firstListNameElement);
+  vm.runInContext(`routeVersion = 120;`, app);
+  const secondRename = app.renameWorkspaceList(app.secondListNameElement);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(overlappingRenameRequests)", app)), ["First name"]);
+  releaseFirstRename({ id: "youtube", name: "First name" });
+  assert.equal(await firstRename, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(overlappingRenameRequests)", app)), ["First name", "Published"]);
+  releaseSecondRename({ id: "youtube", name: "Published" });
+  assert.equal(await secondRename, true);
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "Published");
+  assert.equal(vm.runInContext("state.board.buckets[0].name", app), "Published");
+
+  vm.runInContext(`
+    render = savedOverlappingRenameRender;
+    api.patch = savedOverlappingRenamePatch;
+    globalThis.document = savedOverlappingRenameDocument;
+    workspaceListRenameTurns.clear();
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+  delete app.pendingFirstListRename;
+  delete app.pendingSecondListRename;
+  delete app.firstListNameElement;
+  delete app.secondListNameElement;
+});
+
+test("a failed newer list rename keeps an older successful rename", async () => {
+  let releaseFirstRename;
+  let rejectSecondRename;
+  app.pendingSuccessfulListRename = new Promise(resolve => { releaseFirstRename = resolve; });
+  app.pendingFailedListRename = new Promise((_resolve, reject) => { rejectSecondRename = reject; });
+  app.successfulListNameElement = { dataset: { bucketName: "youtube" }, value: "First name", disabled: false };
+  app.failedListNameElement = { dataset: { bucketName: "youtube" }, value: "Rejected name", disabled: false };
+  vm.runInContext(`
+    savedFailedOverlappingRenameRender = render;
+    savedFailedOverlappingRenamePatch = api.patch;
+    savedFailedOverlappingRenameDocument = globalThis.document;
+    render = () => {};
+    globalThis.document = { querySelector() { return null; } };
+    authVersion = 68;
+    routeVersion = 121;
+    workspaceListRenameTurns.clear();
+    state.me = { id: "owner" };
+    state.board = { id: "board-one", buckets: [{ id: "youtube", name: "YouTube", tasks: [] }] };
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    api.patch = async (_path, input) => input.name === "First name" ? pendingSuccessfulListRename : pendingFailedListRename;
+  `, app);
+
+  const firstRename = app.renameWorkspaceList(app.successfulListNameElement);
+  vm.runInContext(`routeVersion = 122;`, app);
+  const secondRename = app.renameWorkspaceList(app.failedListNameElement);
+  releaseFirstRename({ id: "youtube", name: "First name" });
+  assert.equal(await firstRename, true);
+  await new Promise(resolve => setImmediate(resolve));
+  rejectSecondRename(new Error("Could not rename list"));
+  assert.equal(await secondRename, false);
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "First name");
+  assert.equal(vm.runInContext("state.board.buckets[0].name", app), "First name");
+
+  vm.runInContext(`
+    render = savedFailedOverlappingRenameRender;
+    api.patch = savedFailedOverlappingRenamePatch;
+    globalThis.document = savedFailedOverlappingRenameDocument;
+    workspaceListRenameTurns.clear();
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+  delete app.pendingSuccessfulListRename;
+  delete app.pendingFailedListRename;
+  delete app.successfulListNameElement;
+  delete app.failedListNameElement;
+});
+
+test("task loaders resolve stale payload names against the current list index", async () => {
+  app.location = { pathname: "/app/tasks", search: "" };
+  vm.runInContext(`
+    savedResolvedLocationAPIGet = api.get;
+    authVersion = 66;
+    routeVersion = 117;
+    workspaceLoadVersion = 0;
+    agentDetailLoadVersions.clear();
+    state.me = { id: "owner" };
+    state.boards = [{ id: "board-one", name: "Workspace" }];
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "Published" }];
+    state.agents = [];
+    api.get = async path => {
+      if (path.startsWith("/api/v1/tasks?")) {
+        return { tasks: [{ id: "workspace-task", bucketId: "youtube", listName: "YouTube" }] };
+      }
+      if (path === "/api/v1/agents/agent-one") {
+        return { agent: { id: "agent-one" }, work: {
+          ready: [{ id: "ready-task", bucketId: "youtube", listName: "YouTube" }],
+          working: [], review: [], recentlyCompleted: [],
+        } };
+      }
+      if (path === "/api/v1/agents/agent-one/work?page=1&pageSize=50") {
+        return { items: [{ id: "page-task", bucketId: "youtube", bucketName: "YouTube" }] };
+      }
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+
+  assert.equal(await app.loadWorkspace({ name: "workspace", scope: "all" }, 117), true);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].listName", app), "Published");
+  assert.equal(await app.loadAgentDetail("agent-one", {
+    includeWorkPage: true,
+    page: 1,
+    sessionVersion: 66,
+    userID: "owner",
+    expectedRouteVersion: 117,
+  }), true);
+  assert.deepEqual(
+    JSON.parse(vm.runInContext(`JSON.stringify([
+      state.agentDetail.work.ready[0].listName,
+      state.agentWorkPage.items[0].bucketName,
+    ])`, app)),
+    ["Published", "Published"],
+  );
+  vm.runInContext(`
+    api.get = savedResolvedLocationAPIGet;
+    state.me = null;
+    state.boards = [];
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+    state.agents = [];
+    state.agentDetail = null;
+    state.agentWorkPage = null;
+  `, app);
+});
+
+test("a newer list index reconciles tasks that finished loading against an older cache", async () => {
+  let releaseLists;
+  app.pendingRefreshedLists = new Promise(resolve => { releaseLists = resolve; });
+  app.location = { pathname: "/app/tasks", search: "" };
+  vm.runInContext(`
+    savedConcurrentRefreshGet = api.get;
+    authVersion = 67;
+    routeVersion = 118;
+    workspaceListVersion = 0;
+    workspaceListLoadVersion = 0;
+    workspaceLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.boards = [{ id: "board-one", name: "Workspace" }];
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    state.workspaceTasks = [];
+    api.get = async path => {
+      if (path === "/api/v1/lists") return pendingRefreshedLists;
+      if (path.startsWith("/api/v1/tasks?")) {
+        return { tasks: [{ id: "workspace-task", bucketId: "youtube", listName: "Published" }] };
+      }
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+
+  const listsLoading = app.loadWorkspaceListIndex(118);
+  assert.equal(await app.loadWorkspace({ name: "workspace", scope: "all" }, 118), true);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].listName", app), "YouTube");
+
+  releaseLists({ lists: [{ id: "youtube", boardId: "board-one", name: "Published" }] });
+  assert.equal(await listsLoading, true);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].listName", app), "Published");
+  vm.runInContext(`
+    api.get = savedConcurrentRefreshGet;
+    state.me = null;
+    state.boards = [];
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+  `, app);
+  delete app.pendingRefreshedLists;
 });
 
 test("an older list-index response cannot overwrite a newer count", async () => {
