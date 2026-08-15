@@ -750,7 +750,7 @@ async function loadWorkspace(route, expectedRouteVersion) {
     throw err;
   }
   if (!loadIsCurrent()) return null;
-  state.workspaceTasks = taskData.tasks || [];
+  state.workspaceTasks = (taskData.tasks || []).map(taskWithResolvedLocation);
   state.workspaceReviewKinds = {};
   if (route.scope === "review") {
     let reviewData;
@@ -790,7 +790,7 @@ async function loadMoreWorkspaceTasks() {
     const data = await api.get(`/api/v1/tasks?${query}`);
     if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion) return;
     const known = new Set(state.workspaceTasks.map(task => task.id));
-    state.workspaceTasks = [...state.workspaceTasks, ...(data.tasks || []).filter(task => !known.has(task.id))];
+    state.workspaceTasks = [...state.workspaceTasks, ...(data.tasks || []).filter(task => !known.has(task.id)).map(taskWithResolvedLocation)];
     state.workspaceNextCursor = data.nextCursor || "";
     state.error = "";
   } catch (err) {
@@ -944,19 +944,25 @@ async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion)
     && sessionVersion === authVersion
     && (expectedRouteVersion === undefined || expectedRouteVersion === routeVersion);
   const previousBoardID = state.board?.id || "";
-  let board = await api.get(`/api/v1/boards/${id}`);
-  if (!loadIsCurrent()) return false;
-  const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
-  if (staleNames.length) {
-    try {
-      await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
-      if (!loadIsCurrent()) return false;
-      board = await api.get(`/api/v1/boards/${id}`);
-    } catch (err) {
-      if (!loadIsCurrent()) return false;
-      throw err;
-    }
+  let expectedListVersion = workspaceListVersion;
+  let board;
+  while (true) {
+    board = await api.get(`/api/v1/boards/${id}`);
     if (!loadIsCurrent()) return false;
+    const staleNames = (board.buckets || []).filter(list => list.name === "New bucket");
+    if (staleNames.length) {
+      try {
+        await Promise.all(staleNames.map(list => api.patch(`/api/v1/buckets/${list.id}`, { name: "New list" })));
+        if (!loadIsCurrent()) return false;
+        board = await api.get(`/api/v1/boards/${id}`);
+      } catch (err) {
+        if (!loadIsCurrent()) return false;
+        throw err;
+      }
+      if (!loadIsCurrent()) return false;
+    }
+    if (expectedListVersion === workspaceListVersion) break;
+    expectedListVersion = workspaceListVersion;
   }
   const changedBoard = previousBoardID && previousBoardID !== board.id;
   state.board = board;
@@ -1153,7 +1159,7 @@ async function loadAllSubtasks(taskID, isCurrent) {
     for (const task of page.tasks || []) {
       if (known.has(task.id)) continue;
       known.add(task.id);
-      tasks.push(task);
+      tasks.push(taskWithResolvedLocation(task));
     }
     cursor = page.nextCursor || "";
   } while (cursor);
@@ -1183,7 +1189,7 @@ async function openTaskDetail(taskID, trigger, options = {}) {
       api.get(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`),
     ]);
     if (!isCurrent() || subtasks === null) return false;
-    state.selectedTask = { ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) };
+    state.selectedTask = taskWithResolvedLocation({ ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) });
     state.selectedSubtasks = subtasks;
     state.selectedEntries = entryPage.entries || [];
     state.cardEntryDraft = "";
@@ -3374,7 +3380,17 @@ function taskWithResolvedLocation(task) {
     boardId: boardID,
     boardName: board?.name || task.boardName,
     bucketName: list.name,
+    listName: list.name,
   };
+}
+
+function resolveAgentTaskLocations(detail, workPage) {
+  if (detail?.work) {
+    for (const group of ["ready", "working", "review", "recentlyCompleted"]) {
+      detail.work[group] = (detail.work[group] || []).map(taskWithResolvedLocation);
+    }
+  }
+  if (workPage) workPage.items = (workPage.items || []).map(taskWithResolvedLocation);
 }
 
 function reconcileAgentTaskCaches(task, { deleted = false, previousTask = null } = {}) {
@@ -4422,6 +4438,15 @@ function renameCachedTaskListMetadata(listID, listName) {
   }
 }
 
+function renderAfterBackgroundListRename() {
+  const route = parseRoute(globalThis.location?.pathname || "");
+  const mounted = route.name === "workspace" ? state.view === "app"
+    : route.name === "board" ? state.view === "board" && state.board?.id === route.boardId
+      : ["agent-detail", "agent-work"].includes(route.name)
+        && state.view === route.name && state.agentDetail?.agent?.id === route.agentId;
+  if (mounted) renderPreservingCurrentTaskDetail();
+}
+
 async function renameWorkspaceList(element) {
   const id = element.dataset.bucketName;
   const list = state.board?.buckets?.find(item => item.id === id);
@@ -4457,7 +4482,10 @@ async function renameWorkspaceList(element) {
     }
     state.workspaceLists = state.workspaceLists.map(rename);
     renameCachedTaskListMetadata(id, nextName);
-    if (expectedRouteVersion !== routeVersion) return true;
+    if (expectedRouteVersion !== routeVersion) {
+      renderAfterBackgroundListRename();
+      return true;
+    }
     state.error = "";
     render();
     document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
@@ -6191,6 +6219,7 @@ async function loadAgentDetail(agentID, options = {}) {
     throw err;
   }
   if (!loadIsCurrent()) return false;
+  resolveAgentTaskLocations(detail, workPage);
   state.agentDetail = detail;
   state.agentWorkPage = options.includeWorkPage ? workPage : null;
   const index = state.agents.findIndex(agent => agent.id === detail.agent.id);

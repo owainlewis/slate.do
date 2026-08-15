@@ -1189,12 +1189,18 @@ test("a list renamed while switching boards keeps its new name in the move contr
   await page.getByRole("button", { name: "Other", exact: true }).click();
   await waitFor(() => typeof state.releaseListRename === "function");
   await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
-  state.releaseListRename();
-  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
-
   await page.getByRole("button", { name: /Move this card/ }).click();
   const listControl = page.getByLabel("List", { exact: true });
+  assert.equal(await listControl.locator('option[value="list-youtube"]').textContent(), "YouTube");
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("Unsaved move title");
+  await title.focus();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(() => document.querySelector('#workspace-detail-list option[value="list-youtube"]')?.textContent === "Published");
   assert.equal(await listControl.locator('option[value="list-youtube"]').textContent(), "Published");
+  assert.equal(await title.inputValue(), "Unsaved move title");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
   await listControl.selectOption("list-youtube");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => state.tasks.find(task => task.id === "task-other")?.bucketId === "list-youtube");
