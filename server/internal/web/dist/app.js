@@ -4395,9 +4395,12 @@ function bindApp() {
     state.weekStart = dateKey(addDays(startOfWeek(new Date()), 7));
     render();
   });
-  document.querySelectorAll("[data-bucket-name]").forEach(element => element.addEventListener("change", () => {
-    if (!suppressListRenameChange && !element.disabled) renameWorkspaceList(element);
-  }));
+  document.querySelectorAll("[data-bucket-name]").forEach(element => {
+    element.addEventListener("input", () => { element.dataset.listNameDirty = "true"; });
+    element.addEventListener("change", () => {
+      if (!suppressListRenameChange && !element.disabled) renameWorkspaceList(element);
+    });
+  });
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
     const id = el.dataset.bucketGoal;
@@ -4835,6 +4838,7 @@ function renderAfterBackgroundListRename() {
   const listNameDraft = listNameInput ? {
     listID: listNameInput.dataset.bucketName,
     name: listNameInput.value,
+    dirty: listNameInput.dataset.listNameDirty === "true",
     selectionStart: listNameInput.selectionStart,
     selectionEnd: listNameInput.selectionEnd,
   } : null;
@@ -4871,8 +4875,9 @@ function renderAfterBackgroundListRename() {
   if (listNameDraft) {
     const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
       .find(item => item.dataset.bucketName === listNameDraft.listID);
-    if (input) {
+    if (input && listNameDraft.dirty) {
       input.value = listNameDraft.name;
+      input.dataset.listNameDirty = "true";
       input.addEventListener("blur", () => {
         const list = state.board?.buckets?.find(item => item.id === listNameDraft.listID);
         if (!suppressListRenameChange && !input.disabled && list) renameWorkspaceList(input);

@@ -1450,6 +1450,101 @@ test("a cross-board list rename preserves a focused list-name draft", async t =>
   assert.deepEqual(pageErrors, []);
 });
 
+test("a returning source board cannot restore or resubmit a stale list name", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await navigateApp(page, "/app/boards/board-one");
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+
+  let sourceName = page.getByLabel("List name").nth(1);
+  assert.equal(await sourceName.inputValue(), "YouTube");
+  await sourceName.focus();
+  let previousSourceName = await sourceName.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousSourceName);
+  assert.equal(await sourceName.inputValue(), "Published");
+  assert.equal(await sourceName.evaluate(element => element === document.activeElement), true);
+  await sourceName.press("Tab");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-youtube").length, 1);
+
+  state.releaseListRename = null;
+  state.delayNextListRename = true;
+  await sourceName.fill("Videos");
+  await sourceName.press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await navigateApp(page, "/app/boards/board-one");
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+
+  sourceName = page.getByLabel("List name").nth(1);
+  assert.equal(await sourceName.inputValue(), "Published");
+  await sourceName.fill("Draft after return");
+  previousSourceName = await sourceName.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Videos");
+  await page.waitForFunction(element => !element.isConnected, previousSourceName);
+  assert.equal(await sourceName.inputValue(), "Draft after return");
+  assert.equal(await sourceName.evaluate(element => element === document.activeElement), true);
+  await sourceName.press("Tab");
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Draft after return");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-youtube").length, 3);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("overlapping list renames cannot mark a pristine stale name as edited", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(0).fill("Capture");
+  await page.getByLabel("List name").nth(0).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  const releaseInboxRename = state.releaseListRename;
+
+  state.delayNextListRename = true;
+  state.releaseListRename = null;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  const releaseYouTubeRename = state.releaseListRename;
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await navigateApp(page, "/app/boards/board-one");
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+
+  let youtubeName = page.getByLabel("List name").nth(1);
+  assert.equal(await youtubeName.inputValue(), "YouTube");
+  await youtubeName.focus();
+  let previousYouTubeName = await youtubeName.elementHandle();
+  releaseInboxRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-inbox")?.name === "Capture");
+  await page.waitForFunction(element => !element.isConnected, previousYouTubeName);
+  assert.equal(await youtubeName.inputValue(), "YouTube");
+  assert.equal(await youtubeName.evaluate(element => element === document.activeElement), true);
+
+  previousYouTubeName = await youtubeName.elementHandle();
+  releaseYouTubeRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousYouTubeName);
+  assert.equal(await youtubeName.inputValue(), "Published");
+  assert.equal(await youtubeName.evaluate(element => element === document.activeElement), true);
+  await youtubeName.press("Tab");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-youtube").length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a cross-board list rename preserves every destination form draft", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
