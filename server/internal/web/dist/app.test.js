@@ -789,6 +789,53 @@ test("opening a task loads its full description and subtasks", async () => {
   `, app);
 });
 
+test("opening a task re-resolves subtasks after a list rename completes", async () => {
+  let releaseDetail;
+  let releaseSubtasks;
+  app.pendingRenamedListDetail = new Promise(resolve => { releaseDetail = resolve; });
+  app.pendingRenamedListSubtasks = new Promise(resolve => { releaseSubtasks = resolve; });
+  vm.runInContext(`
+    savedRenamedListDetailRender = render;
+    savedRenamedListDetailGet = api.get;
+    render = () => {};
+    authVersion = 10;
+    routeVersion = 12;
+    state.me = { id: "owner" };
+    state.workspaceLists = [{ id: "list-one", boardId: "board-one", name: "YouTube" }];
+    state.board = { id: "board-one", buckets: [{ id: "list-one", name: "YouTube", tasks: [{ id: "task-one", bucketId: "list-one", title: "Summary" }] }] };
+    api.get = async path => {
+      if (path === "/api/v1/tasks/task-one") return pendingRenamedListDetail;
+      if (path.includes("parentTaskId=task-one")) return pendingRenamedListSubtasks;
+      if (path === "/api/v1/cards/task-one/entries") return { entries: [] };
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+
+  const opening = app.openTaskDetail("task-one");
+  releaseSubtasks({ tasks: [{ id: "subtask-one", parentTaskId: "task-one", bucketId: "list-one", listName: "YouTube" }] });
+  await new Promise(resolve => setImmediate(resolve));
+  vm.runInContext(`
+    workspaceListVersion += 1;
+    state.workspaceLists[0].name = "Published";
+  `, app);
+  releaseDetail({ id: "task-one", bucketId: "list-one", title: "Summary" });
+
+  assert.equal(await opening, true);
+  assert.equal(vm.runInContext("state.selectedSubtasks[0].listName", app), "Published");
+
+  vm.runInContext(`
+    render = savedRenamedListDetailRender;
+    api.get = savedRenamedListDetailGet;
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+  `, app);
+  delete app.pendingRenamedListDetail;
+  delete app.pendingRenamedListSubtasks;
+});
+
 test("loading more tasks cannot append an old list response after navigation", async () => {
   app.location = { pathname: "/app/lists/list-a", search: "" };
   vm.runInContext(`

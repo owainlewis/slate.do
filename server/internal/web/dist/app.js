@@ -1192,7 +1192,7 @@ async function openTaskDetail(taskID, trigger, options = {}) {
     ]);
     if (!isCurrent() || subtasks === null) return false;
     state.selectedTask = taskWithResolvedLocation({ ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) });
-    state.selectedSubtasks = subtasks;
+    state.selectedSubtasks = subtasks.map(taskWithResolvedLocation);
     state.selectedEntries = entryPage.entries || [];
     state.cardEntryDraft = "";
     state.cardEntryKind = "comment";
