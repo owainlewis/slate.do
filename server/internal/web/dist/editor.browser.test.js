@@ -658,6 +658,14 @@ test("task history restores unsaved parent and child drafts", async t => {
   await page.goForward();
   await page.getByRole("button", { name: "Back to parent card", exact: true }).waitFor();
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved child through history");
+
+  await page.goBack();
+  await page.getByText("Child cards", { exact: true }).waitFor();
+  await page.goBack();
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  await page.goForward();
+  await page.getByText("Child cards", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent through history");
   assert.deepEqual(pageErrors, []);
 });
 

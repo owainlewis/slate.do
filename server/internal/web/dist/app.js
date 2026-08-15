@@ -525,8 +525,9 @@ async function applyRoute() {
   if (state.agentRefreshOnDetailClose && state.agentRefreshOnDetailClose !== route.agentId) {
     state.agentRefreshOnDetailClose = "";
   }
+  const hadMountedTask = Boolean(state.selectedTask);
   if (!routeTaskID || state.selectedTask?.id !== routeTaskID) {
-    if (routeTaskID && state.selectedTask) preserveCurrentTaskDraft();
+    if (hadMountedTask) preserveCurrentTaskDraft();
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
@@ -536,7 +537,7 @@ async function applyRoute() {
     state.cardEntryPending = false;
     state.cardEntryError = "";
     state.cardEntryAttemptKey = "";
-    if (!routeTaskID) state.taskDetailDrafts = {};
+    if (!routeTaskID && !hadMountedTask) state.taskDetailDrafts = {};
     state.subtaskDraft = "";
     state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
