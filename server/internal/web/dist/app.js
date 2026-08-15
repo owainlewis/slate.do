@@ -393,16 +393,42 @@ function taskPermalink(taskID, locationRef = globalThis.location) {
   return locationRef?.origin ? `${locationRef.origin}${path}` : path;
 }
 
+const TASK_HISTORY_DEPTH_KEY = "slateTaskHistoryDepth";
+
+function taskHistoryDepth(historyRef = globalThis.history) {
+  const depth = Number(historyRef?.state?.[TASK_HISTORY_DEPTH_KEY]);
+  return Number.isSafeInteger(depth) && depth > 0 ? depth : 0;
+}
+
 function syncTaskPermalink(taskID) {
   if (!globalThis.location || !globalThis.history) return;
   if (taskIDFromLocation() === taskID) return;
-  history.pushState({}, "", taskLocationPath(taskID));
+  const currentTaskID = taskIDFromLocation();
+  const currentDepth = taskHistoryDepth();
+  if (currentTaskID && currentDepth === 0) {
+    history.replaceState({}, "", taskLocationPath(taskID));
+    return;
+  }
+  const depth = currentTaskID ? currentDepth + 1 : 1;
+  history.pushState({ [TASK_HISTORY_DEPTH_KEY]: depth }, "", taskLocationPath(taskID));
 }
 
 function clearTaskPermalink() {
   if (!globalThis.location || !globalThis.history) return;
   if (!taskIDFromLocation()) return;
   history.replaceState({}, "", taskLocationPath(""));
+}
+
+function returnFromTaskPermalink() {
+  if (!globalThis.location || !globalThis.history || !taskIDFromLocation()) return false;
+  const depth = taskHistoryDepth();
+  clearTaskPermalink();
+  if (depth > 0 && typeof history.go === "function") {
+    taskHistoryReturnPath = currentLocationPath();
+    history.go(-depth);
+    return true;
+  }
+  return false;
 }
 
 function syncPath(path) {
@@ -425,6 +451,7 @@ let workspaceListVersion = 0;
 let workspaceListLoadVersion = 0;
 let workspaceLoadVersion = 0;
 let boardLoadVersion = 0;
+let taskHistoryReturnPath = "";
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
 let cardContextMenu = null;
@@ -537,7 +564,6 @@ async function applyRoute() {
     state.cardEntryPending = false;
     state.cardEntryError = "";
     state.cardEntryAttemptKey = "";
-    if (!routeTaskID && !hadMountedTask) state.taskDetailDrafts = {};
     state.subtaskDraft = "";
     state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
@@ -1225,14 +1251,31 @@ async function openTaskDetail(taskID, trigger, options = {}) {
       api.get(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`),
     ]);
     if (!isCurrent() || subtasks === null) return false;
-    state.selectedTask = { ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) };
+    const savedDraft = state.taskDetailDrafts[taskID] || {};
+    const {
+      cardEntryDraft = "",
+      cardEntryKind = "comment",
+      cardEntryPending = false,
+      cardEntryError = "",
+      cardEntryAttemptKey = "",
+      subtaskDraft = "",
+      subtaskCreateAttempt = null,
+      subtaskPending = false,
+      subtaskError = "",
+      ...taskDraft
+    } = savedDraft;
+    state.selectedTask = { ...summary, ...detail, ...taskDraft };
     state.selectedSubtasks = subtasks;
     state.selectedEntries = entryPage.entries || [];
-    state.cardEntryDraft = "";
-    state.cardEntryKind = "comment";
-    state.cardEntryPending = false;
-    state.cardEntryError = "";
-    state.cardEntryAttemptKey = "";
+    state.cardEntryDraft = cardEntryDraft;
+    state.cardEntryKind = cardEntryKind === "output" ? "output" : "comment";
+    state.cardEntryPending = cardEntryPending;
+    state.cardEntryError = cardEntryError;
+    state.cardEntryAttemptKey = cardEntryAttemptKey;
+    state.subtaskDraft = subtaskDraft;
+    state.subtaskCreateAttempt = subtaskCreateAttempt;
+    state.subtaskPending = subtaskPending;
+    state.subtaskError = subtaskError;
     state.error = "";
     if (options.syncURL !== false) syncTaskPermalink(taskID);
     render();
@@ -3526,10 +3569,36 @@ function taskDraftFromCurrentForm(task) {
 
 function preserveCurrentTaskDraft() {
   if (!state.selectedTask) return false;
-  const draft = taskDraftFromCurrentForm(state.selectedTask);
-  if (!draft) return false;
+  const formDraft = taskDraftFromCurrentForm(state.selectedTask);
+  const draft = {
+    ...(state.taskDetailDrafts[state.selectedTask.id] || {}),
+    ...(formDraft || {}),
+    cardEntryDraft: state.cardEntryDraft,
+    cardEntryKind: state.cardEntryKind,
+    cardEntryPending: state.cardEntryPending,
+    cardEntryError: state.cardEntryError,
+    cardEntryAttemptKey: state.cardEntryAttemptKey,
+    subtaskDraft: state.subtaskDraft,
+    subtaskCreateAttempt: state.subtaskCreateAttempt,
+    subtaskPending: state.subtaskPending,
+    subtaskError: state.subtaskError,
+  };
   state.taskDetailDrafts[state.selectedTask.id] = draft;
-  state.selectedTask = { ...state.selectedTask, ...draft };
+  if (formDraft) state.selectedTask = { ...state.selectedTask, ...formDraft };
+  return true;
+}
+
+function reconcileCachedCardEntryAttempt(taskID, attemptKey, updates) {
+  const draft = state.taskDetailDrafts[taskID];
+  if (!draft || draft.cardEntryAttemptKey !== attemptKey) return false;
+  Object.assign(draft, updates);
+  return true;
+}
+
+function reconcileCachedSubtaskAttempt(taskID, attemptKey, updates) {
+  const draft = state.taskDetailDrafts[taskID];
+  if (!draft || draft.subtaskCreateAttempt?.key !== attemptKey) return false;
+  Object.assign(draft, updates);
   return true;
 }
 
@@ -3652,7 +3721,10 @@ function bindWorkspaceDetail(options = {}) {
       if (control && "value" in control) control.value = String(updated[field] || "");
     }
     state.selectedTask = merged;
-    state.taskDetailDrafts[updated.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
+    state.taskDetailDrafts[updated.id] = {
+      ...(state.taskDetailDrafts[updated.id] || {}),
+      ...Object.fromEntries(fields.map(field => [field, merged[field] || ""])),
+    };
   };
   const captureDetailFocus = captureTaskDetailFocus;
   const restoreDetailFocus = restoreTaskDetailFocus;
@@ -3682,7 +3754,7 @@ function bindWorkspaceDetail(options = {}) {
     }
   };
   const refreshAfterCommittedMutation = async (action, focus) => {
-    clearTaskPermalink();
+    returnFromTaskPermalink();
     try {
       const refreshed = await refresh();
       if (refreshed !== false) restoreDetailFocus(focus);
@@ -3820,7 +3892,7 @@ function bindWorkspaceDetail(options = {}) {
     state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
     state.subtaskError = "";
-    clearTaskPermalink();
+    returnFromTaskPermalink();
     if (refreshWorkspace) {
       state.workspaceRefreshOnDetailClose = false;
       state.workspaceLoading = true;
@@ -3899,15 +3971,25 @@ function bindWorkspaceDetail(options = {}) {
     preserveTaskDraft();
     state.cardEntryDraft = body;
     state.cardEntryAttemptKey ||= newClientRequestKey();
+    const attemptKey = state.cardEntryAttemptKey;
+    const entryKind = state.cardEntryKind;
+    const attemptIsCurrent = () => state.selectedTask?.id === taskID && state.cardEntryAttemptKey === attemptKey;
     state.cardEntryPending = true;
     state.cardEntryError = "";
+    preserveTaskDraft();
     render();
     try {
       const entry = await api.post(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`, {
-        kind: state.cardEntryKind,
+        kind: entryKind,
         body,
-      }, { headers: { "Idempotency-Key": state.cardEntryAttemptKey } });
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
+      }, { headers: { "Idempotency-Key": attemptKey } });
+      reconcileCachedCardEntryAttempt(taskID, attemptKey, {
+        cardEntryDraft: "",
+        cardEntryAttemptKey: "",
+        cardEntryPending: false,
+        cardEntryError: "",
+      });
+      if ((detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) && !attemptIsCurrent()) {
         const currentRoute = parseRoute(location.pathname);
         const currentAgentSurface = boundAgentID
           && ["agent-detail", "agent-work"].includes(currentRoute.name)
@@ -3917,7 +3999,7 @@ function bindWorkspaceDetail(options = {}) {
         }
         return;
       }
-      state.selectedEntries = [...state.selectedEntries, entry];
+      state.selectedEntries = [...state.selectedEntries.filter(item => item.id !== entry.id), entry];
       state.cardEntryDraft = "";
       state.cardEntryAttemptKey = "";
       state.cardEntryPending = false;
@@ -3936,7 +4018,11 @@ function bindWorkspaceDetail(options = {}) {
       render();
       document.querySelector("#card-entry-body")?.focus();
     } catch (err) {
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return;
+      reconcileCachedCardEntryAttempt(taskID, attemptKey, {
+        cardEntryPending: false,
+        cardEntryError: err.message,
+      });
+      if ((detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) && !attemptIsCurrent()) return;
       if (handleError(err)) return;
       state.cardEntryPending = false;
       state.cardEntryError = err.message;
@@ -3972,6 +4058,7 @@ function bindWorkspaceDetail(options = {}) {
     state.subtaskError = "";
     const idempotencyKey = subtaskCreateIdempotencyKey(parentID, title);
     const attemptIsCurrent = () => state.subtaskCreateAttempt?.key === idempotencyKey;
+    preserveTaskDraft();
     input.readOnly = true;
     const addButton = subtaskControl.querySelector("button");
     addButton.disabled = true;
@@ -3983,6 +4070,12 @@ function bindWorkspaceDetail(options = {}) {
         { headers: { "Idempotency-Key": idempotencyKey } },
       );
       reconcileLoadedTask(created);
+      reconcileCachedSubtaskAttempt(parentID, idempotencyKey, {
+        subtaskDraft: "",
+        subtaskCreateAttempt: null,
+        subtaskPending: false,
+        subtaskError: "",
+      });
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
         await refreshCurrentTaskSurface();
         if (state.selectedTask?.id === parentID) {
@@ -4006,7 +4099,11 @@ function bindWorkspaceDetail(options = {}) {
       state.selectedSubtasks = [...state.selectedSubtasks.filter(item => item.id !== created.id), created];
       await refreshAfterSubtaskMutation({ openTask: created.id });
     } catch (err) {
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) {
+      reconcileCachedSubtaskAttempt(parentID, idempotencyKey, {
+        subtaskPending: false,
+        subtaskError: err.message,
+      });
+      if ((detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) && !attemptIsCurrent()) {
         reportBackgroundMutationFailure("add child card", title, err);
         return;
       }
@@ -4069,6 +4166,7 @@ function bindWorkspaceDetail(options = {}) {
           state.subtaskPending = false;
           state.subtaskError = "";
           state.agentTaskFocusID = taskID;
+          returnFromTaskPermalink();
           render();
           return;
         }
@@ -4343,9 +4441,10 @@ function reconcileTaskMutation(updated, previousTask) {
     state.workspaceTasks = moveChildren(state.workspaceTasks);
     state.selectedSubtasks = moveChildren(state.selectedSubtasks);
     if (state.selectedTask?.parentTaskId === reconciled.id) {
-      const draft = taskDraftFromCurrentForm(state.selectedTask) || state.taskDetailDrafts[state.selectedTask.id] || {};
+      const savedDraft = state.taskDetailDrafts[state.selectedTask.id] || {};
+      const draft = taskDraftFromCurrentForm(state.selectedTask) || savedDraft;
       state.selectedTask = { ...moveChildren([state.selectedTask])[0], ...draft, bucketId: location.bucketId };
-      state.taskDetailDrafts[state.selectedTask.id] = { ...draft, bucketId: location.bucketId };
+      state.taskDetailDrafts[state.selectedTask.id] = { ...savedDraft, ...draft, bucketId: location.bucketId };
       const listControl = globalThis.document?.querySelector?.("#workspace-detail-list");
       if (listControl) listControl.value = location.bucketId;
       const context = globalThis.document?.querySelector?.(".detail-context span");
@@ -4379,7 +4478,10 @@ function reconcileTaskMutation(updated, previousTask) {
   state.selectedTask = merged;
   if (statusControl && !statusWasEdited) statusControl.value = reconciled.status;
   const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
-  state.taskDetailDrafts[reconciled.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
+  state.taskDetailDrafts[reconciled.id] = {
+    ...(state.taskDetailDrafts[reconciled.id] || {}),
+    ...Object.fromEntries(fields.map(field => [field, merged[field] || ""])),
+  };
 }
 
 function bindAppShell() {
@@ -6495,6 +6597,11 @@ function escapeAttr(value) {
 window.addEventListener("popstate", async () => {
   // Sign-out is in flight; the URL it lands on is decided when it finishes.
   if (state.view === "logging-out" || state.view === "logout-error") return;
+  if (taskHistoryReturnPath && currentLocationPath() === taskHistoryReturnPath) {
+    taskHistoryReturnPath = "";
+    return;
+  }
+  taskHistoryReturnPath = "";
   const nextRoute = parseRoute(location.pathname);
   clearSettingsCredentialsLeaving(nextRoute.settingsPage || "");
   clearAgentCredentialLeaving(nextRoute);
