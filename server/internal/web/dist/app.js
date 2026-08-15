@@ -4657,6 +4657,50 @@ function editableFormControls(form) {
   return [...(form?.elements || [])].filter(control => control.matches?.("input, textarea, select, button"));
 }
 
+function stableFocusIdentity(element) {
+  if (!element?.matches?.("button, a, input, textarea, select, [tabindex]")) return null;
+  if (element.id) return { id: element.id };
+  const dataAttributes = [...element.attributes]
+    .filter(attribute => attribute.name.startsWith("data-"))
+    .map(attribute => ({ name: attribute.name, value: attribute.value }));
+  const ariaLabel = element.getAttribute("aria-label");
+  const text = element.textContent?.trim() || "";
+  if (!dataAttributes.length && !ariaLabel && !text) return null;
+  return {
+    tagName: element.tagName,
+    dataAttributes,
+    href: element.getAttribute("href"),
+    ariaLabel,
+    text,
+  };
+}
+
+function restoreStableFocus(documentRef, identity) {
+  if (!identity) return false;
+  if (identity.id) {
+    const control = documentRef?.getElementById?.(identity.id);
+    control?.focus();
+    return Boolean(control);
+  }
+  let controls = [...(documentRef?.querySelectorAll?.(identity.tagName) || [])]
+    .filter(item => identity.dataAttributes.length
+      ? identity.dataAttributes.every(attribute => item.getAttribute(attribute.name) === attribute.value)
+      : identity.ariaLabel
+        ? item.getAttribute("aria-label") === identity.ariaLabel
+        : item.textContent?.trim() === identity.text);
+  for (const [attribute, value] of [["href", identity.href], ["aria-label", identity.ariaLabel]]) {
+    if (controls.length <= 1) break;
+    if (value === null) continue;
+    controls = controls.filter(item => item.getAttribute(attribute) === value);
+  }
+  if (controls.length > 1 && identity.text) {
+    controls = controls.filter(item => item.textContent?.trim() === identity.text);
+  }
+  const control = controls.length === 1 ? controls[0] : null;
+  control?.focus();
+  return Boolean(control);
+}
+
 function captureEditableFormDrafts(documentRef, active) {
   return [...(documentRef?.querySelectorAll?.("form") || [])].flatMap(form => {
     const identity = editableFormIdentity(form);
@@ -4728,7 +4772,7 @@ function renderAfterBackgroundListRename() {
   const documentRef = globalThis.document;
   const active = documentRef?.activeElement;
   const sidebarOpen = Boolean(documentRef?.querySelector?.(".sidebar")?.classList.contains("open"));
-  const standaloneFocusID = active?.matches?.("#priority-filter, #flow-list-filter") ? active.id : "";
+  const stableFocus = stableFocusIdentity(active);
   const listNameInput = active?.matches?.("[data-bucket-name]") ? active : null;
   const listNameDraft = listNameInput ? {
     listID: listNameInput.dataset.bucketName,
@@ -4795,8 +4839,8 @@ function renderAfterBackgroundListRename() {
     if (formFocus.selectionStart !== null && formFocus.selectionEnd !== null) {
       formFocus.control.setSelectionRange(formFocus.selectionStart, formFocus.selectionEnd);
     }
-  } else if (standaloneFocusID) {
-    documentRef?.getElementById?.(standaloneFocusID)?.focus();
+  } else if (restoreStableFocus(documentRef, stableFocus)) {
+    return;
   } else {
     restoreTaskDetailFocus(taskDetailFocus);
   }

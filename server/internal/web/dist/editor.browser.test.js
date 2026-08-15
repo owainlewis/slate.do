@@ -1772,6 +1772,102 @@ test("a background list rename preserves standalone board filter focus", async t
   assert.deepEqual(pageErrors, []);
 });
 
+test("background list renames preserve task-row, view-tab, and task-control focus", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  const task = page.locator('.workspace-flow-card [data-open-task="task-parent"]');
+  await task.waitFor();
+  await task.focus();
+  const previousTask = await task.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousTask);
+  const taskFocus = await page.evaluate(() => ({
+    tagName: document.activeElement?.tagName,
+    id: document.activeElement?.id,
+    openTask: document.activeElement?.dataset?.openTask,
+    ariaLabel: document.activeElement?.getAttribute?.("aria-label"),
+  }));
+  assert.equal(await task.evaluate(element => element === document.activeElement), true, JSON.stringify(taskFocus));
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Videos");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks?view=flow");
+  const flowTab = page.getByRole("tab", { name: "Flow", selected: true });
+  await page.locator('.workspace-flow.grouped-by-status [data-task="task-parent"]').waitFor();
+  await flowTab.focus();
+  const previousFlowTab = await flowTab.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Videos");
+  await page.waitForFunction(element => !element.isConnected, previousFlowTab);
+  assert.equal(await flowTab.evaluate(element => element === document.activeElement), true);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Clips");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true }).click();
+  await page.getByText("Research examples", { exact: true }).click();
+  const parentButton = page.getByRole("button", { name: "Back to parent card", exact: true });
+  await parentButton.focus();
+  const previousParentButton = await parentButton.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Clips");
+  await page.waitForFunction(element => !element.isConnected, previousParentButton);
+  assert.equal(await parentButton.evaluate(element => element === document.activeElement), true);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Footage");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research");
+  const viewAllWork = page.getByRole("link", { name: "View all work", exact: true });
+  await viewAllWork.focus();
+  const previousViewAllWork = await viewAllWork.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Footage");
+  await page.waitForFunction(element => !element.isConnected, previousViewAllWork);
+  assert.equal(await viewAllWork.evaluate(element => element === document.activeElement), true);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Assets");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true }).click();
+  const addChild = page.getByRole("button", { name: "Add child", exact: true });
+  await addChild.focus();
+  const previousAddChild = await addChild.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Assets");
+  await page.waitForFunction(element => !element.isConnected, previousAddChild);
+  assert.equal(await addChild.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("board settings are removed and legacy links return to the board", async t => {
   const { page, origin, pageErrors } = await startWorkspace(t);
 
