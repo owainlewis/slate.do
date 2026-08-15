@@ -1868,6 +1868,80 @@ test("background list renames preserve task-row, view-tab, and task-control focu
   assert.deepEqual(pageErrors, []);
 });
 
+test("background list renames preserve route scroll positions", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t, { width: 600, height: 480 });
+  for (let index = 0; index < 24; index += 1) {
+    state.tasks.push({
+      ...state.tasks[1],
+      id: `task-scroll-${index}`,
+      title: `Scroll fixture card ${index}`,
+    });
+  }
+  state.lists.push({
+    id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Inbox", goal: "", isInbox: true, openCount: 24,
+  });
+  for (let index = 0; index < 24; index += 1) {
+    state.tasks.push({
+      ...state.tasks[1],
+      id: `task-other-scroll-${index}`,
+      boardId: "board-two",
+      bucketId: "list-other-inbox",
+      title: `Other scroll fixture card ${index}`,
+    });
+  }
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  const workspaceContent = page.locator(".workspace-content");
+  const offscreenTask = page.locator('[data-open-task="task-parent"]');
+  await offscreenTask.focus();
+  const previousOffscreenTask = await offscreenTask.elementHandle();
+  await workspaceContent.evaluate(element => { element.scrollTop = 240; });
+  assert.equal(await workspaceContent.evaluate(element => element.scrollTop), 240);
+  assert.equal(await offscreenTask.evaluate(element => element === document.activeElement), true);
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousOffscreenTask);
+  assert.equal(await workspaceContent.evaluate(element => element.scrollTop), 240);
+  const restoredTaskFocus = await page.evaluate(() => ({
+    tagName: document.activeElement?.tagName,
+    openTask: document.activeElement?.dataset?.openTask,
+    id: document.activeElement?.id,
+  }));
+  assert.equal(await page.locator('[data-open-task="task-parent"]').evaluate(element => element === document.activeElement), true, JSON.stringify(restoredTaskFocus));
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Videos");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await navigateApp(page, "/app/boards/board-two");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  await page.addStyleTag({ content: ".flow-cards { max-height: 120px !important; }" });
+  await page.getByRole("button", { name: "Flow", exact: true }).click();
+  const boardFlow = page.locator(".flow");
+  const newCards = page.locator('[data-flow-status="new"] .flow-cards');
+  await boardFlow.evaluate(element => { element.scrollLeft = 180; });
+  await newCards.evaluate(element => { element.scrollTop = 160; });
+  assert.equal(await boardFlow.evaluate(element => element.scrollLeft), 180);
+  assert.equal(await newCards.evaluate(element => element.scrollTop), 160);
+  const previousFlow = await boardFlow.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Videos");
+  await page.waitForFunction(element => !element.isConnected, previousFlow);
+  assert.equal(await boardFlow.evaluate(element => element.scrollLeft), 180);
+  assert.equal(await newCards.evaluate(element => element.scrollTop), 160);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("board settings are removed and legacy links return to the board", async t => {
   const { page, origin, pageErrors } = await startWorkspace(t);
 

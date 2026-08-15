@@ -4701,6 +4701,37 @@ function restoreStableFocus(documentRef, identity) {
   return Boolean(control);
 }
 
+function captureRenderScroll(documentRef) {
+  const root = documentRef?.querySelector?.("#app");
+  const positions = [...(root?.querySelectorAll?.("*") || [])].flatMap(element => {
+    if (element.scrollTop === 0 && element.scrollLeft === 0) return [];
+    const path = [];
+    for (let current = element; current && current !== root; current = current.parentElement) {
+      const index = [...current.parentElement.children].indexOf(current);
+      if (index < 0) return [];
+      path.unshift(index);
+    }
+    return [{ path, top: element.scrollTop, left: element.scrollLeft }];
+  });
+  const page = documentRef?.scrollingElement;
+  return { positions, pageTop: page?.scrollTop || 0, pageLeft: page?.scrollLeft || 0 };
+}
+
+function restoreRenderScroll(documentRef, snapshot) {
+  const root = documentRef?.querySelector?.("#app");
+  for (const saved of snapshot?.positions || []) {
+    const element = saved.path.reduce((parent, index) => parent?.children?.[index], root);
+    if (!element) continue;
+    element.scrollTop = saved.top;
+    element.scrollLeft = saved.left;
+  }
+  const page = documentRef?.scrollingElement;
+  if (page) {
+    page.scrollTop = snapshot?.pageTop || 0;
+    page.scrollLeft = snapshot?.pageLeft || 0;
+  }
+}
+
 function captureEditableFormDrafts(documentRef, active) {
   return [...(documentRef?.querySelectorAll?.("form") || [])].flatMap(form => {
     const identity = editableFormIdentity(form);
@@ -4772,6 +4803,7 @@ function renderAfterBackgroundListRename() {
   const documentRef = globalThis.document;
   const active = documentRef?.activeElement;
   const sidebarOpen = Boolean(documentRef?.querySelector?.(".sidebar")?.classList.contains("open"));
+  const scrollSnapshot = captureRenderScroll(documentRef);
   const stableFocus = stableFocusIdentity(active);
   const listNameInput = active?.matches?.("[data-bucket-name]") ? active : null;
   const listNameDraft = listNameInput ? {
@@ -4839,11 +4871,10 @@ function renderAfterBackgroundListRename() {
     if (formFocus.selectionStart !== null && formFocus.selectionEnd !== null) {
       formFocus.control.setSelectionRange(formFocus.selectionStart, formFocus.selectionEnd);
     }
-  } else if (restoreStableFocus(documentRef, stableFocus)) {
-    return;
-  } else {
+  } else if (!restoreStableFocus(documentRef, stableFocus)) {
     restoreTaskDetailFocus(taskDetailFocus);
   }
+  restoreRenderScroll(documentRef, scrollSnapshot);
 }
 
 async function renameWorkspaceList(element) {
