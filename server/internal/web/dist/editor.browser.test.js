@@ -1432,6 +1432,48 @@ test("a list rename keeps a pending destination form locked and retryable", asyn
   assert.deepEqual(pageErrors, []);
 });
 
+test("a list rename keeps pending child creation read-only and reusable", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.locator('[data-open-task="task-parent"]').click();
+  const childTitle = page.getByLabel("Child card title", { exact: true });
+  await childTitle.fill("Pending child");
+  state.delayNextSubtask = true;
+  const previousInput = await childTitle.elementHandle();
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await waitFor(() => typeof state.releaseSubtask === "function");
+  assert.equal(await previousInput.evaluate(element => element.readOnly), true);
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousInput);
+
+  const pendingTitle = page.getByLabel("Child card title", { exact: true });
+  assert.equal(await pendingTitle.evaluate(element => element.readOnly), true);
+  assert.equal(await pendingTitle.isDisabled(), false);
+  assert.equal(await pendingTitle.inputValue(), "Pending child");
+  assert.equal(await page.getByRole("button", { name: "Adding…", exact: true }).isDisabled(), true);
+
+  state.releaseSubtask();
+  await page.getByText("Pending child", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Add child", exact: true }).waitFor();
+  assert.equal(await pendingTitle.evaluate(element => element.readOnly), false);
+  await pendingTitle.fill("Next child");
+  await page.getByRole("button", { name: "Add child", exact: true }).click();
+  await page.getByText("Next child", { exact: true }).waitFor();
+  assert.equal(state.subtaskRequestKeys.length, 2);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a list rename keeps a failed pending board rename retryable", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 

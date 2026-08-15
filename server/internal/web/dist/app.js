@@ -4499,6 +4499,7 @@ function captureEditableFormDrafts(documentRef, active) {
       value: control.matches("input, textarea, select") ? control.value : null,
       checked: ["checkbox", "radio"].includes(control.type) ? control.checked : null,
       disabled: control.disabled,
+      readOnly: "readOnly" in control ? control.readOnly : null,
       innerHTML: control.tagName === "BUTTON" && control.disabled ? control.innerHTML : null,
       active: control === active,
       selectionStart: control === active && ["text", "search", "url", "tel", "password", "textarea"].includes(control.type)
@@ -4526,6 +4527,7 @@ function restoreEditableFormDrafts(documentRef, drafts) {
       if (saved.value !== null) control.value = saved.value;
       if (saved.checked !== null) control.checked = saved.checked;
       control.disabled = saved.disabled;
+      if (saved.readOnly !== null) control.readOnly = saved.readOnly;
       if (saved.innerHTML !== null) control.innerHTML = saved.innerHTML;
       if (saved.active) focus = { control, selectionStart: saved.selectionStart, selectionEnd: saved.selectionEnd };
     }
