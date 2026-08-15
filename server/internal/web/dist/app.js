@@ -685,6 +685,7 @@ async function loadWorkspaceListIndex(expectedRouteVersion) {
   if (!loadIsCurrent()) return false;
   if (expectedListVersion !== workspaceListVersion) return true;
   state.workspaceLists = data.lists || [];
+  resolveCachedTaskLocations();
   return true;
 }
 
@@ -3393,6 +3394,16 @@ function resolveAgentTaskLocations(detail, workPage) {
   if (workPage) workPage.items = (workPage.items || []).map(taskWithResolvedLocation);
 }
 
+function resolveCachedTaskLocations() {
+  state.workspaceTasks = state.workspaceTasks.map(taskWithResolvedLocation);
+  state.selectedSubtasks = state.selectedSubtasks.map(taskWithResolvedLocation);
+  if (state.selectedTask) state.selectedTask = taskWithResolvedLocation(state.selectedTask);
+  for (const list of state.board?.buckets || []) {
+    list.tasks = (list.tasks || []).map(taskWithResolvedLocation);
+  }
+  resolveAgentTaskLocations(state.agentDetail, state.agentWorkPage);
+}
+
 function reconcileAgentTaskCaches(task, { deleted = false, previousTask = null } = {}) {
   task = taskWithResolvedLocation(task);
   previousTask = previousTask ? taskWithResolvedLocation(previousTask) : null;
@@ -4444,7 +4455,36 @@ function renderAfterBackgroundListRename() {
     : route.name === "board" ? state.view === "board" && state.board?.id === route.boardId
       : ["agent-detail", "agent-work"].includes(route.name)
         && state.view === route.name && state.agentDetail?.agent?.id === route.agentId;
-  if (mounted) renderPreservingCurrentTaskDetail();
+  if (!mounted) return;
+
+  const documentRef = globalThis.document;
+  const active = documentRef?.activeElement;
+  const quickAddDrafts = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])].map(form => ({
+    listID: form.dataset.addTask,
+    title: form.elements?.title?.value || "",
+  }));
+  const quickAddForm = active?.closest?.("[data-add-task]");
+  const assignForm = documentRef?.querySelector?.("#assign-work-form");
+  const focus = captureTaskDetailFocus()
+    || (quickAddForm ? { surface: "quick-add", listID: quickAddForm.dataset.addTask, name: active.name }
+      : assignForm?.contains(active) ? { surface: "assign", id: active.id, name: active.name } : null);
+  if (state.agentAssignOpen && assignForm) state.agentAssignDraft = assignDraftFromForm(assignForm);
+  preserveCurrentTaskDraft();
+  render();
+  for (const draft of quickAddDrafts) {
+    const form = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])]
+      .find(item => item.dataset.addTask === draft.listID);
+    if (form?.elements?.title) form.elements.title.value = draft.title;
+  }
+  if (focus?.surface === "quick-add") {
+    const form = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])]
+      .find(item => item.dataset.addTask === focus.listID);
+    (form?.elements?.namedItem?.(focus.name) || form?.elements?.[focus.name])?.focus();
+  } else if (focus?.surface === "assign") {
+    (documentRef?.getElementById?.(focus.id) || documentRef?.querySelector?.(`#assign-work-form [name="${focus.name}"]`))?.focus();
+  } else {
+    restoreTaskDetailFocus(focus);
+  }
 }
 
 async function renameWorkspaceList(element) {

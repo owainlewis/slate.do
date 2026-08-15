@@ -2004,6 +2004,47 @@ test("task loaders resolve stale payload names against the current list index", 
   `, app);
 });
 
+test("a newer list index reconciles tasks that finished loading against an older cache", async () => {
+  let releaseLists;
+  app.pendingRefreshedLists = new Promise(resolve => { releaseLists = resolve; });
+  app.location = { pathname: "/app/tasks", search: "" };
+  vm.runInContext(`
+    savedConcurrentRefreshGet = api.get;
+    authVersion = 67;
+    routeVersion = 118;
+    workspaceListVersion = 0;
+    workspaceListLoadVersion = 0;
+    workspaceLoadVersion = 0;
+    state.me = { id: "owner" };
+    state.boards = [{ id: "board-one", name: "Workspace" }];
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    state.workspaceTasks = [];
+    api.get = async path => {
+      if (path === "/api/v1/lists") return pendingRefreshedLists;
+      if (path.startsWith("/api/v1/tasks?")) {
+        return { tasks: [{ id: "workspace-task", bucketId: "youtube", listName: "Published" }] };
+      }
+      throw new Error("unexpected request " + path);
+    };
+  `, app);
+
+  const listsLoading = app.loadWorkspaceListIndex(118);
+  assert.equal(await app.loadWorkspace({ name: "workspace", scope: "all" }, 118), true);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].listName", app), "YouTube");
+
+  releaseLists({ lists: [{ id: "youtube", boardId: "board-one", name: "Published" }] });
+  assert.equal(await listsLoading, true);
+  assert.equal(vm.runInContext("state.workspaceTasks[0].listName", app), "Published");
+  vm.runInContext(`
+    api.get = savedConcurrentRefreshGet;
+    state.me = null;
+    state.boards = [];
+    state.workspaceLists = [];
+    state.workspaceTasks = [];
+  `, app);
+  delete app.pendingRefreshedLists;
+});
+
 test("an older list-index response cannot overwrite a newer count", async () => {
   let releaseOlderLists;
   app.pendingOlderLists = new Promise(resolve => { releaseOlderLists = resolve; });

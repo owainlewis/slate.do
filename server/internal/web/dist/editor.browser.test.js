@@ -1208,6 +1208,61 @@ test("a list renamed while switching boards keeps its new name in the move contr
   assert.deepEqual(pageErrors, []);
 });
 
+test("a cross-board list rename preserves a focused quick-add draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 0 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+
+  const quickAdd = page.locator('[data-add-task="list-other"] input[name="title"]');
+  await quickAdd.fill("Unsubmitted quick add");
+  await quickAdd.focus();
+  const previousInput = await quickAdd.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousInput);
+
+  assert.equal(await quickAdd.inputValue(), "Unsubmitted quick add");
+  assert.equal(await quickAdd.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list rename preserves a focused agent assignment draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  const listName = page.getByLabel("List name").nth(1);
+  await listName.fill("Published");
+  await listName.press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research");
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Assign work", exact: true }).click();
+  const title = page.getByLabel("Title", { exact: true });
+  const description = page.getByLabel("Description", { exact: true });
+  await title.fill("Unsubmitted assignment");
+  await description.fill("Keep this assignment draft");
+  await description.focus();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(() => document.querySelector('#assign-list option[value="list-youtube"]')?.textContent === "Published");
+
+  assert.equal(await title.inputValue(), "Unsubmitted assignment");
+  assert.equal(await description.inputValue(), "Keep this assignment draft");
+  assert.equal(await description.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("board settings are removed and legacy links return to the board", async t => {
   const { page, origin, pageErrors } = await startWorkspace(t);
 
