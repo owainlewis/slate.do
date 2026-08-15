@@ -2250,7 +2250,7 @@ test("detail exposes state without a type control", () => {
   assert.doesNotMatch(actionHTML, /name="kind"/);
 });
 
-test("detail presents one contextual accessible card editor with clear actions", () => {
+test("detail presents an autosaving editor with destructive actions in the header menu", () => {
   vm.runInContext(`
     state.view = "home";
     state.workspaceLists = [{ id: "inbox", name: "Home list" }];
@@ -2263,14 +2263,55 @@ test("detail presents one contextual accessible card editor with clear actions",
   assert.match(html, /class="detail-title"/);
   assert.match(html, /class="detail-description"/);
   assert.match(html, /class="detail-properties"/);
-  assert.match(html, />Save changes</);
+  assert.match(html, /data-task-save-status data-state="saved"/);
+  assert.match(html, />Saved<\/span>/);
+  assert.doesNotMatch(html, />Save changes</);
+  assert.doesNotMatch(html, /class="detail-actions"/);
   assert.match(html, /data-close-detail/);
   assert.match(html, />Back to cards<\/span>/);
-  assert.match(html, />Delete card</);
+  assert.match(html, /<summary aria-label="More card actions" aria-haspopup="menu">/);
+  assert.match(html, /role="menu" aria-label="Card actions"/);
+  assert.match(html, /role="menuitem" id="delete-task"/);
   assert.match(html, /Home list/);
   assert.match(html, /<label for="workspace-detail-owner">Agent<\/label>/);
   assert.doesNotMatch(html, /Act with an agent|Choose an agent as owner|workspace-agent-action/);
   assert.doesNotMatch(html, /aria-label="Close card"/);
+});
+
+test("task autosave sends only fields that differ from the persisted baseline", () => {
+  vm.runInContext(`
+    state.taskDetailBaselines = { task: {
+      title: "Original", description: "Brief", status: "working", bucketId: "list",
+      priority: "", assigneeAgentId: "agent", scheduledDate: "",
+    } };
+  `, app);
+  const draft = {
+    title: "Changed", description: "Brief", status: "working", bucketId: "list",
+    priority: "p1", assigneeAgentId: "agent", scheduledDate: "",
+  };
+
+  assert.deepEqual(JSON.parse(JSON.stringify(app.taskDetailDirtyFields("task", draft))), ["title", "priority"]);
+  assert.equal(app.taskDetailDraftIsDirty(app.taskDetailSnapshot({ ...draft, title: "Original", priority: "" }), draft), true);
+  vm.runInContext(`state.taskDetailBaselines = {};`, app);
+});
+
+test("task autosave validates title runes and description bytes before sending", () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(app.taskDetailDraftValidation({ title: "", description: "" }))), {
+    field: "title",
+    message: "Title is required.",
+  });
+  assert.equal(app.taskDetailDraftValidation({ title: "x".repeat(300), description: "" }), null);
+  assert.equal(app.taskDetailDraftValidation({ title: "😀".repeat(301), description: "" }).field, "title");
+  assert.equal(app.taskDetailDraftValidation({ title: "Valid", description: "😀".repeat(4097) }).field, "description");
+});
+
+test("task autosave status markup exposes saving, saved, and retry states", () => {
+  vm.runInContext(`state.taskDetailSaveState = "saving";`, app);
+  assert.match(app.taskDetailSaveStatusHTML(), /data-state="saving"[\s\S]*Saving…/);
+  vm.runInContext(`state.taskDetailSaveState = "error";`, app);
+  assert.match(app.taskDetailSaveStatusHTML(), /data-state="error"[\s\S]*Couldn’t save[\s\S]*data-retry-task-save/);
+  vm.runInContext(`state.taskDetailSaveState = "saved";`, app);
+  assert.match(app.taskDetailSaveStatusHTML(), /data-state="saved"[\s\S]*Saved/);
 });
 
 test("detail can move a parent task between account-wide lists", () => {

@@ -26,6 +26,10 @@ const ICON_PATHS = {
 
 const AGENT_NAME_LIMIT = 100;
 const AGENT_INSTRUCTIONS_BYTE_LIMIT = 4096;
+const TASK_TITLE_RUNE_LIMIT = 300;
+const TASK_DESCRIPTION_BYTE_LIMIT = 16 * 1024;
+const TASK_DETAIL_AUTOSAVE_DELAY = 1000;
+const TASK_DETAIL_FIELDS = ["title", "description", "status", "bucketId", "priority", "assigneeAgentId", "scheduledDate"];
 
 function icon(name, cls = "") {
   const paths = ICON_PATHS[name] || "";
@@ -116,6 +120,10 @@ const state = {
   cardEntryError: "",
   cardEntryAttemptKey: "",
   taskDetailDrafts: {},
+  taskDetailBaselines: {},
+  taskDetailSaveState: "saved",
+  taskDetailSaveError: "",
+  taskDetailSaveErrorField: "",
   taskMutationError: null,
   subtaskDraft: "",
   subtaskCreateAttempt: null,
@@ -373,18 +381,22 @@ function currentLocationPath() {
 
 function syncPath(path) {
   if (currentPath() !== normalizePath(path)) history.replaceState({}, "", path);
+  appliedLocationPath = currentLocationPath();
 }
 
-function navigate(path, options = {}) {
+async function navigate(path, options = {}) {
+  if (!options.skipTaskDetailAutosave && !await prepareTaskDetailLeave()) return false;
   const nextRoute = parseRoute(path);
   clearSettingsCredentialsLeaving(nextRoute.name === "settings" ? nextRoute.settingsPage : "");
   clearAgentCredentialLeaving(nextRoute);
   if (options.replace || currentLocationPath() === path) history.replaceState({}, "", path);
   else history.pushState({}, "", path);
+  appliedLocationPath = currentLocationPath();
   return applyRoute();
 }
 
 let routeVersion = 0;
+let appliedLocationPath = "";
 let taskDetailVersion = 0;
 let workspaceViewActivationVersion = 0;
 let workspaceListVersion = 0;
@@ -394,6 +406,9 @@ let boardLoadVersion = 0;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
 let cardContextMenu = null;
+let taskDetailAutosaveTimer = null;
+let taskDetailAutosavePromise = null;
+let taskDetailAutosaveRequested = false;
 
 async function serializeTaskMutation(taskID, mutation) {
   const sessionVersion = authVersion;
@@ -501,6 +516,7 @@ async function applyRoute() {
     state.cardEntryError = "";
     state.cardEntryAttemptKey = "";
     state.taskDetailDrafts = {};
+    clearTaskDetailAutosave();
     state.subtaskDraft = "";
     state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
@@ -643,6 +659,7 @@ function readResetToken() {
 }
 
 async function boot() {
+  appliedLocationPath = currentLocationPath();
   try {
     const me = await api.get("/api/v1/me");
     if (me.authenticated) beginAuthenticatedSession(me.user);
@@ -824,6 +841,7 @@ function resetAuthenticatedState() {
   state.cardEntryPending = false;
   state.cardEntryError = "";
   state.taskDetailDrafts = {};
+  clearTaskDetailAutosave();
   state.taskMutationError = null;
   state.subtaskDraft = "";
   state.subtaskCreateAttempt = null;
@@ -923,6 +941,7 @@ async function establishAuthenticatedSession(path, input) {
 
 async function logout() {
   if (logoutRequest) return logoutRequest;
+  if (!await prepareTaskDetailLeave()) return false;
   authVersion += 1;
   resetAuthenticatedState();
   state.view = "logging-out";
@@ -1184,6 +1203,7 @@ async function openTaskDetail(taskID, trigger, options = {}) {
     ]);
     if (!isCurrent() || subtasks === null) return false;
     state.selectedTask = { ...summary, ...detail, ...(state.taskDetailDrafts[taskID] || {}) };
+    beginTaskDetailAutosave(state.selectedTask);
     state.selectedSubtasks = subtasks;
     state.selectedEntries = entryPage.entries || [];
     state.cardEntryDraft = "";
@@ -1792,11 +1812,15 @@ function workspaceDetailHTML(task) {
       <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
     </section>`;
   return `<section class="workspace-detail" aria-label="Card detail" data-detail-surface tabindex="-1">
-      <header class="detail-head"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Child card" : "Card"}</b></div></header>
+      <header class="detail-head">
+        <div class="detail-head-start"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Child card" : "Card"}</b></div></div>
+        <div class="detail-head-actions">${taskDetailSaveStatusHTML()}<details class="task-detail-actions-menu"><summary aria-label="More card actions" aria-haspopup="menu">•••</summary><div role="menu" aria-label="Card actions"><button class="danger" type="button" role="menuitem" id="delete-task">${icon("trash")}<span>Delete card</span></button></div></details></div>
+      </header>
+      <p class="task-detail-save-error" data-task-save-error role="alert" ${state.taskDetailSaveError && !state.taskDetailSaveErrorField ? "" : "hidden"}>${state.taskDetailSaveErrorField ? "" : escapeHTML(state.taskDetailSaveError)}</p>
       <form id="workspace-detail-form" class="workspace-detail-form">
         <div class="workspace-detail-main">
-          <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
-          <label class="workspace-brief-label" for="workspace-detail-description">Prompt and context</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…">${escapeHTML(task.description || "")}</textarea>
+          <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required aria-describedby="workspace-detail-title-error"><p class="task-field-error" id="workspace-detail-title-error" data-task-field-error="title" role="alert" hidden></p>
+          <label class="workspace-brief-label" for="workspace-detail-description">Prompt and context</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…" aria-describedby="workspace-detail-description-error">${escapeHTML(task.description || "")}</textarea><p class="task-field-error" id="workspace-detail-description-error" data-task-field-error="description" role="alert" hidden></p>
           <section class="card-conversation" aria-labelledby="card-conversation-heading">
             <header><div><h3 id="card-conversation-heading">Conversation</h3><span>${state.selectedEntries.length}</span></div></header>
             ${entries ? `<div class="card-entry-list">${entries}</div>` : `<p class="card-conversation-empty">Comments and agent outputs will appear here.</p>`}
@@ -1821,7 +1845,6 @@ function workspaceDetailHTML(task) {
             <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
           </div>
         </aside>
-        <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete card</button><div><button class="primary" type="submit">Save changes</button></div></footer>
       </form>
     </section>`;
 }
@@ -3474,6 +3497,243 @@ function taskDraftFromCurrentForm(task) {
   };
 }
 
+function taskDetailSnapshot(task = {}) {
+  return Object.fromEntries(TASK_DETAIL_FIELDS.map(field => [field, String(task[field] || "")]));
+}
+
+function taskDetailDraftIsDirty(baseline, draft) {
+  if (!baseline || !draft) return false;
+  return TASK_DETAIL_FIELDS.some(field => String(draft[field] || "") !== String(baseline[field] || ""));
+}
+
+function taskDetailDirtyFields(taskID, draft) {
+  const baseline = state.taskDetailBaselines[taskID];
+  if (!baseline || !draft) return [];
+  return TASK_DETAIL_FIELDS.filter(field => String(draft[field] || "") !== String(baseline[field] || ""));
+}
+
+function taskDetailDraftValidation(draft) {
+  const title = String(draft?.title || "").trim();
+  if (!title) return { field: "title", message: "Title is required." };
+  if ([...title].length > TASK_TITLE_RUNE_LIMIT) {
+    return { field: "title", message: `Title must be ${TASK_TITLE_RUNE_LIMIT} characters or fewer.` };
+  }
+  if (utf8Length(draft?.description) > TASK_DESCRIPTION_BYTE_LIMIT) {
+    return { field: "description", message: "Prompt and context must be 16 KiB or smaller." };
+  }
+  return null;
+}
+
+function taskDetailSaveStateLabel() {
+  if (state.taskDetailSaveState === "saving") return "Saving…";
+  if (state.taskDetailSaveState === "error") return "Couldn’t save";
+  return "Saved";
+}
+
+function taskDetailSaveStatusHTML() {
+  const error = state.taskDetailSaveState === "error";
+  const saved = state.taskDetailSaveState === "saved";
+  return `<div class="task-detail-save-status ${error ? "error" : ""}" data-task-save-status data-state="${escapeAttr(state.taskDetailSaveState)}" aria-live="polite">
+    <span>${saved ? icon("check") : ""}${escapeHTML(taskDetailSaveStateLabel())}</span>
+    <button type="button" data-retry-task-save ${error ? "" : "hidden"}>Retry</button>
+  </div>`;
+}
+
+function syncTaskDetailSaveStatus() {
+  const status = globalThis.document?.querySelector?.("[data-task-save-status]");
+  if (status) {
+    const error = state.taskDetailSaveState === "error";
+    const saved = state.taskDetailSaveState === "saved";
+    status.dataset.state = state.taskDetailSaveState;
+    status.classList.toggle("error", error);
+    const label = status.querySelector("span");
+    if (label) label.innerHTML = `${saved ? icon("check") : ""}${escapeHTML(taskDetailSaveStateLabel())}`;
+    const retry = status.querySelector("[data-retry-task-save]");
+    if (retry) retry.hidden = !error;
+  }
+  const message = globalThis.document?.querySelector?.("[data-task-save-error]");
+  if (message) {
+    const showGlobalError = Boolean(state.taskDetailSaveError && !state.taskDetailSaveErrorField);
+    message.textContent = showGlobalError ? state.taskDetailSaveError : "";
+    message.hidden = !showGlobalError;
+  }
+  for (const field of ["title", "description"]) {
+    const fieldError = globalThis.document?.querySelector?.(`[data-task-field-error="${field}"]`);
+    if (!fieldError) continue;
+    fieldError.textContent = state.taskDetailSaveErrorField === field ? state.taskDetailSaveError : "";
+    fieldError.hidden = state.taskDetailSaveErrorField !== field || !state.taskDetailSaveError;
+  }
+}
+
+function setTaskDetailSaveState(saveState, error = "", field = "") {
+  state.taskDetailSaveState = saveState;
+  state.taskDetailSaveError = error;
+  state.taskDetailSaveErrorField = field;
+  syncTaskDetailSaveStatus();
+}
+
+function clearTaskDetailAutosave() {
+  globalThis.clearTimeout?.(taskDetailAutosaveTimer);
+  taskDetailAutosaveTimer = null;
+  taskDetailAutosaveRequested = false;
+  taskDetailAutosavePromise = null;
+  state.taskDetailBaselines = {};
+  state.taskDetailSaveState = "saved";
+  state.taskDetailSaveError = "";
+  state.taskDetailSaveErrorField = "";
+}
+
+function beginTaskDetailAutosave(task) {
+  globalThis.clearTimeout?.(taskDetailAutosaveTimer);
+  taskDetailAutosaveTimer = null;
+  taskDetailAutosaveRequested = false;
+  taskDetailAutosavePromise = null;
+  const snapshot = taskDetailSnapshot(task);
+  state.taskDetailBaselines = { [task.id]: snapshot };
+  state.taskDetailDrafts[task.id] = snapshot;
+  setTaskDetailSaveState("saved");
+}
+
+function currentTaskDetailDraft() {
+  if (!state.selectedTask) return null;
+  return taskDetailSnapshot(
+    taskDraftFromCurrentForm(state.selectedTask)
+      || state.taskDetailDrafts[state.selectedTask.id]
+      || state.selectedTask,
+  );
+}
+
+function captureTaskDetailAutosaveDraft() {
+  if (!state.selectedTask) return null;
+  const draft = currentTaskDetailDraft();
+  if (!draft) return null;
+  state.taskDetailDrafts[state.selectedTask.id] = draft;
+  state.selectedTask = { ...state.selectedTask, ...draft };
+  return draft;
+}
+
+function taskDetailHasUnsavedChanges() {
+  if (!state.selectedTask) return false;
+  const taskID = state.selectedTask.id;
+  const draft = currentTaskDetailDraft();
+  return Boolean(taskDetailAutosaveTimer || taskDetailAutosavePromise || taskDetailAutosaveRequested
+    || taskDetailDraftIsDirty(state.taskDetailBaselines[taskID], draft));
+}
+
+async function commitTaskDetailAutosave() {
+  globalThis.clearTimeout?.(taskDetailAutosaveTimer);
+  taskDetailAutosaveTimer = null;
+  if (!state.selectedTask) return true;
+  if (taskDetailAutosavePromise) {
+    taskDetailAutosaveRequested = true;
+    const saved = await taskDetailAutosavePromise;
+    return saved ? commitTaskDetailAutosave() : false;
+  }
+
+  const taskID = state.selectedTask.id;
+  const detailVersion = taskDetailVersion;
+  const startedRouteVersion = routeVersion;
+  const draft = captureTaskDetailAutosaveDraft();
+  const validation = taskDetailDraftValidation(draft);
+  if (validation) {
+    setTaskDetailSaveState("error", validation.message, validation.field);
+    return false;
+  }
+  const dirtyFields = taskDetailDirtyFields(taskID, draft);
+  if (!dirtyFields.length) {
+    taskDetailAutosaveRequested = false;
+    setTaskDetailSaveState("saved");
+    return true;
+  }
+
+  const payload = Object.fromEntries(dirtyFields.map(field => [field, draft[field]]));
+  if (state.selectedTask.parentTaskId) delete payload.bucketId;
+  const baseline = state.taskDetailBaselines[taskID] || {};
+  const previousTask = { ...state.selectedTask, ...baseline };
+  const taskTitle = draft.title || previousTask.title;
+  taskDetailAutosaveRequested = false;
+  setTaskDetailSaveState("saving");
+
+  const request = (async () => {
+    try {
+      const statusChanged = Object.hasOwn(payload, "status");
+      let reconciliationBase = previousTask;
+      const updated = await serializeTaskMutation(taskID, async ({ queued }) => {
+        if (queued) reconciliationBase = await api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}`);
+        return api.patch(
+          `/api/v1/tasks/${encodeURIComponent(taskID)}${statusChanged ? "/status" : ""}`,
+          payload,
+        );
+      });
+      if (!updated) return false;
+      reconcileTaskMutation(updated, reconciliationBase);
+      await refreshAfterTaskMutation(startedRouteVersion);
+      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return true;
+      const liveDraft = captureTaskDetailAutosaveDraft();
+      if (!taskDetailDirtyFields(taskID, liveDraft).length && !taskDetailAutosaveRequested) {
+        setTaskDetailSaveState("saved");
+      }
+      return true;
+    } catch (err) {
+      if (handleAgentUnauthorized(err)) return false;
+      if (detailVersion === taskDetailVersion && state.selectedTask?.id === taskID) {
+        setTaskDetailSaveState("error", err.message || `Couldn’t save “${taskTitle}”.`);
+      } else {
+        state.taskMutationError = { taskID, message: `Couldn’t save “${taskTitle}”: ${err.message}` };
+      }
+      return false;
+    }
+  })();
+  taskDetailAutosavePromise = request;
+  const saved = await request;
+  if (taskDetailAutosavePromise === request) taskDetailAutosavePromise = null;
+  if (!saved) return false;
+  if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return true;
+  const liveDraft = captureTaskDetailAutosaveDraft();
+  if (taskDetailAutosaveRequested || taskDetailDirtyFields(taskID, liveDraft).length) {
+    return commitTaskDetailAutosave();
+  }
+  setTaskDetailSaveState("saved");
+  return true;
+}
+
+function scheduleTaskDetailAutosave({ immediate = false } = {}) {
+  const draft = captureTaskDetailAutosaveDraft();
+  if (!state.selectedTask || !draft) return;
+  const validation = taskDetailDraftValidation(draft);
+  if (validation) {
+    globalThis.clearTimeout?.(taskDetailAutosaveTimer);
+    taskDetailAutosaveTimer = null;
+    setTaskDetailSaveState("error", validation.message, validation.field);
+    return;
+  }
+  if (!taskDetailDirtyFields(state.selectedTask.id, draft).length && !taskDetailAutosavePromise) {
+    globalThis.clearTimeout?.(taskDetailAutosaveTimer);
+    taskDetailAutosaveTimer = null;
+    setTaskDetailSaveState("saved");
+    return;
+  }
+  setTaskDetailSaveState("saving");
+  globalThis.clearTimeout?.(taskDetailAutosaveTimer);
+  taskDetailAutosaveTimer = null;
+  if (immediate) {
+    void commitTaskDetailAutosave();
+    return;
+  }
+  taskDetailAutosaveTimer = globalThis.setTimeout?.(() => { void commitTaskDetailAutosave(); }, TASK_DETAIL_AUTOSAVE_DELAY) || null;
+}
+
+async function prepareTaskDetailLeave() {
+  if (!state.selectedTask) return true;
+  const alreadyFailed = state.taskDetailSaveState === "error";
+  if (await commitTaskDetailAutosave()) return true;
+  if (!alreadyFailed) return false;
+  if (globalThis.confirm?.("Changes could not be saved. Leave without saving?") !== true) return false;
+  delete state.taskDetailDrafts[state.selectedTask.id];
+  clearTaskDetailAutosave();
+  return true;
+}
+
 function preserveCurrentTaskDraft() {
   if (!state.selectedTask) return false;
   const draft = taskDraftFromCurrentForm(state.selectedTask);
@@ -3750,6 +4010,7 @@ function bindWorkspaceDetail(options = {}) {
     });
   };
   const close = async () => {
+    if (!await prepareTaskDetailLeave()) return false;
     const currentRoute = parseRoute(location.pathname);
     const closedTaskID = state.selectedTask?.id || "";
     const refreshWorkspace = state.workspaceRefreshOnDetailClose && currentRoute.name === "workspace";
@@ -3765,6 +4026,7 @@ function bindWorkspaceDetail(options = {}) {
     state.cardEntryError = "";
     state.cardEntryAttemptKey = "";
     state.taskDetailDrafts = {};
+    clearTaskDetailAutosave();
     state.subtaskDraft = "";
     state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
@@ -3807,9 +4069,21 @@ function bindWorkspaceDetail(options = {}) {
     }
     render();
     document.querySelector(`[data-open-task="${CSS.escape(closedTaskID)}"]`)?.focus();
+    return true;
   };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
-  document.onkeydown = event => { if (event.key === "Escape") close(); };
+  document.onkeydown = event => {
+    if (event.key !== "Escape") return;
+    const actions = document.querySelector(".task-detail-actions-menu[open]");
+    if (actions) {
+      event.preventDefault();
+      actions.removeAttribute("open");
+      actions.querySelector("summary")?.focus();
+      return;
+    }
+    void close();
+  };
+  document.querySelector("[data-retry-task-save]")?.addEventListener("click", () => { void commitTaskDetailAutosave(); });
   document.querySelectorAll("[data-entry-kind]").forEach(element => element.addEventListener("click", () => {
     preserveTaskDraft();
     state.cardEntryDraft = document.querySelector("#card-entry-body")?.value || state.cardEntryDraft;
@@ -3876,14 +4150,16 @@ function bindWorkspaceDetail(options = {}) {
       document.querySelector("#card-entry-body")?.focus();
     }
   });
-  document.querySelector("[data-open-parent]")?.addEventListener("click", event => {
+  document.querySelector("[data-open-parent]")?.addEventListener("click", async event => {
+    if (!await prepareTaskDetailLeave()) return;
     preserveTaskDraft();
     state.subtaskDraft = "";
     state.subtaskCreateAttempt = null;
     state.subtaskError = "";
     openTaskDetail(state.selectedTask.parentTaskId, event.currentTarget);
   });
-  document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = () => {
+  document.querySelectorAll(".workspace-subtask-list [data-open-task]").forEach(element => element.onclick = async () => {
+    if (!await prepareTaskDetailLeave()) return;
     preserveTaskDraft();
     state.subtaskDraft = "";
     state.subtaskCreateAttempt = null;
@@ -3966,6 +4242,11 @@ function bindWorkspaceDetail(options = {}) {
   });
   document.querySelector("#delete-task")?.addEventListener("click", async () => {
     if (!confirm("Delete this card and its child cards?")) return;
+    globalThis.clearTimeout?.(taskDetailAutosaveTimer);
+    taskDetailAutosaveTimer = null;
+    captureTaskDetailAutosaveDraft();
+    document.querySelectorAll("#workspace-detail-form input, #workspace-detail-form textarea, #workspace-detail-form select, #workspace-detail-form button")
+      .forEach(control => { control.disabled = true; });
     const taskID = state.selectedTask.id;
     const taskTitle = state.selectedTask.title;
     const parentTaskID = state.selectedTask.parentTaskId || "";
@@ -3979,6 +4260,7 @@ function bindWorkspaceDetail(options = {}) {
     try {
       const deleted = await serializeTaskMutation(taskID, () => api.del(`/api/v1/tasks/${taskID}`));
       if (!deleted) return;
+      if (state.selectedTask?.id === taskID) clearTaskDetailAutosave();
       const agentCacheChanged = deletedTasks.reduce((changed, task) => reconcileLoadedTask(task, { deleted: true, deferAgentRender: true }) || changed, false);
       if (agentCacheChanged && !state.selectedTask && ["agent-detail", "agent-work"].includes(state.view)) {
         state.agentTaskFocusID = document.activeElement?.dataset?.openAgentTask || taskID;
@@ -4049,79 +4331,23 @@ function bindWorkspaceDetail(options = {}) {
       if (handleError(err)) return;
       state.error = err.message;
       render();
+      scheduleTaskDetailAutosave();
     }
   });
-  document.querySelector("#workspace-detail-form")?.addEventListener("submit", async event => {
+  const detailForm = document.querySelector("#workspace-detail-form");
+  detailForm?.addEventListener("submit", event => {
     event.preventDefault();
-    const controls = [...event.currentTarget.querySelectorAll("input, textarea, select, button")];
-    const form = new FormData(event.currentTarget);
-    const taskID = state.selectedTask.id;
-    const taskTitle = String(form.get("title") || state.selectedTask.title);
-    const parentTaskID = state.selectedTask.parentTaskId || "";
-    const previousTask = { ...state.selectedTask };
-    const detailVersion = taskDetailVersion;
-    state.agentTaskMutationError = "";
-    state.agentTaskRefreshError = "";
-    preserveTaskDraft();
-    const submit = event.currentTarget.querySelector('button[type="submit"]');
-    controls.forEach(control => { control.disabled = true; });
-    submit.textContent = "Saving…";
-    try {
-      const input = {
-        title: form.get("title"), description: form.get("description"), status: form.get("status"),
-        priority: form.get("priority"), assigneeAgentId: form.get("assigneeAgentId"),
-        scheduledDate: form.get("scheduledDate"),
-      };
-      if (!parentTaskID) input.bucketId = form.get("bucketId");
-      const updated = await serializeTaskMutation(taskID, async ({ queued }) => {
-        if (!queued) return api.patch(`/api/v1/tasks/${taskID}/status`, input);
-        const current = await api.get(`/api/v1/tasks/${taskID}`);
-        const rebased = { status: current.status };
-        for (const field of ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
-          if (!(field in input)) continue;
-          const previousValue = String(previousTask[field] || "");
-          if (String(input[field] || "") !== previousValue) rebased[field] = input[field];
-        }
-        return api.patch(`/api/v1/tasks/${taskID}/status`, rebased);
-      });
-      if (!updated) return;
-      reconcileLoadedTask(updated, { previousTask });
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
-        state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
-        state.selectedSubtasks = state.selectedSubtasks.map(item => item.id === taskID ? { ...item, ...updated } : item);
-        reconcileReopenedTaskDetail(updated);
-        await refreshCurrentTaskSurface();
-        return;
-      }
-      if (parentTaskID) {
-        delete state.taskDetailDrafts[taskID];
-        state.subtaskDraft = "";
-        state.subtaskCreateAttempt = null;
-        state.subtaskPending = false;
-        state.subtaskError = "";
-        await openTaskDetail(parentTaskID);
-        await refreshAfterSubtaskMutation();
-        return;
-      }
-      taskDetailVersion += 1;
-      state.selectedTask = null;
-      state.selectedSubtasks = [];
-      state.taskDetailDrafts = {};
-      state.subtaskDraft = "";
-      state.subtaskCreateAttempt = null;
-      state.subtaskPending = false;
-      state.subtaskError = "";
-      await refreshAfterCommittedMutation("saved");
-    } catch (err) {
-      if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) {
-        reportBackgroundMutationFailure("save", taskTitle, err);
-        return;
-      }
-      if (handleError(err)) return;
-      state.error = err.message;
-      render();
-    }
+    void commitTaskDetailAutosave();
   });
+  for (const field of ["title", "description"]) {
+    const control = detailForm?.querySelector(`[name="${field}"]`);
+    control?.addEventListener("input", () => scheduleTaskDetailAutosave());
+    control?.addEventListener("blur", () => { void commitTaskDetailAutosave(); });
+  }
+  for (const field of ["status", "bucketId", "priority", "assigneeAgentId", "scheduledDate"]) {
+    detailForm?.querySelector(`[name="${field}"]`)?.addEventListener("change", () => scheduleTaskDetailAutosave({ immediate: true }));
+  }
+  syncTaskDetailSaveStatus();
   document.querySelector("#workspace-detail-title")?.focus();
 }
 
@@ -4255,6 +4481,7 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
 
 function reconcileTaskMutation(updated, previousTask) {
   const reconciled = { ...updated };
+  const detailBaseline = state.taskDetailBaselines[reconciled.id];
   const merge = items => (items || []).map(item => item.id === reconciled.id ? { ...item, ...reconciled } : item);
   state.workspaceTasks = merge(state.workspaceTasks);
   state.selectedSubtasks = merge(state.selectedSubtasks);
@@ -4290,16 +4517,20 @@ function reconcileTaskMutation(updated, previousTask) {
     if (list) list.openCount = Math.max(0, Number(list.openCount || 0) + (reconciled.status === "done" ? -1 : 1));
   }
 
-  if (state.selectedTask?.id !== reconciled.id) return;
+  if (state.selectedTask?.id !== reconciled.id) {
+    if (detailBaseline) state.taskDetailBaselines[reconciled.id] = taskDetailSnapshot(reconciled);
+    return;
+  }
   const baseline = state.selectedTask;
   const live = taskDraftFromCurrentForm(baseline);
   const statusControl = globalThis.document?.querySelector?.('#workspace-detail-form [name="status"]');
   const liveStatus = live?.status || statusControl?.value || baseline.status;
-  const statusWasEdited = Boolean(statusControl) && liveStatus !== baseline.status;
+  const statusWasEdited = Boolean(statusControl) && detailBaseline
+    && String(liveStatus || "") !== String(detailBaseline.status || "");
   const merged = { ...baseline, ...reconciled };
   const form = globalThis.document?.querySelector?.("#workspace-detail-form");
   for (const field of ["title", "description", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
-    if (live && String(live[field] || "") !== String(baseline[field] || "")) {
+    if (live && detailBaseline && String(live[field] || "") !== String(detailBaseline[field] || "")) {
       merged[field] = live[field];
       continue;
     }
@@ -4312,6 +4543,7 @@ function reconcileTaskMutation(updated, previousTask) {
   if (statusControl && !statusWasEdited) statusControl.value = reconciled.status;
   const fields = ["title", "description", "status", "priority", "assigneeAgentId", "scheduledDate", "bucketId"];
   state.taskDetailDrafts[reconciled.id] = Object.fromEntries(fields.map(field => [field, merged[field] || ""]));
+  if (detailBaseline) state.taskDetailBaselines[reconciled.id] = taskDetailSnapshot(reconciled);
 }
 
 function bindAppShell() {
@@ -6424,9 +6656,22 @@ function escapeAttr(value) {
   return escapeHTML(value);
 }
 
+window.addEventListener("beforeunload", event => {
+  if (!taskDetailHasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
 window.addEventListener("popstate", async () => {
   // Sign-out is in flight; the URL it lands on is decided when it finishes.
   if (state.view === "logging-out" || state.view === "logout-error") return;
+  const targetPath = currentLocationPath();
+  const previousPath = appliedLocationPath || APP_PATH;
+  if (!await prepareTaskDetailLeave()) {
+    history.pushState({}, "", previousPath);
+    return;
+  }
+  appliedLocationPath = targetPath;
   const nextRoute = parseRoute(location.pathname);
   clearSettingsCredentialsLeaving(nextRoute.settingsPage || "");
   clearAgentCredentialLeaving(nextRoute);
