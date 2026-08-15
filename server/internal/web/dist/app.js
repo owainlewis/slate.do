@@ -4721,7 +4721,7 @@ function renderAfterBackgroundListRename() {
   const route = parseRoute(globalThis.location?.pathname || "");
   const mounted = route.name === "workspace" ? state.view === "app"
     : route.name === "board" ? state.view === "board" && state.board?.id === route.boardId
-      : ["agent-detail", "agent-work"].includes(route.name)
+      : ["agent-detail", "agent-work", "agent-settings"].includes(route.name)
         && state.view === route.name && state.agentDetail?.agent?.id === route.agentId;
   if (!mounted) return;
 

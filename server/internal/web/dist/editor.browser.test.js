@@ -1519,6 +1519,50 @@ test("a list rename preserves a focused agent assignment draft", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("agent settings list refreshes preserve drafts and task permalinks", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research/settings");
+  const purpose = page.locator("#agent-settings-purpose");
+  await purpose.fill("Unsaved settings purpose");
+  const previousPurpose = await purpose.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousPurpose);
+  assert.equal(await purpose.inputValue(), "Unsaved settings purpose");
+  assert.equal(await purpose.evaluate(element => element === document.activeElement), true);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Videos");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research/settings?task=task-parent");
+  await page.getByRole("region", { name: "Card detail" }).waitFor();
+  const title = page.getByLabel("Title", { exact: true });
+  const list = page.getByLabel("List", { exact: true });
+  assert.equal(await list.locator("option:checked").textContent(), "Published");
+  await title.fill("Unsaved permalink title");
+  const previousList = await list.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(item => item.id === "list-youtube")?.name === "Videos");
+  await page.waitForFunction(element => !element.isConnected, previousList);
+  assert.equal(await list.locator("option:checked").textContent(), "Videos");
+  assert.equal(await title.inputValue(), "Unsaved permalink title");
+  assert.equal(await title.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a list rename keeps a pending destination form locked and retryable", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
