@@ -4548,6 +4548,11 @@ function renderAfterBackgroundListRename() {
     listID: listNameInput.dataset.bucketName,
     name: listNameInput.value,
   } : null;
+  const listGoalFocus = active?.matches?.("[data-bucket-goal]") ? {
+    listID: active.dataset.bucketGoal,
+    selectionStart: active.selectionStart,
+    selectionEnd: active.selectionEnd,
+  } : null;
   const formDrafts = captureEditableFormDrafts(documentRef, active);
   const disabledListNameDrafts = [...(documentRef?.querySelectorAll?.("[data-bucket-name]:disabled") || [])].map(input => ({
     listID: input.dataset.bucketName,
@@ -4586,6 +4591,13 @@ function renderAfterBackgroundListRename() {
   if (listNameDraft) {
     [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
       .find(item => item.dataset.bucketName === listNameDraft.listID)?.focus();
+  } else if (listGoalFocus) {
+    const input = [...(documentRef?.querySelectorAll?.("[data-bucket-goal]") || [])]
+      .find(item => item.dataset.bucketGoal === listGoalFocus.listID);
+    input?.focus();
+    if (input && listGoalFocus.selectionStart !== null && listGoalFocus.selectionEnd !== null) {
+      input.setSelectionRange(listGoalFocus.selectionStart, listGoalFocus.selectionEnd);
+    }
   } else if (formFocus) {
     formFocus.control.focus();
     if (formFocus.selectionStart !== null && formFocus.selectionEnd !== null) {

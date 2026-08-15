@@ -1256,6 +1256,34 @@ test("a cross-board list rename preserves a focused quick-add draft", async t =>
   assert.deepEqual(pageErrors, []);
 });
 
+test("a cross-board list rename preserves focused goal editing", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 0 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+
+  const goal = page.getByLabel("Goal for Backlog", { exact: true });
+  await goal.fill("weekly videos");
+  await goal.evaluate(input => input.setSelectionRange(7, 7));
+  const previousInput = await goal.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousInput);
+
+  assert.equal(await goal.inputValue(), "weekly videos");
+  assert.equal(await goal.evaluate(element => element === document.activeElement), true);
+  assert.equal(await goal.evaluate(element => element.selectionStart), 7);
+  await page.keyboard.type("useful ");
+  assert.equal(await goal.inputValue(), "weekly useful videos");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a cross-board list rename preserves a focused list-name draft", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
   state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 0 });
