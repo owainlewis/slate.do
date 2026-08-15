@@ -1233,6 +1233,39 @@ test("a cross-board list rename preserves a focused quick-add draft", async t =>
   assert.deepEqual(pageErrors, []);
 });
 
+test("a cross-board list rename preserves a focused list-name draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+  state.lists.push({ id: "list-other", boardId: "board-two", boardName: "Other", name: "Backlog", goal: "", isInbox: false, openCount: 0 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+
+  const destinationName = page.getByLabel("List name", { exact: true });
+  await destinationName.fill(" Unsubmitted destination name ");
+  await destinationName.focus();
+  assert.equal(state.lists.find(list => list.id === "list-other")?.name, "Backlog");
+  const previousInput = await destinationName.elementHandle();
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousInput);
+
+  assert.equal(await destinationName.inputValue(), " Unsubmitted destination name ");
+  assert.equal(await destinationName.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.lists.find(list => list.id === "list-other")?.name, "Backlog");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-other").length, 0);
+  await destinationName.press("Tab");
+  await waitFor(() => state.lists.find(list => list.id === "list-other")?.name === "Unsubmitted destination name");
+  await page.waitForFunction(() => document.querySelector('[data-bucket-name="list-other"]')?.value === "Unsubmitted destination name");
+  assert.equal(await destinationName.inputValue(), "Unsubmitted destination name");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/buckets/list-other").length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a list rename preserves a focused agent assignment draft", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 

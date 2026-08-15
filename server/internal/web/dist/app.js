@@ -391,6 +391,7 @@ let workspaceListVersion = 0;
 let workspaceListLoadVersion = 0;
 let workspaceLoadVersion = 0;
 let boardLoadVersion = 0;
+let suppressListRenameChange = false;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
 let cardContextMenu = null;
@@ -4190,7 +4191,9 @@ function bindApp() {
     state.weekStart = dateKey(addDays(startOfWeek(new Date()), 7));
     render();
   });
-  document.querySelectorAll("[data-bucket-name]").forEach(element => element.addEventListener("change", () => renameWorkspaceList(element)));
+  document.querySelectorAll("[data-bucket-name]").forEach(element => element.addEventListener("change", () => {
+    if (!suppressListRenameChange && !element.disabled) renameWorkspaceList(element);
+  }));
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
     const id = el.dataset.bucketGoal;
@@ -4459,6 +4462,11 @@ function renderAfterBackgroundListRename() {
 
   const documentRef = globalThis.document;
   const active = documentRef?.activeElement;
+  const listNameInput = active?.matches?.("[data-bucket-name]") ? active : null;
+  const listNameDraft = listNameInput ? {
+    listID: listNameInput.dataset.bucketName,
+    name: listNameInput.value,
+  } : null;
   const quickAddDrafts = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])].map(form => ({
     listID: form.dataset.addTask,
     title: form.elements?.title?.value || "",
@@ -4467,19 +4475,39 @@ function renderAfterBackgroundListRename() {
   const assignForm = documentRef?.querySelector?.("#assign-work-form");
   const focus = captureTaskDetailFocus()
     || (quickAddForm ? { surface: "quick-add", listID: quickAddForm.dataset.addTask, name: active.name }
-      : assignForm?.contains(active) ? { surface: "assign", id: active.id, name: active.name } : null);
+      : listNameInput ? { surface: "list-name", listID: listNameInput.dataset.bucketName }
+        : assignForm?.contains(active) ? { surface: "assign", id: active.id, name: active.name } : null);
   if (state.agentAssignOpen && assignForm) state.agentAssignDraft = assignDraftFromForm(assignForm);
   preserveCurrentTaskDraft();
-  render();
+  suppressListRenameChange = true;
+  try {
+    render();
+  } finally {
+    suppressListRenameChange = false;
+  }
   for (const draft of quickAddDrafts) {
     const form = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])]
       .find(item => item.dataset.addTask === draft.listID);
     if (form?.elements?.title) form.elements.title.value = draft.title;
   }
+  if (listNameDraft) {
+    const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
+      .find(item => item.dataset.bucketName === listNameDraft.listID);
+    if (input) {
+      input.value = listNameDraft.name;
+      input.addEventListener("blur", () => {
+        const list = state.board?.buckets?.find(item => item.id === listNameDraft.listID);
+        if (!suppressListRenameChange && !input.disabled && list) renameWorkspaceList(input);
+      }, { once: true });
+    }
+  }
   if (focus?.surface === "quick-add") {
     const form = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])]
       .find(item => item.dataset.addTask === focus.listID);
     (form?.elements?.namedItem?.(focus.name) || form?.elements?.[focus.name])?.focus();
+  } else if (focus?.surface === "list-name") {
+    [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
+      .find(item => item.dataset.bucketName === focus.listID)?.focus();
   } else if (focus?.surface === "assign") {
     (documentRef?.getElementById?.(focus.id) || documentRef?.querySelector?.(`#assign-work-form [name="${focus.name}"]`))?.focus();
   } else {
