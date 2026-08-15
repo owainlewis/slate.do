@@ -35,7 +35,7 @@ function workspaceFixture() {
   const agents = [
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, delayNextListRename: false, releaseListRename: null, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
+  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, delayNextListRename: false, releaseListRename: null, failNextBucketTaskCreate: false, delayNextBucketTaskCreate: false, releaseBucketTaskCreate: null, failNextBoardRename: false, delayNextBoardRename: false, releaseBoardRename: null, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
 }
 
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
@@ -83,6 +83,21 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         await new Promise(resolve => { state.releaseBoardDetail = resolve; });
       }
       return json(response, { ...board, buckets });
+    }
+    if (boardMatch && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      if (state.delayNextBoardRename) {
+        state.delayNextBoardRename = false;
+        await new Promise(resolve => { state.releaseBoardRename = resolve; });
+      }
+      if (state.failNextBoardRename) {
+        state.failNextBoardRename = false;
+        return json(response, { error: "Could not rename board" }, 500);
+      }
+      const board = state.boards.find(item => item.id === boardMatch[1]);
+      if (!board) return json(response, { error: "board not found" }, 404);
+      Object.assign(board, input);
+      return json(response, board);
     }
     if (boardMatch && request.method === "DELETE") {
       if (state.delayNextBoardDelete) {
@@ -320,6 +335,14 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const bucketTaskMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)\/tasks$/);
     if (bucketTaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
+      if (state.delayNextBucketTaskCreate) {
+        state.delayNextBucketTaskCreate = false;
+        await new Promise(resolve => { state.releaseBucketTaskCreate = resolve; });
+      }
+      if (state.failNextBucketTaskCreate) {
+        state.failNextBucketTaskCreate = false;
+        return json(response, { error: "Could not assign item" }, 500);
+      }
       const list = state.lists.find(item => item.id === bucketTaskMatch[1]);
       if (!list) return json(response, { error: "list not found" }, 404);
       const created = { id: `task-created-${state.created.length + 1}`, boardId: list.boardId, bucketId: list.id, listName: list.name, title: input.title, description: input.description || "", scheduledDate: input.scheduledDate || "", kind: "action", status: input.assigneeAgentId ? "queued" : "new", priority: "", assigneeAgentId: input.assigneeAgentId || "" };
@@ -1332,6 +1355,87 @@ test("a list rename preserves a focused agent assignment draft", async t => {
   assert.equal(await title.inputValue(), "Unsubmitted assignment");
   assert.equal(await description.inputValue(), "Keep this assignment draft");
   assert.equal(await description.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list rename keeps a pending destination form locked and retryable", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/agents/agent-research");
+  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Assign work", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Pending assignment");
+  state.failNextBucketTaskCreate = true;
+  state.delayNextBucketTaskCreate = true;
+  const create = page.getByRole("button", { name: "Create item", exact: true });
+  const previousCreate = await create.elementHandle();
+  await create.click();
+  await waitFor(() => typeof state.releaseBucketTaskCreate === "function");
+  assert.equal(await previousCreate.evaluate(element => element.disabled), true);
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousCreate);
+
+  const pendingCreate = page.getByRole("button", { name: "Creating…", exact: true });
+  assert.equal(await pendingCreate.isDisabled(), true);
+  assert.equal(await page.getByLabel("Title", { exact: true }).isDisabled(), true);
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Pending assignment");
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/buckets/list-inbox/tasks").length, 1);
+
+  state.releaseBucketTaskCreate();
+  await page.getByText("Could not assign item", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).isEnabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Create item", exact: true }).isEnabled(), true);
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/buckets/list-inbox/tasks").length, 1);
+  await page.getByRole("button", { name: "Create item", exact: true }).click();
+  await page.getByText('"Pending assignment" was assigned to Research agent.', { exact: true }).waitFor();
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/buckets/list-inbox/tasks").length, 2);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a list rename keeps a failed pending board rename retryable", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.locator('[data-start-rename-board="board-two"]').click();
+  const boardName = page.getByLabel("Board name", { exact: true });
+  await boardName.fill("Unsubmitted board name");
+  state.failNextBoardRename = true;
+  state.delayNextBoardRename = true;
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await waitFor(() => typeof state.releaseBoardRename === "function");
+  const previousName = await boardName.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousName);
+  assert.equal(await boardName.isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Save board name", exact: true }).isDisabled(), true);
+
+  state.releaseBoardRename();
+  await page.getByText("Could not rename board", { exact: true }).waitFor();
+  assert.equal(await boardName.isEnabled(), true);
+  assert.equal(await boardName.inputValue(), "Unsubmitted board name");
+  assert.equal(state.boards.find(board => board.id === "board-two")?.name, "Other");
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await waitFor(() => state.boards.find(board => board.id === "board-two")?.name === "Unsubmitted board name");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/boards/board-two").length, 2);
   assert.deepEqual(pageErrors, []);
 });
 

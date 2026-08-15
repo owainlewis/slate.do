@@ -4461,7 +4461,7 @@ function editableFormIdentity(form) {
 }
 
 function editableFormControls(form) {
-  return [...(form?.elements || [])].filter(control => control.matches?.("input, textarea, select"));
+  return [...(form?.elements || [])].filter(control => control.matches?.("input, textarea, select, button"));
 }
 
 function captureEditableFormDrafts(documentRef, active) {
@@ -4473,8 +4473,10 @@ function captureEditableFormDrafts(documentRef, active) {
       tagName: control.tagName,
       name: control.name,
       type: control.type,
-      value: control.value,
+      value: control.matches("input, textarea, select") ? control.value : null,
       checked: ["checkbox", "radio"].includes(control.type) ? control.checked : null,
+      disabled: control.disabled,
+      innerHTML: control.tagName === "BUTTON" && control.disabled ? control.innerHTML : null,
       active: control === active,
       selectionStart: control === active && ["text", "search", "url", "tel", "password", "textarea"].includes(control.type)
         ? control.selectionStart : null,
@@ -4498,8 +4500,10 @@ function restoreEditableFormDrafts(documentRef, drafts) {
     for (const saved of draft.controls) {
       const control = controls[saved.index];
       if (!control || control.tagName !== saved.tagName || control.name !== saved.name || control.type !== saved.type) continue;
-      control.value = saved.value;
+      if (saved.value !== null) control.value = saved.value;
       if (saved.checked !== null) control.checked = saved.checked;
+      control.disabled = saved.disabled;
+      if (saved.innerHTML !== null) control.innerHTML = saved.innerHTML;
       if (saved.active) focus = { control, selectionStart: saved.selectionStart, selectionEnd: saved.selectionEnd };
     }
   }
@@ -4522,6 +4526,10 @@ function renderAfterBackgroundListRename() {
     name: listNameInput.value,
   } : null;
   const formDrafts = captureEditableFormDrafts(documentRef, active);
+  const disabledListNameDrafts = [...(documentRef?.querySelectorAll?.("[data-bucket-name]:disabled") || [])].map(input => ({
+    listID: input.dataset.bucketName,
+    name: input.value,
+  }));
   const assignForm = documentRef?.querySelector?.("#assign-work-form");
   const taskDetailFocus = captureTaskDetailFocus();
   if (state.agentAssignOpen && assignForm) state.agentAssignDraft = assignDraftFromForm(assignForm);
@@ -4533,6 +4541,14 @@ function renderAfterBackgroundListRename() {
     suppressListRenameChange = false;
   }
   const formFocus = restoreEditableFormDrafts(documentRef, formDrafts);
+  for (const draft of disabledListNameDrafts) {
+    const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
+      .find(item => item.dataset.bucketName === draft.listID);
+    if (input) {
+      input.value = draft.name;
+      input.disabled = true;
+    }
+  }
   if (listNameDraft) {
     const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
       .find(item => item.dataset.bucketName === listNameDraft.listID);
@@ -4839,7 +4855,6 @@ function bindBoardRename(form) {
   const id = form.dataset.renameBoard;
   const sidebarIsOpen = () => Boolean(form.closest(".sidebar")?.classList.contains("open"));
   const input = form.querySelector('input[name="name"]');
-  const error = form.querySelector(".board-rename-error");
   const controls = [...form.querySelectorAll("input, button")];
   const cancel = () => {
     const keepSidebarOpen = sidebarIsOpen();
@@ -4848,9 +4863,11 @@ function bindBoardRename(form) {
     document.querySelector(`[data-start-rename-board="${id}"]`)?.focus();
   };
   const showError = message => {
-    error.textContent = message;
-    input.setAttribute("aria-invalid", "true");
-    input.focus();
+    const currentForm = document.querySelector(`[data-rename-board="${CSS.escape(id)}"]`) || form;
+    const currentInput = currentForm.querySelector('input[name="name"]');
+    currentForm.querySelector(".board-rename-error").textContent = message;
+    currentInput.setAttribute("aria-invalid", "true");
+    currentInput.focus();
   };
   form.querySelector("[data-cancel-rename-board]").onclick = cancel;
   input.addEventListener("keydown", event => {
@@ -4859,7 +4876,7 @@ function bindBoardRename(form) {
     cancel();
   });
   input.addEventListener("input", () => {
-    error.textContent = "";
+    form.querySelector(".board-rename-error").textContent = "";
     input.removeAttribute("aria-invalid");
   });
   form.addEventListener("submit", async event => {
@@ -4876,7 +4893,8 @@ function bindBoardRename(form) {
       renderKeepingSidebarOpen(keepSidebarOpen);
       document.querySelector(`[data-start-rename-board="${id}"]`)?.focus();
     } catch (err) {
-      controls.forEach(control => { control.disabled = false; });
+      const currentForm = document.querySelector(`[data-rename-board="${CSS.escape(id)}"]`) || form;
+      [...currentForm.querySelectorAll("input, button")].forEach(control => { control.disabled = false; });
       showError(err.message);
     }
   });
@@ -5709,9 +5727,10 @@ function bindAssignWork() {
       if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || !state.agentAssignOpen) return;
       if (handleAgentUnauthorized(err)) return;
       state.agentAssignError = err.message;
-      [...form.elements].forEach(control => { control.disabled = false; });
-      form.querySelector('button[type="submit"]').textContent = "Create item";
-      error.textContent = err.message;
+      const currentForm = document.querySelector("#assign-work-form") || form;
+      [...currentForm.elements].forEach(control => { control.disabled = false; });
+      currentForm.querySelector('button[type="submit"]').textContent = "Create item";
+      currentForm.querySelector("#assign-error").textContent = err.message;
     }
   });
 }
