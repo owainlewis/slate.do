@@ -394,6 +394,7 @@ let boardLoadVersion = 0;
 let suppressListRenameChange = false;
 const agentDetailLoadVersions = new Map();
 const taskMutationTurns = new Map();
+const workspaceListRenameTurns = new Map();
 let cardContextMenu = null;
 
 async function serializeTaskMutation(taskID, mutation) {
@@ -410,6 +411,22 @@ async function serializeTaskMutation(taskID, mutation) {
   } finally {
     release();
     if (taskMutationTurns.get(taskID) === turn) taskMutationTurns.delete(taskID);
+  }
+}
+
+async function serializeWorkspaceListRename(listID, mutation) {
+  const sessionVersion = authVersion;
+  const previous = workspaceListRenameTurns.get(listID) || Promise.resolve();
+  let release;
+  const turn = new Promise(resolve => { release = resolve; });
+  workspaceListRenameTurns.set(listID, turn);
+  await previous.catch(() => {});
+  try {
+    if (sessionVersion !== authVersion) return false;
+    return await mutation();
+  } finally {
+    release();
+    if (workspaceListRenameTurns.get(listID) === turn) workspaceListRenameTurns.delete(listID);
   }
 }
 
@@ -807,6 +824,7 @@ async function loadMoreWorkspaceTasks() {
 function resetAuthenticatedState() {
   goalSaveChains.clear();
   taskMutationTurns.clear();
+  workspaceListRenameTurns.clear();
   themeSaveChain = Promise.resolve();
   themeChangeVersion += 1;
   state.me = null;
@@ -1136,9 +1154,14 @@ async function loadCompletedHistory(listID, trigger) {
   try {
     const page = await api.get(`/api/v1/tasks?bucketId=${encodeURIComponent(listID)}&status=done&limit=20&cursor=${encodeURIComponent(list.completedNextCursor)}`);
     if (!sessionIsCurrent(sessionVersion, userID) || version !== routeVersion || state.board?.id !== boardID) return;
-    const known = new Set((list.tasks || []).map(task => task.id));
-    list.tasks = [...(list.tasks || []), ...(page.tasks || []).filter(task => !known.has(task.id))];
-    list.completedNextCursor = page.nextCursor || "";
+    const currentList = state.board.buckets.find(item => item.id === listID);
+    if (!currentList) return;
+    const known = new Set((currentList.tasks || []).map(task => task.id));
+    currentList.tasks = [
+      ...(currentList.tasks || []),
+      ...(page.tasks || []).filter(task => !known.has(task.id)).map(taskWithResolvedLocation),
+    ];
+    currentList.completedNextCursor = page.nextCursor || "";
     state.error = "";
     render();
     document.querySelector(`[data-load-completed="${CSS.escape(listID)}"]`)?.focus();
@@ -4592,39 +4615,41 @@ async function renameWorkspaceList(element) {
     return true;
   }
   element.disabled = true;
-  try {
-    const updated = await api.patch(`/api/v1/buckets/${id}`, { name });
-    if (!sessionIsCurrent(sessionVersion, userID)) return false;
-    const nextName = updated.name || name;
-    const rename = item => item.id === id ? {
-      ...item,
-      ...updated,
-      name: nextName,
-      tasks: (item.tasks || []).map(task => ({ ...task, listName: nextName, bucketName: nextName })),
-    } : item;
-    workspaceListVersion += 1;
-    if (state.board?.buckets?.some(item => item.id === id)) {
-      state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
-    }
-    state.workspaceLists = state.workspaceLists.map(rename);
-    renameCachedTaskListMetadata(id, nextName);
-    if (expectedRouteVersion !== routeVersion) {
-      renderAfterBackgroundListRename();
+  return serializeWorkspaceListRename(id, async () => {
+    try {
+      const updated = await api.patch(`/api/v1/buckets/${id}`, { name });
+      if (!sessionIsCurrent(sessionVersion, userID)) return false;
+      const nextName = updated.name || name;
+      const rename = item => item.id === id ? {
+        ...item,
+        ...updated,
+        name: nextName,
+        tasks: (item.tasks || []).map(task => ({ ...task, listName: nextName, bucketName: nextName })),
+      } : item;
+      workspaceListVersion += 1;
+      if (state.board?.buckets?.some(item => item.id === id)) {
+        state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
+      }
+      state.workspaceLists = state.workspaceLists.map(rename);
+      renameCachedTaskListMetadata(id, nextName);
+      if (expectedRouteVersion !== routeVersion) {
+        renderAfterBackgroundListRename();
+        return true;
+      }
+      state.error = "";
+      render();
+      document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
       return true;
+    } catch (err) {
+      if (!sessionIsCurrent(sessionVersion, userID) || expectedRouteVersion !== routeVersion) return false;
+      state.error = err.message;
+      render();
+      const restored = document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`);
+      restored?.focus();
+      restored?.select();
+      return false;
     }
-    state.error = "";
-    render();
-    document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`)?.focus();
-    return true;
-  } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID) || expectedRouteVersion !== routeVersion) return false;
-    state.error = err.message;
-    render();
-    const restored = document.querySelector(`[data-bucket-name="${CSS.escape(id)}"]`);
-    restored?.focus();
-    restored?.select();
-    return false;
-  }
+  });
 }
 
 function bindWorkspaceListControl() {

@@ -729,6 +729,48 @@ test("completed history pages append to a list and preserve the next cursor", as
   `, app);
 });
 
+test("completed history resolves list names after a concurrent rename", async () => {
+  let releaseHistory;
+  app.pendingRenamedListHistory = new Promise(resolve => { releaseHistory = resolve; });
+  vm.runInContext(`
+    savedRenamedHistoryRender = render;
+    savedRenamedHistoryGet = api.get;
+    render = () => {};
+    authVersion = 5;
+    routeVersion = 8;
+    state.me = { id: "owner" };
+    state.workspaceLists = [{ id: "list-one", boardId: "board-one", name: "YouTube" }];
+    state.board = {
+      id: "board-one",
+      buckets: [{ id: "list-one", name: "YouTube", completedNextCursor: "cursor-one", tasks: [] }],
+    };
+    api.get = async () => pendingRenamedListHistory;
+  `, app);
+
+  const loading = app.loadCompletedHistory("list-one");
+  vm.runInContext(`
+    workspaceListVersion += 1;
+    state.workspaceLists[0] = { ...state.workspaceLists[0], name: "Published" };
+    state.board = { ...state.board, buckets: state.board.buckets.map(list => ({ ...list, name: "Published" })) };
+  `, app);
+  releaseHistory({
+    tasks: [{ id: "older", bucketId: "list-one", listName: "YouTube", status: "done" }],
+    nextCursor: "",
+  });
+
+  await loading;
+  assert.equal(vm.runInContext("state.board.buckets[0].tasks[0].listName", app), "Published");
+
+  vm.runInContext(`
+    render = savedRenamedHistoryRender;
+    api.get = savedRenamedHistoryGet;
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+  delete app.pendingRenamedListHistory;
+});
+
 test("opening a task loads its full description and subtasks", async () => {
   vm.runInContext(`
     savedDetailRender = render;
@@ -1992,6 +2034,109 @@ test("a completed list rename survives navigation and an older list-index respon
   delete app.pendingStaleBoard;
   delete app.pendingStaleLists;
   delete app.listNameElement;
+});
+
+test("an older list rename response cannot overwrite a newer rename", async () => {
+  let releaseFirstRename;
+  let releaseSecondRename;
+  app.pendingFirstListRename = new Promise(resolve => { releaseFirstRename = resolve; });
+  app.pendingSecondListRename = new Promise(resolve => { releaseSecondRename = resolve; });
+  app.firstListNameElement = { dataset: { bucketName: "youtube" }, value: "First name", disabled: false };
+  app.secondListNameElement = { dataset: { bucketName: "youtube" }, value: "Published", disabled: false };
+  vm.runInContext(`
+    savedOverlappingRenameRender = render;
+    savedOverlappingRenamePatch = api.patch;
+    savedOverlappingRenameDocument = globalThis.document;
+    render = () => {};
+    globalThis.document = { querySelector() { return null; } };
+    authVersion = 67;
+    routeVersion = 119;
+    workspaceListRenameTurns.clear();
+    state.me = { id: "owner" };
+    state.board = { id: "board-one", buckets: [{ id: "youtube", name: "YouTube", tasks: [] }] };
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    overlappingRenameRequests = [];
+    api.patch = async (_path, input) => {
+      overlappingRenameRequests.push(input.name);
+      return input.name === "First name" ? pendingFirstListRename : pendingSecondListRename;
+    };
+  `, app);
+
+  const firstRename = app.renameWorkspaceList(app.firstListNameElement);
+  vm.runInContext(`routeVersion = 120;`, app);
+  const secondRename = app.renameWorkspaceList(app.secondListNameElement);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(overlappingRenameRequests)", app)), ["First name"]);
+  releaseFirstRename({ id: "youtube", name: "First name" });
+  assert.equal(await firstRename, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(overlappingRenameRequests)", app)), ["First name", "Published"]);
+  releaseSecondRename({ id: "youtube", name: "Published" });
+  assert.equal(await secondRename, true);
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "Published");
+  assert.equal(vm.runInContext("state.board.buckets[0].name", app), "Published");
+
+  vm.runInContext(`
+    render = savedOverlappingRenameRender;
+    api.patch = savedOverlappingRenamePatch;
+    globalThis.document = savedOverlappingRenameDocument;
+    workspaceListRenameTurns.clear();
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+  delete app.pendingFirstListRename;
+  delete app.pendingSecondListRename;
+  delete app.firstListNameElement;
+  delete app.secondListNameElement;
+});
+
+test("a failed newer list rename keeps an older successful rename", async () => {
+  let releaseFirstRename;
+  let rejectSecondRename;
+  app.pendingSuccessfulListRename = new Promise(resolve => { releaseFirstRename = resolve; });
+  app.pendingFailedListRename = new Promise((_resolve, reject) => { rejectSecondRename = reject; });
+  app.successfulListNameElement = { dataset: { bucketName: "youtube" }, value: "First name", disabled: false };
+  app.failedListNameElement = { dataset: { bucketName: "youtube" }, value: "Rejected name", disabled: false };
+  vm.runInContext(`
+    savedFailedOverlappingRenameRender = render;
+    savedFailedOverlappingRenamePatch = api.patch;
+    savedFailedOverlappingRenameDocument = globalThis.document;
+    render = () => {};
+    globalThis.document = { querySelector() { return null; } };
+    authVersion = 68;
+    routeVersion = 121;
+    workspaceListRenameTurns.clear();
+    state.me = { id: "owner" };
+    state.board = { id: "board-one", buckets: [{ id: "youtube", name: "YouTube", tasks: [] }] };
+    state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    api.patch = async (_path, input) => input.name === "First name" ? pendingSuccessfulListRename : pendingFailedListRename;
+  `, app);
+
+  const firstRename = app.renameWorkspaceList(app.successfulListNameElement);
+  vm.runInContext(`routeVersion = 122;`, app);
+  const secondRename = app.renameWorkspaceList(app.failedListNameElement);
+  releaseFirstRename({ id: "youtube", name: "First name" });
+  assert.equal(await firstRename, true);
+  await new Promise(resolve => setImmediate(resolve));
+  rejectSecondRename(new Error("Could not rename list"));
+  assert.equal(await secondRename, false);
+  assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "First name");
+  assert.equal(vm.runInContext("state.board.buckets[0].name", app), "First name");
+
+  vm.runInContext(`
+    render = savedFailedOverlappingRenameRender;
+    api.patch = savedFailedOverlappingRenamePatch;
+    globalThis.document = savedFailedOverlappingRenameDocument;
+    workspaceListRenameTurns.clear();
+    state.me = null;
+    state.board = null;
+    state.workspaceLists = [];
+  `, app);
+  delete app.pendingSuccessfulListRename;
+  delete app.pendingFailedListRename;
+  delete app.successfulListNameElement;
+  delete app.failedListNameElement;
 });
 
 test("task loaders resolve stale payload names against the current list index", async () => {
