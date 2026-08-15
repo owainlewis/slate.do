@@ -4409,6 +4409,19 @@ function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar"
   };
 }
 
+function renameCachedTaskListMetadata(listID, listName) {
+  const renameTask = task => task?.bucketId === listID ? { ...task, listName, bucketName: listName } : task;
+  state.workspaceTasks = state.workspaceTasks.map(renameTask);
+  state.selectedSubtasks = state.selectedSubtasks.map(renameTask);
+  if (state.selectedTask) state.selectedTask = renameTask(state.selectedTask);
+  if (state.agentWorkPage) state.agentWorkPage.items = (state.agentWorkPage.items || []).map(renameTask);
+  const work = state.agentDetail?.work;
+  if (!work) return;
+  for (const group of ["ready", "working", "review", "recentlyCompleted"]) {
+    work[group] = (work[group] || []).map(renameTask);
+  }
+}
+
 async function renameWorkspaceList(element) {
   const id = element.dataset.bucketName;
   const list = state.board?.buckets?.find(item => item.id === id);
@@ -4443,6 +4456,7 @@ async function renameWorkspaceList(element) {
       state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
     }
     state.workspaceLists = state.workspaceLists.map(rename);
+    renameCachedTaskListMetadata(id, nextName);
     if (expectedRouteVersion !== routeVersion) return true;
     state.error = "";
     render();

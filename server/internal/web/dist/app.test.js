@@ -1878,6 +1878,14 @@ test("a completed list rename survives navigation and an older list-index respon
     state.me = { id: "owner" };
     state.board = { id: "board-one", buckets: [{ id: "youtube", name: "YouTube", tasks: [] }] };
     state.workspaceLists = [{ id: "youtube", boardId: "board-one", name: "YouTube" }];
+    state.workspaceTasks = [{ id: "workspace-task", bucketId: "youtube", listName: "YouTube" }];
+    state.selectedTask = { id: "selected-task", bucketId: "youtube", listName: "YouTube" };
+    state.selectedSubtasks = [{ id: "selected-subtask", bucketId: "youtube", listName: "YouTube" }];
+    state.agentWorkPage = { items: [{ id: "page-task", bucketId: "youtube", bucketName: "YouTube" }] };
+    state.agentDetail = { work: {
+      ready: [{ id: "ready-task", bucketId: "youtube", listName: "YouTube" }],
+      working: [], review: [], recentlyCompleted: [],
+    } };
     api.patch = async () => pendingRename;
     api.get = async path => {
       if (path !== "/api/v1/lists") throw new Error("unexpected request " + path);
@@ -1891,6 +1899,16 @@ test("a completed list rename survives navigation and an older list-index respon
   releaseRename({ id: "youtube", name: "Published" });
   assert.equal(await renaming, true);
   assert.equal(vm.runInContext("state.workspaceLists[0].name", app), "Published");
+  assert.deepEqual(
+    JSON.parse(vm.runInContext(`JSON.stringify([
+      state.workspaceTasks[0].listName,
+      state.selectedTask.listName,
+      state.selectedSubtasks[0].listName,
+      state.agentWorkPage.items[0].bucketName,
+      state.agentDetail.work.ready[0].listName,
+    ])`, app)),
+    ["Published", "Published", "Published", "Published", "Published"],
+  );
 
   releaseStaleLists({ lists: [{ id: "youtube", boardId: "board-one", name: "YouTube" }] });
   assert.equal(await staleLoad, true);
@@ -1901,6 +1919,11 @@ test("a completed list rename survives navigation and an older list-index respon
     state.me = null;
     state.board = null;
     state.workspaceLists = [];
+    state.workspaceTasks = [];
+    state.selectedTask = null;
+    state.selectedSubtasks = [];
+    state.agentWorkPage = null;
+    state.agentDetail = null;
   `, app);
   delete app.pendingRename;
   delete app.pendingStaleLists;
