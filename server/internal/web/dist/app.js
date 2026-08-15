@@ -371,6 +371,40 @@ function currentLocationPath() {
   return `${location.pathname}${location.search || ""}`;
 }
 
+function taskIDFromLocation(locationRef = globalThis.location) {
+  return new URLSearchParams(locationRef?.search || "").get("task")?.trim() || "";
+}
+
+function routeSupportsTaskDetail(route) {
+  return route.name === "workspace" || route.name === "board"
+    || ["agent-detail", "agent-work", "agent-settings"].includes(route.name);
+}
+
+function taskLocationPath(taskID, locationRef = globalThis.location) {
+  const query = new URLSearchParams(locationRef?.search || "");
+  if (taskID) query.set("task", taskID);
+  else query.delete("task");
+  const search = query.toString();
+  return `${locationRef?.pathname || TASKS_PATH}${search ? `?${search}` : ""}`;
+}
+
+function taskPermalink(taskID, locationRef = globalThis.location) {
+  const path = taskLocationPath(taskID, locationRef);
+  return locationRef?.origin ? `${locationRef.origin}${path}` : path;
+}
+
+function syncTaskPermalink(taskID) {
+  if (!globalThis.location || !globalThis.history) return;
+  if (taskIDFromLocation() === taskID) return;
+  history.pushState({}, "", taskLocationPath(taskID));
+}
+
+function clearTaskPermalink() {
+  if (!globalThis.location || !globalThis.history) return;
+  if (!taskIDFromLocation()) return;
+  history.replaceState({}, "", taskLocationPath(""));
+}
+
 function syncPath(path) {
   if (currentPath() !== normalizePath(path)) history.replaceState({}, "", path);
 }
@@ -487,10 +521,12 @@ function prepareAgentRoute(route) {
 async function applyRoute() {
   const version = ++routeVersion;
   const route = parseRoute(location.pathname);
+  const routeTaskID = routeSupportsTaskDetail(route) ? taskIDFromLocation() : "";
   if (state.agentRefreshOnDetailClose && state.agentRefreshOnDetailClose !== route.agentId) {
     state.agentRefreshOnDetailClose = "";
   }
-  if (route.name !== "board" && !["agent-detail", "agent-work", "agent-settings"].includes(route.name)) {
+  if (!routeTaskID || state.selectedTask?.id !== routeTaskID) {
+    if (routeTaskID && state.selectedTask) preserveCurrentTaskDraft();
     taskDetailVersion += 1;
     state.selectedTask = null;
     state.selectedSubtasks = [];
@@ -500,7 +536,7 @@ async function applyRoute() {
     state.cardEntryPending = false;
     state.cardEntryError = "";
     state.cardEntryAttemptKey = "";
-    state.taskDetailDrafts = {};
+    if (!routeTaskID) state.taskDetailDrafts = {};
     state.subtaskDraft = "";
     state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
@@ -590,6 +626,7 @@ async function applyRoute() {
       state.agentRefreshOnDetailClose = "";
       state.agentDetailLoadState = "ready";
       render();
+      if (routeTaskID) await openTaskDetail(routeTaskID, null, { syncURL: false, preserveTaskDrafts: true, handleError: err => handleAgentUnauthorized(err, route) });
       return;
     }
     await loadAgents(true, authVersion, state.me?.id, version);
@@ -601,7 +638,9 @@ async function applyRoute() {
       if (routeVersion !== version) return;
       if (workspaceLoaded === null) return;
       if (!workspaceLoaded) return showRoute("not-found");
-      return showRoute("app");
+      showRoute("app");
+      if (routeTaskID) await openTaskDetail(routeTaskID, null, { syncURL: false, preserveTaskDrafts: true });
+      return;
     }
     if (route.name === "board") {
       if (!state.boards.some(board => board.id === route.boardId)) {
@@ -609,7 +648,9 @@ async function applyRoute() {
       }
       if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
       if (routeVersion !== version) return;
-      return showRoute("board");
+      showRoute("board");
+      if (routeTaskID) await openTaskDetail(routeTaskID, null, { syncURL: false, preserveTaskDrafts: true });
+      return;
     }
     if (route.settingsPage === "api" && !await loadTokens(authVersion, state.me?.id, version)) return;
     if (routeVersion !== version) return;
@@ -1161,7 +1202,7 @@ async function loadAllSubtasks(taskID, isCurrent) {
 }
 
 async function openTaskDetail(taskID, trigger, options = {}) {
-  const movingWithinTaskChain = Boolean(state.selectedTask);
+  const movingWithinTaskChain = Boolean(state.selectedTask) || options.preserveTaskDrafts;
   const detailVersion = ++taskDetailVersion;
   state.subtaskPending = false;
   if (!movingWithinTaskChain) {
@@ -1192,6 +1233,7 @@ async function openTaskDetail(taskID, trigger, options = {}) {
     state.cardEntryError = "";
     state.cardEntryAttemptKey = "";
     state.error = "";
+    if (options.syncURL !== false) syncTaskPermalink(taskID);
     render();
     focusOpenedTaskDetail();
     return true;
@@ -1814,6 +1856,13 @@ function workspaceDetailHTML(task) {
           <h2>Properties</h2>
           ${task.parentTaskId ? `<div class="workspace-parent-context"><span>Part of a parent card</span>${subtaskSection}</div>` : ""}
           <div class="detail-properties">
+            <div class="field task-reference-field">
+              <span class="task-reference-label">Task ID</span>
+              <div class="task-reference-value"><code id="workspace-task-id" tabindex="0">${escapeHTML(task.id)}</code><button class="secondary icon-label" id="copy-task-id" type="button" aria-label="Copy task ID">${icon("copy")}<span>Copy ID</span></button></div>
+              <code class="sr-only" id="workspace-task-link" aria-hidden="true">${escapeHTML(taskPermalink(task.id))}</code>
+              <button class="secondary icon-label task-link-copy" id="copy-task-link" type="button">${icon("copy")}<span>Copy link</span></button>
+              <p class="task-reference-status" id="task-reference-status" role="status" aria-live="polite"></p>
+            </div>
             <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
             <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Child cards stay with their parent card.</small>` : ""}</div>
             <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
@@ -3632,6 +3681,7 @@ function bindWorkspaceDetail(options = {}) {
     }
   };
   const refreshAfterCommittedMutation = async (action, focus) => {
+    clearTaskPermalink();
     try {
       const refreshed = await refresh();
       if (refreshed !== false) restoreDetailFocus(focus);
@@ -3769,6 +3819,7 @@ function bindWorkspaceDetail(options = {}) {
     state.subtaskCreateAttempt = null;
     state.subtaskPending = false;
     state.subtaskError = "";
+    clearTaskPermalink();
     if (refreshWorkspace) {
       state.workspaceRefreshOnDetailClose = false;
       state.workspaceLoading = true;
@@ -3810,6 +3861,22 @@ function bindWorkspaceDetail(options = {}) {
   };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
   document.onkeydown = event => { if (event.key === "Escape") close(); };
+  const copyTaskReference = async (value, source, button, successMessage, failureMessage) => {
+    const copied = await copyAgentCredential(value, source);
+    const status = document.querySelector("#task-reference-status");
+    if (copied) {
+      button.innerHTML = `${icon("check")}<span>Copied</span>`;
+      if (status) status.textContent = successMessage;
+      return;
+    }
+    if (status) status.textContent = failureMessage;
+  };
+  document.querySelector("#copy-task-id")?.addEventListener("click", event => {
+    copyTaskReference(state.selectedTask.id, document.querySelector("#workspace-task-id"), event.currentTarget, "Task ID copied.", "Copy failed. The task ID is selected so you can copy it manually.");
+  });
+  document.querySelector("#copy-task-link")?.addEventListener("click", event => {
+    copyTaskReference(taskPermalink(state.selectedTask.id), document.querySelector("#workspace-task-link"), event.currentTarget, "Task link copied.", "Copy failed. Copy the link from your browser address bar.");
+  });
   document.querySelectorAll("[data-entry-kind]").forEach(element => element.addEventListener("click", () => {
     preserveTaskDraft();
     state.cardEntryDraft = document.querySelector("#card-entry-body")?.value || state.cardEntryDraft;

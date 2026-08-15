@@ -1072,6 +1072,13 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .workspace-detail .detail-properties { display: grid; grid-template-columns: 1fr; gap: 20px; padding: 0; border: 0; }
 .workspace-detail .field label { margin-bottom: 7px; font-size: 11px; letter-spacing: .1em; }
 .workspace-detail .field input, .workspace-detail .field select { min-height: 40px; padding: 9px 11px; font-size: 13px; }
+.task-reference-field { padding-bottom: 20px; border-bottom: 1px solid var(--line-2); }
+.task-reference-label { display: block; margin-bottom: 7px; color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.task-reference-value { display: flex; align-items: center; gap: 7px; }
+.task-reference-value code { min-width: 0; flex: 1; padding: 10px 11px; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); color: var(--soft); font-size: 11px; line-height: 1.4; }
+.task-reference-value button, .task-link-copy { flex: 0 0 auto; min-height: 38px; }
+.task-link-copy { width: 100%; justify-content: center; margin-top: 8px; }
+.task-reference-status { min-height: 16px; margin: 6px 0 -4px; color: var(--faint); font-size: 11px; line-height: 1.4; }
 .workspace-detail .detail-actions { grid-column: 1 / -1; min-height: 64px; padding: 12px 18px; }
 .workspace-detail .detail-actions button { min-height: 38px; font-size: 13px; }
 .card-conversation { margin-top: 30px; padding-top: 25px; border-top: 1px solid var(--line); }
