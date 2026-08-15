@@ -4727,6 +4727,8 @@ function renderAfterBackgroundListRename() {
 
   const documentRef = globalThis.document;
   const active = documentRef?.activeElement;
+  const sidebarOpen = Boolean(documentRef?.querySelector?.(".sidebar")?.classList.contains("open"));
+  const standaloneFocusID = active?.matches?.("#priority-filter, #flow-list-filter") ? active.id : "";
   const listNameInput = active?.matches?.("[data-bucket-name]") ? active : null;
   const listNameDraft = listNameInput ? {
     listID: listNameInput.dataset.bucketName,
@@ -4750,7 +4752,7 @@ function renderAfterBackgroundListRename() {
   preserveCurrentTaskDraft();
   suppressListRenameChange = true;
   try {
-    render();
+    renderKeepingSidebarOpen(sidebarOpen);
   } finally {
     suppressListRenameChange = false;
   }
@@ -4793,6 +4795,8 @@ function renderAfterBackgroundListRename() {
     if (formFocus.selectionStart !== null && formFocus.selectionEnd !== null) {
       formFocus.control.setSelectionRange(formFocus.selectionStart, formFocus.selectionEnd);
     }
+  } else if (standaloneFocusID) {
+    documentRef?.getElementById?.(standaloneFocusID)?.focus();
   } else {
     restoreTaskDetailFocus(taskDetailFocus);
   }

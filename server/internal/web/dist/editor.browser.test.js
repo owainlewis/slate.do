@@ -1679,6 +1679,55 @@ test("a list rename preserves destination board validation", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("a background list rename keeps mobile navigation open", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t, { width: 390, height: 844 });
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Open navigation", exact: true }).click();
+  const previousSidebar = await page.locator(".sidebar").elementHandle();
+  assert.equal(await page.locator("#sidebar-content").isVisible(), true);
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousSidebar);
+
+  const closeNavigation = page.getByRole("button", { name: "Close navigation", exact: true });
+  assert.equal(await closeNavigation.getAttribute("aria-expanded"), "true");
+  assert.equal(await page.locator("#sidebar-content").isVisible(), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("a background list rename preserves standalone board filter focus", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Flow", exact: true }).click();
+  const flowList = page.locator("#flow-list-filter");
+  await flowList.focus();
+  const previousFlowList = await flowList.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousFlowList);
+  assert.equal(await flowList.evaluate(element => element === document.activeElement), true);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("board settings are removed and legacy links return to the board", async t => {
   const { page, origin, pageErrors } = await startWorkspace(t);
 
