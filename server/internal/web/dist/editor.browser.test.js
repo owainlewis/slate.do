@@ -1266,6 +1266,45 @@ test("a cross-board list rename preserves a focused list-name draft", async t =>
   assert.deepEqual(pageErrors, []);
 });
 
+test("a cross-board list rename preserves every destination form draft", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.locator('[data-start-rename-board="board-two"]').click();
+  await page.locator("#workspace-filter-toggle").click();
+  const boardName = page.getByLabel("Board name", { exact: true });
+  const search = page.getByLabel("Search", { exact: true });
+  const status = page.locator('#workspace-filters select[name="status"]');
+  const hideChildren = page.locator('#workspace-filters input[name="children"]');
+  await boardName.fill("Unsubmitted board name");
+  await search.fill("unsubmitted search");
+  await status.selectOption("working");
+  await hideChildren.check();
+  await search.focus();
+  const previousSearch = await search.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousSearch);
+
+  assert.equal(await boardName.inputValue(), "Unsubmitted board name");
+  assert.equal(await search.inputValue(), "unsubmitted search");
+  assert.equal(await status.inputValue(), "working");
+  assert.equal(await hideChildren.isChecked(), true);
+  assert.equal(await search.evaluate(element => element === document.activeElement), true);
+  assert.equal(state.boards.find(board => board.id === "board-two")?.name, "Other");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/boards/board-two").length, 0);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a list rename preserves a focused agent assignment draft", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 

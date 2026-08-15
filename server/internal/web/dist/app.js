@@ -4452,6 +4452,60 @@ function renameCachedTaskListMetadata(listID, listName) {
   }
 }
 
+function editableFormIdentity(form) {
+  if (form.id) return { kind: "id", value: form.id };
+  for (const attribute of ["data-add-task", "data-rename-board"]) {
+    if (form.hasAttribute(attribute)) return { kind: "attribute", attribute, value: form.getAttribute(attribute) };
+  }
+  return null;
+}
+
+function editableFormControls(form) {
+  return [...(form?.elements || [])].filter(control => control.matches?.("input, textarea, select"));
+}
+
+function captureEditableFormDrafts(documentRef, active) {
+  return [...(documentRef?.querySelectorAll?.("form") || [])].flatMap(form => {
+    const identity = editableFormIdentity(form);
+    if (!identity) return [];
+    const controls = editableFormControls(form).map((control, index) => ({
+      index,
+      tagName: control.tagName,
+      name: control.name,
+      type: control.type,
+      value: control.value,
+      checked: ["checkbox", "radio"].includes(control.type) ? control.checked : null,
+      active: control === active,
+      selectionStart: control === active && ["text", "search", "url", "tel", "password", "textarea"].includes(control.type)
+        ? control.selectionStart : null,
+      selectionEnd: control === active && ["text", "search", "url", "tel", "password", "textarea"].includes(control.type)
+        ? control.selectionEnd : null,
+    }));
+    return [{ identity, controls }];
+  });
+}
+
+function restoreEditableFormDrafts(documentRef, drafts) {
+  let focus = null;
+  const forms = [...(documentRef?.querySelectorAll?.("form") || [])];
+  for (const draft of drafts) {
+    const form = forms.find(item => {
+      const identity = editableFormIdentity(item);
+      return identity?.kind === draft.identity.kind && identity.value === draft.identity.value
+        && identity.attribute === draft.identity.attribute;
+    });
+    const controls = editableFormControls(form);
+    for (const saved of draft.controls) {
+      const control = controls[saved.index];
+      if (!control || control.tagName !== saved.tagName || control.name !== saved.name || control.type !== saved.type) continue;
+      control.value = saved.value;
+      if (saved.checked !== null) control.checked = saved.checked;
+      if (saved.active) focus = { control, selectionStart: saved.selectionStart, selectionEnd: saved.selectionEnd };
+    }
+  }
+  return focus;
+}
+
 function renderAfterBackgroundListRename() {
   const route = parseRoute(globalThis.location?.pathname || "");
   const mounted = route.name === "workspace" ? state.view === "app"
@@ -4467,16 +4521,9 @@ function renderAfterBackgroundListRename() {
     listID: listNameInput.dataset.bucketName,
     name: listNameInput.value,
   } : null;
-  const quickAddDrafts = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])].map(form => ({
-    listID: form.dataset.addTask,
-    title: form.elements?.title?.value || "",
-  }));
-  const quickAddForm = active?.closest?.("[data-add-task]");
+  const formDrafts = captureEditableFormDrafts(documentRef, active);
   const assignForm = documentRef?.querySelector?.("#assign-work-form");
-  const focus = captureTaskDetailFocus()
-    || (quickAddForm ? { surface: "quick-add", listID: quickAddForm.dataset.addTask, name: active.name }
-      : listNameInput ? { surface: "list-name", listID: listNameInput.dataset.bucketName }
-        : assignForm?.contains(active) ? { surface: "assign", id: active.id, name: active.name } : null);
+  const taskDetailFocus = captureTaskDetailFocus();
   if (state.agentAssignOpen && assignForm) state.agentAssignDraft = assignDraftFromForm(assignForm);
   preserveCurrentTaskDraft();
   suppressListRenameChange = true;
@@ -4485,11 +4532,7 @@ function renderAfterBackgroundListRename() {
   } finally {
     suppressListRenameChange = false;
   }
-  for (const draft of quickAddDrafts) {
-    const form = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])]
-      .find(item => item.dataset.addTask === draft.listID);
-    if (form?.elements?.title) form.elements.title.value = draft.title;
-  }
+  const formFocus = restoreEditableFormDrafts(documentRef, formDrafts);
   if (listNameDraft) {
     const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
       .find(item => item.dataset.bucketName === listNameDraft.listID);
@@ -4501,17 +4544,16 @@ function renderAfterBackgroundListRename() {
       }, { once: true });
     }
   }
-  if (focus?.surface === "quick-add") {
-    const form = [...(documentRef?.querySelectorAll?.("[data-add-task]") || [])]
-      .find(item => item.dataset.addTask === focus.listID);
-    (form?.elements?.namedItem?.(focus.name) || form?.elements?.[focus.name])?.focus();
-  } else if (focus?.surface === "list-name") {
+  if (listNameDraft) {
     [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
-      .find(item => item.dataset.bucketName === focus.listID)?.focus();
-  } else if (focus?.surface === "assign") {
-    (documentRef?.getElementById?.(focus.id) || documentRef?.querySelector?.(`#assign-work-form [name="${focus.name}"]`))?.focus();
+      .find(item => item.dataset.bucketName === listNameDraft.listID)?.focus();
+  } else if (formFocus) {
+    formFocus.control.focus();
+    if (formFocus.selectionStart !== null && formFocus.selectionEnd !== null) {
+      formFocus.control.setSelectionRange(formFocus.selectionStart, formFocus.selectionEnd);
+    }
   } else {
-    restoreTaskDetailFocus(focus);
+    restoreTaskDetailFocus(taskDetailFocus);
   }
 }
 
