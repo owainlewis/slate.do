@@ -1512,6 +1512,43 @@ test("a list rename keeps a failed pending board rename retryable", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("a list rename preserves destination board validation", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.locator('[data-start-rename-board="board-two"]').click();
+  const boardName = page.getByLabel("Board name", { exact: true });
+  await boardName.fill(" ");
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await page.getByText("Board name is required.", { exact: true }).waitFor();
+  assert.equal(await boardName.getAttribute("aria-invalid"), "true");
+  const previousName = await boardName.elementHandle();
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousName);
+
+  assert.equal(await boardName.inputValue(), " ");
+  assert.equal(await boardName.getAttribute("aria-invalid"), "true");
+  assert.equal(await boardName.evaluate(element => element === document.activeElement), true);
+  await page.getByText("Board name is required.", { exact: true }).waitFor();
+  await boardName.fill("Recovered board");
+  assert.equal(await boardName.getAttribute("aria-invalid"), null);
+  assert.equal(await page.getByText("Board name is required.", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "Save board name", exact: true }).click();
+  await waitFor(() => state.boards.find(board => board.id === "board-two")?.name === "Recovered board");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/boards/board-two").length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("board settings are removed and legacy links return to the board", async t => {
   const { page, origin, pageErrors } = await startWorkspace(t);
 

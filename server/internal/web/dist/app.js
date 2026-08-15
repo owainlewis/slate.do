@@ -4500,6 +4500,7 @@ function captureEditableFormDrafts(documentRef, active) {
       checked: ["checkbox", "radio"].includes(control.type) ? control.checked : null,
       disabled: control.disabled,
       readOnly: "readOnly" in control ? control.readOnly : null,
+      ariaInvalid: control.getAttribute("aria-invalid"),
       innerHTML: control.tagName === "BUTTON" && control.disabled ? control.innerHTML : null,
       active: control === active,
       selectionStart: control === active && ["text", "search", "url", "tel", "password", "textarea"].includes(control.type)
@@ -4507,7 +4508,11 @@ function captureEditableFormDrafts(documentRef, active) {
       selectionEnd: control === active && ["text", "search", "url", "tel", "password", "textarea"].includes(control.type)
         ? control.selectionEnd : null,
     }));
-    return [{ identity, controls }];
+    const alerts = [...form.querySelectorAll('[role="alert"]')].map((alert, index) => ({
+      index,
+      textContent: alert.textContent,
+    }));
+    return [{ identity, controls, alerts }];
   });
 }
 
@@ -4528,8 +4533,15 @@ function restoreEditableFormDrafts(documentRef, drafts) {
       if (saved.checked !== null) control.checked = saved.checked;
       control.disabled = saved.disabled;
       if (saved.readOnly !== null) control.readOnly = saved.readOnly;
+      if (saved.ariaInvalid === null) control.removeAttribute("aria-invalid");
+      else control.setAttribute("aria-invalid", saved.ariaInvalid);
       if (saved.innerHTML !== null) control.innerHTML = saved.innerHTML;
       if (saved.active) focus = { control, selectionStart: saved.selectionStart, selectionEnd: saved.selectionEnd };
+    }
+    const alerts = [...(form?.querySelectorAll?.('[role="alert"]') || [])];
+    for (const saved of draft.alerts) {
+      const alert = alerts[saved.index];
+      if (alert) alert.textContent = saved.textContent;
     }
   }
   return focus;
