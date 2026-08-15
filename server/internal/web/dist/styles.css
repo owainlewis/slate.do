@@ -11,6 +11,7 @@
   --card-shadow: 0 1px 1px rgb(20 22 28 / 8%), 0 2px 5px rgb(20 22 28 / 5%);
   --card-shadow-hover: 0 2px 2px rgb(20 22 28 / 9%), 0 5px 12px rgb(20 22 28 / 8%);
   --danger: #a23f39;
+  --success: #3d7a4a;
   --warn: #9a621f;
   --review: #6749a8;
   --sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -248,6 +249,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   --card-shadow: 0 1px 1px rgb(0 0 0 / 30%), 0 3px 8px rgb(0 0 0 / 18%);
   --card-shadow-hover: 0 2px 2px rgb(0 0 0 / 34%), 0 6px 16px rgb(0 0 0 / 24%);
   --danger: #d07862;
+  --success: #73b883;
   --warn: #d39a55;
   --review: #c0acec;
 }
@@ -1040,9 +1042,25 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .card-detail-main { height: 100vh; overflow: hidden; background: var(--card); }
 .workspace-detail .detail-head { min-height: 58px; padding: 11px 24px; display: flex; align-items: center; gap: 14px; }
 .workspace-detail .detail-context { font-size: 13px; }
+.detail-head-start, .detail-head-actions { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.detail-head-actions { margin-left: auto; flex: 0 0 auto; }
 .workspace-detail-close { min-height: 34px; padding: 7px 9px; display: inline-flex; align-items: center; gap: 6px; color: var(--soft); font-size: 13px; font-weight: 650; }
 .workspace-detail-close:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
 .workspace-detail-close .icon { width: 15px; height: 15px; }
+.task-detail-save-status { min-width: 72px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; color: var(--faint); font-size: 12px; }
+.task-detail-save-status > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.task-detail-save-status .icon { width: 14px; height: 14px; color: var(--success); }
+.task-detail-save-status.error { color: var(--danger); }
+.task-detail-save-status button { padding: 4px 6px; border: 0; background: transparent; color: var(--danger); font-size: 12px; font-weight: 700; }
+.task-detail-actions-menu { position: relative; }
+.task-detail-actions-menu summary { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); color: var(--soft); cursor: pointer; font-size: 18px; letter-spacing: .08em; list-style: none; }
+.task-detail-actions-menu summary::-webkit-details-marker { display: none; }
+.task-detail-actions-menu summary:hover, .task-detail-actions-menu[open] summary { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.task-detail-actions-menu > div { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; width: 170px; padding: 5px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--card); box-shadow: 0 14px 36px rgba(0, 0, 0, .22); }
+.task-detail-actions-menu button { width: 100%; padding: 8px 9px; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; text-align: left; }
+.task-detail-actions-menu button:hover, .task-detail-actions-menu button:focus-visible { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.task-detail-actions-menu .icon { width: 15px; height: 15px; }
+.task-detail-save-error { width: min(1120px, 100%); margin: 0 auto; padding: 8px 18px; border-bottom: 1px solid color-mix(in srgb, var(--danger) 24%, var(--line)); background: color-mix(in srgb, var(--danger) 7%, var(--card)); color: var(--danger); font-size: 12px; }
 .workspace-detail-form {
   width: min(1120px, 100%);
   margin: 0 auto;
@@ -1050,7 +1068,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   min-height: 0;
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) 260px;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
 }
 .workspace-detail-main {
   min-width: 0;
@@ -1069,11 +1087,10 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .workspace-detail-properties h2 { margin: 0 0 28px; font-size: 15px; letter-spacing: -.01em; }
 .workspace-detail .detail-title { font-size: 26px; line-height: 1.25; }
 .workspace-detail .detail-description { min-height: 150px; margin: 0 0 20px; font-size: 14px; line-height: 1.6; }
+.task-field-error { margin: -10px 0 18px; color: var(--danger); font-size: 12px; }
 .workspace-detail .detail-properties { display: grid; grid-template-columns: 1fr; gap: 20px; padding: 0; border: 0; }
 .workspace-detail .field label { margin-bottom: 7px; font-size: 11px; letter-spacing: .1em; }
 .workspace-detail .field input, .workspace-detail .field select { min-height: 40px; padding: 9px 11px; font-size: 13px; }
-.workspace-detail .detail-actions { grid-column: 1 / -1; min-height: 64px; padding: 12px 18px; }
-.workspace-detail .detail-actions button { min-height: 38px; font-size: 13px; }
 .card-conversation { margin-top: 30px; padding-top: 25px; border-top: 1px solid var(--line); }
 .card-conversation > header > div { display: flex; align-items: baseline; gap: 8px; }
 .card-conversation h3 { margin: 0; font-size: 16px; }
@@ -2020,6 +2037,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   .agents-main { width: 100%; overflow: visible; }
   .agents-wrap { padding: 28px 20px 60px; }
   .workspace-detail-form { display: block !important; overflow-y: auto; }
+  .workspace-detail .detail-context { display: none; }
   .workspace-detail-main { padding: 32px 28px 28px; overflow: visible; border-right: 0; }
   .workspace-detail-properties { padding: 26px 28px 30px; overflow: visible; border-top: 1px solid var(--line-2); }
   .workspace-detail-properties h2 { margin-bottom: 22px; }
@@ -2103,7 +2121,6 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   .workspace-detail-main { padding: 28px 20px 26px; overflow: visible; border-right: 0; }
   .workspace-detail-properties { padding: 24px 20px 28px; overflow: visible; border-top: 1px solid var(--line-2); }
   .workspace-detail .detail-title { font-size: 24px; }
-  .workspace-detail .detail-actions { position: sticky; bottom: 0; }
   .move-fields { grid-template-columns: 1fr; }
   .detail-actions { padding: 12px; }
   .detail-actions .danger { padding-left: 6px; padding-right: 6px; }
