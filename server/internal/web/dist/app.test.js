@@ -2644,8 +2644,24 @@ test("detail presents one contextual accessible card editor with clear actions",
   assert.match(html, />Delete card</);
   assert.match(html, /Home list/);
   assert.match(html, /<label for="workspace-detail-owner">Agent<\/label>/);
+  assert.match(html, />Task ID</);
+  assert.match(html, /id="workspace-task-id"[^>]*>working</);
+  assert.match(html, /id="workspace-task-link"[^>]*>\/app\/tasks\?task=working</);
+  assert.match(html, /id="copy-task-id"[^>]*aria-label="Copy task ID"/);
+  assert.match(html, /id="copy-task-link"[^>]*>[^<]*(?:<svg[\s\S]*?<\/svg>)?<span>Copy link<\/span>/);
   assert.doesNotMatch(html, /Act with an agent|Choose an agent as owner|workspace-agent-action/);
   assert.doesNotMatch(html, /aria-label="Close card"/);
+});
+
+test("task permalinks preserve the current surface and filters", () => {
+  const location = { pathname: "/app/boards/board-one", search: "?view=flow&priority=p0", origin: "https://slate.do" };
+
+  assert.equal(app.taskIDFromLocation(location), "");
+  assert.equal(app.taskLocationPath("task-one", location), "/app/boards/board-one?view=flow&priority=p0&task=task-one");
+  assert.equal(app.taskPermalink("task-one", location), "https://slate.do/app/boards/board-one?view=flow&priority=p0&task=task-one");
+  assert.equal(app.taskLocationPath("", { ...location, search: "?view=flow&task=task-one" }), "/app/boards/board-one?view=flow");
+  assert.equal(app.routeSupportsTaskDetail(app.parseRoute(location.pathname)), true);
+  assert.equal(app.routeSupportsTaskDetail(app.parseRoute("/app/settings/profile")), false);
 });
 
 test("detail can move a parent task between account-wide lists", () => {
