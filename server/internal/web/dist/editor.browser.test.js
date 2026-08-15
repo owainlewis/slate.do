@@ -1530,14 +1530,21 @@ test("agent settings list refreshes preserve drafts and task permalinks", async 
   await waitFor(() => typeof state.releaseListRename === "function");
 
   await navigateApp(page, "/app/agents/agent-research/settings");
+  const name = page.locator("#agent-settings-name");
   const purpose = page.locator("#agent-settings-purpose");
   await purpose.fill("Unsaved settings purpose");
-  const previousPurpose = await purpose.elementHandle();
+  await name.fill("");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByText("Agent name is required.", { exact: true }).waitFor();
+  const previousName = await name.elementHandle();
   state.releaseListRename();
   await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
-  await page.waitForFunction(element => !element.isConnected, previousPurpose);
+  await page.waitForFunction(element => !element.isConnected, previousName);
+  assert.equal(await name.inputValue(), "");
   assert.equal(await purpose.inputValue(), "Unsaved settings purpose");
-  assert.equal(await purpose.evaluate(element => element === document.activeElement), true);
+  assert.equal(await name.getAttribute("aria-invalid"), "true");
+  assert.equal(await page.getByText("Agent name is required.", { exact: true }).isVisible(), true);
+  assert.equal(await name.evaluate(element => element === document.activeElement), true);
 
   await page.goto(`${origin}/app/boards/board-one`);
   await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
@@ -1939,6 +1946,38 @@ test("background list renames preserve route scroll positions", async t => {
   await page.waitForFunction(element => !element.isConnected, previousFlow);
   assert.equal(await boardFlow.evaluate(element => element.scrollLeft), 180);
   assert.equal(await newCards.evaluate(element => element.scrollTop), 160);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("background list renames preserve an open card action menu", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await page.goto(`${origin}/app/boards/board-one`);
+  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  state.delayNextListRename = true;
+  await page.getByLabel("List name").nth(1).fill("Published");
+  await page.getByLabel("List name").nth(1).press("Tab");
+  await waitFor(() => typeof state.releaseListRename === "function");
+
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  const card = page.locator('.workspace-flow-card[data-task="task-parent"]');
+  await card.click({ button: "right" });
+  let menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
+  const previousMenu = await menu.elementHandle();
+  assert.equal(await menu.getByRole("menuitem", { name: "Delete card" }).evaluate(element => element === document.activeElement), true);
+
+  state.releaseListRename();
+  await waitFor(() => state.lists.find(list => list.id === "list-youtube")?.name === "Published");
+  await page.waitForFunction(element => !element.isConnected, previousMenu);
+  menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
+  await menu.waitFor();
+  assert.equal(await menu.getByRole("menuitem", { name: "Delete card" }).evaluate(element => element === document.activeElement), true);
+  assert.equal(await card.evaluate(element => element.classList.contains("context-open")), true);
+
+  await page.keyboard.press("Escape");
+  await menu.waitFor({ state: "detached" });
+  assert.equal(await card.locator("[data-open-task]").evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
 

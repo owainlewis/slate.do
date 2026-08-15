@@ -3249,51 +3249,66 @@ function closeCardContextMenu({ restoreFocus = false } = {}) {
   if (restoreFocus) trigger?.focus?.();
 }
 
+function captureCardContextMenuState() {
+  if (!cardContextMenu?.card?.dataset?.task) return null;
+  return { taskID: cardContextMenu.card.dataset.task, x: cardContextMenu.x, y: cardContextMenu.y };
+}
+
+function restoreCardContextMenuState(snapshot) {
+  if (!snapshot) return;
+  const card = document.querySelector(`[data-task="${CSS.escape(snapshot.taskID)}"]`);
+  const task = findTask(snapshot.taskID);
+  if (card && task) openCardContextMenu(card, task, snapshot.x, snapshot.y);
+}
+
+function openCardContextMenu(card, task, clientX = 0, clientY = 0) {
+  closeCardContextMenu();
+  const trigger = card.matches("button, a") ? card : card.querySelector("[data-open-task], button, a") || card;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = cardContextMenuHTML(task);
+  const menu = wrapper.firstElementChild;
+  const menuHost = document.querySelector("#app > .theme-dark, #app > .theme-light") || document.body;
+  menuHost.append(menu);
+
+  let x = clientX;
+  let y = clientY;
+  if (!x && !y) {
+    const bounds = trigger.getBoundingClientRect();
+    x = bounds.left;
+    y = bounds.bottom;
+  }
+  const position = cardContextMenuPosition(x, y, menu.offsetWidth, menu.offsetHeight, window.innerWidth, window.innerHeight);
+  menu.style.left = `${position.left}px`;
+  menu.style.top = `${position.top}px`;
+  card.classList.add("context-open");
+
+  const onPointerDown = pointerEvent => {
+    if (!menu.contains(pointerEvent.target)) closeCardContextMenu();
+  };
+  const onKeyDown = keyEvent => {
+    if (keyEvent.key === "Escape") {
+      keyEvent.preventDefault();
+      closeCardContextMenu({ restoreFocus: true });
+    } else if (keyEvent.key === "Tab") {
+      closeCardContextMenu();
+    }
+  };
+  cardContextMenu = { menu, card, trigger, onPointerDown, onKeyDown, x, y };
+  document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  menu.querySelector("[data-context-delete]").addEventListener("click", async () => {
+    closeCardContextMenu({ restoreFocus: true });
+    await deleteCardFromContext(task.id);
+  });
+  menu.querySelector("[role=menuitem]").focus();
+}
+
 function bindCardContextMenus() {
   document.querySelectorAll("[data-task]").forEach(card => card.addEventListener("contextmenu", event => {
     const task = findTask(card.dataset.task);
     if (!task) return;
     event.preventDefault();
-    closeCardContextMenu();
-
-    const trigger = card.matches("button, a") ? card : card.querySelector("[data-open-task], button, a") || card;
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = cardContextMenuHTML(task);
-    const menu = wrapper.firstElementChild;
-    const menuHost = document.querySelector("#app > .theme-dark, #app > .theme-light") || document.body;
-    menuHost.append(menu);
-
-    let x = event.clientX;
-    let y = event.clientY;
-    if (!x && !y) {
-      const bounds = trigger.getBoundingClientRect();
-      x = bounds.left;
-      y = bounds.bottom;
-    }
-    const position = cardContextMenuPosition(x, y, menu.offsetWidth, menu.offsetHeight, window.innerWidth, window.innerHeight);
-    menu.style.left = `${position.left}px`;
-    menu.style.top = `${position.top}px`;
-    card.classList.add("context-open");
-
-    const onPointerDown = pointerEvent => {
-      if (!menu.contains(pointerEvent.target)) closeCardContextMenu();
-    };
-    const onKeyDown = keyEvent => {
-      if (keyEvent.key === "Escape") {
-        keyEvent.preventDefault();
-        closeCardContextMenu({ restoreFocus: true });
-      } else if (keyEvent.key === "Tab") {
-        closeCardContextMenu();
-      }
-    };
-    cardContextMenu = { menu, card, trigger, onPointerDown, onKeyDown };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    menu.querySelector("[data-context-delete]").addEventListener("click", async () => {
-      closeCardContextMenu({ restoreFocus: true });
-      await deleteCardFromContext(task.id);
-    });
-    menu.querySelector("[role=menuitem]").focus();
+    openCardContextMenu(card, task, event.clientX, event.clientY);
   }));
 }
 
@@ -4736,7 +4751,8 @@ function captureEditableFormDrafts(documentRef, active) {
   return [...(documentRef?.querySelectorAll?.("form") || [])].flatMap(form => {
     const identity = editableFormIdentity(form);
     if (!identity) return [];
-    const controls = editableFormControls(form).map((control, index) => ({
+    const formControls = editableFormControls(form);
+    const controls = formControls.map((control, index) => ({
       index,
       tagName: control.tagName,
       name: control.name,
@@ -4757,7 +4773,12 @@ function captureEditableFormDrafts(documentRef, active) {
       index,
       textContent: alert.textContent,
     }));
-    return [{ identity, controls, alerts }];
+    const describedErrors = [...new Set(formControls.flatMap(control => (control.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean)))]
+      .flatMap(id => {
+        const element = documentRef?.getElementById?.(id);
+        return element?.matches?.(".error") ? [{ id, textContent: element.textContent }] : [];
+      });
+    return [{ identity, controls, alerts, describedErrors }];
   });
 }
 
@@ -4788,6 +4809,10 @@ function restoreEditableFormDrafts(documentRef, drafts) {
       const alert = alerts[saved.index];
       if (alert) alert.textContent = saved.textContent;
     }
+    for (const saved of draft.describedErrors || []) {
+      const element = documentRef?.getElementById?.(saved.id);
+      if (element) element.textContent = saved.textContent;
+    }
   }
   return focus;
 }
@@ -4804,6 +4829,7 @@ function renderAfterBackgroundListRename() {
   const active = documentRef?.activeElement;
   const sidebarOpen = Boolean(documentRef?.querySelector?.(".sidebar")?.classList.contains("open"));
   const scrollSnapshot = captureRenderScroll(documentRef);
+  const contextMenuSnapshot = captureCardContextMenuState();
   const stableFocus = stableFocusIdentity(active);
   const listNameInput = active?.matches?.("[data-bucket-name]") ? active : null;
   const listNameDraft = listNameInput ? {
@@ -4832,6 +4858,7 @@ function renderAfterBackgroundListRename() {
   } finally {
     suppressListRenameChange = false;
   }
+  restoreCardContextMenuState(contextMenuSnapshot);
   const formFocus = restoreEditableFormDrafts(documentRef, formDrafts);
   for (const draft of disabledListNameDrafts) {
     const input = [...(documentRef?.querySelectorAll?.("[data-bucket-name]") || [])]
