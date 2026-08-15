@@ -379,6 +379,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     const statusMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/status$/);
     if (statusMatch && request.method === "PATCH") {
       const input = await requestJSON(request);
+      if (typeof input.title === "string") input.title = input.title.trim();
       if (state.delayNextStatus) {
         state.delayNextStatus = false;
         await new Promise(resolve => { state.releaseStatus = resolve; });
@@ -461,6 +462,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     }
     if (taskMatch && request.method === "PATCH") {
       const input = await requestJSON(request);
+      if (typeof input.title === "string") input.title = input.title.trim();
       if (state.delayNextTaskPatch) {
         state.delayNextTaskPatch = false;
         await new Promise(resolve => { state.releaseTaskPatch = resolve; });
@@ -2771,6 +2773,22 @@ test("task detail autosaves text without a bottom action bar", async t => {
   assert.equal(await detail.isVisible(), true);
   await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
   await page.getByText("Autosaved task title", { exact: true }).waitFor();
+  assert.deepEqual(pageErrors, []);
+});
+
+test("task autosave adopts server-normalized text without resaving forever", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+
+  await page.locator('[data-open-task="task-parent"]').click();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("  Trimmed once  ");
+  await title.blur();
+  await page.locator('[data-task-save-status][data-state="saved"]').waitFor();
+  await page.waitForTimeout(1200);
+
+  assert.equal(await title.inputValue(), "Trimmed once");
+  assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Trimmed once");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/tasks/task-parent").length, 1);
   assert.deepEqual(pageErrors, []);
 });
 

@@ -3666,7 +3666,7 @@ async function commitTaskDetailAutosave() {
         );
       });
       if (!updated) return false;
-      reconcileTaskMutation(updated, reconciliationBase);
+      reconcileTaskMutation(updated, reconciliationBase, { submittedDraft: draft });
       await refreshAfterTaskMutation(startedRouteVersion);
       if (detailVersion !== taskDetailVersion || state.selectedTask?.id !== taskID) return true;
       const liveDraft = captureTaskDetailAutosaveDraft();
@@ -4479,9 +4479,10 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
   }
 }
 
-function reconcileTaskMutation(updated, previousTask) {
+function reconcileTaskMutation(updated, previousTask, options = {}) {
   const reconciled = { ...updated };
   const detailBaseline = state.taskDetailBaselines[reconciled.id];
+  const comparisonDraft = options.submittedDraft || detailBaseline;
   const merge = items => (items || []).map(item => item.id === reconciled.id ? { ...item, ...reconciled } : item);
   state.workspaceTasks = merge(state.workspaceTasks);
   state.selectedSubtasks = merge(state.selectedSubtasks);
@@ -4525,12 +4526,12 @@ function reconcileTaskMutation(updated, previousTask) {
   const live = taskDraftFromCurrentForm(baseline);
   const statusControl = globalThis.document?.querySelector?.('#workspace-detail-form [name="status"]');
   const liveStatus = live?.status || statusControl?.value || baseline.status;
-  const statusWasEdited = Boolean(statusControl) && detailBaseline
-    && String(liveStatus || "") !== String(detailBaseline.status || "");
+  const statusWasEdited = Boolean(statusControl) && comparisonDraft
+    && String(liveStatus || "") !== String(comparisonDraft.status || "");
   const merged = { ...baseline, ...reconciled };
   const form = globalThis.document?.querySelector?.("#workspace-detail-form");
   for (const field of ["title", "description", "priority", "assigneeAgentId", "scheduledDate", "bucketId"]) {
-    if (live && detailBaseline && String(live[field] || "") !== String(detailBaseline[field] || "")) {
+    if (live && comparisonDraft && String(live[field] || "") !== String(comparisonDraft[field] || "")) {
       merged[field] = live[field];
       continue;
     }
