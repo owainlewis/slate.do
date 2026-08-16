@@ -214,6 +214,17 @@ const FLOW_STATES = [
   { value: "needs_review", label: "Review" },
   { value: "done", label: "Done" },
 ];
+// The board groups the statuses into four columns so each has room to read.
+// Ready is not a column of its own: assigning an agent promotes a task from
+// new to queued automatically, so both sit in Todo and the agent on the card
+// is what tells you it is waiting to be picked up. Dropping on a column sets
+// its `value`, and the store promotes new to queued when an agent is assigned.
+const BOARD_COLUMNS = [
+  { value: "new", label: "Todo", statuses: ["new", "queued"] },
+  { value: "working", label: "In Progress", statuses: ["working"] },
+  { value: "needs_review", label: "Review", statuses: ["needs_review"] },
+  { value: "done", label: "Done", statuses: ["done"] },
+];
 const PRIORITIES = [
   { value: "p0", label: "P0" },
   { value: "p1", label: "P1" },
@@ -1648,8 +1659,8 @@ function workspaceTaskContext(task, includeOwner = false) {
 
 function workspaceFlowHTML(tasks) {
   const card = task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task, true))}</small></button></article>`;
-  return `<section class="workspace-flow grouped-by-status">${FLOW_STATES.map(group => {
-    const items = tasks.filter(task => task.status === group.value);
+  return `<section class="workspace-flow grouped-by-status">${BOARD_COLUMNS.map(group => {
+    const items = tasks.filter(task => group.statuses.includes(task.status));
     return `<section class="workspace-flow-column" data-flow-status="${escapeAttr(group.value)}"><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag tasks here</p>`}</div></section>`;
   }).join("")}</section>`;
 }
@@ -2013,7 +2024,7 @@ function boardRowHTML(board) {
       <span class="board-select" data-board="${board.id}">${escapeHTML(board.name)}</span>
       <div class="board-actions">
         <button data-start-rename-board="${board.id}" aria-label="Rename ${escapeAttr(board.name)}" title="Rename board">${icon("pencil")}</button>
-        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="${deletable ? "Delete board" : "Move or create another Inbox before deleting this board"}" ${deletable ? "" : "disabled"}>${icon("trash")}</button>
+        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="${deletable ? "Delete board" : escapeAttr(boardDeleteBlockedReason(board.id))}" ${deletable ? "" : "disabled"}>${icon("trash")}</button>
       </div>
     </div>`;
 }
@@ -4679,6 +4690,16 @@ async function deleteBoard(id) {
 
 function boardCanBeDeleted(boardID) {
   return state.workspaceLists.some(list => list.isInbox && list.boardId !== boardID);
+}
+
+// An account always keeps one Inbox, so the board holding the only one cannot
+// go. Say that, rather than suggesting a move or a new Inbox: neither is
+// something a person can do from here.
+function boardDeleteBlockedReason(boardID) {
+  if (boardCanBeDeleted(boardID)) return "";
+  return state.boards.length > 1
+    ? "This board holds your only Inbox, so it cannot be deleted"
+    : "Your last board cannot be deleted: it holds your Inbox";
 }
 
 async function bindSettings() {

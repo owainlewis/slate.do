@@ -130,6 +130,23 @@ test("password reset forms collect email and a secure replacement password", () 
   vm.runInContext(`state.resetToken = ""`, app);
 });
 
+test("the last board explains why it cannot be deleted", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "only", name: "Work" }];
+    state.workspaceLists = [{ id: "inbox", name: "Inbox", boardId: "only", isInbox: true }];
+  `, app);
+  assert.equal(app.boardCanBeDeleted("only"), false);
+  assert.equal(app.boardDeleteBlockedReason("only"), "Your last board cannot be deleted: it holds your Inbox");
+
+  vm.runInContext(`state.boards = [{ id: "only", name: "Work" }, { id: "other", name: "Other" }];`, app);
+  assert.equal(app.boardDeleteBlockedReason("only"), "This board holds your only Inbox, so it cannot be deleted");
+
+  vm.runInContext(`state.workspaceLists = [{ id: "inbox", name: "Inbox", boardId: "only", isInbox: true }, { id: "inbox-two", name: "Inbox", boardId: "other", isInbox: true }];`, app);
+  assert.equal(app.boardCanBeDeleted("only"), true);
+  assert.equal(app.boardDeleteBlockedReason("only"), "", "a deletable board needs no reason");
+  vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
+});
+
 test("sidebar makes work, lists, and agents the primary control plane", () => {
   vm.runInContext(`
     state.boards = [{ id: "content", name: "Content" }];
@@ -344,6 +361,33 @@ test("the board includes subtasks while an individual list stays a parent rollup
   assert.equal(paged.get("cursor"), "next-page");
   assert.equal(paged.has("topLevel"), false);
   delete app.location;
+});
+
+test("the board groups statuses into four columns and Ready sits in Todo", () => {
+  const tasks = [
+    { id: "a", title: "Fresh", status: "new", bucketId: "list" },
+    { id: "b", title: "Assigned", status: "queued", bucketId: "list" },
+    { id: "c", title: "Running", status: "working", bucketId: "list" },
+    { id: "d", title: "Back to me", status: "needs_review", bucketId: "list" },
+    { id: "e", title: "Finished", status: "done", bucketId: "list" },
+  ];
+  const html = app.workspaceFlowHTML(tasks);
+  assert.equal((html.match(/class="workspace-flow-column"/g) || []).length, 4);
+  for (const label of ["Todo", "In Progress", "Review", "Done"]) assert.match(html, new RegExp(`<h2>${label}</h2>`));
+  assert.doesNotMatch(html, /<h2>Ready<\/h2>/, "Ready is a status inside Todo, not a column");
+
+  // Todo holds both the unassigned and the agent-queued task, so its count is 2.
+  const todo = html.slice(html.indexOf('data-flow-status="new"'), html.indexOf('data-flow-status="working"'));
+  assert.match(todo, /<span>2<\/span>/);
+  assert.match(todo, /Fresh/);
+  assert.match(todo, /Assigned/);
+
+  // Dropping on Todo sets new; the store promotes it back to queued when an
+  // agent is assigned, which keeps the task in the same column.
+  for (const value of ["new", "working", "needs_review", "done"]) {
+    assert.match(html, new RegExp(`data-flow-status="${value}"`));
+  }
+  assert.doesNotMatch(html, /data-flow-status="queued"/);
 });
 
 test("the board filter keeps search, agent and priority, and applies without a button", () => {

@@ -84,8 +84,10 @@
 .workspace-filters button { height: 36px; white-space: nowrap; }
 .workspace-content { flex: 1; min-height: 0; overflow: auto; padding: 22px 30px 50px; }
 .workspace-load-more { align-self: center; margin: 0 24px 20px; }
-.workspace-empty { padding: 60px 20px; color: var(--faint); text-align: center; font-size: 13px; }.workspace-flow { min-width: max-content; display: flex; align-items: flex-start; gap: 11px; }
-.workspace-flow.grouped-by-status { width: 100%; min-width: 1100px; display: grid; grid-template-columns: repeat(5, minmax(205px, 1fr)); }
+.workspace-empty { padding: 60px 20px; color: var(--faint); text-align: center; font-size: 13px; }
+/* Columns stretch to the tallest, so a short column does not stop halfway up
+   the board while its neighbour runs long. */
+.workspace-flow.grouped-by-status { width: 100%; min-width: 960px; display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); align-items: stretch; gap: 11px; }
 .workspace-flow-column { min-height: 440px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }.workspace-flow-column.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, var(--card)); }
 .workspace-flow-column > header { display: flex; justify-content: space-between; align-items: baseline; padding: 0 2px 10px; }
 .workspace-flow-column h2 { margin: 0; font-size: 14px; }
