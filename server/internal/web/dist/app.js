@@ -1554,9 +1554,12 @@ function appHTML() {
     : state.workspaceScope === "list" ? list?.name || "List" : "Board";
   const subtitle = state.workspaceScope === "inbox" ? "New tasks waiting for context."
     : state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
+  const renameableList = state.workspaceScope === "list" && list && !list.isInbox;
   const overview = `
     <header class="workspace-topbar">
-      <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
+      <div><div class="workspace-title">${renameableList
+        ? `<label class="sr-only" for="workspace-list-name">List name</label><input class="workspace-title-input" id="workspace-list-name" data-bucket-name="${escapeAttr(list.id)}" value="${escapeAttr(list.name)}" maxlength="100" autocomplete="off">`
+        : `<h1>${escapeHTML(title)}</h1>`}<span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
       <div class="workspace-topbar-actions">
         ${state.workspaceScope === "list" && list && !list.isInbox ? `<button class="plain-btn danger-text" id="delete-workspace-list" type="button" data-list-id="${escapeAttr(list.id)}">${icon("trash")}<span>Delete list</span></button>` : ""}
         <button class="primary" id="new-task" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New task"}</span></button>
@@ -3125,7 +3128,7 @@ async function refreshAfterContextDelete() {
 
 async function deleteCardFromContext(taskID) {
   const task = findTask(taskID);
-  if (!task || !confirm(`Delete “${task.title}” and its child cards?`)) return false;
+  if (!task || !confirm(`Delete “${task.title}” and its subtasks?`)) return false;
   const deleteErrorPrefix = `Couldn’t delete “${task.title}”:`;
   const sessionVersion = authVersion;
   const userID = state.me?.id;
@@ -4046,7 +4049,12 @@ function bindApp() {
     render();
     document.querySelector("#priority-filter")?.focus();
   });
-  document.querySelectorAll("[data-bucket-name]").forEach(element => element.addEventListener("change", () => renameWorkspaceList(element)));
+  document.querySelectorAll("[data-bucket-name]").forEach(element => {
+    element.addEventListener("change", () => renameWorkspaceList(element));
+    element.addEventListener("keydown", event => {
+      if (event.key === "Enter") { event.preventDefault(); element.blur(); }
+    });
+  });
   document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
     const goal = e.target.value;
     const id = el.dataset.bucketGoal;
@@ -4296,7 +4304,7 @@ function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar"
 
 async function renameWorkspaceList(element) {
   const id = element.dataset.bucketName;
-  const list = state.board?.buckets?.find(item => item.id === id);
+  const list = state.workspaceLists.find(item => item.id === id) || state.board?.buckets?.find(item => item.id === id);
   if (!list) return false;
   const name = element.value.trim();
   const expectedRouteVersion = routeVersion;
@@ -4321,7 +4329,7 @@ async function renameWorkspaceList(element) {
       name: nextName,
       tasks: (item.tasks || []).map(task => ({ ...task, listName: nextName, bucketName: nextName })),
     } : item;
-    state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
+    if (state.board?.buckets) state.board = { ...state.board, buckets: state.board.buckets.map(rename) };
     state.workspaceLists = state.workspaceLists.map(rename);
     state.error = "";
     render();
