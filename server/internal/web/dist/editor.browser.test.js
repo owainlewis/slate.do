@@ -1237,7 +1237,7 @@ test("board settings are removed and legacy links return to the board", async t 
 test("a board can be created from settings, where board storage now lives", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/settings/profile`);
+  await page.goto(`${origin}/app/settings/boards`);
   await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   state.delayNextBoardCreate = true;
   await page.evaluate(() => {
@@ -1351,7 +1351,7 @@ test("mobile navigation keeps its existing closed dropdown behaviour", async t =
 test("a delayed board creation cannot override newer navigation", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/settings/profile`);
+  await page.goto(`${origin}/app/settings/boards`);
   await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   state.delayNextBoardCreate = true;
   await page.getByRole("button", { name: "New board", exact: true }).click();
@@ -1369,7 +1369,7 @@ test("a delayed board creation cannot override newer navigation", async t => {
 test("board deletion uses a recoverable designed dialog in settings", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/settings/profile`);
+  await page.goto(`${origin}/app/settings/boards`);
   await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   const protectedDelete = page.getByRole("button", { name: "Delete Workspace", exact: true });
   assert.equal(await protectedDelete.isDisabled(), true);
@@ -1414,7 +1414,7 @@ test("board deletion refreshes assigned work counts on the agent directory", asy
   const researchAgent = page.locator(".agent-directory-row").filter({ hasText: "Research agent" });
   await researchAgent.getByText("2 working tasks", { exact: true }).waitFor();
 
-  await page.goto(`${origin}/app/settings/profile`);
+  await page.goto(`${origin}/app/settings/boards`);
   await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   await page.getByRole("button", { name: "Delete Other", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Delete Other?", exact: true });
@@ -3193,7 +3193,8 @@ test("direct settings keeps board navigation and can create a board", async t =>
 
   await page.goto(`${origin}/app/settings/profile`);
   await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
-  assert.equal(await page.getByRole("heading", { name: "Boards", exact: true }).isVisible(), true);
+  await page.getByRole("tab", { name: "Boards", exact: true }).click();
+  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await waitFor(() => state.createdBoards.length === 1);
   assert.deepEqual(pageErrors, []);

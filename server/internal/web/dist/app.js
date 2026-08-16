@@ -1871,7 +1871,7 @@ function boardsNavigationHTML() {
   const boardLimitReached = state.boards.length >= state.maxBoards;
   return `
     <section class="nav-sec nav-boards">
-      <div class="nav-section-title"><h3>Boards</h3><button class="plain-btn" id="new-board" type="button" aria-label="New board" ${boardLimitReached || state.boardCreatePending ? "disabled" : ""}>${icon("plus")}</button></div>
+      <div class="nav-section-title"><p class="settings-description">A board holds your lists. You work on the board and in lists, so this is only here for when you need another one.</p><button class="secondary" id="new-board" type="button" ${boardLimitReached || state.boardCreatePending ? "disabled" : ""}>${icon("plus")}<span>New board</span></button></div>
       <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
       <div class="pages">${state.boards.map(boardRowHTML).join("")}</div>
       ${boardLimitReached ? `<p class="board-limit">${state.maxBoards} board limit reached</p>` : ""}
@@ -2647,14 +2647,7 @@ function settingsHTML() {
         </div>
       </section>`;
   } else if (page.id === "boards") {
-    content = `
-      <section class="settings-section" aria-labelledby="boards-heading">
-        <div class="settings-section-head">
-          <h2 id="boards-heading">Boards</h2>
-          <p>A board is where your lists are stored. You work on the board and in lists, so this is only here for when you need another one.</p>
-        </div>
-        ${boardsNavigationHTML()}
-      </section>`;
+    content = `<section class="settings-card">${boardsNavigationHTML()}</section>`;
   } else {
     const tokenVisible = state.newToken && state.newTokenOwnerID === state.me?.id;
     const tokenLimit = Number(accountLimits().apiTokens) || 0;
@@ -2734,7 +2727,6 @@ function settingsHTML() {
           </section>
         </div>
       </main>
-      ${workspaceListDialogHTML()}
     </section>`;
 }
 
