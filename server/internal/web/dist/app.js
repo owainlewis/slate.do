@@ -1972,22 +1972,6 @@ function boardRowHTML(board) {
     </div>`;
 }
 
-function priorityToolbarHTML() {
-  const selected = state.priorityFilter;
-  return `
-    <div class="priority-toolbar">
-      <label for="priority-filter">Priority</label>
-      <select id="priority-filter" aria-label="Filter board by priority">
-        <option value="">All items</option>
-        ${PRIORITIES.map(p => `<option value="${escapeAttr(p.value)}" ${p.value === selected ? "selected" : ""}>${escapeHTML(p.label)} only</option>`).join("")}
-      </select>
-    </div>`;
-}
-
-function priorityMatches(task) {
-  return !state.priorityFilter || task.priority === state.priorityFilter;
-}
-
 function accountLimits() {
   return state.me?.entitlement?.limits || {
     boards: DEFAULT_MAX_BOARDS,
@@ -2922,6 +2906,12 @@ function bindWorkspace() {
   });
   document.querySelector("#new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
   document.querySelector("#workspace-load-more")?.addEventListener("click", loadMoreWorkspaceTasks);
+  document.querySelectorAll("[data-bucket-name]").forEach(element => {
+    element.addEventListener("change", () => renameWorkspaceList(element));
+    element.addEventListener("keydown", event => {
+      if (event.key === "Enter") { event.preventDefault(); element.blur(); }
+    });
+  });
   bindDrag();
   bindWorkspaceDetail();
 }
@@ -4025,74 +4015,7 @@ function bindWorkspaceDetail(options = {}) {
 
 function bindApp() {
   bindAppShell();
-  if (parseRoute(location.pathname).name === "workspace") {
-    bindWorkspace();
-    return;
-  }
-  document.querySelector("#view-moved-item")?.addEventListener("click", async () => {
-    const notice = state.moveNotice;
-    if (!notice) return;
-    await loadBoard(notice.boardId);
-    state.moveNotice = null;
-    await openTaskDetail(notice.taskId);
-  });
-  document.querySelector("#dismiss-notice")?.addEventListener("click", () => { state.moveNotice = null; render(); });
-  document.querySelector("#flow-list-filter")?.addEventListener("change", event => {
-    state.flowListId = event.target.value;
-    state.selectedTask = null;
-    render();
-    document.querySelector("#flow-list-filter")?.focus();
-  });
-  document.querySelector("#priority-filter")?.addEventListener("change", event => {
-    state.priorityFilter = event.target.value;
-    state.selectedTask = null;
-    render();
-    document.querySelector("#priority-filter")?.focus();
-  });
-  document.querySelectorAll("[data-bucket-name]").forEach(element => {
-    element.addEventListener("change", () => renameWorkspaceList(element));
-    element.addEventListener("keydown", event => {
-      if (event.key === "Enter") { event.preventDefault(); element.blur(); }
-    });
-  });
-  document.querySelectorAll("[data-bucket-goal]").forEach(el => el.addEventListener("input", e => {
-    const goal = e.target.value;
-    const id = el.dataset.bucketGoal;
-    const sessionVersion = authVersion;
-    const userID = state.me?.id;
-    const list = state.board.buckets.find(item => item.id === el.dataset.bucketGoal);
-    if (list) list.goal = goal;
-    delete state.goalErrors[id];
-    clearTimeout(el.goalSaveTimer);
-    el.goalSaveTimer = setTimeout(() => {
-      if (!sessionIsCurrent(sessionVersion, userID)) return;
-      const previous = goalSaveChains.get(id) || Promise.resolve();
-      const next = previous.catch(() => {}).then(() => {
-        if (!sessionIsCurrent(sessionVersion, userID)) return;
-        return api.patch(`/api/v1/buckets/${id}`, { goal });
-      });
-      goalSaveChains.set(id, next);
-      next.then(() => {
-        if (sessionIsCurrent(sessionVersion, userID) && goalSaveChains.get(id) === next) delete state.goalErrors[id];
-      }).catch(err => {
-        if (sessionIsCurrent(sessionVersion, userID) && goalSaveChains.get(id) === next) {
-          state.goalErrors[id] = err.message;
-          render();
-        }
-      });
-    }, 300);
-  }));
-  document.querySelectorAll("[data-add-task]").forEach(form => {
-    form.addEventListener("submit", addTask);
-    form.querySelector('input[name="title"]').addEventListener("keydown", event => {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      form.requestSubmit();
-    });
-  });
-  document.querySelectorAll("[data-open-task]").forEach(el => el.onclick = () => openTaskDetail(el.dataset.openTask, el));
-  bindDrag();
-  bindWorkspaceDetail();
+  bindWorkspace();
 }
 
 function clearTaskMutationError(taskID) {
@@ -5614,75 +5537,6 @@ function bindDrag() {
       clearDropMarks();
     });
   });
-  document.querySelectorAll("[data-task-list]").forEach(list => {
-    list.addEventListener("dragover", event => {
-      if (drag?.type !== "task") return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      markTaskDrop(list, event.clientY);
-    });
-    list.addEventListener("drop", async event => {
-      if (drag?.type !== "task") return;
-      event.preventDefault();
-      const id = drag.id;
-      const index = fullTaskIndex(list, taskDropIndex(list, event.clientY), id);
-      drag = null;
-      clearDropMarks();
-      await dropTask(id, list.dataset.taskList, index);
-    });
-  });
-  document.querySelectorAll(".grid [data-bucket]").forEach(bucket => {
-    bucket.addEventListener("dragstart", event => {
-      if (event.target.closest?.("[data-task]")) return;
-      if (event.target.closest?.("input, textarea, select, button")) {
-        event.preventDefault();
-        return;
-      }
-      drag = { type: "bucket", id: bucket.dataset.bucket };
-      event.dataTransfer.setData("text/bucket-id", bucket.dataset.bucket);
-      event.dataTransfer.effectAllowed = "move";
-      requestAnimationFrame(() => bucket.classList.add("dragging"));
-    });
-    bucket.addEventListener("dragend", () => {
-      drag = null;
-      bucket.classList.remove("dragging");
-      clearDropMarks();
-    });
-  });
-  const grid = document.querySelector(".grid");
-  if (grid) {
-    grid.addEventListener("dragover", event => {
-      if (drag?.type !== "bucket") return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      markBucketDrop(event);
-    });
-    grid.addEventListener("drop", async event => {
-      if (drag?.type !== "bucket") return;
-      event.preventDefault();
-      const index = bucketDropIndex(event);
-      const id = drag.id;
-      drag = null;
-      clearDropMarks();
-      await dropBucket(id, index);
-    });
-  }
-  document.querySelectorAll(".calendar-day[data-calendar-date], .workspace-week [data-calendar-date]").forEach(day => {
-    day.addEventListener("dragover", event => {
-      if (drag?.type !== "task") return;
-      event.preventDefault();
-      day.classList.add("drop-into");
-    });
-    day.addEventListener("dragleave", () => day.classList.remove("drop-into"));
-    day.addEventListener("drop", async event => {
-      if (drag?.type !== "task") return;
-      event.preventDefault();
-      const id = drag.id;
-      drag = null;
-      clearDropMarks();
-      await updateTaskScheduledDate(id, day.dataset.calendarDate);
-    });
-  });
   document.querySelectorAll("[data-flow-status]").forEach(column => {
     column.addEventListener("dragover", event => {
       if (drag?.type !== "task") return;
@@ -5700,48 +5554,6 @@ function bindDrag() {
       await updateTaskStatus(id, column.dataset.flowStatus);
     });
   });
-  document.querySelectorAll("[data-kanban-list]").forEach(column => {
-    column.addEventListener("dragover", event => {
-      if (drag?.type !== "task") return;
-      event.preventDefault();
-      column.classList.add("over");
-    });
-    column.addEventListener("dragleave", () => column.classList.remove("over"));
-    column.addEventListener("drop", async event => {
-      if (drag?.type !== "task") return;
-      event.preventDefault();
-      const id = drag.id;
-      drag = null;
-      clearDropMarks();
-      column.classList.remove("over");
-      await moveWorkspaceTaskToList(id, column.dataset.kanbanList);
-    });
-  });
-}
-
-async function moveWorkspaceTaskToList(id, bucketID) {
-  const sessionVersion = authVersion;
-  const userID = state.me?.id;
-  const startedRouteVersion = routeVersion;
-  let previousTask = findTask(id);
-  if (!previousTask || previousTask.parentTaskId || previousTask.bucketId === bucketID) return false;
-  let moved;
-  try {
-    moved = await serializeTaskMutation(id, async ({ queued }) => {
-      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(id)}`);
-      return api.post(`/api/v1/tasks/${encodeURIComponent(id)}/move`, { bucketId: bucketID, position: 0 });
-    });
-  } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
-    state.error = err.message;
-    render();
-    return false;
-  }
-  if (!moved || !sessionIsCurrent(sessionVersion, userID)) return false;
-  reconcileTaskMutation(moved, previousTask);
-  clearTaskMutationError(id);
-  await refreshAfterTaskMutation(startedRouteVersion);
-  return true;
 }
 
 async function updateTaskStatus(id, status) {
@@ -5754,37 +5566,6 @@ async function updateTaskStatus(id, status) {
     updated = await serializeTaskMutation(id, async ({ queued }) => {
       if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(id)}`);
       return api.patch(`/api/v1/tasks/${encodeURIComponent(id)}/status`, { status });
-    });
-  } catch (err) {
-    if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
-    state.taskMutationError = { taskID: id, message: err.message };
-    if (state.selectedTask?.id === id) {
-      state.error = err.message;
-      syncTaskDetailError();
-      return false;
-    }
-    if (state.selectedTask) return false;
-    state.error = err.message;
-    render();
-    return false;
-  }
-  if (!updated || !sessionIsCurrent(sessionVersion, userID)) return false;
-  reconcileTaskMutation(updated, previousTask);
-  clearTaskMutationError(id);
-  await refreshAfterTaskMutation(startedRouteVersion);
-  return true;
-}
-
-async function updateTaskScheduledDate(id, scheduledDate) {
-  const sessionVersion = authVersion;
-  const userID = state.me?.id;
-  const startedRouteVersion = routeVersion;
-  let previousTask = findTask(id);
-  let updated;
-  try {
-    updated = await serializeTaskMutation(id, async ({ queued }) => {
-      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(id)}`);
-      return api.patch(`/api/v1/tasks/${encodeURIComponent(id)}`, { scheduledDate });
     });
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID) || startedRouteVersion !== routeVersion) return false;
@@ -5835,52 +5616,8 @@ function reorderedTaskIDs(ids, movingID, targetID, afterTarget = false) {
   return ordered;
 }
 
-function taskDropIndex(list, y) {
-  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")]
-    .filter(item => !isDraggedTaskChild(item.dataset.task));
-  for (let i = 0; i < items.length; i++) {
-    const rect = items[i].getBoundingClientRect();
-    if (y < rect.top + rect.height / 2) return i;
-  }
-  return items.length;
-}
-
-// taskDropIndex counts rendered cards, but dropTask splices into the full task
-// array. While a priority filter hides cards those two disagree, so translate
-// the visible position into a real one by anchoring on the card dropped before.
-function fullTaskIndex(listElement, visibleIndex, draggingID) {
-  const bucket = state.board?.buckets?.find(b => b.id === listElement.dataset.taskList);
-  const remaining = (bucket?.tasks || []).filter(task => task.id !== draggingID && task.parentTaskId !== draggingID);
-  if (!state.priorityFilter) return Math.min(visibleIndex, remaining.length);
-  const visibleIDs = [...listElement.querySelectorAll("[data-task]:not(.dragging)")]
-    .map(el => el.dataset.task)
-    .filter(id => id !== draggingID && findTask(id)?.parentTaskId !== draggingID);
-  if (visibleIndex >= visibleIDs.length) return remaining.length;
-  const anchor = remaining.findIndex(task => task.id === visibleIDs[visibleIndex]);
-  return anchor < 0 ? remaining.length : anchor;
-}
-
-function markTaskDrop(list, y) {
-  clearDropMarks();
-  const items = [...list.querySelectorAll("[data-task]:not(.dragging)")]
-    .filter(item => !isDraggedTaskChild(item.dataset.task));
-  if (!items.length) {
-    list.classList.add("drop-into");
-    return;
-  }
-  const index = taskDropIndex(list, y);
-  if (index < items.length) items[index].classList.add("drop-before");
-  else items[items.length - 1].classList.add("drop-after");
-}
-
 function isDraggedTaskChild(taskID) {
   return drag?.type === "task" && findTask(taskID)?.parentTaskId === drag.id;
-}
-
-function bucketDropIndex(event) {
-  const buckets = [...document.querySelectorAll(".grid [data-bucket]:not(.dragging)")];
-  const rects = buckets.map(bucket => bucket.getBoundingClientRect());
-  return bucketDropIndexForRects(rects, event.clientX);
 }
 
 function bucketDropIndexForRects(rects, x) {
@@ -5891,73 +5628,10 @@ function bucketDropIndexForRects(rects, x) {
   return rects.length;
 }
 
-function markBucketDrop(event) {
-  clearDropMarks();
-  const buckets = [...document.querySelectorAll(".grid [data-bucket]:not(.dragging)")];
-  if (!buckets.length) return;
-  const index = bucketDropIndex(event);
-  if (index < buckets.length) buckets[index].classList.add("drop-before-bucket");
-  else buckets[buckets.length - 1].classList.add("drop-after-bucket");
-}
-
 function clearDropMarks() {
   document.querySelectorAll(".drop-before, .drop-after, .drop-into, .drop-before-bucket, .drop-after-bucket").forEach(el => {
     el.classList.remove("drop-before", "drop-after", "drop-into", "drop-before-bucket", "drop-after-bucket");
   });
-}
-
-async function dropTask(taskId, bucketId, index) {
-  const sessionVersion = authVersion;
-  const userID = state.me?.id;
-  const startedRouteVersion = routeVersion;
-  const contextIsCurrent = () => sessionVersion === authVersion && startedRouteVersion === routeVersion;
-  const task = findTask(taskId);
-  const target = state.board.buckets.find(b => b.id === bucketId);
-  if (!task || !target) return;
-  let previousTask = { ...task };
-  const children = state.board.buckets.flatMap(list => list.tasks || []).filter(item => item.parentTaskId === taskId);
-  const taskGroup = [task, ...children];
-  const taskGroupIDs = new Set(taskGroup.map(item => item.id));
-  for (const list of state.board.buckets) {
-    list.tasks = (list.tasks || []).filter(item => !taskGroupIDs.has(item.id));
-  }
-  for (const item of taskGroup) item.bucketId = bucketId;
-  target.tasks = target.tasks || [];
-  target.tasks.splice(Math.min(index, target.tasks.length), 0, ...taskGroup);
-  state.error = "";
-  render();
-  let moved;
-  try {
-    moved = await serializeTaskMutation(taskId, async ({ queued }) => {
-      if (queued) previousTask = await api.get(`/api/v1/tasks/${encodeURIComponent(taskId)}`);
-      return api.post(`/api/v1/tasks/${encodeURIComponent(taskId)}/move`, { bucketId, position: index });
-    });
-    if (moved === null) return;
-  } catch (err) {
-    if (!contextIsCurrent()) return;
-    state.error = err.message;
-    await reload();
-    return false;
-  }
-  if (!moved || !sessionIsCurrent(sessionVersion, userID)) return false;
-  reconcileTaskMutation(moved, previousTask);
-  clearTaskMutationError(taskId);
-  await refreshAfterTaskMutation(startedRouteVersion);
-  return true;
-}
-
-async function dropBucket(bucketId, index) {
-  const ids = state.board.buckets.map(b => b.id).filter(id => id !== bucketId);
-  ids.splice(index, 0, bucketId);
-  state.board.buckets.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
-  state.error = "";
-  render();
-  try {
-    await api.post(`/api/v1/boards/${state.board.id}/reorder-buckets`, { ids });
-  } catch (err) {
-    state.error = err.message;
-  }
-  await reload();
 }
 
 function sessionIsCurrent(sessionVersion, userID) {

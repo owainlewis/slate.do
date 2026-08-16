@@ -1308,20 +1308,23 @@ test("a delayed board creation cannot override newer navigation", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
-test("board deletion uses a recoverable designed dialog", async t => {
-  const { page, state, pageErrors } = await startWorkspace(t);
+test("board deletion uses a recoverable designed dialog in settings", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
 
+  await page.goto(`${origin}/app/settings/profile`);
+  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   const protectedDelete = page.getByRole("button", { name: "Delete Workspace", exact: true });
   assert.equal(await protectedDelete.isDisabled(), true);
   assert.equal(await protectedDelete.getAttribute("title"), "Move or create another Inbox before deleting this board");
   state.lists.push({ id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Other Inbox", goal: "", isInbox: true, openCount: 0 });
   await page.reload();
-  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   assert.equal(await protectedDelete.isEnabled(), true);
+
   const deleteOther = page.getByRole("button", { name: "Delete Other", exact: true });
   await deleteOther.click();
   let dialog = page.getByRole("dialog", { name: "Delete Other?", exact: true });
-  assert.equal(await dialog.getByText("Every list and card on this board will be permanently deleted. This cannot be undone.", { exact: true }).isVisible(), true);
+  assert.equal(await dialog.getByText("Every list and task on this board will be permanently deleted. This cannot be undone.", { exact: true }).isVisible(), true);
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(await deleteOther.evaluate(element => element === document.activeElement), true);
 
@@ -1335,13 +1338,9 @@ test("board deletion uses a recoverable designed dialog", async t => {
   await dialog.getByRole("button", { name: "Delete board", exact: true }).click();
   await dialog.waitFor({ state: "detached" });
   assert.deepEqual(state.deletedBoards, ["board-two"]);
-  assert.equal(await page.getByRole("button", { name: "Other", exact: true }).count(), 0);
   assert.equal(await protectedDelete.isDisabled(), true);
-  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for", exact: true }).click();
-  assert.equal(await page.getByLabel("List", { exact: true }).locator("option", { hasText: "Other Inbox" }).count(), 0);
   assert.deepEqual(pageErrors, []);
 });
-
 test("board deletion refreshes assigned work counts on the agent directory", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
@@ -1364,73 +1363,6 @@ test("board deletion refreshes assigned work counts on the agent directory", asy
   await researchAgent.getByText("1 working task", { exact: true }).waitFor();
   assert.equal(state.tasks.some(task => task.id === "task-other-agent"), false);
   assert.equal(await researchAgent.getByText("2 working tasks", { exact: true }).count(), 0);
-  assert.deepEqual(pageErrors, []);
-});
-
-test("a delayed board deletion cannot clear a newer board route", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-
-  state.lists.push({ id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Other Inbox", goal: "", isInbox: true, openCount: 0 });
-  await page.goto(`${origin}/app/tasks`);
-  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
-  state.delayNextBoardDelete = true;
-  await page.getByRole("button", { name: "Delete Workspace", exact: true }).click();
-  await page.getByRole("dialog", { name: "Delete Workspace?", exact: true }).getByRole("button", { name: "Delete board", exact: true }).click();
-  await waitFor(() => typeof state.releaseBoardDelete === "function");
-
-  await page.evaluate(() => {
-    history.pushState({}, "", "/app/inbox");
-    dispatchEvent(new PopStateEvent("popstate"));
-  });
-  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
-  state.releaseBoardDelete();
-  await waitFor(() => state.deletedBoards.includes("board-one"));
-  await page.getByRole("dialog", { name: "Delete Workspace?", exact: true }).waitFor({ state: "detached" });
-
-  assert.equal(new URL(page.url()).pathname, "/app/inbox");
-  await page.getByRole("button", { name: "New list", exact: true }).click();
-  await page.getByRole("dialog", { name: "New list", exact: true }).getByRole("button", { name: "Cancel", exact: true }).click();
-  assert.deepEqual(pageErrors, []);
-});
-
-test("a delayed board deletion failure stays out of a newer route", async t => {
-  const { page, state, pageErrors } = await startWorkspace(t);
-
-  state.delayNextBoardDelete = true;
-  state.failNextBoardDelete = true;
-  await page.getByRole("button", { name: "Delete Other", exact: true }).click();
-  await page.getByRole("dialog", { name: "Delete Other?", exact: true }).getByRole("button", { name: "Delete board", exact: true }).click();
-  await waitFor(() => typeof state.releaseBoardDelete === "function");
-  await page.evaluate(() => {
-    history.pushState({}, "", "/app/settings/profile");
-    dispatchEvent(new PopStateEvent("popstate"));
-  });
-  await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
-  state.releaseBoardDelete();
-  await page.getByRole("dialog", { name: "Delete Other?", exact: true }).waitFor({ state: "detached" });
-
-  assert.equal(new URL(page.url()).pathname, "/app/settings/profile");
-  assert.equal(await page.getByText("Could not delete board", { exact: true }).count(), 0);
-  assert.deepEqual(pageErrors, []);
-});
-
-test("an agent surface reports refresh failure after a committed board deletion", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-
-  state.lists.push({ id: "list-other-work", boardId: "board-two", boardName: "Other", name: "Other work", goal: "", isInbox: false, openCount: 1 });
-  state.tasks.push({
-    id: "task-other-agent", boardId: "board-two", bucketId: "list-other-work", listName: "Other work",
-    title: "Research the other board", description: "", scheduledDate: "", kind: "action",
-    status: "working", priority: "", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent",
-  });
-  await page.goto(`${origin}/app/agents/agent-research`);
-  await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
-  await page.getByRole("button", { name: "Delete Other", exact: true }).click();
-  state.failNextAgentDetail = true;
-  await page.getByRole("dialog", { name: "Delete Other?", exact: true }).getByRole("button", { name: "Delete board", exact: true }).click();
-
-  await page.getByRole("alert").filter({ hasText: "The board was deleted, but Slate could not refresh all views" }).waitFor();
-  assert.equal(state.tasks.some(task => task.id === "task-other-agent"), false);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -1484,53 +1416,14 @@ test("an idle agent detail stays quiet and uses a consistent color identity", as
   assert.deepEqual(pageErrors, []);
 });
 
-test("board lists stay in one horizontal scroll lane", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t, { width: 720, height: 900 });
-
-  state.lists.push({ id: "list-planning", boardId: "board-one", boardName: "Workspace", name: "Planning", goal: "", isInbox: false, openCount: 0 });
-  await page.goto(`${origin}/app/tasks`);
-  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
-  const grid = page.locator(".grid");
-  const lists = grid.locator(".bucket");
-  const [first, second] = await Promise.all([lists.nth(0).boundingBox(), lists.nth(1).boundingBox()]);
-  const dimensions = await grid.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
-
-  assert.ok(Math.abs(first.y - second.y) < 2, `lists should share a row: ${first.y} vs ${second.y}`);
-  assert.ok(second.x > first.x, `second list should be to the right: ${first.x} vs ${second.x}`);
-  assert.ok(dimensions.scrollWidth > dimensions.clientWidth, `board should scroll horizontally: ${JSON.stringify(dimensions)}`);
-
-  await page.evaluate(() => {
-    const source = document.querySelector('[data-bucket="list-planning"] .bucket-head');
-    const target = document.querySelector(".grid");
-    const dataTransfer = new DataTransfer();
-    const rect = target.getBoundingClientRect();
-    source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer }));
-    target.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.top + 120, dataTransfer }));
-    target.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, clientX: rect.left + 5, clientY: rect.top + 120, dataTransfer }));
-    source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer }));
-  });
-  await waitFor(() => state.reorderedLists[0] === "list-planning");
-  assert.deepEqual(state.reorderedLists, ["list-planning", "list-inbox", "list-youtube"]);
-  assert.equal(await grid.locator(".bucket").first().getAttribute("data-bucket"), "list-planning");
-
-  await page.getByRole("button", { name: "Publish task-first agents video", exact: true }).click();
-  await page.getByRole("region", { name: "Task detail" }).waitFor();
-  assert.equal(await page.locator(".board-main").count(), 0);
-  assert.equal(await page.getByRole("button", { name: "Back to board", exact: true }).isVisible(), true);
-  await page.getByRole("button", { name: "Back to board", exact: true }).click();
-  const opener = page.getByRole("button", { name: "Publish task-first agents video", exact: true });
-  assert.equal(await opener.evaluate(element => element === document.activeElement), true);
-  assert.deepEqual(pageErrors, []);
-});
-
-test("board Flow stays in one horizontal scroll lane", async t => {
+test("the board keeps its status columns in one horizontal scroll lane", async t => {
   const { page, origin, pageErrors } = await startWorkspace(t, { width: 720, height: 900 });
 
   await page.goto(`${origin}/app/tasks`);
   await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
-  await page.locator('[data-board-mode="flow"]').click();
-  const flow = page.locator(".flow");
-  const columns = flow.locator(".flow-column");
+  const flow = page.locator(".workspace-flow");
+  const columns = flow.locator(".workspace-flow-column");
+  assert.equal(await columns.count(), 5);
   const [first, second, last] = await Promise.all([
     columns.nth(0).boundingBox(),
     columns.nth(1).boundingBox(),
@@ -1538,14 +1431,19 @@ test("board Flow stays in one horizontal scroll lane", async t => {
   ]);
   const dimensions = await flow.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
 
-  assert.equal(await columns.count(), 5);
-  assert.ok(Math.abs(first.y - second.y) < 2, `Flow columns should share a row: ${first.y} vs ${second.y}`);
-  assert.ok(Math.abs(first.y - last.y) < 2, `the final Flow column should not wrap: ${first.y} vs ${last.y}`);
-  assert.ok(second.x > first.x, `second Flow column should be to the right: ${first.x} vs ${second.x}`);
-  assert.ok(dimensions.scrollWidth > dimensions.clientWidth, `Flow should scroll horizontally: ${JSON.stringify(dimensions)}`);
+  assert.ok(Math.abs(first.y - second.y) < 2, `columns should share a row: ${first.y} vs ${second.y}`);
+  assert.ok(Math.abs(first.y - last.y) < 2, `the final column should not wrap: ${first.y} vs ${last.y}`);
+  assert.ok(second.x > first.x, `the second column should be to the right: ${first.x} vs ${second.x}`);
+  assert.ok(dimensions.scrollWidth > dimensions.clientWidth, `the board should scroll horizontally: ${JSON.stringify(dimensions)}`);
+
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Back to board", exact: true }).isVisible(), true);
+  await page.getByRole("button", { name: "Back to board", exact: true }).click();
+  const opener = page.getByRole("button", { name: "Open task: Publish task-first agents video", exact: true });
+  assert.equal(await opener.evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
-
 test("a delayed list creation cannot repaint while a newer history route loads", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
