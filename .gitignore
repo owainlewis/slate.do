@@ -8,3 +8,9 @@ server/internal/web/dist/*
 !server/internal/web/dist/editor.browser.test.js
 !server/internal/web/dist/cli.html
 build/
+
+# Compiled binaries
+/cli/slate
+/cli/slate.exe
+/server/slate
+*.exe
