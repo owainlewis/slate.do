@@ -4143,7 +4143,7 @@ function reconcileTaskMutation(updated, previousTask) {
 function bindAppShell() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   bindCardContextMenus();
-  document.querySelectorAll(".nav-sec a.nav-link, .task-nav-pages a, .agent-nav-link").forEach(el => el.addEventListener("click", event => {
+  document.querySelectorAll(".nav-sec a.nav-link, .task-nav-pages a").forEach(el => el.addEventListener("click", event => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     const target = new URL(el.href, location.origin);

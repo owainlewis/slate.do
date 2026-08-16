@@ -1444,16 +1444,16 @@ test("an idle agent detail stays quiet and uses a consistent color identity", as
   assert.equal(await page.getByText("No purpose added", { exact: true }).count(), 0);
   assert.equal(await page.getByText(/Last credential use/).count(), 0);
 
-  const detailAvatar = page.locator(".agent-detail-identity .agent-avatar");
-  const navAvatar = page.locator(".agent-nav-link .agent-avatar");
-  const [detailStyle, navStyle] = await Promise.all([
-    detailAvatar.evaluate(element => {
-      const style = getComputedStyle(element);
-      return { color: style.color, backgroundImage: style.backgroundImage, borderRadius: style.borderRadius };
-    }),
-    navAvatar.evaluate(element => ({ color: getComputedStyle(element).color })),
-  ]);
-  assert.equal(detailStyle.color, navStyle.color);
+  // The sidebar no longer lists agents, so the directory is the other place
+  // this identity has to match.
+  const detailStyle = await page.locator(".agent-detail-identity .agent-avatar").evaluate(element => {
+    const style = getComputedStyle(element);
+    return { color: style.color, backgroundImage: style.backgroundImage, borderRadius: style.borderRadius };
+  });
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
+  await page.getByRole("heading", { name: "Agents", exact: true, level: 1 }).waitFor();
+  const directoryStyle = await page.locator('[data-agent-link="agent-research"] .agent-avatar').evaluate(element => ({ color: getComputedStyle(element).color }));
+  assert.equal(detailStyle.color, directoryStyle.color);
   assert.notEqual(detailStyle.color, "rgb(255, 255, 255)");
   assert.match(detailStyle.backgroundImage, /linear-gradient/);
   assert.notEqual(detailStyle.borderRadius, "50%");
@@ -1889,7 +1889,7 @@ test("a delayed reassignment refreshes the newly assigned agent work page", asyn
   await waitFor(() => typeof state.releaseStatus === "function");
 
   await page.getByRole("link", { name: "Agents", exact: true }).click();
-  await page.getByRole("link", { name: "Writing agent", exact: true }).click();
+  await page.locator('[data-agent-link="agent-writing"]').click();
   await page.getByRole("tab", { name: "Work", exact: true }).click();
   await page.getByRole("heading", { name: "All work", exact: true }).waitFor();
   assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).count(), 0);
@@ -2434,6 +2434,7 @@ test("workspace mutations cannot cross into retained agent context", async t => 
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
   await page.getByRole("button", { name: "Back to board" }).click();
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
   await page.locator('[data-agent-link="agent-research"]').click();
   await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
   state.releaseStatus();

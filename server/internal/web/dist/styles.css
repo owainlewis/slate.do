@@ -36,7 +36,6 @@
 .nav-collaborators .nav-link { min-height: 36px; padding: 7px 9px; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 9px; border-radius: var(--radius-sm); color: var(--soft); font-size: 13px; text-decoration: none; }
 .nav-collaborators .nav-link:hover, .nav-collaborators .nav-link.on { color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
 .nav-collaborators .nav-link .icon { width: 16px; height: 16px; color: var(--faint); }
-.nav-collaborators .agent-nav-link { grid-template-columns: 23px minmax(0, 1fr); }
 .workspace-topbar { min-height: 104px; padding: 22px 30px 18px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line-2); }
 .workspace-title { display: flex; align-items: baseline; gap: 9px; }
 .workspace-title h1 { margin: 0; font-size: 27px; letter-spacing: -.035em; }
