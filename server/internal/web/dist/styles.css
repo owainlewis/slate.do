@@ -2164,3 +2164,49 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   .detail-actions { padding: 12px; }
   .detail-actions .danger { padding-left: 6px; padding-right: 6px; }
 }
+
+/* ---------- Inbox ---------- */
+.inbox-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; max-width: 760px; }
+.inbox-message {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.inbox-message-avatar { display: flex; align-items: center; justify-content: center; }
+.inbox-message-avatar .icon { width: 18px; height: 18px; color: var(--faint); }
+.inbox-message-body { min-width: 0; }
+.inbox-message-body header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.inbox-message-body strong { font-size: 13px; }
+.inbox-message-body time { color: var(--faint); font-size: 12px; }
+.inbox-message-kind {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--review) 22%, transparent);
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+.inbox-message-body p { margin: 0 0 10px; font-size: 14px; line-height: 1.55; }
+.inbox-message-task { min-height: 30px; padding: 5px 8px; display: inline-flex; align-items: center; gap: 7px; color: var(--soft); font-size: 12px; }
+.inbox-message-task:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.inbox-message-task .icon { width: 14px; height: 14px; color: var(--faint); }
+.inbox-empty { max-width: 460px; margin: 56px auto 0; text-align: center; }
+.inbox-empty-mark {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.inbox-empty-mark .icon { width: 22px; height: 22px; color: var(--faint); }
+.inbox-empty h2 { margin: 0 0 10px; font-size: 17px; letter-spacing: -.01em; }
+.inbox-empty p { margin: 0 0 10px; color: var(--soft); font-size: 14px; line-height: 1.6; }
+.inbox-empty-hint { color: var(--faint); font-size: 13px; }

@@ -69,6 +69,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(a.auth.DeleteAgent))
 	mux.HandleFunc("GET /api/v1/boards", a.accountRead(a.boards.ListBoards))
 	mux.HandleFunc("GET /api/v1/lists", a.accountRead(a.boards.ListAllBuckets))
+	// The inbox is a person's view of what agents have said, so agent credentials
+	// do not reach it.
+	mux.HandleFunc("GET /api/v1/inbox", a.accountRead(a.boards.ListInbox))
 	mux.HandleFunc("POST /api/v1/boards", a.accountManage(a.boards.CreateBoard))
 	mux.HandleFunc("GET /api/v1/boards/{id}", a.accountRead(a.boards.GetBoard))
 	mux.HandleFunc("PATCH /api/v1/boards/{id}", a.accountManage(a.boards.UpdateBoard))

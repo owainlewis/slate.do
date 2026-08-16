@@ -175,6 +175,8 @@ const state = {
   workspaceListDialogName: "",
   workspaceListDialogBoardID: "",
   workspaceListDialogError: "",
+  inboxMessages: [],
+  inboxLoading: false,
   workspaceTasks: [],
   workspaceScope: "all",
   workspaceListID: "",
@@ -274,7 +276,7 @@ function parseRoute(pathname) {
   if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
   if (path === APP_PATH) return { name: "workspace", scope: "all", redirect: true };
   if (path === TASKS_PATH) return { name: "workspace", scope: "all" };
-  if (path === INBOX_PATH) return { name: "workspace", scope: "inbox" };
+  if (path === INBOX_PATH) return { name: "inbox" };
   // Retired views. Old links land on the board rather than a 404.
   if ([TODAY_PATH, REVIEW_PATH, WEEK_PATH].includes(path)) return { name: "workspace", scope: "all", redirect: true };
   const list = /^\/app\/lists\/([^/]+)$/.exec(path);
@@ -340,7 +342,7 @@ function parseRoute(pathname) {
 }
 
 function isProtectedRoute(name) {
-  return name === "workspace" || name === "board" || name === "settings" || name === "runs" || name === "runners"
+  return name === "workspace" || name === "board" || name === "settings" || name === "inbox" || name === "runs" || name === "runners"
     || name === "agents" || name === "agent-new" || name === "agent-detail" || name === "agent-work" || name === "agent-settings";
 }
 
@@ -604,6 +606,13 @@ async function applyRoute() {
     ]);
     if (!boardsLoaded || !listsLoaded) return;
     if (routeVersion !== version) return;
+    if (route.name === "inbox") {
+      await loadAgents(true, authVersion, state.me?.id, version);
+      if (routeVersion !== version) return;
+      if (await loadInbox(version) === null) return;
+      if (routeVersion !== version) return;
+      return showRoute("inbox");
+    }
     if (route.name === "runs" || route.name === "runners") {
       await loadAgents(true, authVersion, state.me?.id, version);
       if (routeVersion !== version) return;
@@ -766,15 +775,31 @@ async function loadBoards(selectId, expectedRouteVersion) {
 function workspaceQuery(route, cursor = "") {
   const current = new URLSearchParams(location.search);
   const query = new URLSearchParams({ limit: "200" });
-  if (["inbox", "list"].includes(route.scope)) query.set("topLevel", "true");
+  if (route.scope === "list") query.set("topLevel", "true");
   if (current.get("children") === "hide") query.set("topLevel", "true");
   if (route.scope === "list" && route.listId) query.set("bucketId", route.listId);
-  if (route.scope === "inbox") query.set("inbox", "true");
   for (const name of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
     if (current.get(name)) query.set(name, current.get(name));
   }
   if (cursor) query.set("cursor", cursor);
   return query;
+}
+
+async function loadInbox(expectedRouteVersion) {
+  const sessionVersion = authVersion;
+  const userID = state.me?.id;
+  state.inboxLoading = true;
+  try {
+    const data = await api.get("/api/v1/inbox");
+    if (!sessionIsCurrent(sessionVersion, userID) || expectedRouteVersion !== routeVersion) return null;
+    state.inboxMessages = data.messages || [];
+  } catch (err) {
+    if (!sessionIsCurrent(sessionVersion, userID) || expectedRouteVersion !== routeVersion) return null;
+    state.inboxLoading = false;
+    throw err;
+  }
+  state.inboxLoading = false;
+  return true;
 }
 
 async function loadWorkspace(route, expectedRouteVersion) {
@@ -1276,6 +1301,17 @@ function render() {
     bindSettings();
     return;
   }
+  if (state.view === "inbox") {
+    root.innerHTML = inboxHTML();
+    bindAppShell();
+    bindWorkspaceListControl();
+    document.querySelectorAll("[data-inbox-task]").forEach(element => element.addEventListener("click", event => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      navigate(`${TASKS_PATH}?task=${encodeURIComponent(element.dataset.inboxTask)}`);
+    }));
+    return;
+  }
   if (state.view === "runs" || state.view === "runners") {
     root.innerHTML = executionPlaceholderHTML(state.view);
     bindAppShell();
@@ -1550,10 +1586,8 @@ function appHTML() {
   const theme = currentTheme();
   const tasks = workspaceScopedTasks();
   const list = state.workspaceLists.find(item => item.id === state.workspaceListID);
-  const title = state.workspaceScope === "inbox" ? "Inbox"
-    : state.workspaceScope === "list" ? list?.name || "List" : "Board";
-  const subtitle = state.workspaceScope === "inbox" ? "New tasks waiting for context."
-    : state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
+  const title = state.workspaceScope === "list" ? list?.name || "List" : "Board";
+  const subtitle = state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
   const renameableList = state.workspaceScope === "list" && list && !list.isInbox;
   const overview = `
     <header class="workspace-topbar">
@@ -1586,15 +1620,13 @@ function appHTML() {
 }
 
 function workspaceScopedTasks() {
-  if (state.workspaceScope !== "inbox") return state.workspaceTasks;
-  const inboxIDs = new Set(state.workspaceLists.filter(list => list.isInbox).map(list => list.id));
-  return state.workspaceTasks.filter(task => inboxIDs.has(task.bucketId));
+  return state.workspaceTasks;
 }
 
 function workspaceFilterCount() {
   const query = new URLSearchParams(globalThis.location?.search || "");
   const names = ["q", "priority", "assigneeAgentId", "status", "plannedFrom", "plannedTo"];
-  if (!["inbox", "list"].includes(state.workspaceScope)) names.push("children");
+  if (state.workspaceScope !== "list") names.push("children");
   return names.filter(name => query.get(name)).length;
 }
 
@@ -1606,7 +1638,7 @@ function workspaceFilterHTML() {
     <label><span>Status</span><select name="status"><option value="">Any status</option>${FLOW_STATES.map(item => `<option value="${item.value}" ${query.get("status") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
     <label><span>Priority</span><select name="priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
     <label><span>Owner</span><select name="assigneeAgentId"><option value="">Anyone</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
-    ${["inbox", "list"].includes(state.workspaceScope) ? "" : `<fieldset class="workspace-child-filter"><legend>Subtasks</legend><label class="workspace-checkbox"><input type="checkbox" name="children" value="hide" ${query.get("children") === "hide" ? "checked" : ""}><span>Hide subtasks</span></label></fieldset>`}
+    ${state.workspaceScope === "list" ? "" : `<fieldset class="workspace-child-filter"><legend>Subtasks</legend><label class="workspace-checkbox"><input type="checkbox" name="children" value="hide" ${query.get("children") === "hide" ? "checked" : ""}><span>Hide subtasks</span></label></fieldset>`}
     <label><span>From</span><input type="date" name="plannedFrom" value="${escapeAttr(query.get("plannedFrom") || "")}"></label>
     <label><span>To</span><input type="date" name="plannedTo" value="${escapeAttr(query.get("plannedTo") || "")}"></label>
     <button class="secondary" type="submit">Apply</button><button class="plain-btn" id="clear-workspace-filters" type="button">Clear</button>
@@ -1762,7 +1794,7 @@ function appSidebarHTML({ agentsCurrent = false } = {}) {
         ${globalNewTaskButtonHTML()}
         ${newTaskRecoveryNoticeHTML()}
         <section class="nav-sec nav-collaborators workspace-nav">
-          <a class="nav-link ${workspaceOn("inbox") ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
+          <a class="nav-link ${route.name === "inbox" ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
           <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
         </section>
         ${listsNavigationHTML()}
@@ -1782,6 +1814,44 @@ function appSidebarHTML({ agentsCurrent = false } = {}) {
 function desktopSidebarToggleHTML() {
   const expanded = !state.sidebarCollapsed;
   return `<button class="icon-btn desktop-sidebar-toggle" id="desktop-sidebar-toggle" type="button" aria-label="${expanded ? "Hide" : "Show"} navigation" aria-controls="primary-navigation" aria-expanded="${expanded}">${icon("sidebar")}</button>`;
+}
+
+function inboxHTML() {
+  const theme = currentTheme();
+  const messages = state.inboxMessages;
+  const body = state.inboxLoading
+    ? `<div class="workspace-empty">Loading messages…</div>`
+    : messages.length
+    ? `<ol class="inbox-list">${messages.map(inboxMessageHTML).join("")}</ol>`
+    : `<div class="inbox-empty">
+        <span class="inbox-empty-mark">${icon("inboxTray")}</span>
+        <h2>No messages yet</h2>
+        <p>This is where your agents talk to you. As an agent works it posts updates here, like <em>“I have drafted the spec, can you take a look?”</em>, each one linked to the task it came from.</p>
+        <p class="inbox-empty-hint">Only agents write to your inbox. Your own comments stay on the task.</p>
+      </div>`;
+  return `
+    <section class="shell theme-${theme}">
+      ${appSidebarHTML()}
+      <div class="main workspace-main">
+        <header class="workspace-topbar">
+          <div><div class="workspace-title"><h1>Inbox</h1>${messages.length ? `<span>${messages.length}</span>` : ""}</div><p>Updates your agents have posted, newest first.</p></div>
+        </header>
+        ${statusErrorHTML(state.error)}
+        <div class="workspace-content">${body}</div>
+      </div>
+    </section>`;
+}
+
+function inboxMessageHTML(message) {
+  const agent = state.agents.find(item => item.id === message.authorId);
+  return `<li class="inbox-message">
+    <span class="inbox-message-avatar">${agent ? avatarHTML(agent, { small: true, decorative: true }) : icon("bot")}</span>
+    <div class="inbox-message-body">
+      <header><strong>${escapeHTML(message.authorName)}</strong>${message.kind === "output" ? `<span class="inbox-message-kind">Output</span>` : ""}<time>${new Date(message.createdAt).toLocaleString()}</time></header>
+      <p>${escapeHTML(message.body).replace(/\n/g, "<br>")}</p>
+      <a class="plain-btn inbox-message-task" href="${TASKS_PATH}?task=${encodeURIComponent(message.taskId)}" data-inbox-task="${escapeAttr(message.taskId)}">${icon("kanban")}<span>${escapeHTML(message.taskTitle)}</span></a>
+    </div>
+  </li>`;
 }
 
 // Runs and Runners exist so the shape of the product is visible before the

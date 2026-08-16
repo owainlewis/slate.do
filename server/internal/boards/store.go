@@ -1691,6 +1691,39 @@ func (s *Store) GetTaskForAgent(ctx context.Context, userID string, agentID stri
 	return s.getTask(ctx, userID, agentID, id)
 }
 
+const inboxLimit = 100
+
+// ListInbox returns the newest agent-authored entries across an account.
+func (s *Store) ListInbox(ctx context.Context, userID string) ([]InboxMessage, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT e.id::text, e.task_id::text, t.title, e.kind, e.body,
+			e.author_id::text, e.author_name, COALESCE(e.run_id::text, ''), e.created_at
+		FROM card_entries e
+		JOIN tasks t ON t.id = e.task_id
+		JOIN boards b ON b.id = t.board_id
+		WHERE b.user_id = $1 AND e.author_kind = 'agent'
+		ORDER BY e.created_at DESC, e.id DESC
+		LIMIT $2
+	`, userID, inboxLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages := []InboxMessage{}
+	for rows.Next() {
+		var message InboxMessage
+		if err := rows.Scan(&message.ID, &message.TaskID, &message.TaskTitle, &message.Kind, &message.Body,
+			&message.AuthorID, &message.AuthorName, &message.RunID, &message.CreatedAt); err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
 func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID string, taskID string) ([]CardEntry, error) {
 	return s.listCardEntries(ctx, userID, agentID, taskID, "")
 }

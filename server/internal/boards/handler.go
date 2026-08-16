@@ -243,6 +243,14 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request, user auth.User
 	writeJSON(w, http.StatusOK, task)
 }
 
+func (h *Handler) ListInbox(w http.ResponseWriter, r *http.Request, user auth.User) {
+	messages, err := h.store.ListInbox(r.Context(), user.ID)
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": messages})
+}
+
 func (h *Handler) ListCardEntries(w http.ResponseWriter, r *http.Request, user auth.User) {
 	if !validatePathID(w, "card", r.PathValue("id")) {
 		return

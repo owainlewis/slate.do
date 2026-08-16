@@ -335,12 +335,9 @@ test("the product no longer promises hard item limits", () => {
 	assert.doesNotMatch(landing, /Every list caps|list is full/i);
 });
 
-test("global scopes include subtasks while Inbox and individual lists remain parent rollups", () => {
+test("the board includes subtasks while an individual list stays a parent rollup", () => {
   app.location = { search: "" };
-  for (const scope of ["all", "today", "week", "review"]) {
-    assert.equal(app.workspaceQuery({ scope }).has("topLevel"), false, `${scope} should include subtasks`);
-  }
-  assert.equal(app.workspaceQuery({ scope: "inbox" }).get("topLevel"), "true");
+  assert.equal(app.workspaceQuery({ scope: "all" }).has("topLevel"), false, "the board should include subtasks");
   assert.equal(app.workspaceQuery({ scope: "list", listId: "youtube" }).get("topLevel"), "true");
   const paged = app.workspaceQuery({ scope: "all" }, "next-page");
   assert.equal(paged.get("cursor"), "next-page");
@@ -348,15 +345,13 @@ test("global scopes include subtasks while Inbox and individual lists remain par
   delete app.location;
 });
 
-test("global filters can hide child cards while rollup scopes stay top level", () => {
+test("the board filter can hide subtasks while a list stays top level", () => {
   app.location = { search: "?children=hide" };
   vm.runInContext(`state.workspaceScope = "all";`, app);
-  for (const scope of ["all", "today", "week", "review"]) {
-    assert.equal(app.workspaceQuery({ scope }).get("topLevel"), "true", `${scope} should hide child cards`);
-  }
+  assert.equal(app.workspaceQuery({ scope: "all" }).get("topLevel"), "true", "the board should hide subtasks");
   assert.equal(app.workspaceFilterCount(), 1);
   assert.match(app.workspaceFilterHTML(), /name="children" value="hide" checked/);
-  vm.runInContext(`state.workspaceScope = "inbox";`, app);
+  vm.runInContext(`state.workspaceScope = "list";`, app);
   assert.doesNotMatch(app.workspaceFilterHTML(), /name="children"/);
   vm.runInContext(`state.workspaceScope = "all";`, app);
   delete app.location;
@@ -2400,7 +2395,7 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/login"), { name: "login" });
   assert.deepEqual(route("/app"), { name: "workspace", scope: "all", redirect: true });
   assert.deepEqual(route("/app/tasks"), { name: "workspace", scope: "all" });
-  assert.deepEqual(route("/app/inbox"), { name: "workspace", scope: "inbox" });
+  assert.deepEqual(route("/app/inbox"), { name: "inbox" });
   // Retired views redirect to the board rather than 404.
   for (const path of ["/app/today", "/app/week", "/app/review"]) {
     assert.deepEqual(route(path), { name: "workspace", scope: "all", redirect: true });
@@ -2755,12 +2750,13 @@ test("back and forward move between landing, the board, and settings", async () 
   assert.equal(it.url(), "/app/tasks");
   await it.go("/app/inbox");
   assert.equal(it.url(), "/app/inbox");
+  assert.equal(it.view(), "inbox");
   await it.go("/app/settings/profile");
   assert.equal(it.view(), "app:settings");
 
   await it.back();
   assert.equal(it.url(), "/app/inbox");
-  assert.equal(it.view(), "app");
+  assert.equal(it.view(), "inbox");
   await it.back();
   assert.equal(it.url(), "/app/tasks");
   await it.back();
