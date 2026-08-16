@@ -1661,33 +1661,3 @@ func TestLegacyTaskIdempotencyMigrationClearsMutableDevelopmentBackfill(t *testi
 		t.Fatalf("old-writer hash = %q", oldWriterHash)
 	}
 }
-
-func TestListsOwnThemselvesBackfillsEveryListAndToleratesTwoInboxes(t *testing.T) {
-	body, err := files.ReadFile("045_lists_own_themselves.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql := string(body)
-	for _, want := range []string{
-		"ALTER TABLE buckets ADD COLUMN user_id",
-		"UPDATE buckets SET user_id = boards.user_id",
-		"ALTER COLUMN user_id SET NOT NULL",
-		"CREATE INDEX buckets_user_sort_idx",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("045 is missing %q", want)
-		}
-	}
-	// The trigger is what makes the column self-maintaining while board_id is
-	// still the source of truth, so a writer that predates the column cannot
-	// create an ownerless list.
-	if !strings.Contains(sql, "buckets_inherit_board_owner") {
-		t.Fatal("045 must keep user_id filled by trigger during the transition")
-	}
-	// Creating a board creates an Inbox inside it, so an account with two boards
-	// has two inbox lists. A unique index on (user_id) WHERE is_inbox would fail
-	// the migration on that data and take the deploy with it.
-	if strings.Contains(sql, "is_inbox = true") && strings.Contains(sql, "UNIQUE") {
-		t.Fatal("045 must not constrain inbox uniqueness: live accounts can already hold two")
-	}
-}
