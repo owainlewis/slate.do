@@ -288,7 +288,10 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
   transition: width .24s cubic-bezier(.4, 0, .2, 1), flex-basis .24s cubic-bezier(.4, 0, .2, 1), padding .24s cubic-bezier(.4, 0, .2, 1), opacity .18s ease, border-width .24s cubic-bezier(.4, 0, .2, 1);
 }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; }
-.sidebar-content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 20px; }
+.sidebar-content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+/* Sections keep their natural height; the sidebar scrolls instead of letting
+   flex shrink them into each other. */
+.sidebar-content > .nav-sec { flex: 0 0 auto; }
 .sidebar-new-task { width: 100%; justify-content: center; flex: 0 0 auto; }
 .nav-boards { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sidebar-head .sidebar-toggle { display: none; width: 34px; height: 34px; padding: 0; }

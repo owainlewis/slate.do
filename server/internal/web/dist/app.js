@@ -1562,7 +1562,6 @@ function appHTML() {
         : `<h1>${escapeHTML(title)}</h1>`}<span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
       <div class="workspace-topbar-actions">
         ${state.workspaceScope === "list" && list && !list.isInbox ? `<button class="plain-btn danger-text" id="delete-workspace-list" type="button" data-list-id="${escapeAttr(list.id)}">${icon("trash")}<span>Delete list</span></button>` : ""}
-        <button class="primary" id="new-task" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New task"}</span></button>
       </div>
     </header>
     ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskMutationError?.message)}
@@ -1579,7 +1578,7 @@ function appHTML() {
     ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more tasks"}</button>` : ""}`;
   return `
     <section class="shell task-shell theme-${theme}">
-      ${appSidebarHTML({ theme, showNewTask: false })}
+      ${appSidebarHTML()}
       <div class="main workspace-main ${state.selectedTask ? "card-detail-main" : ""}">
         ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : overview}
       </div>
@@ -1750,7 +1749,7 @@ function workspaceDetailHTML(task) {
     </section>`;
 }
 
-function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNewTask = true } = {}) {
+function appSidebarHTML({ agentsCurrent = false } = {}) {
   const route = parseRoute(globalThis.location?.pathname || APP_PATH);
   const workspaceOn = name => route.name === "workspace" && state.workspaceScope === name;
   return `
@@ -1760,23 +1759,19 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
         <button class="icon-btn sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar-content" aria-expanded="false">${icon("menu")}</button>
       </div>
       <div class="sidebar-content" id="sidebar-content">
-        ${showNewTask ? globalNewTaskButtonHTML() : ""}
+        ${globalNewTaskButtonHTML()}
         ${newTaskRecoveryNoticeHTML()}
         <section class="nav-sec nav-collaborators workspace-nav">
-          <h3>Work</h3>
-          <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
           <a class="nav-link ${workspaceOn("inbox") ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
-          <a class="nav-link ${route.name === "runs" ? "on" : ""}" href="${RUNS_PATH}">${icon("history")}<span>Runs</span></a>
-          <a class="nav-link ${route.name === "runners" ? "on" : ""}" href="${RUNNERS_PATH}">${icon("server")}<span>Runners</span></a>
+          <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
         </section>
         ${listsNavigationHTML()}
         <section class="nav-sec nav-collaborators">
-          <h3>Agents</h3>
-          <a class="plain-btn icon-label nav-link ${agentsCurrent && !route.agentId ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent && !route.agentId ? 'aria-current="page"' : ""}>${icon("bot")}<span>All agents</span></a>
-          ${state.agents.map(agent => `<a class="nav-link agent-nav-link ${route.agentId === agent.id ? "on" : ""}" href="${agentPath(agent.id)}">${avatarHTML(agent, { small: true, decorative: true })}<span>${escapeHTML(agent.displayName)}</span></a>`).join("")}
+          <a class="plain-btn icon-label nav-link ${agentsCurrent ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent ? 'aria-current="page"' : ""}>${icon("bot")}<span>Agents</span></a>
+          <a class="nav-link ${route.name === "runs" ? "on" : ""}" href="${RUNS_PATH}">${icon("history")}<span>Runs</span></a>
+          <a class="nav-link ${route.name === "runners" ? "on" : ""}" href="${RUNNERS_PATH}">${icon("server")}<span>Runners</span></a>
         </section>
         <section class="nav-sec nav-sec-footer">
-          ${themeSwitchHTML(theme)}
           <button class="plain-btn icon-label" id="settings">${icon("gear")}<span>Settings</span></button>
           <button class="plain-btn icon-label" id="logout">${icon("signOut")}<span>Sign out</span></button>
         </section>
@@ -1796,7 +1791,7 @@ function executionPlaceholderHTML(view) {
   const runs = view === "runs";
   return `
     <section class="shell theme-${theme}">
-      ${appSidebarHTML({ theme, showNewTask: false })}
+      ${appSidebarHTML()}
       <div class="main workspace-main">
         <header class="workspace-topbar">
           <div><div class="workspace-title"><h1>${runs ? "Runs" : "Runners"}</h1></div><p>${runs
@@ -1916,14 +1911,6 @@ function clearResolvedAgentTaskRefreshError() {
     state.error = "";
     syncTaskDetailError();
   }
-}
-
-function themeSwitchHTML(theme) {
-  return `
-    <div class="theme-switch ${theme}" role="group" aria-label="Theme">
-      <span class="theme-switch-thumb" aria-hidden="true"></span>
-      ${themes.map(item => `<button type="button" data-set-theme="${item.id}" class="${theme === item.id ? "on" : ""}" aria-pressed="${theme === item.id}" title="${item.label} theme">${icon(item.id === "dark" ? "moon" : "sun")}<span>${item.label}</span></button>`).join("")}
-  </div>`;
 }
 
 function globalNewTaskButtonHTML() {
@@ -2101,7 +2088,7 @@ function agentsHTML() {
   const limitReached = state.activeAgents >= state.maxAgents;
   return `
     <section class="shell agents-shell theme-${theme}">
-      ${appSidebarHTML({ theme, agentsCurrent: true })}
+      ${appSidebarHTML({ agentsCurrent: true })}
       <main class="agents-main">
         <div class="agents-wrap">
           <header class="agents-head">
@@ -2211,7 +2198,7 @@ function agentDetailHTML() {
   const theme = currentTheme();
   return `
     <section class="shell agents-shell theme-${theme}">
-      ${appSidebarHTML({ theme, agentsCurrent: true })}
+      ${appSidebarHTML({ agentsCurrent: true })}
       <main class="${state.selectedTask ? "main workspace-main card-detail-main agent-task-main" : "agents-main"}">
         ${state.selectedTask ? workspaceDetailHTML(state.selectedTask) : `<div class="agents-wrap agent-detail-wrap">
           <a class="back-link" href="${AGENTS_PATH}" id="agent-detail-back">${icon("chevronLeft")}<span>Agents</span></a>
@@ -2631,7 +2618,7 @@ function settingsHTML() {
         <div class="settings-row">
           <div class="settings-row-copy">
             <strong id="appearance-heading">Appearance</strong>
-            <span>This preference also controls the shortcut in the app navigation.</span>
+            <span>Slate follows this choice on every screen.</span>
           </div>
           <div class="theme-choice" role="group" aria-label="Theme preference">
             ${themes.map(item => `
@@ -2706,9 +2693,9 @@ function settingsHTML() {
         ${globalNewTaskButtonHTML()}
         ${newTaskRecoveryNoticeHTML()}
         <section class="nav-sec nav-collaborators settings-workspace-nav" aria-label="Work">
-          <h3>Work</h3>
-          <a class="nav-link" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
           <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
+          <a class="nav-link" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
+          <a class="nav-link" href="${AGENTS_PATH}">${icon("bot")}<span>Agents</span></a>
           <a class="nav-link" href="${RUNS_PATH}">${icon("history")}<span>Runs</span></a>
           <a class="nav-link" href="${RUNNERS_PATH}">${icon("server")}<span>Runners</span></a>
         </section>
@@ -2903,7 +2890,6 @@ function bindWorkspace() {
   document.querySelector("#clear-workspace-filters")?.addEventListener("click", () => {
     navigate(location.pathname);
   });
-  document.querySelector("#new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
   document.querySelector("#workspace-load-more")?.addEventListener("click", loadMoreWorkspaceTasks);
   document.querySelectorAll("[data-bucket-name]").forEach(element => {
     element.addEventListener("change", () => renameWorkspaceList(element));

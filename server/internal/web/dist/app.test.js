@@ -138,17 +138,21 @@ test("sidebar makes work, lists, and agents the primary control plane", () => {
   `, app);
 
   const html = app.appSidebarHTML();
-  for (const label of ["Work", "Board", "Inbox", "Runs", "Lists", "Product", "Agents", "Runners"]) assert.match(html, new RegExp(`>${label}<`));
+  for (const label of ["Inbox", "Board", "Lists", "Product", "Agents", "Runs", "Runners"]) assert.match(html, new RegExp(`>${label}<`));
   // Boards are storage, not navigation. They stay out of the primary sidebar.
-  for (const label of ["Focus", "Attention", "Today", "Week", "Review", "Plan", "All cards", "Boards", "Content"]) assert.doesNotMatch(html, new RegExp(`>${label}<`));
-  assert.ok(html.indexOf(">Work<") < html.indexOf(">Lists<"));
+  for (const label of ["Focus", "Work", "Attention", "Today", "Week", "Review", "Plan", "All cards", "Boards", "Content", "All agents"]) assert.doesNotMatch(html, new RegExp(`>${label}<`));
+  // The inbox is where agents reach you, so it leads.
+  assert.ok(html.indexOf(">Inbox<") < html.indexOf(">Board<"));
+  assert.ok(html.indexOf(">Board<") < html.indexOf(">Lists<"));
   assert.ok(html.indexOf(">Lists<") < html.indexOf(">Agents<"));
+  // The theme lives in settings now, not as a navigation shortcut.
+  assert.doesNotMatch(html, /theme-switch|data-set-theme/);
   assert.match(html, /id="new-workspace-list"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
 
   // Board plumbing stays reachable from settings.
   const settings = app.settingsHTML();
-  for (const label of ["Work", "Board", "Lists", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
+  for (const label of ["Board", "Lists", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
   for (const label of ["Today", "Week", "Review", "All cards"]) assert.doesNotMatch(settings, new RegExp(`>${label}<`));
   assert.match(settings, /data-board="content">Content</);
   assert.match(settings, /id="new-board"/);
@@ -529,11 +533,8 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   assert.doesNotMatch(html, /data-workspace-view=|workspace-tab-/);
   assert.match(html, /id="workspace-task-panel"/);
   assert.match(html, /class="workspace-flow grouped-by-status"/);
-  assert.match(html, /id="new-task"/);
+  assert.match(html, /id="global-new-task"/);
   assert.match(html, /id="workspace-filter-toggle"/);
-  assert.match(html, /data-set-theme="light"[\s\S]*?<span>Light<\/span>/);
-  assert.match(html, /data-set-theme="dark"[\s\S]*?<span>Dark<\/span>/);
-  assert.match(html, /class="theme-switch light"[\s\S]*?id="settings"/);
   assert.match(html, /id="settings"[\s\S]*?<span>Settings<\/span>/);
   assert.match(html, /id="logout"[\s\S]*?<span>Sign out<\/span>/);
   assert.doesNotMatch(html, /data-board-settings|Board settings/);
@@ -1363,7 +1364,7 @@ test("credential copy failure leaves the token selected for manual copy", async 
   vm.runInContext(`state.credentialCopyError = "";`, app);
 });
 
-test("the card header stays focused on the workspace and new-card action", () => {
+test("the board header stays focused on the workspace, with capture in the sidebar", () => {
   vm.runInContext(`
     state.me = { id: "owner", email: "owner@example.com", displayName: "Owain Lewis" };
     state.board = { id: "board", name: "Business", maxTasksPerList: 20, buckets: [] };
@@ -1371,7 +1372,7 @@ test("the card header stays focused on the workspace and new-card action", () =>
   `, app);
   const html = app.appHTML();
   assert.match(html, /class="workspace-title"><h1>Board<\/h1>/);
-  assert.match(html, /id="new-task"/);
+  assert.match(html, /id="global-new-task"/);
   assert.doesNotMatch(html, /class="current-user"|>OL<\/span>/);
   vm.runInContext(`state.me = null; state.board = null; state.boards = [];`, app);
 });
@@ -2134,8 +2135,9 @@ test("one theme holds when switching between boards", () => {
   assert.match(app.appHTML(), /class="shell task-shell theme-dark"/);
   vm.runInContext(`state.board = { id: "other-board", name: "Other board", backgroundValue: "charcoal", buckets: [] }`, app);
   assert.match(app.appHTML(), /class="shell task-shell theme-dark"/);
-  assert.match(app.appHTML(), /class="theme-switch dark"/);
-  assert.match(app.appHTML(), /data-set-theme="dark"[^>]*class="on"/);
+  vm.runInContext(`state.settingsPage = "preferences";`, app);
+  assert.match(app.settingsHTML(), /data-set-theme="dark"[^>]*class="on"/, "the theme control lives in settings");
+  vm.runInContext(`state.settingsPage = "profile";`, app);
 });
 
 test("changing theme updates the user preference once", async () => {
