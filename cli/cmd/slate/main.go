@@ -113,7 +113,7 @@ func printVersion(args []string, w io.Writer) error {
 func printHelp(topic string) error {
 	help, ok := helpText[topic]
 	if !ok {
-		return fmt.Errorf("unknown help topic %q; choose auth, lists, or tasks", topic)
+		return fmt.Errorf("unknown help topic %q; choose auth, lists, tasks, watch, or runs", topic)
 	}
 	_, err := fmt.Fprint(os.Stdout, help)
 	return err

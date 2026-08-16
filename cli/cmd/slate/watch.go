@@ -94,7 +94,7 @@ func watchCmd(c client, args []string) error {
 		return errors.New("unexpected arguments; run 'slate help watch'")
 	}
 	if strings.TrimSpace(*listID) != "" && !validUUID(strings.TrimSpace(*listID)) {
-		return errors.New("--board must be a valid board ID")
+		return errors.New("--list must be a valid list ID")
 	}
 	options := watchOptions{
 		profileName: strings.TrimSpace(*profileName),
@@ -231,7 +231,7 @@ func (w *watcher) refuseWhileWorkTaskExists(ctx context.Context) error {
 		return err
 	}
 	if len(working) > 0 {
-		scope := "any visible board"
+		scope := "any visible list"
 		if w.listID != "" {
 			scope = "list " + w.listID
 		}

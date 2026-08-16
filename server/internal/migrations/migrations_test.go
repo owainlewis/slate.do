@@ -1541,6 +1541,39 @@ func TestListsLeaveBoardsOwningThemselvesWithOneInboxEach(t *testing.T) {
 		t.Fatalf("another account's inbox must be allowed: %v", err)
 	}
 
+	// Moving a task to another account's list moves its owner with it. This is
+	// the rule that outlives the migration: every future move depends on it.
+	var otherList string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO buckets (user_id, name) VALUES ($1, 'B work') RETURNING id::text
+	`, ownerB).Scan(&otherList); err != nil {
+		t.Fatal(err)
+	}
+	var taskID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM tasks WHERE bucket_id = $1`, listID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	var movedOwner string
+	if err := tx.QueryRow(ctx, `
+		UPDATE tasks SET bucket_id = $2 WHERE id = $1 RETURNING owner_user_id::text
+	`, taskID, otherList).Scan(&movedOwner); err != nil {
+		t.Fatal(err)
+	}
+	if movedOwner != ownerB {
+		t.Fatalf("owner after moving to another account's list = %s, want %s", movedOwner, ownerB)
+	}
+
+	// Writing owner_user_id directly cannot hand a task to another account.
+	var forcedOwner string
+	if err := tx.QueryRow(ctx, `
+		UPDATE tasks SET bucket_id = $2, owner_user_id = $3 WHERE id = $1 RETURNING owner_user_id::text
+	`, taskID, listID, ownerB).Scan(&forcedOwner); err != nil {
+		t.Fatal(err)
+	}
+	if forcedOwner != ownerA {
+		t.Fatalf("owner after a supplied mismatch = %s, want the list owner %s", forcedOwner, ownerA)
+	}
+
 	// The trigger that derived ownership from a board is gone with it.
 	var triggers int
 	if err := tx.QueryRow(ctx, `
