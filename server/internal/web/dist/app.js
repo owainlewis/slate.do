@@ -2013,7 +2013,7 @@ function boardRowHTML(board) {
       <span class="board-select" data-board="${board.id}">${escapeHTML(board.name)}</span>
       <div class="board-actions">
         <button data-start-rename-board="${board.id}" aria-label="Rename ${escapeAttr(board.name)}" title="Rename board">${icon("pencil")}</button>
-        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="${deletable ? "Delete board" : "Move or create another Inbox before deleting this board"}" ${deletable ? "" : "disabled"}>${icon("trash")}</button>
+        <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="${deletable ? "Delete board" : escapeAttr(boardDeleteBlockedReason(board.id))}" ${deletable ? "" : "disabled"}>${icon("trash")}</button>
       </div>
     </div>`;
 }
@@ -4679,6 +4679,16 @@ async function deleteBoard(id) {
 
 function boardCanBeDeleted(boardID) {
   return state.workspaceLists.some(list => list.isInbox && list.boardId !== boardID);
+}
+
+// An account always keeps one Inbox, so the board holding the only one cannot
+// go. Say that, rather than suggesting a move or a new Inbox: neither is
+// something a person can do from here.
+function boardDeleteBlockedReason(boardID) {
+  if (boardCanBeDeleted(boardID)) return "";
+  return state.boards.length > 1
+    ? "This board holds your only Inbox, so it cannot be deleted"
+    : "Your last board cannot be deleted: it holds your Inbox";
 }
 
 async function bindSettings() {
