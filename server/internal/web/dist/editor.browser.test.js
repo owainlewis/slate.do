@@ -716,16 +716,16 @@ test("the board filters as you type and clears back to everything", async t => {
   assert.equal(await page.locator('[data-open-task="task-child"]').count(), 1);
   assert.equal(await page.getByRole("button", { name: "Clear", exact: true }).count(), 0, "Clear only appears once something is filtered");
 
-  await page.getByLabel("Search", { exact: true }).fill("Publish");
+  await page.getByLabel("Search tasks", { exact: true }).fill("Publish");
   await waitFor(() => state.taskQueries.some(query => query.includes("q=Publish")));
   await page.locator('[data-open-task="task-child"]').waitFor({ state: "detached" });
   assert.match(page.url(), /q=Publish/);
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
-  assert.equal(await page.getByLabel("Search", { exact: true }).inputValue(), "Publish");
-  assert.equal(await page.getByLabel("Search", { exact: true }).evaluate(element => element === document.activeElement), true,
+  assert.equal(await page.getByLabel("Search tasks", { exact: true }).inputValue(), "Publish");
+  assert.equal(await page.getByLabel("Search tasks", { exact: true }).evaluate(element => element === document.activeElement), true,
     "typing must not lose focus when the board refreshes");
 
-  await page.getByLabel("Priority", { exact: true }).selectOption("p1");
+  await page.getByLabel("Filter by priority", { exact: true }).selectOption("p1");
   await waitFor(() => state.taskQueries.some(query => query.includes("priority=p1")));
   assert.match(page.url(), /priority=p1/);
 
@@ -1582,6 +1582,7 @@ test("assigning an existing New task makes it Ready for agent work", async t => 
   const { page, state, pageErrors } = await startWorkspace(t);
 
   await page.getByRole("button", { name: "Open task: Write the doc my boss asked for", exact: true }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
   await page.getByLabel("Agent", { exact: true }).selectOption("agent-research");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => state.tasks.find(task => task.id === "task-inbox")?.assigneeAgentId === "agent-research");

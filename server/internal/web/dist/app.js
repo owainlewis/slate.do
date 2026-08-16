@@ -2,9 +2,9 @@ function workspaceFilterHTML() {
   const query = new URLSearchParams(globalThis.location?.search || "");
   const agentOptions = state.agents.map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
   return `<form class="workspace-filters" id="workspace-filters" role="search">
-    <label class="workspace-search"><span class="sr-only">Search</span>${icon("filter")}<input name="q" aria-label="Search" value="${escapeAttr(query.get("q") || "")}" placeholder="Search tasks…"></label>
-    <label><span class="sr-only">Agent</span><select name="assigneeAgentId" aria-label="Agent"><option value="">Any agent</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
-    <label><span class="sr-only">Priority</span><select name="priority" aria-label="Priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
+    <label class="workspace-search"><span class="sr-only">Search tasks</span>${icon("filter")}<input name="q" aria-label="Search tasks" value="${escapeAttr(query.get("q") || "")}" placeholder="Search tasks…"></label>
+    <label><span class="sr-only">Filter by agent</span><select name="assigneeAgentId" aria-label="Filter by agent"><option value="">Any agent</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
+    <label><span class="sr-only">Filter by priority</span><select name="priority" aria-label="Filter by priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
     ${workspaceFilterCount() ? `<button class="plain-btn" id="clear-workspace-filters" type="button">Clear</button>` : ""}
   </form>`;
 }
