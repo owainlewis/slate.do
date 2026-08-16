@@ -150,12 +150,13 @@ test("sidebar makes work, lists, and agents the primary control plane", () => {
   assert.match(html, /id="new-workspace-list"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
 
-  // Board plumbing stays reachable from settings.
+  // Board storage stays reachable, as a settings tab rather than a nav section.
+  vm.runInContext(`state.settingsPage = "boards";`, app);
   const settings = app.settingsHTML();
-  for (const label of ["Board", "Lists", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
-  for (const label of ["Today", "Week", "Review", "All cards"]) assert.doesNotMatch(settings, new RegExp(`>${label}<`));
+  for (const label of ["Board", "Lists", "Boards"]) assert.match(settings, new RegExp(`>${label}<`));
   assert.match(settings, /data-board="content">Content</);
   assert.match(settings, /id="new-board"/);
+  vm.runInContext(`state.settingsPage = "profile";`, app);
   vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
 });
 
@@ -170,7 +171,7 @@ test("desktop navigation exposes a persistent accessible collapse control", () =
   const collapsed = app.appSidebarHTML();
   assert.match(collapsed, /class="sidebar collapsed"/);
   assert.match(collapsed, /id="desktop-sidebar-toggle"[^>]*aria-label="Show navigation"[^>]*aria-expanded="false"/);
-  assert.match(app.settingsHTML(), /class="sidebar settings-sidebar collapsed"[^>]*id="primary-navigation"/);
+  assert.match(app.settingsHTML(), /class="sidebar collapsed"[^>]*id="primary-navigation"/, "settings shares the primary sidebar");
   assert.match(styles, /@media \(min-width: 901px\) \{[\s\S]*?\.sidebar\.collapsed \{[\s\S]*?width: 0;[\s\S]*?flex-basis: 0;/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.sidebar, \.desktop-sidebar-toggle \{ transition: none !important; \}/);
   vm.runInContext(`state.sidebarCollapsed = false;`, app);
@@ -780,7 +781,7 @@ test("account settings contain profile, preferences, and personal API access onl
     state.settingsPage = "profile";
   `, app);
   const profile = app.settingsHTML();
-  assert.match(profile, /<h1>Profile<\/h1>/);
+  assert.match(profile, /<h2>Profile<\/h2>/);
   assert.match(profile, /Generated locally from your account ID/);
   assert.match(profile, /id="profile-form"/);
   assert.match(profile, /id="profile-display-name" name="displayName" value="Owain Lewis"/);
@@ -793,14 +794,14 @@ test("account settings contain profile, preferences, and personal API access onl
 
   vm.runInContext(`state.settingsPage = "preferences";`, app);
   const preferences = app.settingsHTML();
-  assert.match(preferences, /<h1>Preferences<\/h1>/);
+  assert.match(preferences, /<h2>Preferences<\/h2>/);
   assert.match(preferences, /aria-label="Theme preference"/);
   assert.match(preferences, /data-set-theme="light"[^>]*aria-pressed="true"/);
   assert.doesNotMatch(preferences, /profile-form|settings-list-limit|token-form|slate_personal_secret/);
 
   vm.runInContext(`state.settingsPage = "api";`, app);
   const apiSettings = app.settingsHTML();
-  assert.match(apiSettings, /<h1>API access<\/h1>/);
+  assert.match(apiSettings, /<h2>API access<\/h2>/);
   assert.match(apiSettings, /id="token-form"/);
   assert.match(apiSettings, /slate_personal_secret/);
   assert.match(apiSettings, /Personal API tokens/);
@@ -809,13 +810,11 @@ test("account settings contain profile, preferences, and personal API access onl
   assert.doesNotMatch(apiSettings, /profile-form|settings-list-limit|agent-limit/);
 
   for (const html of [profile, preferences, apiSettings]) {
-    assert.match(html, /<nav class="settings-nav" aria-label="Settings">/);
+    assert.match(html, /<nav class="settings-tabs" aria-label="Settings sections"/);
+    assert.match(html, /<h1>Settings<\/h1>/, "the surface heading does not move between tabs");
     assert.doesNotMatch(html, /href="\/app\/settings\/agents"/);
-    assert.doesNotMatch(html, /href="\/app\/settings\/board"/);
-    assert.match(html, />Back to board<\/span>/);
-    assert.match(html, /aria-label="Account actions"/);
+    assert.doesNotMatch(html, /settings-sidebar|>Back to board</, "settings no longer replaces the navigation");
     assert.equal((html.match(/aria-current="page"/g) || []).length, 1);
-    assert.doesNotMatch(html, /<h1>Settings<\/h1>/);
   }
   vm.runInContext(`state.me = null; state.board = null; state.agents = []; state.tokens = []; state.newToken = ""; state.newTokenOwnerID = ""; state.settingsPage = "profile";`, app);
 });

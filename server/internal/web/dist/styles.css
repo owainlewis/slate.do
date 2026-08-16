@@ -1339,7 +1339,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .settings-nav { display: flex; flex-direction: column; gap: 2px; }
 .settings-nav-link { display: flex; font-size: 14px; text-decoration: none; }
 .settings-nav-link .icon { width: 14px; height: 14px; }
-.settings-actions { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }.settings-main { flex: 1; min-width: 0; background: var(--bg); padding: 36px 44px; }
+.settings-main { min-width: 0; }
 .settings-panel { width: min(720px, 100%); }
 .settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 24px; }
 .settings-head p:not(.settings-description) { margin: 0 0 6px; color: var(--faint); font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
@@ -1804,3 +1804,28 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .workspace-filters select { min-height: 34px; padding: 6px 9px; font-size: 13px; }
 .workspace-filters label { display: inline-flex; align-items: center; margin: 0; }
 .workspace-filters #clear-workspace-filters { min-height: 32px; padding: 6px 9px; color: var(--soft); font-size: 12px; }
+
+/* ---------- Settings as a surface ---------- */
+.settings-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 30px;
+  border-bottom: 1px solid var(--line-2);
+}
+.settings-tab {
+  min-height: 40px;
+  padding: 10px 12px;
+  display: inline-flex;
+  align-items: center;
+  border-bottom: 2px solid transparent;
+  color: var(--soft);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.settings-tab:hover { color: var(--ink); }
+.settings-tab.on { border-bottom-color: var(--accent); color: var(--ink); }
+.settings-scroll { min-height: 0; flex: 1; overflow-y: auto; }
+.settings-scroll .settings-panel { width: min(760px, 100%); padding: 28px 30px 40px; }
+.settings-head h2 { margin: 0 0 6px; font-size: 17px; letter-spacing: -.01em; }

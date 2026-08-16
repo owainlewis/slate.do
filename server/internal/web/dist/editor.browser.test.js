@@ -1303,7 +1303,7 @@ test("desktop navigation collapses with the keyboard and stays collapsed across 
   assert.equal(await page.getByRole("button", { name: "Show navigation" }).getAttribute("aria-expanded"), "false");
 
   await navigateApp(page, "/app/settings/profile");
-  await page.getByRole("heading", { name: "Profile", exact: true, level: 1 }).waitFor();
+  await page.getByRole("heading", { name: "Profile", exact: true, level: 2 }).waitFor();
   const settingsShowNavigation = page.getByRole("button", { name: "Show navigation" });
   assert.equal(await settingsShowNavigation.getAttribute("aria-expanded"), "false");
   const darkToggleStyle = await settingsShowNavigation.evaluate(element => {

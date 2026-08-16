@@ -232,6 +232,7 @@ const SETTINGS_PAGES = [
   { id: "profile", label: "Profile", icon: "user", title: "Profile", description: "Your identity across Slate." },
   { id: "preferences", label: "Preferences", icon: "sun", title: "Preferences", description: "Choose how Slate looks for this account." },
   { id: "api", label: "API access", icon: "copy", title: "API access", description: "Manage personal access to the Slate CLI and API." },
+  { id: "boards", label: "Boards", icon: "kanban", title: "Boards", description: "Boards hold your lists. Most people never need more than one." },
 ];
 const RUNS_PATH = "/app/runs";
 const RUNNERS_PATH = "/app/runners";
@@ -1583,13 +1584,13 @@ function appHTML() {
   const tasks = workspaceScopedTasks();
   const list = state.workspaceLists.find(item => item.id === state.workspaceListID);
   const title = state.workspaceScope === "list" ? list?.name || "List" : "Board";
-  const subtitle = state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
+  const subtitle = state.workspaceScope === "list" ? list?.goal || "" : "One control plane for human and agent work.";
   const renameableList = state.workspaceScope === "list" && list && !list.isInbox;
   const overview = `
     <header class="workspace-topbar">
       <div><div class="workspace-title">${renameableList
         ? `<label class="sr-only" for="workspace-list-name">List name</label><input class="workspace-title-input" id="workspace-list-name" data-bucket-name="${escapeAttr(list.id)}" value="${escapeAttr(list.name)}" maxlength="100" autocomplete="off">`
-        : `<h1>${escapeHTML(title)}</h1>`}<span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
+        : `<h1>${escapeHTML(title)}</h1>`}<span>${tasks.length}</span></div>${subtitle ? `<p>${escapeHTML(subtitle)}</p>` : ""}</div>
       <div class="workspace-topbar-actions">
         ${state.workspaceScope === "list" && list && !list.isInbox ? `<button class="plain-btn danger-text" id="delete-workspace-list" type="button" data-list-id="${escapeAttr(list.id)}">${icon("trash")}<span>Delete list</span></button>` : ""}
       </div>
@@ -2645,6 +2646,15 @@ function settingsHTML() {
           <p class="settings-status ${state.themeStatus.startsWith("Could not") ? "error" : ""}" role="${state.themeStatus.startsWith("Could not") ? "alert" : "status"}">${escapeHTML(state.themeStatus)}</p>
         </div>
       </section>`;
+  } else if (page.id === "boards") {
+    content = `
+      <section class="settings-section" aria-labelledby="boards-heading">
+        <div class="settings-section-head">
+          <h2 id="boards-heading">Boards</h2>
+          <p>A board is where your lists are stored. You work on the board and in lists, so this is only here for when you need another one.</p>
+        </div>
+        ${boardsNavigationHTML()}
+      </section>`;
   } else {
     const tokenVisible = state.newToken && state.newTokenOwnerID === state.me?.id;
     const tokenLimit = Number(accountLimits().apiTokens) || 0;
@@ -2700,42 +2710,29 @@ function settingsHTML() {
         </a>
       </section>`;
   }
+  // Settings is a surface like any other: the primary navigation does not move,
+  // and its own sections are tabs inside the page.
   return `
-    <section class="settings-page theme-${theme}">
-      <aside class="sidebar settings-sidebar ${state.sidebarCollapsed ? "collapsed" : ""}" id="primary-navigation" aria-label="Primary navigation">
-        <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
-        ${globalNewTaskButtonHTML()}
-        ${newTaskRecoveryNoticeHTML()}
-        <section class="nav-sec nav-collaborators settings-workspace-nav" aria-label="Work">
-          <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
-          <a class="nav-link" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
-          <a class="nav-link" href="${AGENTS_PATH}">${icon("bot")}<span>Agents</span></a>
-          <a class="nav-link" href="${RUNS_PATH}">${icon("history")}<span>Runs</span></a>
-          <a class="nav-link" href="${RUNNERS_PATH}">${icon("server")}<span>Runners</span></a>
-        </section>
-        ${listsNavigationHTML()}
-        ${boardsNavigationHTML()}
-        <p class="settings-sidebar-title">Account settings</p>
-        <nav class="settings-nav" aria-label="Settings">
-          ${SETTINGS_PAGES.map(item => `<a class="page-row icon-label settings-nav-link ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" ${item.id === page.id ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${item.label}</span></a>`).join("")}
+    <section class="shell settings-page theme-${theme}">
+      ${appSidebarHTML()}
+      <main class="main workspace-main settings-main">
+        <header class="workspace-topbar">
+          <div><div class="workspace-title"><h1>Settings</h1></div><p>Your account, preferences and API access.</p></div>
+        </header>
+        <nav class="settings-tabs" aria-label="Settings sections" role="tablist">
+          ${SETTINGS_PAGES.map(item => `<a class="settings-tab ${item.id === page.id ? "on" : ""}" href="${settingsPath(item.id)}" role="tab" aria-selected="${item.id === page.id}" ${item.id === page.id ? 'aria-current="page"' : ""} data-settings-tab>${escapeHTML(item.label)}</a>`).join("")}
         </nav>
-        <section class="settings-actions" aria-label="Account actions">
-          <button class="plain-btn icon-label" id="back">${icon("chevronLeft")}<span>Back to board</span></button>
-          <button class="plain-btn icon-label" id="settings-logout">${icon("signOut")}<span>Sign out</span></button>
-        </section>
-      </aside>
-      ${desktopSidebarToggleHTML()}
-      <main class="settings-main">
-        <section class="settings-panel">
-          <div class="settings-head">
-            <div>
-              <p>Account settings</p>
-              <h1>${page.title}</h1>
-              <p class="settings-description">${page.description}</p>
+        <div class="settings-scroll">
+          <section class="settings-panel">
+            <div class="settings-head">
+              <div>
+                <h2>${page.title}</h2>
+                <p class="settings-description">${page.description}</p>
+              </div>
             </div>
-          </div>
-          ${content}
-        </section>
+            ${content}
+          </section>
+        </div>
       </main>
       ${workspaceListDialogHTML()}
     </section>`;
@@ -4685,13 +4682,13 @@ async function bindSettings() {
   bindNewTaskRecoveryActions();
   bindGlobalNewTask();
   bindWorkspaceListControl();
-  bindBoardNavigationControls(document.querySelector(".settings-sidebar"));
-  document.querySelectorAll(".settings-nav-link").forEach(el => el.onclick = event => {
+  bindBoardNavigationControls(document.querySelector(".settings-main"));
+  document.querySelectorAll("[data-settings-tab]").forEach(el => el.onclick = event => {
     event.preventDefault();
     navigate(el.getAttribute("href"));
   });
-  document.querySelector("#back").onclick = closeSettings;
-  document.querySelector("#settings-logout").onclick = logout;
+  document.querySelector("#settings")?.addEventListener("click", () => navigate(settingsPath(state.settingsPage)));
+  document.querySelector("#logout")?.addEventListener("click", logout);
   bindThemeControls();
   document.querySelector("#request-password-reset")?.addEventListener("click", async event => {
     const version = routeVersion;
