@@ -345,15 +345,21 @@ test("the board includes subtasks while an individual list stays a parent rollup
   delete app.location;
 });
 
-test("the board filter can hide subtasks while a list stays top level", () => {
-  app.location = { search: "?children=hide" };
-  vm.runInContext(`state.workspaceScope = "all";`, app);
-  assert.equal(app.workspaceQuery({ scope: "all" }).get("topLevel"), "true", "the board should hide subtasks");
-  assert.equal(app.workspaceFilterCount(), 1);
-  assert.match(app.workspaceFilterHTML(), /name="children" value="hide" checked/);
-  vm.runInContext(`state.workspaceScope = "list";`, app);
-  assert.doesNotMatch(app.workspaceFilterHTML(), /name="children"/);
-  vm.runInContext(`state.workspaceScope = "all";`, app);
+test("the board filter keeps search, agent and priority, and applies without a button", () => {
+  app.location = { search: "?q=spec&priority=p1" };
+  vm.runInContext(`state.workspaceScope = "all"; state.me = { id: "owner", displayName: "Owain" }; state.agents = [];`, app);
+  const html = app.workspaceFilterHTML();
+  for (const name of ["q", "priority", "assigneeAgentId"]) assert.match(html, new RegExp(`name="${name}"`));
+  // status, planned dates and the subtask toggle keep working as URL parameters.
+  for (const name of ["status", "children", "plannedFrom", "plannedTo"]) assert.doesNotMatch(html, new RegExp(`name="${name}"`));
+  assert.doesNotMatch(html, /type="submit"|>Apply</);
+  assert.match(html, /id="clear-workspace-filters"/);
+  assert.equal(app.workspaceFilterCount(), 2);
+
+  app.location = { search: "" };
+  assert.equal(app.workspaceFilterCount(), 0);
+  assert.doesNotMatch(app.workspaceFilterHTML(), /id="clear-workspace-filters"/, "Clear only appears when something is filtered");
+  vm.runInContext(`state.me = null;`, app);
   delete app.location;
 });
 
@@ -529,7 +535,7 @@ test("primary navigation uses distinct icons and keeps readable labels", () => {
   assert.match(html, /id="workspace-task-panel"/);
   assert.match(html, /class="workspace-flow grouped-by-status"/);
   assert.match(html, /id="global-new-task"/);
-  assert.match(html, /id="workspace-filter-toggle"/);
+  assert.match(html, /id="workspace-filters"/);
   assert.match(html, /id="settings"[\s\S]*?<span>Settings<\/span>/);
   assert.match(html, /id="logout"[\s\S]*?<span>Sign out<\/span>/);
   assert.doesNotMatch(html, /data-board-settings|Board settings/);

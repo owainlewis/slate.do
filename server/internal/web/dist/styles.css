@@ -64,12 +64,17 @@
 .workspace-topbar-actions button { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .workspace-topbar-actions .icon { width: 14px; height: 14px; }
 .workspace-topbar-actions .danger-text { color: var(--danger); }
-.workspace-viewbar { min-height: 48px; padding: 0 30px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-2); }.workspace-view-actions { display: flex; align-items: center; gap: 14px; }
+.workspace-viewbar { min-height: 52px; padding: 9px 30px; display: flex; align-items: center; border-bottom: 1px solid var(--line-2); }
+.workspace-viewbar .workspace-filters { flex: 1; }
 .workspace-filter-toggle { display: flex; align-items: center; gap: 6px; }
 .workspace-filter-toggle .icon { width: 14px; height: 14px; }
 .workspace-filter-toggle b { min-width: 19px; padding: 2px 6px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-size: 11px; }
-.workspace-filters { min-height: 68px; padding: 10px 30px; display: flex; align-items: flex-end; gap: 8px; border-bottom: 1px solid var(--line-2); background: color-mix(in srgb, var(--panel) 65%, var(--bg)); overflow-x: auto; }
-.workspace-filters label { min-width: 110px; display: grid; gap: 5px; color: var(--faint); font-size: 11px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
+.workspace-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .workspace-filters .workspace-search { min-width: 190px; }
 .workspace-filters input, .workspace-filters select { height: 36px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 10px; background: var(--card); color: var(--ink); font-size: 13px; text-transform: none; letter-spacing: normal; }
 .workspace-filters .workspace-child-filter { min-width: 140px; margin: 0; padding: 0; border: 0; }
@@ -1780,3 +1785,22 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .inbox-empty h2 { margin: 0 0 10px; font-size: 17px; letter-spacing: -.01em; }
 .inbox-empty p { margin: 0 0 10px; color: var(--soft); font-size: 14px; line-height: 1.6; }
 .inbox-empty-hint { color: var(--faint); font-size: 13px; }
+
+.workspace-filters .workspace-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 0 1 260px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+.workspace-filters .workspace-search:focus-within { border-color: var(--accent); }
+.workspace-filters .workspace-search .icon { width: 15px; height: 15px; flex: 0 0 auto; color: var(--faint); }
+.workspace-filters .workspace-search input { min-width: 0; flex: 1; min-height: 32px; padding: 0; border: 0; background: none; font-size: 13px; }
+.workspace-filters .workspace-search input:focus { outline: none; }
+.workspace-filters select { min-height: 34px; padding: 6px 9px; font-size: 13px; }
+.workspace-filters label { display: inline-flex; align-items: center; margin: 0; }
+.workspace-filters #clear-workspace-filters { min-height: 32px; padding: 6px 9px; color: var(--soft); font-size: 12px; }

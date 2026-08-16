@@ -679,22 +679,28 @@ test("task history restores unsaved parent and child drafts", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
-test("global filters can hide and restore subtasks", async t => {
+test("the board filters as you type and clears back to everything", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
   assert.equal(await page.locator('[data-open-task="task-child"]').count(), 1);
-  await page.locator("#workspace-filter-toggle").click();
-  await page.getByLabel("Hide subtasks", { exact: true }).check();
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
-  await waitFor(() => state.taskQueries.some(query => query.includes("topLevel=true")));
-  await page.locator('[data-open-task="task-child"]').waitFor({ state: "detached" });
-  assert.match(page.url(), /children=hide/);
-  assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
+  assert.equal(await page.getByRole("button", { name: "Clear", exact: true }).count(), 0, "Clear only appears once something is filtered");
 
-  assert.equal(await page.getByLabel("Hide subtasks", { exact: true }).isChecked(), true);
+  await page.getByLabel("Search", { exact: true }).fill("Publish");
+  await waitFor(() => state.taskQueries.some(query => query.includes("q=Publish")));
+  await page.locator('[data-open-task="task-child"]').waitFor({ state: "detached" });
+  assert.match(page.url(), /q=Publish/);
+  assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
+  assert.equal(await page.getByLabel("Search", { exact: true }).inputValue(), "Publish");
+  assert.equal(await page.getByLabel("Search", { exact: true }).evaluate(element => element === document.activeElement), true,
+    "typing must not lose focus when the board refreshes");
+
+  await page.getByLabel("Priority", { exact: true }).selectOption("p1");
+  await waitFor(() => state.taskQueries.some(query => query.includes("priority=p1")));
+  assert.match(page.url(), /priority=p1/);
+
   await page.getByRole("button", { name: "Clear", exact: true }).click();
   await page.locator('[data-open-task="task-child"]').waitFor();
-  assert.doesNotMatch(page.url(), /children=hide/);
+  assert.doesNotMatch(page.url(), /q=|priority=/);
   assert.deepEqual(pageErrors, []);
 });
 

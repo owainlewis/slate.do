@@ -1,3 +1,14 @@
+function workspaceFilterHTML() {
+  const query = new URLSearchParams(globalThis.location?.search || "");
+  const agentOptions = state.agents.map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
+  return `<form class="workspace-filters" id="workspace-filters" role="search">
+    <label class="workspace-search"><span class="sr-only">Search</span>${icon("filter")}<input name="q" aria-label="Search" value="${escapeAttr(query.get("q") || "")}" placeholder="Search tasks…"></label>
+    <label><span class="sr-only">Agent</span><select name="assigneeAgentId" aria-label="Agent"><option value="">Any agent</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
+    <label><span class="sr-only">Priority</span><select name="priority" aria-label="Priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
+    ${workspaceFilterCount() ? `<button class="plain-btn" id="clear-workspace-filters" type="button">Clear</button>` : ""}
+  </form>`;
+}
+
 const ICON_PATHS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
@@ -181,7 +192,6 @@ const state = {
   workspaceLoading: false,
   workspaceRefreshOnDetailClose: false,
   agentRefreshOnDetailClose: "",
-  workspaceFiltersOpen: false,
   sidebarCollapsed: false,
   theme: "",
   routeError: null,
@@ -930,7 +940,6 @@ function resetAuthenticatedState() {
   state.workspaceLoading = false;
   state.workspaceRefreshOnDetailClose = false;
   state.agentRefreshOnDetailClose = "";
-  state.workspaceFiltersOpen = false;
   state.sidebarCollapsed = false;
   state.theme = "";
   state.routeError = null;
@@ -1586,12 +1595,7 @@ function appHTML() {
       </div>
     </header>
     ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskMutationError?.message)}
-    <div class="workspace-viewbar">
-      <div class="workspace-view-actions">
-        <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
-      </div>
-    </div>
-    ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
+    <div class="workspace-viewbar">${workspaceFilterHTML()}</div>
     <div class="workspace-content" id="workspace-task-panel">
       ${state.workspaceLoading ? `<div class="workspace-empty">Loading tasks…</div>` : workspaceFlowHTML(tasks)}
     </div>
@@ -1611,25 +1615,11 @@ function workspaceScopedTasks() {
 
 function workspaceFilterCount() {
   const query = new URLSearchParams(globalThis.location?.search || "");
-  const names = ["q", "priority", "assigneeAgentId", "status", "plannedFrom", "plannedTo"];
-  if (state.workspaceScope !== "list") names.push("children");
-  return names.filter(name => query.get(name)).length;
+  // status, planned dates and the subtask toggle still work as URL parameters;
+  // they just no longer earn a control on the board.
+  return ["q", "priority", "assigneeAgentId"].filter(name => query.get(name)).length;
 }
 
-function workspaceFilterHTML() {
-  const query = new URLSearchParams(globalThis.location?.search || "");
-  const agentOptions = state.agents.map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
-  return `<form class="workspace-filters" id="workspace-filters">
-    <label class="workspace-search"><span>Search</span><input name="q" value="${escapeAttr(query.get("q") || "")}" placeholder="Search tasks…"></label>
-    <label><span>Status</span><select name="status"><option value="">Any status</option>${FLOW_STATES.map(item => `<option value="${item.value}" ${query.get("status") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
-    <label><span>Priority</span><select name="priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
-    <label><span>Owner</span><select name="assigneeAgentId"><option value="">Anyone</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
-    ${state.workspaceScope === "list" ? "" : `<fieldset class="workspace-child-filter"><legend>Subtasks</legend><label class="workspace-checkbox"><input type="checkbox" name="children" value="hide" ${query.get("children") === "hide" ? "checked" : ""}><span>Hide subtasks</span></label></fieldset>`}
-    <label><span>From</span><input type="date" name="plannedFrom" value="${escapeAttr(query.get("plannedFrom") || "")}"></label>
-    <label><span>To</span><input type="date" name="plannedTo" value="${escapeAttr(query.get("plannedTo") || "")}"></label>
-    <button class="secondary" type="submit">Apply</button><button class="plain-btn" id="clear-workspace-filters" type="button">Clear</button>
-  </form>`;
-}
 
 function workspaceTaskOwner(task) {
   return task.assigneeAgentName || state.agents.find(agent => agent.id === task.assigneeAgentId)?.displayName || state.me?.displayName || "You";
@@ -2897,20 +2887,42 @@ function bindWorkspace() {
     if (event.target.closest("button, a")) return;
     row.querySelector("[data-open-task]")?.click();
   }));
-  document.querySelector("#workspace-filter-toggle")?.addEventListener("click", () => {
-    state.workspaceFiltersOpen = !state.workspaceFiltersOpen;
-    render();
-  });
-  document.querySelector("#workspace-filters")?.addEventListener("submit", event => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    const query = new URLSearchParams();
-    for (const name of ["q", "status", "priority", "assigneeAgentId", "children", "plannedFrom", "plannedTo"]) {
-      const value = String(data.get(name) || "").trim();
-      if (value) query.set(name, value);
+  const filters = document.querySelector("#workspace-filters");
+  if (filters) {
+    // Filters apply as you change them. Parameters without a control, like a
+    // status deep link, survive because the current query is the starting point.
+    const applyFilters = () => {
+      const data = new FormData(filters);
+      const query = new URLSearchParams(location.search);
+      for (const name of ["q", "priority", "assigneeAgentId"]) {
+        const value = String(data.get(name) || "").trim();
+        if (value) query.set(name, value);
+        else query.delete(name);
+      }
+      return navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
+    };
+    filters.addEventListener("submit", event => { event.preventDefault(); applyFilters(); });
+    filters.querySelectorAll("select").forEach(element => element.addEventListener("change", applyFilters));
+    const search = filters.querySelector('input[name="q"]');
+    if (search) {
+      let searchTimer;
+      search.addEventListener("input", () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(async () => {
+          const focused = document.activeElement === search;
+          const caret = search.selectionStart;
+          // The render replaces the input, so focus and caret are restored only
+          // after navigation settles.
+          await applyFilters();
+          if (!focused) return;
+          const restored = document.querySelector('#workspace-filters input[name="q"]');
+          if (!restored) return;
+          restored.focus();
+          restored.setSelectionRange(caret, caret);
+        }, 250);
+      });
     }
-    navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
-  });
+  }
   document.querySelector("#clear-workspace-filters")?.addEventListener("click", () => {
     navigate(location.pathname);
   });
