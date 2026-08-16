@@ -100,7 +100,8 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const index = state.boards.findIndex(item => item.id === boardID);
       if (index < 0) return json(response, { error: "board not found" }, 404);
       if (!state.lists.some(list => list.isInbox && list.boardId !== boardID)) {
-        return json(response, { code: "inbox_required", error: "the account must keep an Inbox list" }, 409);
+        // Production maps ErrInvalidData to 400 with no code, so match it exactly.
+        return json(response, { error: "invalid data: the account must keep an Inbox list" }, 400);
       }
       const deletedListIDs = new Set(state.lists.filter(list => list.boardId === boardID).map(list => list.id));
       state.boards.splice(index, 1);
