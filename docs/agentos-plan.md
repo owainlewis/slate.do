@@ -125,6 +125,11 @@ Pure deletion and renaming. No schema. Do this first because everything after is
 | 0.5 | Rebuild task detail as Details, Description, Attachments placeholder, Subtasks. Details holds Agent, Assignee, Workspace, Schedule, Requires approval | Description is full-width and inline-editable. Details shows five fields |
 | 0.6 | Nav becomes Board, Inbox, Runs, Agents, Runners, Settings, with a runner status indicator in the sidebar footer | Six items. Runs and Runners can be empty states |
 
+Two decisions taken while doing this work, recorded because they are not obvious from the task list:
+
+- **Boards leave the primary sidebar.** Lists are what people navigate by, so they became direct links carrying the scope in the URL. Board rename, delete and create moved to the settings sidebar rather than being deleted, because a board is still the storage parent of a list until lists become account-wide.
+- **Per-list completed history was removed, not ported.** Its only trigger lived inside the lists grid. The Done column needs real paging, which belongs with runs in M2 rather than as a control with nowhere to live.
+
 ### M1 - Agents become config
 
 | # | Task | Done when |
