@@ -184,6 +184,7 @@ const state = {
   workspaceListDialogBoardID: "",
   workspaceListDialogError: "",
   inboxMessages: [],
+  inboxNextCursor: "",
   inboxLoading: false,
   workspaceTasks: [],
   workspaceScope: "all",
@@ -788,14 +789,18 @@ function workspaceQuery(route, cursor = "") {
   return query;
 }
 
-async function loadInbox(expectedRouteVersion) {
+async function loadInbox(expectedRouteVersion, cursor = "") {
   const sessionVersion = authVersion;
   const userID = state.me?.id;
   state.inboxLoading = true;
   try {
-    const data = await api.get("/api/v1/inbox");
+    const data = await api.get(`/api/v1/inbox${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`);
     if (!sessionIsCurrent(sessionVersion, userID) || expectedRouteVersion !== routeVersion) return null;
-    state.inboxMessages = data.messages || [];
+    const known = new Set(state.inboxMessages.map(message => message.id));
+    state.inboxMessages = cursor
+      ? [...state.inboxMessages, ...(data.messages || []).filter(message => !known.has(message.id))]
+      : data.messages || [];
+    state.inboxNextCursor = data.nextCursor || "";
   } catch (err) {
     if (!sessionIsCurrent(sessionVersion, userID) || expectedRouteVersion !== routeVersion) return null;
     state.inboxLoading = false;
@@ -1302,6 +1307,13 @@ function render() {
     root.innerHTML = inboxHTML();
     bindAppShell();
     bindWorkspaceListControl();
+    document.querySelector("#inbox-load-more")?.addEventListener("click", async () => {
+      const cursor = state.inboxNextCursor;
+      if (!cursor || state.inboxLoading) return;
+      render();
+      if (await loadInbox(routeVersion, cursor) === null) return;
+      render();
+    });
     document.querySelectorAll("[data-inbox-task]").forEach(element => element.addEventListener("click", event => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
@@ -1799,7 +1811,8 @@ function inboxHTML() {
   const body = state.inboxLoading
     ? `<div class="workspace-empty">Loading messages…</div>`
     : messages.length
-    ? `<ol class="inbox-list">${messages.map(inboxMessageHTML).join("")}</ol>`
+    ? `<ol class="inbox-list">${messages.map(inboxMessageHTML).join("")}</ol>
+      ${state.inboxNextCursor ? `<button class="secondary workspace-load-more" id="inbox-load-more" ${state.inboxLoading ? "disabled" : ""}>${state.inboxLoading ? "Loading…" : "Load older messages"}</button>` : ""}`
     : `<div class="inbox-empty">
         <span class="inbox-empty-mark">${icon("inboxTray")}</span>
         <h2>No messages yet</h2>

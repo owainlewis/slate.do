@@ -146,7 +146,11 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         state.failNextInbox = false;
         return json(response, { error: "Could not load your inbox" }, 500);
       }
-      return json(response, { messages: state.inboxMessages });
+      const cursor = url.searchParams.get("cursor") || "";
+      const start = cursor ? state.inboxMessages.findIndex(message => message.id === cursor) + 1 : 0;
+      const page = state.inboxMessages.slice(start, start + 2);
+      const nextCursor = start + 2 < state.inboxMessages.length ? page[page.length - 1].id : "";
+      return json(response, { messages: page, nextCursor });
     }
     if (url.pathname === "/api/v1/lists" && request.method === "GET") {
       if (state.failNextLists) {
@@ -526,10 +530,37 @@ test("the inbox is agent messages, not another board", async t => {
   assert.equal(await page.getByText("Research agent", { exact: true }).first().isVisible(), true);
   assert.equal(await page.getByRole("heading", { name: "No messages yet", exact: true }).count(), 0);
 
+  assert.equal(await page.getByRole("button", { name: "Load older messages", exact: true }).count(), 0, "one page needs no pagination");
+
   await page.locator('[data-inbox-task="task-parent"]').click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/tasks?task=task-parent");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
+  assert.deepEqual(pageErrors, []);
+});
+
+test("the inbox pages back through older messages", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  state.inboxMessages = ["one", "two", "three"].map((word, index) => ({
+    id: `message-${word}`,
+    taskId: "task-parent",
+    taskTitle: "Publish task-first agents video",
+    kind: "comment",
+    body: `Message ${word}`,
+    authorId: "agent-research",
+    authorName: "Research agent",
+    createdAt: `2026-08-1${index}T09:00:00Z`,
+  }));
+
+  await page.goto(`${origin}/app/inbox`);
+  await page.getByText("Message one", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Message three", { exact: true }).count(), 0, "the third message is on the next page");
+
+  await page.getByRole("button", { name: "Load older messages", exact: true }).click();
+  await page.getByText("Message three", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Message one", { exact: true }).count(), 1, "older pages append rather than replace");
+  assert.equal(await page.getByRole("button", { name: "Load older messages", exact: true }).count(), 0, "the last page offers no more");
   assert.deepEqual(pageErrors, []);
 });
 

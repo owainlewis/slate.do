@@ -1691,22 +1691,34 @@ func (s *Store) GetTaskForAgent(ctx context.Context, userID string, agentID stri
 	return s.getTask(ctx, userID, agentID, id)
 }
 
-const inboxLimit = 100
+const inboxPageSize = 50
 
-// ListInbox returns the newest agent-authored entries across an account.
-func (s *Store) ListInbox(ctx context.Context, userID string) ([]InboxMessage, error) {
+// ListInbox returns a page of the newest agent-authored entries across an
+// account. The cursor is the created_at and id of the last message on the
+// previous page, which is the order the index is built for.
+func (s *Store) ListInbox(ctx context.Context, userID string, cursor string) ([]InboxMessage, string, error) {
+	args := []any{userID, inboxPageSize + 1}
+	cursorSQL := ""
+	if cursor != "" {
+		createdAt, id, err := decodeInboxCursor(cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		args = append(args, createdAt, id)
+		cursorSQL = " AND (e.created_at, e.id) < ($3, $4)"
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT e.id::text, e.task_id::text, t.title, e.kind, e.body,
 			e.author_id::text, e.author_name, COALESCE(e.run_id::text, ''), e.created_at
 		FROM card_entries e
 		JOIN tasks t ON t.id = e.task_id
 		JOIN boards b ON b.id = t.board_id
-		WHERE b.user_id = $1 AND e.author_kind = 'agent'
+		WHERE b.user_id = $1 AND e.author_kind = 'agent'`+cursorSQL+`
 		ORDER BY e.created_at DESC, e.id DESC
 		LIMIT $2
-	`, userID, inboxLimit)
+	`, args...)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer rows.Close()
 	messages := []InboxMessage{}
@@ -1714,14 +1726,40 @@ func (s *Store) ListInbox(ctx context.Context, userID string) ([]InboxMessage, e
 		var message InboxMessage
 		if err := rows.Scan(&message.ID, &message.TaskID, &message.TaskTitle, &message.Kind, &message.Body,
 			&message.AuthorID, &message.AuthorName, &message.RunID, &message.CreatedAt); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		messages = append(messages, message)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return messages, nil
+	next := ""
+	if len(messages) > inboxPageSize {
+		last := messages[inboxPageSize-1]
+		messages = messages[:inboxPageSize]
+		next = encodeInboxCursor(last.CreatedAt, last.ID)
+	}
+	return messages, next, nil
+}
+
+func encodeInboxCursor(createdAt time.Time, id string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(createdAt.UTC().Format(time.RFC3339Nano) + "|" + id))
+}
+
+func decodeInboxCursor(cursor string) (time.Time, string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("%w: inbox cursor is not valid", ErrInvalidData)
+	}
+	parts := strings.SplitN(string(raw), "|", 2)
+	if len(parts) != 2 || !validUUID(parts[1]) {
+		return time.Time{}, "", fmt.Errorf("%w: inbox cursor is not valid", ErrInvalidData)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("%w: inbox cursor is not valid", ErrInvalidData)
+	}
+	return createdAt, parts[1], nil
 }
 
 func (s *Store) ListTaskEntries(ctx context.Context, userID string, agentID string, taskID string) ([]TaskEntry, error) {

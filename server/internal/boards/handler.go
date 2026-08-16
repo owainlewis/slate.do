@@ -244,11 +244,11 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request, user auth.User
 }
 
 func (h *Handler) ListInbox(w http.ResponseWriter, r *http.Request, user auth.User) {
-	messages, err := h.store.ListInbox(r.Context(), user.ID)
+	messages, nextCursor, err := h.store.ListInbox(r.Context(), user.ID, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if handleStoreError(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"messages": messages})
+	writeJSON(w, http.StatusOK, map[string]any{"messages": messages, "nextCursor": nextCursor})
 }
 
 func (h *Handler) ListTaskEntries(w http.ResponseWriter, r *http.Request, user auth.User) {

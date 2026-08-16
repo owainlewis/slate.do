@@ -69,9 +69,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(a.auth.DeleteAgent))
 	mux.HandleFunc("GET /api/v1/boards", a.accountRead(a.boards.ListBoards))
 	mux.HandleFunc("GET /api/v1/lists", a.accountRead(a.boards.ListAllBuckets))
-	// The inbox is a person's view of what agents have said, so agent credentials
-	// do not reach it.
-	mux.HandleFunc("GET /api/v1/inbox", a.accountRead(a.boards.ListInbox))
+	// The inbox is a person's view of what every agent has said, so an agent
+	// credential must not reach it: it would read other agents' messages.
+	mux.HandleFunc("GET /api/v1/inbox", a.person(a.boards.ListInbox))
 	mux.HandleFunc("POST /api/v1/boards", a.accountManage(a.boards.CreateBoard))
 	mux.HandleFunc("GET /api/v1/boards/{id}", a.accountRead(a.boards.GetBoard))
 	mux.HandleFunc("PATCH /api/v1/boards/{id}", a.accountManage(a.boards.UpdateBoard))
@@ -362,8 +362,24 @@ func (a *App) user(next func(http.ResponseWriter, *http.Request, auth.User)) htt
 	}
 }
 
+// accountRead accepts agent credentials, because an agent needs the same
+// account context a person has to work on its own tasks. Handlers behind it
+// must narrow their own results for agents, as ListTasks does.
 func (a *App) accountRead(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {
 	return a.user(next)
+}
+
+// person accepts a browser session or a personal API token and rejects agent
+// credentials. Use it for account-wide surfaces that belong to the human, where
+// there is no per-agent narrowing to apply.
+func (a *App) person(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {
+	return a.user(func(w http.ResponseWriter, r *http.Request, user auth.User) {
+		if user.AgentID != "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "agent credentials cannot read account-wide data"})
+			return
+		}
+		next(w, r, user)
+	})
 }
 
 func (a *App) accountManage(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {
