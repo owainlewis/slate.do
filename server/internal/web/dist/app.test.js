@@ -130,6 +130,23 @@ test("password reset forms collect email and a secure replacement password", () 
   vm.runInContext(`state.resetToken = ""`, app);
 });
 
+test("the last board explains why it cannot be deleted", () => {
+  vm.runInContext(`
+    state.boards = [{ id: "only", name: "Work" }];
+    state.workspaceLists = [{ id: "inbox", name: "Inbox", boardId: "only", isInbox: true }];
+  `, app);
+  assert.equal(app.boardCanBeDeleted("only"), false);
+  assert.equal(app.boardDeleteBlockedReason("only"), "Your last board cannot be deleted: it holds your Inbox");
+
+  vm.runInContext(`state.boards = [{ id: "only", name: "Work" }, { id: "other", name: "Other" }];`, app);
+  assert.equal(app.boardDeleteBlockedReason("only"), "This board holds your only Inbox, so it cannot be deleted");
+
+  vm.runInContext(`state.workspaceLists = [{ id: "inbox", name: "Inbox", boardId: "only", isInbox: true }, { id: "inbox-two", name: "Inbox", boardId: "other", isInbox: true }];`, app);
+  assert.equal(app.boardCanBeDeleted("only"), true);
+  assert.equal(app.boardDeleteBlockedReason("only"), "", "a deletable board needs no reason");
+  vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
+});
+
 test("sidebar makes work, lists, and agents the primary control plane", () => {
   vm.runInContext(`
     state.boards = [{ id: "content", name: "Content" }];

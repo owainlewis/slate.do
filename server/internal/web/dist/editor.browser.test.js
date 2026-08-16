@@ -100,7 +100,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const index = state.boards.findIndex(item => item.id === boardID);
       if (index < 0) return json(response, { error: "board not found" }, 404);
       if (!state.lists.some(list => list.isInbox && list.boardId !== boardID)) {
-        return json(response, { code: "inbox_required", error: "Move or create another Inbox before deleting this board" }, 409);
+        return json(response, { code: "inbox_required", error: "the account must keep an Inbox list" }, 409);
       }
       const deletedListIDs = new Set(state.lists.filter(list => list.boardId === boardID).map(list => list.id));
       state.boards.splice(index, 1);
@@ -1404,7 +1404,7 @@ test("board deletion uses a recoverable designed dialog in settings", async t =>
   await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   const protectedDelete = page.getByRole("button", { name: "Delete Workspace", exact: true });
   assert.equal(await protectedDelete.isDisabled(), true);
-  assert.equal(await protectedDelete.getAttribute("title"), "Move or create another Inbox before deleting this board");
+  assert.equal(await protectedDelete.getAttribute("title"), "This board holds your only Inbox, so it cannot be deleted");
   state.lists.push({ id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Other Inbox", goal: "", isInbox: true, openCount: 0 });
   await page.reload();
   await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
