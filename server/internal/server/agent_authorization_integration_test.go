@@ -310,7 +310,7 @@ func TestManagedAgentRunHTTPContract(t *testing.T) {
 		t.Fatalf("managed status = %d %s", status.Code, status.Body.String())
 	}
 	output := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries", `{"kind":"output","body":"done"}`, map[string]string{"Idempotency-Key": "managed-output", "X-Slate-Run-ID": runID})
-	if output.Code != http.StatusCreated || !strings.Contains(output.Body.String(), `"cardStatus":"needs_review"`) {
+	if output.Code != http.StatusCreated || !strings.Contains(output.Body.String(), `"taskStatus":"needs_review"`) {
 		t.Fatalf("managed output = %d %s", output.Code, output.Body.String())
 	}
 	entries := agentRequest(t, app, token, http.MethodGet, "/api/v1/tasks/"+task.ID+"/entries?runId="+runID, "")

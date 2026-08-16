@@ -92,13 +92,15 @@ func TestStoreCapacityTimeoutUsesStableServiceUnavailableResponse(t *testing.T) 
 	}
 }
 
-func TestConversationReadJSONOmitsMutationOnlyCardState(t *testing.T) {
+func TestConversationReadJSONOmitsMutationOnlyTaskState(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writeJSON(recorder, http.StatusOK, map[string]any{
-		"entries": []TaskEntry{{ID: "entry-one", TaskID: "card-one", Kind: "comment", Body: "Hello"}},
+		"entries": []TaskEntry{{ID: "entry-one", TaskID: "task-one", Kind: "comment", Body: "Hello"}},
 	})
-	if strings.Contains(recorder.Body.String(), "cardStatus") || strings.Contains(recorder.Body.String(), "cardDone") || strings.Contains(recorder.Body.String(), "cardReviewReason") {
-		t.Fatalf("conversation response leaked mutation-only card state: %s", recorder.Body.String())
+	for _, leaked := range []string{"taskStatus", "taskReviewReason", "cardStatus", "cardDone", "cardReviewReason"} {
+		if strings.Contains(recorder.Body.String(), leaked) {
+			t.Fatalf("conversation response leaked mutation-only task state %q: %s", leaked, recorder.Body.String())
+		}
 	}
 }
 
