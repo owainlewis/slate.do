@@ -415,9 +415,11 @@ Register, take exactly one job, deregister, exit. That is a Cloud Run job, a Fly
 
 ## 12. State machines
 
-**Task:** `draft` -> `queued` -> `running` -> `review` -> `done`, plus `blocked` and `cancelled`.
+**Task:** `new` -> `queued` -> `working` -> `needs_review` -> `done`, plus `blocked` and `cancelled`.
 
-Board columns are the statuses themselves: Todo, Ready, In Progress, Review, Done. `blocked` is shown on the task rather than as a sixth column, so a blocked task stays where you left it.
+Assigning an agent promotes `new` to `queued` on save: a task with an owner is by definition waiting to be picked up, so there is no separate act of queueing it. Clearing the agent leaves the task where it is.
+
+Board columns group the statuses: Todo (`new`, `queued`), In Progress, Review, Done. Ready is not a column of its own, because assigning an agent promotes a task from `new` to `queued` automatically and the agent shown on the card is what tells you it is waiting to be picked up. Four columns also give each one room to read. Dropping on a column sets its primary status, and the store promotes `new` back to `queued` when the task has an agent, so the card stays where you put it.
 
 **Run:** `leased` -> `running` -> one of `succeeded`, `failed`, `parked`, `expired`, `cancelled`.
 
@@ -425,7 +427,7 @@ Board columns are the statuses themselves: Todo, Ready, In Progress, Review, Don
 | --- | --- | --- |
 | Queued task matches a runner | created, `leased` | `running` |
 | Runner spawns the process | `running` | `running` |
-| `slate task done` | `succeeded` | `review`, or `done` when approval is not required |
+| `slate task done` | `succeeded` | `needs_review`, or `done` when `requires_approval` is false |
 | `slate task block` | `failed` | `blocked` |
 | `inbox ask` exceeds its wait | `parked` | `blocked`, awaiting reply |
 | A person replies | new run, `resume_from_run_id` set | `running` |
@@ -491,7 +493,7 @@ Six items. Adding a seventh means deleting one.
 
 | | |
 | --- | --- |
-| **Board** | Columns are status: Todo, Ready, In Progress, Review, Done. Lists are a scope filter in the sidebar. |
+| **Board** | Columns are status: Todo, In Progress, Review, Done. Lists are a scope filter in the sidebar. |
 | **Inbox** | Unanswered questions and notices, account-wide, newest first. The unread count is the one number in the nav. |
 | **Runs** | Run history and the live session view. |
 | **Agents** | Config. Instructions, backend, workspace, overrides. |
@@ -502,7 +504,7 @@ A runner status indicator is pinned in the sidebar footer. A green dot and "Runn
 
 ### Columns are not configurable
 
-The five columns map to the statuses that drive dispatch, so they are fixed. Assigning an agent moves a task to Ready, a runner claiming it moves it to In Progress, and an agent posting an output moves it to Review. If a person could invent columns, Slate would need a per-board mapping saying which column means "an agent may start" and which means "hand this back", which is exactly the second config surface this design avoids.
+The four columns map to the statuses that drive dispatch, so they are fixed. Assigning an agent promotes a task to `queued`, a runner claiming it moves it to `working`, and an agent posting an output moves it to `needs_review`, or straight to `done` when the task does not require approval. If a person could invent columns, Slate would need a per-board mapping saying which column means "an agent may start" and which means "hand this back", which is exactly the second config surface this design avoids.
 
 Renaming the labels without letting people add columns is a setting that changes nothing, so that is not offered either.
 

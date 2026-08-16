@@ -577,7 +577,7 @@ test("a failed inbox load reports itself without leaving a blank surface", async
 test("the board is grouped by status and dragging changes status", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
-  for (const status of ["Todo", "Ready", "In Progress", "Review", "Done"]) {
+  for (const status of ["Todo", "In Progress", "Review", "Done"]) {
     await page.locator(".workspace-flow-column").getByText(status, { exact: true }).waitFor();
   }
   assert.equal(await page.locator(".workspace-flow.grouped-by-status").count(), 1);
@@ -1524,11 +1524,11 @@ test("the board keeps its status columns in one horizontal scroll lane", async t
   const scroller = page.locator("#workspace-task-panel");
   const flow = page.locator(".workspace-flow");
   const columns = flow.locator(".workspace-flow-column");
-  assert.equal(await columns.count(), 5);
+  assert.equal(await columns.count(), 4);
   const [first, second, last] = await Promise.all([
     columns.nth(0).boundingBox(),
     columns.nth(1).boundingBox(),
-    columns.nth(4).boundingBox(),
+    columns.nth(3).boundingBox(),
   ]);
   const dimensions = await scroller.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
 
@@ -1591,7 +1591,7 @@ test("assigning an existing New task makes it Ready for agent work", async t => 
 
   const assigned = state.tasks.find(task => task.id === "task-inbox");
   assert.equal(assigned.status, "queued");
-  const readyCard = page.locator('[data-flow-status="queued"]').getByText("Write the doc my boss asked for", { exact: true });
+  const readyCard = page.locator('[data-flow-status="new"]').getByText("Write the doc my boss asked for", { exact: true });
   await readyCard.waitFor();
   assert.equal(await readyCard.isVisible(), true);
   assert.deepEqual(pageErrors, []);
@@ -2857,7 +2857,7 @@ test("a background parent move refreshes counts without resetting agent settings
 
   await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
-  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="queued"]'));
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="new"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
   await page.locator("#agents-nav").click();
   await page.locator('[data-agent-link="agent-research"]').click();
@@ -2890,7 +2890,7 @@ test("a background parent move completes agent settings whose list load it super
 
   await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
-  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="queued"]'));
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="new"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
   await page.locator("#agents-nav").click();
   await page.locator('[data-agent-link="agent-research"]').click();
