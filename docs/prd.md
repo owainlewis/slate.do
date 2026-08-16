@@ -1,6 +1,9 @@
 # Slate PRD
 
-Status: Card-first control plane.
+> **Superseded.** This describes the card-first product that came before the agent control plane pivot.
+> Kept for history. The current target is `docs/agentos-architecture.md`; the plan is `docs/agentos-plan.md`.
+
+Status: Card-first control plane. Superseded by the agent control plane.
 
 ## Summary
 
