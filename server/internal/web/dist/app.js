@@ -135,7 +135,6 @@ const state = {
   themeStatus: "",
   authNotice: "",
   resetToken: "",
-  goalErrors: {},
   newToken: "",
   newTokenOwnerID: "",
   tokens: [],
@@ -165,8 +164,6 @@ const state = {
   agentLifecyclePending: "",
   agentLifecycleConfirm: "",
   agentCredentialResult: null,
-  flowListId: "",
-  priorityFilter: "",
   workspaceLists: [],
   workspaceListError: "",
   workspaceListPending: false,
@@ -187,7 +184,6 @@ const state = {
   workspaceFiltersOpen: false,
   sidebarCollapsed: false,
   theme: "",
-  moveNotice: null,
   routeError: null,
 };
 
@@ -240,10 +236,6 @@ function listPath(id) {
 
 function settingsPath(page = "profile") {
   return `${SETTINGS_PATH}/${page}`;
-}
-
-function agentsPath() {
-  return AGENTS_PATH;
 }
 
 function agentPath(id) {
@@ -894,7 +886,6 @@ function resetAuthenticatedState() {
   state.settingsPending = "";
   state.themeStatus = "";
   state.notice = "";
-  state.goalErrors = {};
   state.newToken = "";
   state.newTokenOwnerID = "";
   state.tokens = [];
@@ -924,8 +915,6 @@ function resetAuthenticatedState() {
   state.agentLifecyclePending = "";
   state.agentLifecycleConfirm = "";
   state.agentCredentialResult = null;
-  state.flowListId = "";
-  state.priorityFilter = "";
   state.workspaceLists = [];
   state.workspaceListError = "";
   state.workspaceListPending = false;
@@ -1013,10 +1002,8 @@ async function loadBoard(id, sessionVersion = authVersion, expectedRouteVersion)
   const changedBoard = previousBoardID && previousBoardID !== board.id;
   state.board = board;
   synchronizeWorkspaceListsForBoard(board);
-  if (!(board.buckets || []).some(list => list.id === state.flowListId)) state.flowListId = "";
   // A filter carried onto another board can render every column empty, which
   // reads as a broken board rather than an active filter.
-  if (changedBoard) state.priorityFilter = "";
   state.selectedTask = state.selectedTask ? findTask(state.selectedTask.id) : null;
   return true;
 }
@@ -1599,7 +1586,6 @@ function appHTML() {
       </div>
     </header>
     ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskMutationError?.message)}
-    ${statusNoticeHTML(state.moveNotice)}
     <div class="workspace-viewbar">
       <div class="workspace-view-actions">
         <button class="plain-btn workspace-filter-toggle" id="workspace-filter-toggle">${icon("filter")}<span>Filter</span>${workspaceFilterCount() ? `<b>${workspaceFilterCount()}</b>` : ""}</button>
@@ -2073,17 +2059,6 @@ function taskAssigneeHTML(task, showName = false) {
   return `<span class="task-assignee">${avatarHTML(agent, { small: true })}${showName ? `<span>${escapeHTML(agent.displayName)}</span>` : ""}</span>`;
 }
 
-function taskHTML(task) {
-  return `
-    <li class="task action status-${task.status || "new"}" draggable="${task.parentTaskId ? "false" : "true"}" data-task="${task.id}">
-      <button class="task-body task-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
-        <div class="task-title">${escapeHTML(task.title)}${taskPriorityBadgeHTML(task)}</div>
-        ${task.scheduledDate ? `<span class="task-date">${formatTaskDate(task.scheduledDate)}</span>` : ""}
-      </button>
-      ${taskAssigneeHTML(task)}
-    </li>`;
-}
-
 function taskPriorityBadgeHTML(task) {
   if (!task.priority) return "";
   return `<span class="priority-badge priority-${task.priority}">${escapeHTML(priorityLabel(task.priority))}</span>`;
@@ -2096,22 +2071,6 @@ function priorityLabel(priority) {
 function priorityOptionsHTML(selected) {
   const options = [{ value: "", label: "None" }].concat(PRIORITIES);
   return options.map(p => `<option value="${escapeAttr(p.value)}" ${p.value === (selected || "") ? "selected" : ""}>${escapeHTML(p.label)}</option>`).join("");
-}
-
-function calendarDayHTML(day, tasks) {
-  const key = dateKey(day);
-  const items = tasks.filter(item => item.task.scheduledDate === key);
-  const today = key === dateKey(new Date());
-  return `
-    <section class="calendar-day ${today ? "today" : ""}" data-calendar-date="${key}">
-      <header>
-        <span>${day.toLocaleDateString(undefined, { weekday: "long" })}</span>
-        <b>${day.getDate()}</b>
-      </header>
-      <ul class="calendar-tasks" data-calendar-date="${key}">
-        ${items.length ? items.map(calendarTaskHTML).join("") : `<li class="calendar-empty">Drag items here</li>`}
-      </ul>
-    </section>`;
 }
 
 function calendarTaskHTML(item) {
@@ -2145,11 +2104,6 @@ function statusLabel(status) {
 
 function statusErrorHTML(error) {
   return error ? `<p class="status-error" role="alert">${escapeHTML(error)}</p>` : "";
-}
-
-function statusNoticeHTML(notice) {
-  if (!notice) return "";
-  return `<div class="status-notice" role="status"><span>${escapeHTML(notice.message)}</span><button id="view-moved-item" type="button">View</button><button id="dismiss-notice" type="button" aria-label="Dismiss">${icon("x")}</button></div>`;
 }
 
 function agentsHTML() {
@@ -3781,8 +3735,8 @@ function bindWorkspaceDetail(options = {}) {
       state.cardEntryAttemptKey = "";
       state.cardEntryPending = false;
       if (entry.kind === "output") {
-        const status = entry.cardStatus || "needs_review";
-        const reviewReason = entry.cardReviewReason || (status === "needs_review" ? "output" : "");
+        const status = entry.taskStatus || "needs_review";
+        const reviewReason = entry.taskReviewReason || (status === "needs_review" ? "output" : "");
         state.selectedTask = { ...state.selectedTask, status, reviewReason };
         state.workspaceTasks = state.workspaceTasks.map(item => item.id === taskID ? { ...item, status, reviewReason } : item);
         const currentRoute = parseRoute(location.pathname);
@@ -5660,29 +5614,6 @@ async function runMutation(request, refresh) {
   return true;
 }
 
-function reorderedTaskIDs(ids, movingID, targetID, afterTarget = false) {
-  if (!ids.includes(movingID) || targetID === movingID) return [...ids];
-  const ordered = ids.filter(id => id !== movingID);
-  if (!targetID) return [...ordered, movingID];
-  let targetIndex = ordered.indexOf(targetID);
-  if (targetIndex < 0) return [...ids];
-  if (afterTarget) targetIndex += 1;
-  ordered.splice(targetIndex, 0, movingID);
-  return ordered;
-}
-
-function isDraggedTaskChild(taskID) {
-  return drag?.type === "task" && findTask(taskID)?.parentTaskId === drag.id;
-}
-
-function bucketDropIndexForRects(rects, x) {
-  for (let i = 0; i < rects.length; i++) {
-    const rect = rects[i];
-    if (x < rect.left + rect.width / 2) return i;
-  }
-  return rects.length;
-}
-
 function clearDropMarks() {
   document.querySelectorAll(".drop-before, .drop-after, .drop-into, .drop-before-bucket, .drop-after-bucket").forEach(el => {
     el.classList.remove("drop-before", "drop-after", "drop-into", "drop-before-bucket", "drop-after-bucket");
@@ -5887,12 +5818,6 @@ function findTask(id) {
   return null;
 }
 
-function addDays(date, days) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
 function dateKey(date) {
   const pad = value => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -5901,12 +5826,6 @@ function dateKey(date) {
 function parseDateKey(value) {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(year, month - 1, day, 12);
-}
-
-function ordinal(value) {
-  const remainder = value % 100;
-  if (remainder >= 11 && remainder <= 13) return `${value}th`;
-  return `${value}${{ 1: "st", 2: "nd", 3: "rd" }[value % 10] || "th"}`;
 }
 
 function formatTaskDate(value) {

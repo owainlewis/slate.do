@@ -38,8 +38,8 @@ func TestChildAndConversationRoutesRejectMalformedCardIDsBeforeStore(t *testing.
 		call func(http.ResponseWriter, *http.Request, auth.User)
 	}{
 		{name: "create child", call: handler.CreateSubtask},
-		{name: "list conversation", call: handler.ListCardEntries},
-		{name: "create conversation entry", call: handler.CreateCardEntry},
+		{name: "list conversation", call: handler.ListTaskEntries},
+		{name: "create conversation entry", call: handler.CreateTaskEntry},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -74,10 +74,10 @@ func TestStoreRejectsMalformedChildAndConversationCardIDs(t *testing.T) {
 	if _, err := store.CreateSubtask(context.Background(), "", "not-a-uuid", CreateTaskInput{}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("create child error = %v", err)
 	}
-	if _, err := store.ListCardEntries(context.Background(), "", "", "not-a-uuid"); !errors.Is(err, ErrInvalidData) {
+	if _, err := store.ListTaskEntries(context.Background(), "", "", "not-a-uuid"); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("list conversation error = %v", err)
 	}
-	if _, err := store.CreateCardEntry(context.Background(), "", "", "", "not-a-uuid", CreateCardEntryInput{}); !errors.Is(err, ErrInvalidData) {
+	if _, err := store.CreateTaskEntry(context.Background(), "", "", "", "not-a-uuid", CreateTaskEntryInput{}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("create conversation entry error = %v", err)
 	}
 }
@@ -95,7 +95,7 @@ func TestStoreCapacityTimeoutUsesStableServiceUnavailableResponse(t *testing.T) 
 func TestConversationReadJSONOmitsMutationOnlyCardState(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writeJSON(recorder, http.StatusOK, map[string]any{
-		"entries": []CardEntry{{ID: "entry-one", TaskID: "card-one", Kind: "comment", Body: "Hello"}},
+		"entries": []TaskEntry{{ID: "entry-one", TaskID: "card-one", Kind: "comment", Body: "Hello"}},
 	})
 	if strings.Contains(recorder.Body.String(), "cardStatus") || strings.Contains(recorder.Body.String(), "cardDone") || strings.Contains(recorder.Body.String(), "cardReviewReason") {
 		t.Fatalf("conversation response leaked mutation-only card state: %s", recorder.Body.String())

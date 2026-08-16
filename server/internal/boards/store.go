@@ -1724,20 +1724,20 @@ func (s *Store) ListInbox(ctx context.Context, userID string) ([]InboxMessage, e
 	return messages, nil
 }
 
-func (s *Store) ListCardEntries(ctx context.Context, userID string, agentID string, taskID string) ([]CardEntry, error) {
-	return s.listCardEntries(ctx, userID, agentID, taskID, "")
+func (s *Store) ListTaskEntries(ctx context.Context, userID string, agentID string, taskID string) ([]TaskEntry, error) {
+	return s.listTaskEntries(ctx, userID, agentID, taskID, "")
 }
 
-func (s *Store) ListCardEntriesForRun(ctx context.Context, userID string, agentID string, taskID string, runID string) ([]CardEntry, error) {
+func (s *Store) ListTaskEntriesForRun(ctx context.Context, userID string, agentID string, taskID string, runID string) ([]TaskEntry, error) {
 	if !validUUID(runID) {
 		return nil, fmt.Errorf("%w: run ID must be a valid ID", ErrInvalidData)
 	}
-	return s.listCardEntries(ctx, userID, agentID, taskID, runID)
+	return s.listTaskEntries(ctx, userID, agentID, taskID, runID)
 }
 
-func (s *Store) listCardEntries(ctx context.Context, userID string, agentID string, taskID string, runID string) ([]CardEntry, error) {
+func (s *Store) listTaskEntries(ctx context.Context, userID string, agentID string, taskID string, runID string) ([]TaskEntry, error) {
 	if !validUUID(taskID) {
-		return nil, fmt.Errorf("%w: card ID must be a valid ID", ErrInvalidData)
+		return nil, fmt.Errorf("%w: task ID must be a valid ID", ErrInvalidData)
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -1780,9 +1780,9 @@ func (s *Store) listCardEntries(ctx context.Context, userID string, agentID stri
 		return nil, err
 	}
 	defer rows.Close()
-	entries := []CardEntry{}
+	entries := []TaskEntry{}
 	for rows.Next() {
-		var entry CardEntry
+		var entry TaskEntry
 		if err := rows.Scan(&entry.ID, &entry.TaskID, &entry.Kind, &entry.Body,
 			&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.RunID, &entry.CreatedAt); err != nil {
 			return nil, err
@@ -1799,31 +1799,31 @@ func (s *Store) listCardEntries(ctx context.Context, userID string, agentID stri
 	return entries, nil
 }
 
-func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID string, authorName string, taskID string, input CreateCardEntryInput) (CardEntry, error) {
+func (s *Store) CreateTaskEntry(ctx context.Context, userID string, agentID string, authorName string, taskID string, input CreateTaskEntryInput) (TaskEntry, error) {
 	if !validUUID(taskID) {
-		return CardEntry{}, fmt.Errorf("%w: card ID must be a valid ID", ErrInvalidData)
+		return TaskEntry{}, fmt.Errorf("%w: task ID must be a valid ID", ErrInvalidData)
 	}
 	body := strings.TrimSpace(input.Body)
 	kind := strings.TrimSpace(input.Kind)
 	idempotencyKey := strings.TrimSpace(input.IdempotencyKey)
 	runID := strings.TrimSpace(input.RunID)
 	if body == "" {
-		return CardEntry{}, fmt.Errorf("%w: entry body is required", ErrInvalidData)
+		return TaskEntry{}, fmt.Errorf("%w: entry body is required", ErrInvalidData)
 	}
 	if kind != "comment" && kind != "output" {
-		return CardEntry{}, fmt.Errorf("%w: entry kind must be comment or output", ErrInvalidData)
+		return TaskEntry{}, fmt.Errorf("%w: entry kind must be comment or output", ErrInvalidData)
 	}
-	if len([]byte(body)) > httpapi.CardEntryBytes {
-		return CardEntry{}, fmt.Errorf("%w: entry body must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.CardEntryBytes)
+	if len([]byte(body)) > httpapi.TaskEntryBytes {
+		return TaskEntry{}, fmt.Errorf("%w: entry body must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskEntryBytes)
 	}
 	if len([]byte(idempotencyKey)) > httpapi.TaskIdempotencyBytes {
-		return CardEntry{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
+		return TaskEntry{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
 	}
 	if runID != "" && !validUUID(runID) {
-		return CardEntry{}, fmt.Errorf("%w: run ID must be a valid ID", ErrInvalidData)
+		return TaskEntry{}, fmt.Errorf("%w: run ID must be a valid ID", ErrInvalidData)
 	}
 	if runID != "" && idempotencyKey == "" {
-		return CardEntry{}, fmt.Errorf("%w: managed run entries require an idempotency key", ErrInvalidData)
+		return TaskEntry{}, fmt.Errorf("%w: managed run entries require an idempotency key", ErrInvalidData)
 	}
 	authorKind := "human"
 	authorID := userID
@@ -1833,17 +1833,17 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	}
 	fingerprint, err := cardEntryFingerprint(kind, body)
 	if err != nil {
-		return CardEntry{}, err
+		return TaskEntry{}, err
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return CardEntry{}, err
+		return TaskEntry{}, err
 	}
 	defer tx.Rollback(ctx)
 	if idempotencyKey != "" {
 		lockKey := strings.Join([]string{userID, "card-entry", taskID, authorKind, authorID, idempotencyKey}, ":")
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
-			return CardEntry{}, err
+			return TaskEntry{}, err
 		}
 		replayArgs := []any{userID, taskID, authorKind, authorID, idempotencyKey}
 		replayAgentSQL := ""
@@ -1857,7 +1857,7 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 				replayAgentSQL += " AND t.execution_run_id = $7"
 			}
 		}
-		var existing CardEntry
+		var existing TaskEntry
 		var existingFingerprint string
 		err := tx.QueryRow(ctx, `
 			SELECT e.id::text, e.task_id::text, e.kind, e.body,
@@ -1871,29 +1871,29 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		`, replayArgs...).Scan(
 			&existing.ID, &existing.TaskID, &existing.Kind, &existing.Body,
 			&existing.AuthorKind, &existing.AuthorID, &existing.AuthorName, &existing.RunID, &existing.CreatedAt,
-			&existingFingerprint, &existing.CardStatus, &existing.CardReviewReason,
+			&existingFingerprint, &existing.TaskStatus, &existing.TaskReviewReason,
 		)
 		if err == nil {
 			if existingFingerprint != fingerprint || existing.RunID != runID {
-				return CardEntry{}, ErrIdempotencyKey
+				return TaskEntry{}, ErrIdempotencyKey
 			}
 			if existing.RunID != "" {
-				existing.CardStatus = StatusWorking
-				existing.CardReviewReason = ""
+				existing.TaskStatus = StatusWorking
+				existing.TaskReviewReason = ""
 				if existing.Kind == "output" {
-					existing.CardStatus = StatusNeedsReview
-					existing.CardReviewReason = "output"
+					existing.TaskStatus = StatusNeedsReview
+					existing.TaskReviewReason = "output"
 				}
 			}
 			return existing, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return CardEntry{}, err
+			return TaskEntry{}, err
 		}
 	}
 	quota, err := lockStorageQuota(ctx, tx, userID)
 	if err != nil {
-		return CardEntry{}, err
+		return TaskEntry{}, err
 	}
 	args := []any{userID, taskID}
 	agentSQL := ""
@@ -1910,29 +1910,29 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		FOR UPDATE OF t
 	`, args...).Scan(&authorizedTaskID, &cardStatus, &cardReviewReason, &executionRunID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return CardEntry{}, ErrNotFound
+			return TaskEntry{}, ErrNotFound
 		}
-		return CardEntry{}, err
+		return TaskEntry{}, err
 	}
 	if agentID != "" {
 		if executionRunID != "" {
 			if runID == "" || runID != executionRunID {
-				return CardEntry{}, ErrManagedRunMismatch
+				return TaskEntry{}, ErrManagedRunMismatch
 			}
 			if cardStatus != StatusWorking {
-				return CardEntry{}, ErrTaskUnavailable
+				return TaskEntry{}, ErrTaskUnavailable
 			}
 		} else if runID != "" {
-			return CardEntry{}, ErrManagedRunMismatch
+			return TaskEntry{}, ErrManagedRunMismatch
 		}
 		if err := tx.QueryRow(ctx, `
 			SELECT name FROM agents
 			WHERE id = $1 AND owner_user_id = $2 AND archived_at IS NULL
 		`, agentID, userID).Scan(&authorName); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return CardEntry{}, ErrNotFound
+				return TaskEntry{}, ErrNotFound
 			}
-			return CardEntry{}, err
+			return TaskEntry{}, err
 		}
 	}
 	authorName = strings.TrimSpace(authorName)
@@ -1941,12 +1941,12 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 	}
 	var entryCount int
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM card_entries WHERE task_id = $1", taskID).Scan(&entryCount); err != nil {
-		return CardEntry{}, err
+		return TaskEntry{}, err
 	}
 	if entryCount >= MaxCardEntries {
-		return CardEntry{}, fmt.Errorf("%w: cards can contain at most %d conversation entries", ErrInvalidData, MaxCardEntries)
+		return TaskEntry{}, fmt.Errorf("%w: cards can contain at most %d conversation entries", ErrInvalidData, MaxCardEntries)
 	}
-	var entry CardEntry
+	var entry TaskEntry
 	err = tx.QueryRow(ctx, `
 		INSERT INTO card_entries (task_id, kind, body, author_kind, author_id, author_name, idempotency_key, request_hash, run_id)
 		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, '')::uuid)
@@ -1957,10 +1957,10 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		&entry.AuthorKind, &entry.AuthorID, &entry.AuthorName, &entry.RunID, &entry.CreatedAt,
 	)
 	if err != nil {
-		return CardEntry{}, err
+		return TaskEntry{}, err
 	}
 	if err := quota.apply(ctx, tx, 0, int64(len([]byte(body)))); err != nil {
-		return CardEntry{}, err
+		return TaskEntry{}, err
 	}
 	if kind == "output" {
 		query := `
@@ -1975,18 +1975,18 @@ func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID stri
 		}
 		tag, err := tx.Exec(ctx, query, updateArgs...)
 		if err != nil {
-			return CardEntry{}, err
+			return TaskEntry{}, err
 		}
 		if tag.RowsAffected() != 1 {
-			return CardEntry{}, ErrManagedRunMismatch
+			return TaskEntry{}, ErrManagedRunMismatch
 		}
 		cardStatus = StatusNeedsReview
 		cardReviewReason = "output"
 	}
-	entry.CardStatus = cardStatus
-	entry.CardReviewReason = cardReviewReason
+	entry.TaskStatus = cardStatus
+	entry.TaskReviewReason = cardReviewReason
 	if err := tx.Commit(ctx); err != nil {
-		return CardEntry{}, err
+		return TaskEntry{}, err
 	}
 	return entry, nil
 }

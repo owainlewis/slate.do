@@ -181,14 +181,14 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       if (attemptKey && state.entryAttempts[attemptKey]) {
         return json(response, {
           ...state.entryAttempts[attemptKey],
-          cardStatus: task.status,
-          cardReviewReason: task.reviewReason || "",
+          taskStatus: task.status,
+          taskReviewReason: task.reviewReason || "",
         }, 201);
       }
-      const entry = { id: `entry-${Object.values(state.entries).flat().length + 1}`, cardId: task.id, ...input, authorKind: "human", authorId: "owner", authorName: "Owain", createdAt: new Date().toISOString() };
+      const entry = { id: `entry-${Object.values(state.entries).flat().length + 1}`, taskId: task.id, ...input, authorKind: "human", authorId: "owner", authorName: "Owain", createdAt: new Date().toISOString() };
       state.entries[task.id] = [...(state.entries[task.id] || []), entry];
       if (entry.kind === "output") Object.assign(task, { status: "needs_review", reviewReason: "output" });
-      Object.assign(entry, { cardStatus: task.status, cardReviewReason: task.reviewReason || "" });
+      Object.assign(entry, { taskStatus: task.status, taskReviewReason: task.reviewReason || "" });
       if (attemptKey) state.entryAttempts[attemptKey] = entry;
       if (state.delayNextEntry) {
         state.delayNextEntry = false;

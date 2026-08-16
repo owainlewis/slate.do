@@ -208,7 +208,7 @@ func (h *Handler) CreateInboxTask(w http.ResponseWriter, r *http.Request, user a
 }
 
 func (h *Handler) CreateSubtask(w http.ResponseWriter, r *http.Request, user auth.User) {
-	if !validatePathID(w, "parent card", r.PathValue("id")) {
+	if !validatePathID(w, "parent task", r.PathValue("id")) {
 		return
 	}
 	var input CreateTaskInput
@@ -251,17 +251,17 @@ func (h *Handler) ListInbox(w http.ResponseWriter, r *http.Request, user auth.Us
 	writeJSON(w, http.StatusOK, map[string]any{"messages": messages})
 }
 
-func (h *Handler) ListCardEntries(w http.ResponseWriter, r *http.Request, user auth.User) {
-	if !validatePathID(w, "card", r.PathValue("id")) {
+func (h *Handler) ListTaskEntries(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validatePathID(w, "task", r.PathValue("id")) {
 		return
 	}
 	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
-	var entries []CardEntry
+	var entries []TaskEntry
 	var err error
 	if runID != "" {
-		entries, err = h.store.ListCardEntriesForRun(r.Context(), user.ID, user.AgentID, r.PathValue("id"), runID)
+		entries, err = h.store.ListTaskEntriesForRun(r.Context(), user.ID, user.AgentID, r.PathValue("id"), runID)
 	} else {
-		entries, err = h.store.ListCardEntries(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
+		entries, err = h.store.ListTaskEntries(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
 	}
 	if handleStoreError(w, err) {
 		return
@@ -269,15 +269,15 @@ func (h *Handler) ListCardEntries(w http.ResponseWriter, r *http.Request, user a
 	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
-func (h *Handler) CreateCardEntry(w http.ResponseWriter, r *http.Request, user auth.User) {
-	if !validatePathID(w, "card", r.PathValue("id")) {
+func (h *Handler) CreateTaskEntry(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validatePathID(w, "task", r.PathValue("id")) {
 		return
 	}
-	var input CreateCardEntryInput
+	var input CreateTaskEntryInput
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if !httpapi.ByteLimit(w, "body", input.Body, httpapi.CardEntryBytes) {
+	if !httpapi.ByteLimit(w, "body", input.Body, httpapi.TaskEntryBytes) {
 		return
 	}
 	input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
@@ -287,7 +287,7 @@ func (h *Handler) CreateCardEntry(w http.ResponseWriter, r *http.Request, user a
 	if user.AgentID != "" {
 		input.RunID = strings.TrimSpace(r.Header.Get("X-Slate-Run-ID"))
 	}
-	entry, err := h.store.CreateCardEntry(r.Context(), user.ID, user.AgentID, user.DisplayName, r.PathValue("id"), input)
+	entry, err := h.store.CreateTaskEntry(r.Context(), user.ID, user.AgentID, user.DisplayName, r.PathValue("id"), input)
 	if handleStoreError(w, err) {
 		return
 	}

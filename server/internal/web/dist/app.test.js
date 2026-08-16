@@ -732,26 +732,6 @@ function relativeLuminance(hex) {
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
-test("local date keys survive the spring DST boundary", () => {
-  const before = new Date(2026, 2, 28, 12);
-  assert.equal(app.dateKey(app.addDays(before, 1)), "2026-03-29");
-  assert.equal(app.dateKey(app.addDays(before, 2)), "2026-03-30");
-});
-
-test("list cards open without a legacy completion checkbox", () => {
-  const html = app.taskHTML({ id: "record", title: "Record comparison", kind: "action", status: "queued", scheduledDate: "" });
-
-	assert.match(html, /class="task action/);
-	assert.match(html, /data-open-task="record"/);
-	assert.doesNotMatch(html, /data-toggle-done|class="check"/);
-	assert.doesNotMatch(html, /item-dot/);
-});
-
-test("subtasks cannot be dragged independently between lists", () => {
-	assert.match(app.taskHTML({ id: "parent", title: "Parent", status: "new" }), /draggable="true"/);
-	assert.match(app.taskHTML({ id: "child", parentTaskId: "parent", title: "Child", status: "new" }), /draggable="false"/);
-});
-
 test("agent assignments use safe deterministic bot avatars across directory, task, and detail views", () => {
   vm.runInContext(`
     state.agents = [
@@ -766,11 +746,6 @@ test("agent assignments use safe deterministic bot avatars across directory, tas
     state.selectedSubtasks = [];
   `, app);
   const assigned = { id: "assigned", bucketId: "list", title: "Research", kind: "action", status: "queued", scheduledDate: "", assigneeAgentId: "agent-one" };
-  const taskHTML = app.taskHTML(assigned);
-  assert.match(taskHTML, /class="avatar agent-avatar tone-\d avatar-small/);
-  assert.match(taskHTML, /<rect x="5" y="7" width="14" height="11" rx="3"/);
-  assert.doesNotMatch(taskHTML, />&lt;B<\/span>/);
-  assert.doesNotMatch(taskHTML, /<Research Bot>/);
 
   const detail = app.workspaceDetailHTML({ ...assigned, assigneeAgentId: "agent-one", description: "", priority: "", scheduledDate: "" });
   assert.match(detail, /id="workspace-detail-owner" name="assigneeAgentId"/);
@@ -1905,8 +1880,6 @@ test("switching accounts clears old account data and loads only the new account'
     state.newToken = "secret-token-a";
     state.newTaskRecovery = { task: { id: "secret-a", title: "Account A card" }, message: "Could not open", pending: false };
     state.newTaskCapturePending = true;
-    state.goalErrors = { "list-a": "old error" };
-    state.flowListId = "list-a";
     api.get = async path => {
       requestedPaths.push(path);
       if (path === "/api/v1/boards") return { boards: [{ id: "board-b", name: "Account B board" }], maxBoards: 5 };
@@ -1935,8 +1908,6 @@ test("switching accounts clears old account data and loads only the new account'
       newToken: state.newToken,
       newTaskRecovery: state.newTaskRecovery,
       newTaskCapturePending: state.newTaskCapturePending,
-      goalErrors: state.goalErrors,
-      flowListId: state.flowListId,
     })`, app)),
     {
       me: "account-b",
@@ -1949,8 +1920,6 @@ test("switching accounts clears old account data and loads only the new account'
       newToken: "",
       newTaskRecovery: null,
       newTaskCapturePending: false,
-      goalErrors: {},
-      flowListId: "",
     },
   );
 });
@@ -2306,29 +2275,9 @@ test("rapid theme changes are persisted in click order", async () => {
   assert.equal(vm.runInContext("state.theme", app), "dark");
 });
 
-test("same-list drops produce the requested task order", () => {
-  const ids = ["one", "two", "three"];
-
-  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "three", "one")), ["three", "one", "two"]);
-  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "one", "two", true)), ["two", "one", "three"]);
-  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "one", "")), ["two", "three", "one"]);
-  assert.deepEqual(Array.from(app.reorderedTaskIDs(ids, "two", "two")), ids);
-});
-
 test("counts use readable singular and plural labels", () => {
   assert.equal(app.formatCount(1, "open action", "open actions"), "1 open action");
   assert.equal(app.formatCount(2, "open action", "open actions"), "2 open actions");
-});
-
-test("horizontal list drops use pointer x position", () => {
-  const rects = [
-    { left: 0, width: 300 },
-    { left: 320, width: 300 },
-  ];
-
-  assert.equal(app.bucketDropIndexForRects(rects, 20), 0);
-  assert.equal(app.bucketDropIndexForRects(rects, 280), 1);
-  assert.equal(app.bucketDropIndexForRects(rects, 640), 2);
 });
 
 // Each router test gets its own module instance so history and auth state
