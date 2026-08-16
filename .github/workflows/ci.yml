@@ -9,7 +9,9 @@ jobs:
   test-ci:
     name: Required CI
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The browser suite runs serially and takes about two minutes here. The job
+    # ceiling is the real backstop for a hung test, so it has to sit well above it.
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:18-alpine
