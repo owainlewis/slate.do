@@ -129,6 +129,7 @@ Two decisions taken while doing this work, recorded because they are not obvious
 
 - **Boards leave the primary sidebar.** Lists are what people navigate by, so they became direct links carrying the scope in the URL. Board rename, delete and create moved to the settings sidebar rather than being deleted, because a board is still the storage parent of a list until lists become account-wide.
 - **Per-list completed history was removed, not ported.** Its only trigger lived inside the lists grid. The Done column needs real paging, which belongs with runs in M2 rather than as a control with nowhere to live.
+- **`/app/boards/{id}` folds into the board.** Once the board became status columns, the board route rendered a second board identical to `/app/tasks`. It now redirects there, keeping any task permalink. Board rows survive in the settings sidebar as a label with rename and delete, because a board is still the storage parent of a list.
 
 ### M1 - Agents become config
 
