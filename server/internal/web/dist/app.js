@@ -22,6 +22,9 @@ const ICON_PATHS = {
   copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
   signOut: '<path d="M9.5 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h2.5"/><path d="M15 8l4 4-4 4"/><path d="M9.5 12H19"/>',
   inboxTray: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 13h4.6a3.4 3.4 0 0 0 6.8 0H20"/>',
+  history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 5v4h4"/><path d="M12 8v4.4l3 1.8"/>',
+  server: '<rect x="3.5" y="4.5" width="17" height="6" rx="2"/><rect x="3.5" y="13.5" width="17" height="6" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  list: '<path d="M8.5 6h11.5M8.5 12h11.5M8.5 18h11.5"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
 };
 
 const AGENT_NAME_LIMIT = 100;
@@ -222,6 +225,8 @@ const SETTINGS_PAGES = [
   { id: "preferences", label: "Preferences", icon: "sun", title: "Preferences", description: "Choose how Slate looks for this account." },
   { id: "api", label: "API access", icon: "copy", title: "API access", description: "Manage personal access to the Slate CLI and API." },
 ];
+const RUNS_PATH = "/app/runs";
+const RUNNERS_PATH = "/app/runners";
 const AGENTS_PATH = "/app/agents";
 const NEW_AGENT_PATH = "/app/agents/new";
 const EARLY_ACCESS_PATH = "/early-access";
@@ -286,6 +291,8 @@ function parseRoute(pathname) {
   }
   if (path === SETTINGS_PATH) return { name: "settings", settingsPage: "profile", redirect: true };
   if (path === `${SETTINGS_PATH}/agents`) return { name: "agents", redirect: true };
+  if (path === RUNS_PATH) return { name: "runs" };
+  if (path === RUNNERS_PATH) return { name: "runners" };
   if (path === AGENTS_PATH) return { name: "agents" };
   if (path === NEW_AGENT_PATH) return { name: "agent-new" };
   const agentWork = /^\/app\/agents\/([^/]+)\/work$/.exec(path);
@@ -336,7 +343,7 @@ function parseRoute(pathname) {
 }
 
 function isProtectedRoute(name) {
-  return name === "workspace" || name === "board" || name === "settings"
+  return name === "workspace" || name === "board" || name === "settings" || name === "runs" || name === "runners"
     || name === "agents" || name === "agent-new" || name === "agent-detail" || name === "agent-work" || name === "agent-settings";
 }
 
@@ -600,6 +607,11 @@ async function applyRoute() {
     ]);
     if (!boardsLoaded || !listsLoaded) return;
     if (routeVersion !== version) return;
+    if (route.name === "runs" || route.name === "runners") {
+      await loadAgents(true, authVersion, state.me?.id, version);
+      if (routeVersion !== version) return;
+      return showRoute(route.name);
+    }
     if (route.name === "agents" || route.name === "agent-new") {
       state.settings = false;
       state.settingsPage = "profile";
@@ -1277,6 +1289,12 @@ function render() {
     bindSettings();
     return;
   }
+  if (state.view === "runs" || state.view === "runners") {
+    root.innerHTML = executionPlaceholderHTML(state.view);
+    bindAppShell();
+    bindWorkspaceListControl();
+    return;
+  }
   if (state.view === "agents" || state.view === "agent-new") {
     syncPath(state.view === "agent-new" ? NEW_AGENT_PATH : AGENTS_PATH);
     root.innerHTML = agentsHTML();
@@ -1669,7 +1687,7 @@ function workspaceFlowHTML(tasks) {
 
 function taskDetailBackLabel() {
   if (["agent-detail", "agent-work", "agent-settings"].includes(state.view)) return "Back to agent work";
-  return parseRoute(globalThis.location?.pathname || APP_PATH).name === "board" ? "Back to board" : "Back to cards";
+  return "Back to board";
 }
 
 function workspaceListDialogHTML() {
@@ -1729,12 +1747,41 @@ function workspaceDetailHTML(task) {
       <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a child card" aria-label="Child card title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add child"}</span></button></div>
       <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
     </section>`;
+  const details = `
+          <section class="detail-block detail-summary" aria-labelledby="detail-summary-heading">
+            <h3 id="detail-summary-heading" class="detail-block-heading">Details</h3>
+            <div class="detail-properties">
+              <div class="field"><label for="workspace-detail-owner">Agent</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
+              <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
+              <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Child cards stay with their parent card.</small>` : ""}</div>
+              <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
+              <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
+            </div>
+          </section>`;
+  const reference = `
+          <section class="task-reference-field" aria-label="Card reference">
+            <span class="task-reference-label">Card ID</span>
+            <div class="task-reference-value">
+              <code id="workspace-task-id" tabindex="0">${escapeHTML(task.id)}</code>
+              <button class="secondary icon-label" id="copy-task-id" type="button" aria-label="Copy task ID">${icon("copy")}<span>Copy ID</span></button>
+              <button class="secondary icon-label task-link-copy" id="copy-task-link" type="button">${icon("copy")}<span>Copy link</span></button>
+            </div>
+            <code class="sr-only" id="workspace-task-link" aria-hidden="true">${escapeHTML(taskPermalink(task.id))}</code>
+            <p class="task-reference-status" id="task-reference-status" role="status" aria-live="polite"></p>
+          </section>`;
   return `<section class="workspace-detail" aria-label="Card detail" data-detail-surface tabindex="-1">
       <header class="detail-head"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Child card" : "Card"}</b></div></header>
       <form id="workspace-detail-form" class="workspace-detail-form">
         <div class="workspace-detail-main">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
-          <label class="workspace-brief-label" for="workspace-detail-description">Prompt and context</label><textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…">${escapeHTML(task.description || "")}</textarea>
+          ${details}
+          <section class="detail-block" aria-labelledby="detail-description-heading">
+            <h3 id="detail-description-heading" class="detail-block-heading">Description</h3>
+            <label class="sr-only" for="workspace-detail-description">Description</label>
+            <textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…">${escapeHTML(task.description || "")}</textarea>
+            <p class="detail-block-hint">An assigned agent receives this as its instruction.</p>
+          </section>
+          ${task.parentTaskId ? `<div class="workspace-parent-context">${subtaskSection}</div>` : subtaskSection}
           <section class="card-conversation" aria-labelledby="card-conversation-heading">
             <header><div><h3 id="card-conversation-heading">Conversation</h3><span>${state.selectedEntries.length}</span></div></header>
             ${entries ? `<div class="card-entry-list">${entries}</div>` : `<p class="card-conversation-empty">Comments and agent outputs will appear here.</p>`}
@@ -1745,27 +1792,9 @@ function workspaceDetailHTML(task) {
               <p class="error card-entry-error" role="alert">${escapeHTML(state.cardEntryError)}</p>
             </div>
           </section>
-          ${task.parentTaskId ? "" : subtaskSection}
+          ${reference}
           <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
         </div>
-        <aside class="workspace-detail-properties" aria-label="Card properties">
-          <h2>Properties</h2>
-          ${task.parentTaskId ? `<div class="workspace-parent-context"><span>Part of a parent card</span>${subtaskSection}</div>` : ""}
-          <div class="detail-properties">
-            <div class="field task-reference-field">
-              <span class="task-reference-label">Task ID</span>
-              <div class="task-reference-value"><code id="workspace-task-id" tabindex="0">${escapeHTML(task.id)}</code><button class="secondary icon-label" id="copy-task-id" type="button" aria-label="Copy task ID">${icon("copy")}<span>Copy ID</span></button></div>
-              <code class="sr-only" id="workspace-task-link" aria-hidden="true">${escapeHTML(taskPermalink(task.id))}</code>
-              <button class="secondary icon-label task-link-copy" id="copy-task-link" type="button">${icon("copy")}<span>Copy link</span></button>
-              <p class="task-reference-status" id="task-reference-status" role="status" aria-live="polite"></p>
-            </div>
-            <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
-            <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Child cards stay with their parent card.</small>` : ""}</div>
-            <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
-            <div class="field"><label for="workspace-detail-owner">Agent</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
-            <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
-          </div>
-        </aside>
         <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete card</button><div><button class="primary" type="submit">Save changes</button></div></footer>
       </form>
     </section>`;
@@ -1783,13 +1812,14 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
       <div class="sidebar-content" id="sidebar-content">
         ${showNewTask ? globalNewTaskButtonHTML() : ""}
         ${newTaskRecoveryNoticeHTML()}
-        <section class="nav-sec workspace-nav">
-          <h3>Focus</h3>
-          <div class="pages task-nav-pages">
-            <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
-          </div>
+        <section class="nav-sec nav-collaborators workspace-nav">
+          <h3>Work</h3>
+          <a class="nav-link ${workspaceOn("all") ? "on" : ""}" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
+          <a class="nav-link ${workspaceOn("inbox") ? "on" : ""}" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
+          <a class="nav-link ${route.name === "runs" ? "on" : ""}" href="${RUNS_PATH}">${icon("history")}<span>Runs</span></a>
+          <a class="nav-link ${route.name === "runners" ? "on" : ""}" href="${RUNNERS_PATH}">${icon("server")}<span>Runners</span></a>
         </section>
-        ${boardsNavigationHTML()}
+        ${listsNavigationHTML()}
         <section class="nav-sec nav-collaborators">
           <h3>Agents</h3>
           <a class="plain-btn icon-label nav-link ${agentsCurrent && !route.agentId ? "on" : ""}" id="agents-nav" href="${AGENTS_PATH}" ${agentsCurrent && !route.agentId ? 'aria-current="page"' : ""}>${icon("bot")}<span>All agents</span></a>
@@ -1807,6 +1837,42 @@ function appSidebarHTML({ theme = currentTheme(), agentsCurrent = false, showNew
 function desktopSidebarToggleHTML() {
   const expanded = !state.sidebarCollapsed;
   return `<button class="icon-btn desktop-sidebar-toggle" id="desktop-sidebar-toggle" type="button" aria-label="${expanded ? "Hide" : "Show"} navigation" aria-controls="primary-navigation" aria-expanded="${expanded}">${icon("sidebar")}</button>`;
+}
+
+// Runs and Runners exist so the shape of the product is visible before the
+// execution layer lands. They stay empty until runs and runners are real rows.
+function executionPlaceholderHTML(view) {
+  const theme = currentTheme();
+  const runs = view === "runs";
+  return `
+    <section class="shell theme-${theme}">
+      ${appSidebarHTML({ theme, showNewTask: false })}
+      <div class="main workspace-main">
+        <header class="workspace-topbar">
+          <div><div class="workspace-title"><h1>${runs ? "Runs" : "Runners"}</h1></div><p>${runs
+            ? "Every attempt an agent makes at a task, with its event log and result."
+            : "Machines running the Slate CLI that pick up work from this account."}</p></div>
+        </header>
+        <div class="workspace-content">
+          <div class="workspace-empty">${runs
+            ? "No runs yet. A run appears here once a runner executes a task."
+            : "No runners yet. Install the Slate CLI on a machine and register it to run work here."}</div>
+        </div>
+      </div>
+    </section>`;
+}
+
+function listsNavigationHTML() {
+  const route = parseRoute(globalThis.location?.pathname || APP_PATH);
+  const lists = state.workspaceLists.filter(list => !list.isInbox);
+  return `
+    <section class="nav-sec nav-lists nav-collaborators">
+      <div class="nav-section-title"><h3>Lists</h3><button class="plain-btn" id="new-workspace-list" type="button" aria-label="New list">${icon("plus")}</button></div>
+      <p class="status-error sidebar-list-error" role="alert" data-workspace-list-error ${state.workspaceListError ? "" : "hidden"}>${escapeHTML(state.workspaceListError)}</p>
+      <div class="pages">${lists.length
+        ? lists.map(list => `<a class="nav-link ${route.scope === "list" && route.listId === list.id ? "on" : ""}" href="${listPath(list.id)}">${icon("list")}<span>${escapeHTML(workspaceListLabel(list))}</span></a>`).join("")
+        : `<p class="nav-empty">No lists yet.</p>`}</div>
+    </section>`;
 }
 
 function boardsNavigationHTML() {
@@ -2750,12 +2816,14 @@ function settingsHTML() {
         <button class="brand brand-button" type="button" data-home>slate<span>.do</span></button>
         ${globalNewTaskButtonHTML()}
         ${newTaskRecoveryNoticeHTML()}
-        <section class="nav-sec workspace-nav settings-workspace-nav" aria-label="Focus">
-          <h3>Focus</h3>
-          <div class="pages task-nav-pages">
-            <a class="nav-link" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
-          </div>
+        <section class="nav-sec nav-collaborators settings-workspace-nav" aria-label="Work">
+          <h3>Work</h3>
+          <a class="nav-link" href="${TASKS_PATH}">${icon("kanban")}<span>Board</span></a>
+          <a class="nav-link" href="${INBOX_PATH}">${icon("inboxTray")}<span>Inbox</span></a>
+          <a class="nav-link" href="${RUNS_PATH}">${icon("history")}<span>Runs</span></a>
+          <a class="nav-link" href="${RUNNERS_PATH}">${icon("server")}<span>Runners</span></a>
         </section>
+        ${listsNavigationHTML()}
         ${boardsNavigationHTML()}
         <p class="settings-sidebar-title">Account settings</p>
         <nav class="settings-nav" aria-label="Settings">
@@ -4233,7 +4301,7 @@ function reconcileTaskMutation(updated, previousTask) {
 function bindAppShell() {
   document.querySelectorAll("[data-home]").forEach(el => el.onclick = goHome);
   bindCardContextMenus();
-  document.querySelectorAll(".task-nav-pages a, .agent-nav-link").forEach(el => el.addEventListener("click", event => {
+  document.querySelectorAll(".nav-sec a.nav-link, .task-nav-pages a, .agent-nav-link").forEach(el => el.addEventListener("click", event => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     const target = new URL(el.href, location.origin);

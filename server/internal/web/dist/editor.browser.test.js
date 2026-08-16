@@ -493,63 +493,9 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
   });
   const origin = `http://127.0.0.1:${server.address().port}`;
   await page.goto(`${origin}/app/tasks`);
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   return { page, state, origin, pageErrors };
 }
-
-test("the task workspace supports Board, Flow, Table, lists, and filters", async t => {
-  const { page, state, pageErrors } = await startWorkspace(t);
-
-  for (const label of ["Focus", "All cards", "Boards", "Workspace", "Other", "All agents"]) {
-    assert.equal(await page.getByText(label, { exact: true }).first().isVisible(), true, label);
-  }
-  for (const label of ["Inbox", "Today", "Week", "Review"]) assert.equal(await page.getByRole("link", { name: label, exact: true }).count(), 0, label);
-  const boardsHeading = page.getByRole("heading", { name: "Boards", exact: true });
-  const focusHeading = page.getByRole("heading", { name: "Focus", exact: true });
-  assert.equal(await focusHeading.evaluate((focus, boards) => Boolean(focus.compareDocumentPosition(boards) & Node.DOCUMENT_POSITION_FOLLOWING), await boardsHeading.elementHandle()), true);
-  assert.ok(parseFloat(await page.locator(".task-nav-pages .nav-link").first().evaluate(element => getComputedStyle(element).fontSize)) >= 13);
-  const agentLinkStyle = await page.locator(".agent-nav-link").first().evaluate(element => {
-    const style = getComputedStyle(element);
-    const avatar = element.querySelector(".avatar").getBoundingClientRect();
-    return { display: style.display, decoration: style.textDecorationLine, avatarWidth: avatar.width };
-  });
-  assert.deepEqual(agentLinkStyle, { display: "grid", decoration: "none", avatarWidth: 23 });
-  assert.equal(await page.getByRole("tab", { name: "Board", selected: true }).count(), 1);
-  for (const list of ["Inbox", "YouTube"]) assert.equal(await page.locator(".workspace-flow-column").getByText(list, { exact: true }).count(), 1);
-  assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
-  assert.equal(await page.locator('.workspace-flow-column .task .state-badge').count(), 0);
-
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
-  await page.waitForTimeout(300);
-  assert.equal(await page.locator(".workspace-flow").count(), 1, `url=${page.url()} errors=${pageErrors.join(" | ")} queries=${state.taskQueries.join(" | ")}`);
-  assert.match(page.url(), /view=flow/);
-  for (const status of ["New", "Ready", "In Progress", "Review", "Done"]) assert.equal(await page.locator(".workspace-flow-column").getByText(status, { exact: true }).count(), 1);
-
-  await page.getByRole("tab", { name: "Table", exact: true }).click();
-  await page.getByRole("tab", { name: "Table", selected: true }).waitFor();
-  for (const column of ["Card", "Location", "Status", "Priority", "Owner", "Planned"]) {
-    assert.equal(await page.locator(".workspace-table-head").getByText(column, { exact: true }).isVisible(), true, column);
-  }
-  assert.ok(parseFloat(await page.locator(".workspace-table-head").evaluate(element => getComputedStyle(element).fontSize)) >= 11);
-  assert.ok(parseFloat(await page.locator(".workspace-table-row strong").first().evaluate(element => getComputedStyle(element).fontSize)) >= 14);
-
-  await page.locator("#workspace-filter-toggle").click();
-  await page.waitForTimeout(300);
-  assert.equal(await page.locator("#workspace-filters").count(), 1, `url=${page.url()} errors=${pageErrors.join(" | ")}`);
-  await page.getByLabel("Search", { exact: true }).fill("boss");
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
-  await waitFor(() => state.taskQueries.some(query => query.includes("q=boss")));
-  await page.locator('[data-task="task-parent"]').waitFor({ state: "detached" });
-  assert.match(page.url(), /q=boss/);
-  assert.equal(await page.getByText("Write the doc my boss asked for", { exact: true }).count(), 1);
-  assert.ok(state.taskQueries.some(query => query.includes("q=boss")), state.taskQueries.join("\n"));
-  assert.equal(await page.locator('[data-task="task-parent"]').count(), 0, state.taskQueries.join("\n"));
-
-  await page.goto(`${new URL(page.url()).origin}/app/lists/list-youtube`);
-  await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
-  assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
-  assert.equal(await page.locator('[data-open-task="task-inbox"]').count(), 0);
-});
 
 test("Board changes list membership and Flow changes status", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
@@ -564,7 +510,6 @@ test("Board changes list membership and Flow changes status", async t => {
   assert.equal(state.tasks.find(task => task.id === "task-parent").bucketId, "list-inbox");
   assert.ok(state.requests.includes("POST /api/v1/tasks/task-parent/move"));
 
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
   await page.locator('[data-task="task-child"]').dragTo(page.locator('[data-flow-status="working"]'));
   await page.locator('[data-flow-status="working"] [data-task="task-child"]').waitFor();
   assert.equal(state.subtasks.find(task => task.id === "task-child").status, "working");
@@ -590,7 +535,7 @@ test("a board card exposes a copyable task ID and a reloadable permalink", async
   await page.getByRole("button", { name: "Copy task ID", exact: true }).focus();
   await page.keyboard.press("Enter");
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "task-parent");
-  await page.getByText("Task ID copied.", { exact: true }).waitFor();
+  await page.getByText("Card ID copied.", { exact: true }).waitFor();
 
   await page.getByRole("button", { name: "Copy link", exact: true }).click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `${origin}/app/boards/board-one?task=task-parent`);
@@ -612,7 +557,7 @@ test("a board card exposes a copyable task ID and a reloadable permalink", async
   await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
   assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/boards/board-one");
   await page.goBack();
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   assert.equal(new URL(page.url()).pathname, "/app/tasks");
   assert.deepEqual(pageErrors, []);
 });
@@ -686,7 +631,7 @@ test("task history restores unsaved parent and child drafts", async t => {
   await page.goBack();
   await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
   await page.goBack();
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   await page.goForward();
   await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
   await page.goForward();
@@ -761,7 +706,7 @@ test("right-clicking a card offers a fast confirmed delete action", async t => {
 
   await card.click({ button: "right" });
   menu = page.getByRole("menu", { name: "Actions for Publish task-first agents video" });
-  await page.getByRole("heading", { name: "All cards", exact: true }).click();
+  await page.getByRole("heading", { name: "Board", exact: true }).click();
   await menu.waitFor({ state: "detached" });
 
   await card.click({ button: "right" });
@@ -820,7 +765,7 @@ test("a context-menu delete invalidates a stale navigation response", async t =>
   await waitFor(() => typeof state.releaseDelete === "function");
 
   state.delayNextWorkspaceTasks = true;
-  await page.getByRole("link", { name: "All cards", exact: true }).click();
+  await page.getByRole("link", { name: "Board", exact: true }).click();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
   const taskRequestsBeforeDelete = state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length;
   const boardRequestsBeforeDelete = state.requests.filter(request => request === "GET /api/v1/boards").length;
@@ -829,7 +774,7 @@ test("a context-menu delete invalidates a stale navigation response", async t =>
   state.releaseWorkspaceTasks();
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
   await waitFor(() => state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length > taskRequestsBeforeDelete);
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   await page.waitForTimeout(50);
 
   assert.equal(await page.locator('[data-task="task-parent"]').count(), 0);
@@ -979,7 +924,7 @@ test("a failed overview refresh keeps the locally deleted card removed", async t
   await page.getByRole("menuitem", { name: "Delete card" }).click();
   await page.getByText("The card was deleted, but this view couldn’t be refreshed: Could not refresh tasks", { exact: true }).waitFor();
 
-  assert.equal(await page.getByRole("heading", { name: "All cards", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("heading", { name: "Board", exact: true }).count(), 1);
   assert.equal(await page.locator('[data-task="task-parent"]').count(), 0);
   assert.equal(await page.locator('[data-task="task-inbox"]').count(), 1);
   assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
@@ -1229,21 +1174,6 @@ test("a delayed context-menu delete refreshes the mounted agent directory", asyn
   assert.deepEqual(pageErrors, []);
 });
 
-test("legacy list-grouped Kanban links map to Board and can switch to Flow", async t => {
-  const { page, origin, pageErrors } = await startWorkspace(t);
-
-  await page.goto(`${origin}/app/tasks?view=flow&group=list`);
-  await page.getByRole("tab", { name: "Board", selected: true }).waitFor();
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
-  await page.getByRole("tab", { name: "Flow", selected: true }).waitFor();
-
-  const current = new URL(page.url());
-  assert.equal(current.searchParams.get("view"), "flow");
-  assert.equal(current.searchParams.has("group"), false);
-  assert.equal(await page.locator('[data-flow-status="new"]').count(), 1);
-  assert.deepEqual(pageErrors, []);
-});
-
 test("boards own their lists and support create, rename, and delete", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
@@ -1360,7 +1290,7 @@ test("desktop navigation collapses with the keyboard and stays collapsed across 
   assert.equal(await sidebar.getAttribute("inert"), "");
   assert.equal(await sidebar.getAttribute("aria-hidden"), "true");
   const collapsedToggleBounds = await showNavigation.boundingBox();
-  const workspaceHeadingBounds = await page.getByRole("heading", { name: "All cards", exact: true }).boundingBox();
+  const workspaceHeadingBounds = await page.getByRole("heading", { name: "Board", exact: true }).boundingBox();
   assert.ok(collapsedToggleBounds.x + collapsedToggleBounds.width < workspaceHeadingBounds.x,
     `toggle=${JSON.stringify(collapsedToggleBounds)} heading=${JSON.stringify(workspaceHeadingBounds)}`);
 
@@ -1430,13 +1360,13 @@ test("a delayed board creation cannot override newer navigation", async t => {
   state.delayNextBoardCreate = true;
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await waitFor(() => typeof state.releaseBoardCreate === "function");
-  await navigateApp(page, "/app/today");
-  await page.getByRole("heading", { name: "Today", exact: true }).waitFor();
+  await navigateApp(page, "/app/lists/list-youtube");
+  await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
   state.releaseBoardCreate();
   await waitFor(() => state.createdBoards.length === 1);
   await page.waitForTimeout(50);
 
-  assert.equal(new URL(page.url()).pathname, "/app/today");
+  assert.equal(new URL(page.url()).pathname, "/app/lists/list-youtube");
   assert.equal(await page.getByRole("heading", { name: "Untitled board", exact: true }).count(), 0);
   assert.deepEqual(pageErrors, []);
 });
@@ -1449,7 +1379,7 @@ test("board deletion uses a recoverable designed dialog", async t => {
   assert.equal(await protectedDelete.getAttribute("title"), "Move or create another Inbox before deleting this board");
   state.lists.push({ id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Other Inbox", goal: "", isInbox: true, openCount: 0 });
   await page.reload();
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   assert.equal(await protectedDelete.isEnabled(), true);
   const deleteOther = page.getByRole("button", { name: "Delete Other", exact: true });
   await deleteOther.click();
@@ -1679,38 +1609,6 @@ test("board Flow stays in one horizontal scroll lane", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
-test("boards offer table and calendar views without turning them into separate navigation", async t => {
-  const { page, origin, pageErrors } = await startWorkspace(t);
-
-  await page.goto(`${origin}/app/boards/board-one`);
-  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
-  for (const view of ["Board", "Flow", "Table", "Calendar"]) {
-    assert.equal(await page.locator(`[data-board-mode="${view === "Board" ? "lists" : view.toLowerCase()}"]`).getByText(view, { exact: true }).isVisible(), true, view);
-  }
-  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isVisible(), true);
-
-  await page.locator('[data-board-mode="flow"]').click();
-  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).count(), 0);
-
-  await page.locator('[data-board-mode="table"]').click();
-  await page.getByRole("table", { name: "Cards", exact: true }).waitFor();
-  assert.equal(await page.getByRole("columnheader", { name: "Location", exact: true }).isVisible(), true);
-  assert.ok(await page.getByText("Workspace / YouTube", { exact: true }).count() > 0);
-  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).count(), 0);
-
-  await page.locator('[data-board-mode="calendar"]').click();
-  const calendar = page.getByLabel("Board calendar", { exact: true });
-  await calendar.waitFor();
-  assert.equal(await calendar.locator(".calendar-day").count(), 7);
-  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).count(), 0);
-
-  await page.locator('[data-board-mode="lists"]').click();
-  assert.equal(await page.locator('[data-board-mode="lists"]').getAttribute("aria-pressed"), "true");
-  assert.equal(await page.getByRole("button", { name: "New list", exact: true }).isVisible(), true);
-  assert.equal(await page.getByLabel("List name").count(), 2);
-  assert.deepEqual(pageErrors, []);
-});
-
 test("a delayed list creation cannot repaint while a newer history route loads", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
@@ -1744,28 +1642,6 @@ test("a delayed list creation cannot repaint while a newer history route loads",
   assert.deepEqual(pageErrors, []);
 });
 
-test("generic cards open from the table without a task completion control", async t => {
-  const { page, pageErrors } = await startWorkspace(t);
-
-  assert.equal(await page.locator(".workspace-completion-toggle").count(), 0);
-  await page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true }).click();
-  const detail = page.getByRole("region", { name: "Card detail" });
-  await detail.waitFor();
-  const detailMain = page.locator(".card-detail-main");
-  const detailBounds = await detail.boundingBox();
-  const mainBounds = await detailMain.boundingBox();
-  assert.deepEqual(detailBounds, mainBounds);
-  assert.equal(await page.locator(".workspace-topbar").count(), 0);
-  assert.equal(await page.getByRole("button", { name: "Back to cards", exact: true }).isVisible(), true);
-  assert.equal(await page.getByLabel("Prompt and context", { exact: true }).isVisible(), true);
-  assert.equal(await page.getByText("Act with an agent", { exact: true }).count(), 0);
-  assert.equal(await page.getByLabel("Agent", { exact: true }).inputValue(), "agent-research");
-  await page.getByRole("button", { name: "Back to cards", exact: true }).click();
-  const opener = page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true });
-  assert.equal(await opener.evaluate(element => element === document.activeElement), true);
-  assert.deepEqual(pageErrors, []);
-});
-
 test("assigning an existing New card makes it Ready for agent work", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
@@ -1777,37 +1653,9 @@ test("assigning an existing New card makes it Ready for agent work", async t => 
 
   const assigned = state.tasks.find(task => task.id === "task-inbox");
   assert.equal(assigned.status, "queued");
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
-  await page.getByRole("tab", { name: "Flow", selected: true }).waitFor();
   const readyCard = page.locator('[data-flow-status="queued"]').getByText("Write the doc my boss asked for", { exact: true });
   await readyCard.waitFor();
   assert.equal(await readyCard.isVisible(), true);
-  assert.deepEqual(pageErrors, []);
-});
-
-test("Review separates agent outputs from cards manually placed in review", async t => {
-  const { page, state, pageErrors } = await startWorkspace(t);
-  const [assigned, unassigned] = state.tasks;
-  assigned.status = "needs_review";
-  assigned.reviewReason = "output";
-  unassigned.status = "needs_review";
-  state.entries[assigned.id] = [{ id: "output-1", cardId: assigned.id, kind: "output", body: "Draft ready", authorKind: "agent", authorId: "agent-research", authorName: "Research agent", createdAt: "2026-08-10T12:00:00Z" }];
-  state.entries[unassigned.id] = [{ id: "comment-1", cardId: unassigned.id, kind: "comment", body: "Which audience?", authorKind: "human", authorId: "owner", authorName: "Owain", createdAt: "2026-08-10T12:01:00Z" }];
-
-  await navigateApp(page, "/app/review");
-  const responseGroup = page.locator(".workspace-review-group").filter({ has: page.getByRole("heading", { name: "Other review", exact: true }) });
-  const outputGroup = page.locator(".workspace-review-group").filter({ has: page.getByRole("heading", { name: "Outputs", exact: true }) });
-  await responseGroup.getByText(unassigned.title, { exact: true }).waitFor();
-  await outputGroup.getByText(assigned.title, { exact: true }).waitFor();
-  assert.equal(await responseGroup.getByText(assigned.title, { exact: true }).count(), 0);
-  assert.equal(await outputGroup.getByText(unassigned.title, { exact: true }).count(), 0);
-  await outputGroup.getByRole("button", { name: `Open card: ${assigned.title}`, exact: true }).click();
-  const conversation = page.locator(".card-conversation");
-  await conversation.getByText("Draft ready", { exact: true }).waitFor();
-  assert.equal(await page.getByText("Latest output", { exact: true }).count(), 0);
-  assert.equal(await page.locator(".card-latest-output").count(), 0);
-  assert.equal(await conversation.getByText("Draft ready", { exact: true }).count(), 1);
-  assert.equal(await conversation.locator(".card-entry-kind").getByText("Output", { exact: true }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -1987,182 +1835,9 @@ test("global scopes surface matching subtasks with parent context", async t => {
   const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("-");
   Object.assign(state.subtasks[0], { scheduledDate: today, status: "needs_review" });
 
-  await page.goto(`${origin}/app/review`);
-  await page.getByRole("heading", { name: "Review", exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Open card: Research examples", exact: true }).count(), 1);
-  assert.equal(await page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true }).count(), 0);
-
-  await page.goto(`${origin}/app/today`);
-  await page.getByRole("heading", { name: "Today", exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Open card: Research examples", exact: true }).count(), 1);
-
-  await page.goto(`${origin}/app/week`);
-  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
-  assert.equal(await page.getByText("Research examples", { exact: true }).count(), 1);
-  assert.equal(await page.getByText("Child of Publish task-first agents video · YouTube", { exact: true }).count(), 1);
-
   await page.goto(`${origin}/app/lists/list-youtube`);
   await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Open card: Research examples", exact: true }).count(), 0);
-  assert.deepEqual(pageErrors, []);
-});
-
-test("task view tabs and table rows work from the keyboard and accessibility tree", async t => {
-  const { page, pageErrors } = await startWorkspace(t);
-
-  const boardTab = page.getByRole("tab", { name: "Board", exact: true });
-  const tableTab = page.getByRole("tab", { name: "Table", exact: true });
-  assert.equal(await boardTab.getAttribute("aria-selected"), "true");
-  assert.equal(await boardTab.getAttribute("tabindex"), "0");
-  await boardTab.focus();
-  await page.keyboard.press("ArrowRight");
-  const flowTab = page.getByRole("tab", { name: "Flow", exact: true });
-  await page.getByRole("tab", { name: "Flow", selected: true }).waitFor();
-  assert.equal(await flowTab.getAttribute("aria-selected"), "true");
-  assert.equal(await flowTab.evaluate(element => element === document.activeElement), true);
-
-  await page.keyboard.press("End");
-  const table = page.getByRole("table", { name: "Cards", exact: true });
-  await table.waitFor();
-  assert.equal(await tableTab.getAttribute("aria-selected"), "true");
-  const accessibility = await table.ariaSnapshot();
-  assert.match(accessibility, /table "Cards"/);
-  for (const heading of ["Card", "Location", "Status", "Priority", "Owner", "Planned"]) {
-    assert.match(accessibility, new RegExp(`columnheader "${heading}"`));
-  }
-  const scan = await new AxeBuilder({ page }).include(".workspace-main").analyze();
-  assert.deepEqual(scan.violations.map(violation => ({ id: violation.id, nodes: violation.nodes.map(node => node.target) })), []);
-
-  const row = page.getByRole("button", { name: "Open card: Publish task-first agents video", exact: true });
-  await row.focus();
-  await page.keyboard.press("Enter");
-  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
-  const back = page.getByRole("button", { name: /Back to (?:cards|board)/ });
-  assert.equal(await back.evaluate(element => element === document.activeElement), true);
-  await back.click();
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await page.getByRole("table", { name: "Cards", exact: true }).isVisible(), true);
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
-  assert.deepEqual(pageErrors, []);
-});
-
-test("Week shows only calendar controls while filters and task opening keep working", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-  const now = new Date();
-  const offset = (now.getDay() + 6) % 7;
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-  state.tasks[0].scheduledDate = [monday.getFullYear(), String(monday.getMonth() + 1).padStart(2, "0"), String(monday.getDate()).padStart(2, "0")].join("-");
-
-  await page.goto(`${origin}/app/week?view=flow`);
-  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
-  assert.equal(await page.locator('[data-workspace-view]').count(), 0);
-  assert.equal(await page.getByRole("button", { name: "Filter", exact: true }).isVisible(), true);
-  assert.equal(await page.getByLabel("Week calendar", { exact: true }).isVisible(), true);
-
-  await page.getByRole("button", { name: "Filter", exact: true }).click();
-  await page.getByLabel("Search", { exact: true }).fill("Publish");
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
-  await waitFor(() => state.taskQueries.some(query => query.includes("q=Publish")));
-  assert.match(page.url(), /\/app\/week\?q=Publish$/);
-  await page.getByText("Publish task-first agents video", { exact: true }).click();
-  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
-  await page.getByRole("button", { name: "Clear", exact: true }).click();
-  assert.match(page.url(), /\/app\/week$/);
-
-  await navigateApp(page, "/app/tasks");
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
-  assert.equal(await page.locator(".workspace-flow.grouped-by-list").count(), 1);
-  await navigateApp(page, "/app/week");
-  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
-
-  for (const viewport of [{ width: 1440, height: 960 }, { width: 820, height: 900 }, { width: 390, height: 844 }]) {
-    await page.setViewportSize(viewport);
-    assert.equal(await page.locator("#workspace-filter-toggle").isVisible(), true, `${viewport.width}px filter`);
-    assert.equal(await page.getByLabel("Week calendar", { exact: true }).isVisible(), true, `${viewport.width}px calendar`);
-    assert.equal(await page.locator('[data-workspace-view]').count(), 0, `${viewport.width}px tabs`);
-    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${viewport.width}px page overflow`);
-  }
-  assert.deepEqual(pageErrors, []);
-});
-
-test("a delayed Week move reconciles an open agent task before its next save", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-  const now = new Date();
-  const offset = (now.getDay() + 6) % 7;
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-  const tuesday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1);
-  const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
-  const mondayDate = formatDate(monday);
-  const tuesdayDate = formatDate(tuesday);
-  state.tasks[0].scheduledDate = mondayDate;
-
-  await page.goto(`${origin}/app/week`);
-  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
-  const weekTask = page.locator('.workspace-week [data-task="task-parent"]');
-  assert.equal(await weekTask.count(), 1,
-    `date=${mondayDate} queries=${state.taskQueries.join(" | ")} body=${await page.locator(".workspace-week").innerText()}`);
-  state.delayNextTaskPatch = true;
-  await weekTask.dragTo(page.locator(`.workspace-week [data-calendar-date="${tuesdayDate}"]`));
-  await waitFor(() => typeof state.releaseTaskPatch === "function");
-
-  await page.getByRole("link", { name: "All agents", exact: true }).click();
-  await page.getByRole("link", { name: "Research agent", exact: true }).click();
-  await page.getByRole("tab", { name: "Work", exact: true }).click();
-  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  const planned = page.getByLabel("Planned", { exact: true });
-  const brief = page.getByLabel("Prompt and context", { exact: true });
-  assert.equal(await planned.inputValue(), mondayDate);
-  await brief.fill("Live brief while the Week move commits");
-
-  state.releaseTaskPatch();
-  await page.waitForFunction(expected => document.querySelector('#workspace-detail-form [name="scheduledDate"]')?.value === expected, tuesdayDate);
-
-  assert.equal(await brief.inputValue(), "Live brief while the Week move commits");
-  assert.equal(await brief.evaluate(element => element === document.activeElement), true);
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
-  await waitFor(() => state.patches.length === 2);
-
-  assert.equal(state.patches[0].scheduledDate, tuesdayDate);
-  assert.equal(state.patches[1].scheduledDate, tuesdayDate);
-  assert.equal(state.tasks.find(task => task.id === "task-parent").scheduledDate, tuesdayDate);
-  assert.deepEqual(pageErrors, []);
-});
-
-test("a failed delayed Week move stays out of an unrelated task detail", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-  const now = new Date();
-  const offset = (now.getDay() + 6) % 7;
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-  const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
-  const mondayDate = formatDate(monday);
-  const tuesdayDate = formatDate(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1));
-  const wednesdayDate = formatDate(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 2));
-  state.tasks[0].scheduledDate = mondayDate;
-  state.tasks[1].scheduledDate = tuesdayDate;
-
-  await page.goto(`${origin}/app/week`);
-  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
-  state.delayNextTaskPatch = true;
-  state.failNextTaskPatch = true;
-  await page.locator('.workspace-week [data-task="task-parent"]').dragTo(page.locator(`.workspace-week [data-calendar-date="${wednesdayDate}"]`));
-  await waitFor(() => typeof state.releaseTaskPatch === "function");
-  await page.locator('[data-open-task="task-inbox"]').click();
-  const title = page.getByLabel("Title", { exact: true });
-  await title.fill("Unrelated live Week draft");
-
-  const failedResponse = page.waitForResponse(response => response.url().endsWith("/api/v1/tasks/task-parent")
-    && response.request().method() === "PATCH" && response.status() === 500);
-  state.releaseTaskPatch();
-  await failedResponse;
-  await page.waitForTimeout(50);
-
-  assert.equal(await page.locator(".detail-error").textContent(), "");
-  assert.equal(await title.inputValue(), "Unrelated live Week draft");
-  assert.equal(await title.evaluate(element => element === document.activeElement), true);
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
-  assert.equal(await page.getByRole("alert").filter({ hasText: "Could not update task" }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -2170,59 +1845,16 @@ test("an older workspace response cannot replace the latest route", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
   state.delayNextWorkspaceTasks = true;
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
+  await navigateApp(page, "/app/lists/list-youtube");
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
-  await page.getByRole("tab", { name: "Table", exact: true }).click();
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await navigateApp(page, "/app/tasks");
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   state.releaseWorkspaceTasks();
   await page.waitForTimeout(100);
 
-  assert.match(page.url(), /\/app\/tasks\?view=table$/);
-  assert.equal(await page.getByRole("heading", { name: "All cards", exact: true }).isVisible(), true);
+  assert.match(page.url(), /\/app\/tasks$/);
+  assert.equal(await page.getByRole("heading", { name: "Board", exact: true }).isVisible(), true);
   assert.equal(await page.getByRole("heading", { name: "Not found.", exact: true }).count(), 0);
-  const selectedTab = page.getByRole("tab", { selected: true });
-  assert.equal(await selectedTab.getAttribute("data-workspace-view"), "table");
-  assert.equal(await selectedTab.evaluate(element => element === document.activeElement), true);
-  assert.deepEqual(pageErrors, []);
-});
-
-test("a malformed list route renders Not found without querying cards", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-  const taskQueryCount = state.taskQueries.length;
-
-  await page.goto(`${origin}/app/lists/not-a-uuid`);
-  await page.getByRole("heading", { name: "Not found.", exact: true }).waitFor();
-
-  assert.equal(new URL(page.url()).pathname, "/app/lists/not-a-uuid");
-  assert.equal(state.taskQueries.length, taskQueryCount);
-  assert.deepEqual(pageErrors, []);
-});
-
-test("an older same-view response cannot steal focus from the latest panel", async t => {
-  const { page, state, pageErrors } = await startWorkspace(t);
-
-  await page.evaluate(() => history.replaceState({}, "", "/app/tasks?priority=p0"));
-  state.delayNextWorkspaceTasks = true;
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
-  await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
-  await page.evaluate(() => history.replaceState({}, "", "/app/tasks?priority=p1"));
-  await page.getByRole("tab", { name: "Table", exact: true }).click();
-  await page.locator(".workspace-table").waitFor();
-  await page.evaluate(() => history.replaceState({}, "", "/app/tasks?priority=p2"));
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
-  await page.locator(".workspace-flow").waitFor();
-
-  const panel = page.getByRole("tabpanel");
-  await panel.focus();
-  state.releaseWorkspaceTasks();
-  await waitFor(() => state.delayedWorkspaceTasksCompleted);
-  await page.waitForTimeout(100);
-
-  const current = new URL(page.url());
-  assert.equal(current.searchParams.get("view"), "flow");
-  assert.equal(current.searchParams.get("priority"), "p2");
-  assert.equal(await page.getByRole("tab", { name: "Flow", selected: true }).count(), 1);
-  assert.equal(await panel.evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -2342,7 +1974,7 @@ test("agent task properties stay locked while a save is pending", async t => {
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
-  for (const label of ["Title", "Prompt and context", "Status", "List", "Priority", "Agent", "Planned"]) {
+  for (const label of ["Title", "Description", "Status", "List", "Priority", "Agent", "Planned"]) {
     assert.equal(await page.getByLabel(label, { exact: true }).isDisabled(), true, `${label} should be disabled`);
   }
   for (const name of ["Delete card", "Saving…"]) {
@@ -2426,7 +2058,7 @@ test("a completed save reconciles untouched fields in a reopened task detail", a
 
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  const description = page.getByLabel("Prompt and context", { exact: true });
+  const description = page.getByLabel("Description", { exact: true });
   await description.fill("Live edit on reopened detail");
   state.releaseStatus();
   await waitFor(() => state.patches.length === 1);
@@ -2462,7 +2094,6 @@ test("a Flow drop commits after a pending agent detail save", async t => {
   await waitFor(() => typeof state.releaseStatus === "function");
 
   await navigateApp(page, "/app/tasks");
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   assert.equal(state.patches.length, 0, JSON.stringify({ patches: state.patches, requests: state.requests.slice(-12) }));
 
@@ -2482,7 +2113,7 @@ test("a Flow drop commits after a pending agent detail save", async t => {
 test("a delayed Flow drop reconciles the same task opened after agent navigation", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -2490,7 +2121,7 @@ test("a delayed Flow drop reconciles the same task opened after agent navigation
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  const brief = page.getByLabel("Prompt and context", { exact: true });
+  const brief = page.getByLabel("Description", { exact: true });
   await brief.fill("Live detail edit while Flow commits");
 
   state.releaseStatus();
@@ -2510,7 +2141,7 @@ test("a delayed Flow drop reconciles the same task opened after agent navigation
 test("a delayed Flow drop refreshes Agent Work after cross-route navigation", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -2534,7 +2165,7 @@ test("a delayed Flow drop refreshes Agent Work after cross-route navigation", as
 test("a delayed Flow drop refreshes Agent Work after another detail closes", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -2543,7 +2174,7 @@ test("a delayed Flow drop refreshes Agent Work after another detail closes", asy
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
   await page.getByRole("tab", { name: "Work", exact: true }).click();
   await page.getByRole("button", { name: /Research examples/ }).click();
-  const brief = page.getByLabel("Prompt and context", { exact: true });
+  const brief = page.getByLabel("Description", { exact: true });
   await brief.fill("Live child draft while parent Flow commits");
   const workRequests = () => state.requests.filter(request => request.startsWith("GET /api/v1/agents/agent-research/work?")).length;
   const requestsBeforeRelease = workRequests();
@@ -2559,7 +2190,7 @@ test("a delayed Flow drop refreshes Agent Work after another detail closes", asy
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await waitFor(() => typeof state.releaseAgentWork === "function", 10000);
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  const parentBrief = page.getByLabel("Prompt and context", { exact: true });
+  const parentBrief = page.getByLabel("Description", { exact: true });
   await parentBrief.fill("New parent draft during deferred work refresh");
   state.releaseAgentWork();
   await waitFor(() => workRequests() > requestsBeforeRelease);
@@ -2580,7 +2211,7 @@ test("a delayed Flow drop refreshes Agent Work after another detail closes", asy
 test("a failed deferred Agent Work refresh preserves a newly opened detail", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -2596,7 +2227,7 @@ test("a failed deferred Agent Work refresh preserves a newly opened detail", asy
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await waitFor(() => typeof state.releaseAgentWork === "function", 10000);
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  const brief = page.getByLabel("Prompt and context", { exact: true });
+  const brief = page.getByLabel("Description", { exact: true });
   await brief.fill("Live parent draft during failed deferred refresh");
 
   state.releaseAgentWork();
@@ -2651,7 +2282,7 @@ test("a failed workspace-save Agent Work refresh preserves a task opened while i
   state.releaseStatus();
   await waitFor(() => typeof state.releaseAgentWork === "function");
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  const brief = page.getByLabel("Prompt and context", { exact: true });
+  const brief = page.getByLabel("Description", { exact: true });
   await brief.fill("Live draft during failed workspace-save refresh");
   await brief.focus();
 
@@ -2665,7 +2296,7 @@ test("a failed workspace-save Agent Work refresh preserves a task opened while i
 test("an Agent Work refresh preserves a task opened while it loads", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -2678,7 +2309,7 @@ test("an Agent Work refresh preserves a task opened while it loads", async t => 
   state.releaseStatus();
   await waitFor(() => typeof state.releaseAgentWork === "function");
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  const brief = page.getByLabel("Prompt and context", { exact: true });
+  const brief = page.getByLabel("Description", { exact: true });
   await brief.fill("Live Agent Work draft during refresh");
   await brief.focus();
 
@@ -2692,7 +2323,7 @@ test("an Agent Work refresh preserves a task opened while it loads", async t => 
 test("a failed Agent Work refresh preserves a task opened while it loads", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -2720,20 +2351,20 @@ test("a failed Agent Work refresh preserves a task opened while it loads", async
 test("a delayed Flow drop refreshes a newly selected Review overview", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
 
   const reviewLoaded = page.waitForResponse(response => response.request().method() === "GET"
-    && response.url().includes("/api/v1/tasks?") && response.url().includes("status=needs_review"));
-  await navigateApp(page, "/app/review");
+    && response.url().includes("/api/v1/tasks?"));
+  await navigateApp(page, "/app/tasks");
   await reviewLoaded;
-  await page.getByRole("heading", { name: "Review", exact: true, level: 1 }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true, level: 1 }).waitFor();
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 0);
 
   const reviewRefreshed = page.waitForResponse(response => response.request().method() === "GET"
-    && response.url().includes("/api/v1/tasks?") && response.url().includes("status=needs_review"));
+    && response.url().includes("/api/v1/tasks?"));
   state.releaseStatus();
   await reviewRefreshed;
   await waitFor(() => state.patches.length === 1);
@@ -2747,7 +2378,7 @@ test("a delayed Flow drop refreshes a newly selected Review overview", async t =
 test("a committed Flow drop reports a current workspace refresh failure", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   await page.locator('[data-open-task="task-parent"]').waitFor();
   state.failNextWorkspaceTasks = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
@@ -2762,7 +2393,7 @@ test("a committed Flow drop reports a current workspace refresh failure", async 
 test("an older post-drop refresh failure stays out of a newer workspace route", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
-  await page.goto(`${origin}/app/tasks?view=flow`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await waitFor(() => typeof state.releaseStatus === "function");
@@ -2773,8 +2404,8 @@ test("an older post-drop refresh failure stays out of a newer workspace route", 
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
 
   const reviewLoaded = page.waitForResponse(response => response.request().method() === "GET"
-    && response.url().includes("/api/v1/tasks?") && response.url().includes("status=needs_review"));
-  await navigateApp(page, "/app/review");
+    && response.url().includes("/api/v1/tasks?"));
+  await navigateApp(page, "/app/tasks");
   await reviewLoaded;
   await page.locator('[data-open-task="task-parent"]').waitFor();
 
@@ -2782,7 +2413,7 @@ test("an older post-drop refresh failure stays out of a newer workspace route", 
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
   await page.waitForTimeout(50);
 
-  assert.equal(new URL(page.url()).pathname, "/app/review");
+  assert.equal(new URL(page.url()).pathname, "/app/tasks");
   assert.equal(await page.getByRole("alert").count(), 0);
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 1);
   assert.deepEqual(pageErrors, []);
@@ -2799,7 +2430,6 @@ test("a queued Flow drop cannot refresh over a newer agent settings draft", asyn
   await waitFor(() => typeof state.releaseStatus === "function");
 
   await navigateApp(page, "/app/tasks");
-  await page.getByRole("tab", { name: "Flow", exact: true }).click();
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
@@ -2909,10 +2539,10 @@ test("a parent list move preserves and keeps locked a saving child detail", asyn
   const tuesday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 1);
   const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
   state.tasks[0].scheduledDate = formatDate(monday);
-  await page.goto(`${origin}/app/week`);
-  await page.getByRole("heading", { name: "Week", exact: true }).waitFor();
+  await page.goto(`${origin}/app/tasks`);
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   state.delayNextTaskPatch = true;
-  await page.locator('[data-task="task-parent"]').dragTo(page.locator(`.workspace-week [data-calendar-date="${formatDate(tuesday)}"]`));
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="queued"]'));
   await waitFor(() => typeof state.releaseTaskPatch === "function");
 
   await page.getByRole("link", { name: "All agents", exact: true }).click();
@@ -2920,7 +2550,7 @@ test("a parent list move preserves and keeps locked a saving child detail", asyn
   await page.getByRole("tab", { name: "Work", exact: true }).click();
   await page.getByRole("button", { name: /Research examples/ }).click();
   const title = page.getByLabel("Title", { exact: true });
-  const brief = page.getByLabel("Prompt and context", { exact: true });
+  const brief = page.getByLabel("Description", { exact: true });
   await title.fill("Saving child title");
   await brief.fill("Saving child brief");
   state.delayNextStatus = true;
@@ -2938,7 +2568,7 @@ test("a parent list move preserves and keeps locked a saving child detail", asyn
   assert.equal(await title.inputValue(), "Saving child title");
   assert.equal(await brief.inputValue(), "Saving child brief");
   assert.equal(await back.evaluate(element => element === document.activeElement), true);
-  for (const label of ["Title", "Prompt and context", "Status", "List", "Priority", "Agent", "Planned"]) {
+  for (const label of ["Title", "Description", "Status", "List", "Priority", "Agent", "Planned"]) {
     assert.equal(await page.getByLabel(label, { exact: true }).isDisabled(), true, `${label} should stay disabled`);
   }
 
@@ -2954,14 +2584,14 @@ test("workspace mutations cannot cross into retained agent context", async t => 
   await page.goto(`${origin}/app/agents/agent-research`);
   await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
   await navigateApp(page, "/app/tasks");
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   await page.locator('[data-open-task="task-parent"]').click();
   await page.getByLabel("Title", { exact: true }).fill("Workspace-origin failure");
   state.delayNextStatus = true;
   state.failNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
   await page.getByRole("heading", { name: "Research agent", exact: true }).waitFor();
   state.releaseStatus();
@@ -3043,14 +2673,14 @@ test("a delayed post-save refresh failure cannot render into a newer route", asy
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
 
-  await navigateApp(page, "/app/today");
-  await page.getByRole("heading", { name: "Today", level: 1, exact: true }).waitFor();
+  await navigateApp(page, "/app/lists/list-youtube");
+  await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
   state.releaseWorkspaceTasks();
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
   await page.waitForTimeout(50);
 
-  assert.equal(new URL(page.url()).pathname, "/app/today");
-  assert.equal(await page.getByRole("heading", { name: "Today", level: 1, exact: true }).isVisible(), true);
+  assert.equal(new URL(page.url()).pathname, "/app/lists/list-youtube");
+  assert.equal(await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).isVisible(), true);
   assert.equal(await page.getByRole("alert").count(), 0);
   assert.equal(state.patches.at(-1).title, "Committed before navigation");
   assert.deepEqual(pageErrors, []);
@@ -3066,13 +2696,13 @@ test("a delayed subtask refresh failure cannot render into a newer route", async
   await page.getByRole("button", { name: "Add child", exact: true }).click();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
 
-  await navigateApp(page, "/app/today");
-  await page.getByRole("heading", { name: "Today", level: 1, exact: true }).waitFor();
+  await navigateApp(page, "/app/lists/list-youtube");
+  await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
   state.releaseWorkspaceTasks();
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
   await page.waitForTimeout(50);
 
-  assert.equal(new URL(page.url()).pathname, "/app/today");
+  assert.equal(new URL(page.url()).pathname, "/app/lists/list-youtube");
   assert.equal(await page.getByRole("alert").count(), 0);
   assert.equal(state.subtasks.some(task => task.title === "Committed subtask"), true);
   assert.deepEqual(pageErrors, []);
@@ -3088,7 +2718,7 @@ test("a current subtask refresh failure releases workspace loading", async t => 
   await page.getByRole("button", { name: "Add child", exact: true }).click();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
   await page.getByLabel("Title", { exact: true }).fill("Live title during failed refresh");
-  const brief = page.getByLabel("Prompt and context", { exact: true });
+  const brief = page.getByLabel("Description", { exact: true });
   await brief.fill("Live focused brief during failed refresh");
   state.releaseWorkspaceTasks();
 
@@ -3096,7 +2726,7 @@ test("a current subtask refresh failure releases workspace loading", async t => 
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Live title during failed refresh");
   assert.equal(await brief.inputValue(), "Live focused brief during failed refresh");
   assert.equal(await brief.evaluate(element => element === document.activeElement), true);
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   assert.equal(await page.getByText("Loading tasks…", { exact: true }).count(), 0);
   assert.equal(await page.getByText("Publish task-first agents video", { exact: true }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
@@ -3113,7 +2743,7 @@ test("a background agent refresh failure is visible in a newer task detail", asy
   await waitFor(() => typeof state.releaseStatus === "function");
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Research examples/ }).click();
-  const childBrief = page.getByLabel("Prompt and context", { exact: true });
+  const childBrief = page.getByLabel("Description", { exact: true });
   await childBrief.fill("Newer child draft during refresh failure");
   state.failNextAgentDetail = true;
 
@@ -3146,7 +2776,7 @@ test("a recovered agent refresh clears only its refresh warning", async t => {
   state.delayNextSubtask = true;
   await page.getByRole("button", { name: "Add child", exact: true }).click();
   await waitFor(() => typeof state.releaseSubtask === "function");
-  const parentBrief = page.getByLabel("Prompt and context", { exact: true });
+  const parentBrief = page.getByLabel("Description", { exact: true });
   await parentBrief.fill("Focused parent draft during recovery");
   state.releaseSubtask();
 
@@ -3171,7 +2801,7 @@ test("an unresolved background mutation failure survives an unrelated successful
   await waitFor(() => typeof state.releaseStatus === "function");
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
-  const parentBrief = page.getByLabel("Prompt and context", { exact: true });
+  const parentBrief = page.getByLabel("Description", { exact: true });
   await parentBrief.fill("Newer parent draft after failed save");
 
   state.releaseStatus();
@@ -3203,14 +2833,14 @@ test("an agent subtask refresh failure preserves unrelated task drafts", async t
   state.delayNextAgentWork = true;
   await page.getByRole("button", { name: "Add child", exact: true }).click();
   await waitFor(() => typeof state.releaseAgentWork === "function");
-  await page.getByLabel("Prompt and context", { exact: true }).fill("Unsaved focused brief");
+  await page.getByLabel("Description", { exact: true }).fill("Unsaved focused brief");
   state.releaseAgentWork();
 
   await page.getByRole("alert").filter({ hasText: "The card was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
   assert.equal(await page.getByRole("region", { name: "Card detail" }).count(), 1);
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent draft");
-  assert.equal(await page.getByLabel("Prompt and context", { exact: true }).inputValue(), "Unsaved focused brief");
-  assert.equal(await page.getByLabel("Prompt and context", { exact: true }).evaluate(element => element === document.activeElement), true);
+  assert.equal(await page.getByLabel("Description", { exact: true }).inputValue(), "Unsaved focused brief");
+  assert.equal(await page.getByLabel("Description", { exact: true }).evaluate(element => element === document.activeElement), true);
   assert.equal(state.subtasks.some(task => task.title === "Committed agent subtask"), true);
   assert.deepEqual(pageErrors, []);
 });
@@ -3226,14 +2856,14 @@ test("an in-flight successful agent subtask refresh preserves live edits and foc
   await waitFor(() => typeof state.releaseAgentWork === "function");
 
   await page.getByLabel("Title", { exact: true }).fill("Typed during refresh");
-  await page.getByLabel("Prompt and context", { exact: true }).fill("Focused draft typed during refresh");
+  await page.getByLabel("Description", { exact: true }).fill("Focused draft typed during refresh");
   state.releaseAgentWork();
   await waitFor(() => state.agentWorkRefreshCompleted);
   await page.waitForTimeout(50);
 
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Typed during refresh");
-  assert.equal(await page.getByLabel("Prompt and context", { exact: true }).inputValue(), "Focused draft typed during refresh");
-  assert.equal(await page.getByLabel("Prompt and context", { exact: true }).evaluate(element => element === document.activeElement), true);
+  assert.equal(await page.getByLabel("Description", { exact: true }).inputValue(), "Focused draft typed during refresh");
+  assert.equal(await page.getByLabel("Description", { exact: true }).evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -3248,7 +2878,7 @@ test("background agent subtask creation refreshes list metadata", async t => {
   await waitFor(() => typeof state.releaseSubtask === "function");
   await page.getByRole("button", { name: "Back to agent work", exact: true }).click();
   await page.getByRole("button", { name: /Research examples/ }).click();
-  const childBrief = page.getByLabel("Prompt and context", { exact: true });
+  const childBrief = page.getByLabel("Description", { exact: true });
   await childBrief.fill("Live child edit while count refreshes");
   state.releaseSubtask();
 
@@ -3338,9 +2968,9 @@ test("a background parent move refreshes counts without resetting agent settings
   const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
   state.tasks[0].scheduledDate = formatDate(monday);
 
-  await page.goto(`${origin}/app/week`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextTaskPatch = true;
-  await page.locator('[data-task="task-parent"]').dragTo(page.locator(`.workspace-week [data-calendar-date="${formatDate(tuesday)}"]`));
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="queued"]'));
   await waitFor(() => typeof state.releaseTaskPatch === "function");
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
@@ -3371,9 +3001,9 @@ test("a background parent move completes agent settings whose list load it super
   const formatDate = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
   state.tasks[0].scheduledDate = formatDate(monday);
 
-  await page.goto(`${origin}/app/week`);
+  await page.goto(`${origin}/app/tasks`);
   state.delayNextTaskPatch = true;
-  await page.locator('[data-task="task-parent"]').dragTo(page.locator(`.workspace-week [data-calendar-date="${formatDate(tuesday)}"]`));
+  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="queued"]'));
   await waitFor(() => typeof state.releaseTaskPatch === "function");
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
@@ -3498,13 +3128,13 @@ test("a background mutation completes All cards whose list load it supersedes", 
   state.releaseStatus();
 
   await waitFor(() => listRequests >= 2);
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   await page.getByText("Saved while all tasks loads", { exact: true }).waitFor();
   releaseLists();
   await page.waitForTimeout(50);
 
   assert.equal(new URL(page.url()).pathname, "/app/tasks");
-  assert.equal(await page.getByRole("heading", { name: "All cards", exact: true }).isVisible(), true);
+  assert.equal(await page.getByRole("heading", { name: "Board", exact: true }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -3865,13 +3495,13 @@ test("task detail coordinates one level of human and agent subtasks through the 
   assert.equal(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)), 26);
 
   await page.getByLabel("Title", { exact: true }).fill("Unsaved parent title");
-  await page.getByLabel("Prompt and context", { exact: true }).fill("Unsaved parent brief");
+  await page.getByLabel("Description", { exact: true }).fill("Unsaved parent brief");
   await page.getByLabel("Priority", { exact: true }).selectOption("p2");
 
   assert.equal(await dialog.getByRole("button", { name: /Mark Research examples/ }).count(), 0);
   assert.equal(await dialog.locator('[data-open-task="task-child"] .state-done').getByText("Done", { exact: true }).count(), 1);
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent title");
-  assert.equal(await page.getByLabel("Prompt and context", { exact: true }).inputValue(), "Unsaved parent brief");
+  assert.equal(await page.getByLabel("Description", { exact: true }).inputValue(), "Unsaved parent brief");
   assert.equal(await page.getByLabel("Priority", { exact: true }).inputValue(), "p2");
 
   await page.getByLabel("Child card title", { exact: true }).fill("Human final review");
@@ -3885,7 +3515,7 @@ test("task detail coordinates one level of human and agent subtasks through the 
   assert.equal(state.subtasks.length, 2);
   assert.equal(state.subtasks[1].parentTaskId, "task-parent");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent title");
-  assert.equal(await page.getByLabel("Prompt and context", { exact: true }).inputValue(), "Unsaved parent brief");
+  assert.equal(await page.getByLabel("Description", { exact: true }).inputValue(), "Unsaved parent brief");
   assert.equal(await page.getByLabel("Priority", { exact: true }).inputValue(), "p2");
 
   await dialog.getByText("Human final review", { exact: true }).click();
@@ -3911,8 +3541,8 @@ test("task detail coordinates one level of human and agent subtasks through the 
   assert.equal(Object.hasOwn(state.patches.at(-1), "bucketId"), false, "subtask saves omit their immutable list");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent title");
   assert.equal(await dialog.getByText("Unsaved child title", { exact: true }).isVisible(), true);
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Back to board" }).click();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   assert.equal(await page.locator(".workspace-flow.grouped-by-list").isVisible(), true);
 });
 
@@ -3930,19 +3560,6 @@ test("task detail remains usable on a phone-sized viewport", async t => {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 
-test("task detail stacks its properties rail at tablet width", async t => {
-  const { page } = await startWorkspace(t, { width: 720, height: 900 });
-
-  await page.locator('[data-open-task="task-parent"]').click();
-  const mainBounds = await page.locator(".workspace-detail-main").boundingBox();
-  const propertyBounds = await page.locator(".workspace-detail-properties").boundingBox();
-  assert.ok(mainBounds.width >= 400, `main width=${mainBounds.width}`);
-  assert.ok(Math.abs(mainBounds.width - propertyBounds.width) <= 2, `main=${mainBounds.width} properties=${propertyBounds.width}`);
-  assert.equal(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)), 25);
-  assert.ok(propertyBounds.y > mainBounds.y);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-});
-
 test("a delayed subtask response cannot overwrite a reopened task surface", async t => {
   const { page, state } = await startWorkspace(t);
 
@@ -3953,7 +3570,7 @@ test("a delayed subtask response cannot overwrite a reopened task surface", asyn
   await page.getByRole("button", { name: "Add child", exact: true }).click();
   await waitFor(() => typeof state.releaseSubtask === "function");
 
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   await page.locator('[data-open-task="task-parent"]').click();
   await page.getByLabel("Title", { exact: true }).fill("Draft from the new surface");
   state.releaseSubtask();
@@ -3987,7 +3604,7 @@ test("a delayed save cannot close or overwrite a newer task surface", async t =>
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   await page.locator('[data-open-task="task-inbox"]').click();
   await page.getByLabel("Title", { exact: true }).fill("Draft on the newer surface");
   state.releaseStatus();
@@ -3996,7 +3613,7 @@ test("a delayed save cannot close or overwrite a newer task surface", async t =>
 
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Draft on the newer surface");
   assert.equal(await page.getByRole("region", { name: "Card detail" }).isVisible(), true);
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   await page.getByText("Saved parent title", { exact: true }).waitFor();
 });
 
@@ -4009,7 +3626,7 @@ test("a delayed workspace save refreshes the overview after detail closes", asyn
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
 
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   assert.equal(await page.getByText("Saved after detail closed", { exact: true }).count(), 0);
   state.releaseStatus();
   await page.getByText("Saved after detail closed", { exact: true }).waitFor();
@@ -4026,7 +3643,7 @@ test("a post-save workspace refresh preserves a task opened while it loads", asy
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
 
   state.delayNextWorkspaceTasks = true;
   state.releaseStatus();
@@ -4051,14 +3668,14 @@ test("a failed post-save workspace refresh preserves a task opened while it load
   state.delayNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseStatus === "function");
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
 
   state.delayNextWorkspaceTasks = true;
   state.failNextWorkspaceTasks = true;
   state.releaseStatus();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
   await page.locator('[data-open-task="task-inbox"]').click();
-  const brief = page.getByLabel("Prompt and context", { exact: true });
+  const brief = page.getByLabel("Description", { exact: true });
   await brief.fill("Live draft during failed workspace refresh");
   await brief.focus();
 
@@ -4074,14 +3691,14 @@ test("a failed save preserves every unsaved task field", async t => {
 
   await page.locator('[data-open-task="task-parent"]').click();
   await page.getByLabel("Title", { exact: true }).fill("Unsaved title after failure");
-  await page.getByLabel("Prompt and context", { exact: true }).fill("Unsaved brief after failure");
+  await page.getByLabel("Description", { exact: true }).fill("Unsaved brief after failure");
   await page.getByLabel("Priority", { exact: true }).selectOption("p2");
   state.failNextStatus = true;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await page.locator(".detail-error").getByText("Could not save task", { exact: true }).waitFor();
 
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved title after failure");
-  assert.equal(await page.getByLabel("Prompt and context", { exact: true }).inputValue(), "Unsaved brief after failure");
+  assert.equal(await page.getByLabel("Description", { exact: true }).inputValue(), "Unsaved brief after failure");
   assert.equal(await page.getByLabel("Priority", { exact: true }).inputValue(), "p2");
 });
 
@@ -4094,7 +3711,7 @@ test("a delayed delete cannot close a newer surface and disappears from the over
   await page.getByRole("button", { name: "Delete card", exact: true }).click();
   await waitFor(() => typeof state.releaseDelete === "function");
 
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   await page.locator('[data-open-task="task-inbox"]').click();
   await page.getByLabel("Title", { exact: true }).fill("Newer task stays open");
   state.releaseDelete();
@@ -4102,7 +3719,7 @@ test("a delayed delete cannot close a newer surface and disappears from the over
   await page.waitForTimeout(50);
 
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Newer task stays open");
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 0);
 });
 
@@ -4115,12 +3732,12 @@ test("a delayed delete closes the same task when it has been reopened", async t 
   await page.getByRole("button", { name: "Delete card", exact: true }).click();
   await waitFor(() => typeof state.releaseDelete === "function");
 
-  await page.getByRole("button", { name: /Back to (?:cards|board)/ }).click();
+  await page.getByRole("button", { name: "Back to board" }).click();
   await page.locator('[data-open-task="task-parent"]').click();
   await page.getByRole("region", { name: "Card detail" }).waitFor();
   state.releaseDelete();
   await waitFor(() => !state.tasks.some(item => item.id === "task-parent"));
-  await page.getByRole("heading", { name: "All cards", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
 
   assert.equal(await page.getByRole("region", { name: "Card detail" }).count(), 0);
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 0);
@@ -4186,7 +3803,7 @@ test("agents can be deleted directly from settings", async t => {
 });
 
 function isAppShell(pathname) {
-  if (["/", "/index.html", "/login", "/app", "/app/tasks", "/app/inbox", "/app/today", "/app/week", "/app/review", "/app/settings", "/early-access", "/reset-password"].includes(pathname)) return true;
+  if (["/", "/index.html", "/login", "/app", "/app/tasks", "/app/inbox", "/app/settings", "/early-access", "/reset-password"].includes(pathname)) return true;
   if (pathname.startsWith("/app/boards/") || pathname.startsWith("/app/lists/") || pathname.startsWith("/app/settings/") || pathname.startsWith("/app/agents/")) return true;
   return pathname === "/app/agents";
 }

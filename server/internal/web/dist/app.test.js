@@ -130,24 +130,29 @@ test("password reset forms collect email and a secure replacement password", () 
   vm.runInContext(`state.resetToken = ""`, app);
 });
 
-test("sidebar makes cards, boards, and agents the primary control plane", () => {
+test("sidebar makes work, lists, and agents the primary control plane", () => {
   vm.runInContext(`
     state.boards = [{ id: "content", name: "Content" }];
+    state.workspaceLists = [{ id: "list-one", name: "Product", boardId: "content", isInbox: false }, { id: "list-inbox", name: "Inbox", boardId: "content", isInbox: true }];
     state.workspaceScope = "all";
   `, app);
 
   const html = app.appSidebarHTML();
-  for (const label of ["Focus", "Board", "Boards", "Content", "Agents"]) assert.match(html, new RegExp(`>${label}<`));
-  for (const label of ["Attention", "Today", "Week", "Review", "Plan", "All cards"]) assert.doesNotMatch(html, new RegExp(`>${label}<`));
-  assert.ok(html.indexOf(">Focus<") < html.indexOf(">Boards<"));
-  assert.match(html, /data-board="content"><span>Content<\/span>/);
-  assert.match(html, /id="new-board"/);
+  for (const label of ["Work", "Board", "Inbox", "Runs", "Lists", "Product", "Agents", "Runners"]) assert.match(html, new RegExp(`>${label}<`));
+  // Boards are storage, not navigation. They stay out of the primary sidebar.
+  for (const label of ["Focus", "Attention", "Today", "Week", "Review", "Plan", "All cards", "Boards", "Content"]) assert.doesNotMatch(html, new RegExp(`>${label}<`));
+  assert.ok(html.indexOf(">Work<") < html.indexOf(">Lists<"));
+  assert.ok(html.indexOf(">Lists<") < html.indexOf(">Agents<"));
+  assert.match(html, /id="new-workspace-list"/);
   assert.doesNotMatch(html, /board limit reached|active item limit reached/i);
+
+  // Board plumbing stays reachable from settings.
   const settings = app.settingsHTML();
-  for (const label of ["Focus", "Board", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
+  for (const label of ["Work", "Board", "Lists", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
   for (const label of ["Today", "Week", "Review", "All cards"]) assert.doesNotMatch(settings, new RegExp(`>${label}<`));
-  assert.ok(settings.indexOf(">Focus<") < settings.indexOf(">Boards<"));
-  vm.runInContext(`state.boards = [];`, app);
+  assert.match(settings, /data-board="content"><span>Content<\/span>/);
+  assert.match(settings, /id="new-board"/);
+  vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
 });
 
 test("desktop navigation exposes a persistent accessible collapse control", () => {
@@ -2025,11 +2030,12 @@ test("detail presents one contextual accessible card editor with clear actions",
   assert.match(html, /class="detail-properties"/);
   assert.match(html, />Save changes</);
   assert.match(html, /data-close-detail/);
-  assert.match(html, />Back to cards<\/span>/);
+  assert.match(html, />Back to board<\/span>/);
   assert.match(html, />Delete card</);
   assert.match(html, /Home list/);
   assert.match(html, /<label for="workspace-detail-owner">Agent<\/label>/);
-  assert.match(html, />Task ID</);
+  assert.match(html, />Card ID</);
+  assert.match(html, /<h3[^>]*class="detail-block-heading">Description<\/h3>/);
   assert.match(html, /id="workspace-task-id"[^>]*>working</);
   assert.match(html, /id="workspace-task-link"[^>]*>\/app\/tasks\?task=working</);
   assert.match(html, /id="copy-task-id"[^>]*aria-label="Copy task ID"/);
