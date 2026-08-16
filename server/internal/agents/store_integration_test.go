@@ -38,9 +38,9 @@ func TestDetailAndWorkStayOwnerScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	boardID, bucketID := insertBoardAndBucket(t, ctx, db, owner.ID, "Agent work")
+	bucketID := insertBucket(t, ctx, db, owner.ID, "Agent work")
 	for index, status := range []string{"queued", "working", "needs_review", "done"} {
-		insertAssignedTask(t, ctx, db, boardID, bucketID, agent.ID, fmt.Sprintf("Card %d", index), status, time.Now().Add(time.Duration(index)*time.Second))
+		insertAssignedTask(t, ctx, db, bucketID, agent.ID, fmt.Sprintf("Card %d", index), status, time.Now().Add(time.Duration(index)*time.Second))
 	}
 
 	detail, err := store.GetDetail(ctx, owner.ID, agent.ID)
@@ -129,25 +129,25 @@ func TestDetailAndWorkAreBoundedPaginatedAndPreserveChildContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	boardID, bucketID := insertBoardAndBucket(t, ctx, db, owner.ID, "Bounded work")
-	otherBoardID, otherBucketID := insertBoardAndBucket(t, ctx, db, other.ID, "Foreign work")
+	bucketID := insertBucket(t, ctx, db, owner.ID, "Bounded work")
+	otherBucketID := insertBucket(t, ctx, db, other.ID, "Foreign work")
 	var parentID, childID string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, kind, status)
-		VALUES ($1, $2, 'Parent card', 'action', 'new') RETURNING id::text
-	`, boardID, bucketID).Scan(&parentID); err != nil {
+		INSERT INTO tasks (bucket_id, title, kind, status)
+		VALUES ($1, 'Parent card', 'action', 'new') RETURNING id::text
+	`, bucketID).Scan(&parentID); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, parent_task_id, title, kind, status, assignee_agent_id)
-		VALUES ($1, $2, $3, 'Child card', 'action', 'queued', $4) RETURNING id::text
-	`, boardID, bucketID, parentID, agent.ID).Scan(&childID); err != nil {
+		INSERT INTO tasks (bucket_id, parent_task_id, title, kind, status, assignee_agent_id)
+		VALUES ($1, $2, 'Child card', 'action', 'queued', $3) RETURNING id::text
+	`, bucketID, parentID, agent.ID).Scan(&childID); err != nil {
 		t.Fatal(err)
 	}
 	for index := range 55 {
-		insertAssignedTask(t, ctx, db, boardID, bucketID, agent.ID, fmt.Sprintf("Queued %02d", index), "queued", time.Now().Add(time.Duration(index)*time.Millisecond))
+		insertAssignedTask(t, ctx, db, bucketID, agent.ID, fmt.Sprintf("Queued %02d", index), "queued", time.Now().Add(time.Duration(index)*time.Millisecond))
 	}
-	insertAssignedTask(t, ctx, db, otherBoardID, otherBucketID, agent.ID, "Foreign card", "queued", time.Now())
+	insertAssignedTask(t, ctx, db, otherBucketID, agent.ID, "Foreign card", "queued", time.Now())
 
 	detail, err := store.GetDetail(ctx, owner.ID, agent.ID)
 	if err != nil {
@@ -284,32 +284,25 @@ func lifecycleHash(token string) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func insertBoardAndBucket(t *testing.T, ctx context.Context, db *database.Pool, userID string, name string) (string, string) {
+func insertBucket(t *testing.T, ctx context.Context, db *database.Pool, userID string, name string) string {
 	t.Helper()
-	var boardID, bucketID string
+	var bucketID string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO boards (user_id, name, max_tasks_per_list)
+		INSERT INTO buckets (user_id, name, limit_count)
 		VALUES ($1, $2, 20)
 		RETURNING id::text
-	`, userID, name).Scan(&boardID); err != nil {
+	`, userID, name).Scan(&bucketID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(ctx, `
-		INSERT INTO buckets (board_id, name, limit_count)
-		VALUES ($1, 'Inbox', 20)
-		RETURNING id::text
-	`, boardID).Scan(&bucketID); err != nil {
-		t.Fatal(err)
-	}
-	return boardID, bucketID
+	return bucketID
 }
 
-func insertAssignedTask(t *testing.T, ctx context.Context, db *database.Pool, boardID, bucketID, agentID, title, status string, updatedAt time.Time) {
+func insertAssignedTask(t *testing.T, ctx context.Context, db *database.Pool, bucketID, agentID, title, status string, updatedAt time.Time) {
 	t.Helper()
 	if _, err := db.Exec(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, kind, status, assignee_agent_id, sort_order, created_at, updated_at)
-		VALUES ($1, $2, $3, 'action', $4, $5, 0, $6, $6)
-	`, boardID, bucketID, title, status, agentID, updatedAt); err != nil {
+		INSERT INTO tasks (bucket_id, title, kind, status, assignee_agent_id, sort_order, created_at, updated_at)
+		VALUES ($1, $2, 'action', $3, $4, 0, $5, $5)
+	`, bucketID, title, status, agentID, updatedAt); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -16,7 +16,7 @@ import (
 
 func TestListTasksRejectsMalformedLocationIDsBeforeStore(t *testing.T) {
 	handler := NewHandler(nil)
-	for _, query := range []string{"boardId=not-a-uuid", "bucketId=not-a-uuid"} {
+	for _, query := range []string{"bucketId=not-a-uuid"} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?"+query, nil)
 
@@ -143,8 +143,7 @@ func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
 		code    string
 		message string
 	}{
-		{ErrBoardLimit, "pro_board_limit_reached", "Pro allows up to 5 boards."},
-		{ErrListLimit, "pro_list_limit_reached", "Pro allows up to 9 lists per board."},
+		{ErrListLimit, "pro_list_limit_reached", "Pro allows up to 45 lists."},
 		{ErrActiveItemLimit, "pro_active_item_limit_reached", "Max active items per list is 20 on Pro."},
 	}
 	for _, test := range tests {
@@ -169,14 +168,14 @@ func TestProLimitErrorsUseStableCodesAndActiveItemLanguage(t *testing.T) {
 
 func TestFreeLimitErrorsUsePlanSpecificStableCodes(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	if !handleStoreError(recorder, ErrBoardLimit, entitlements.Free()) {
+	if !handleStoreError(recorder, ErrListLimit, entitlements.Free()) {
 		t.Fatal("limit error was not handled")
 	}
 	var response map[string]string
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response["code"] != "free_board_limit_reached" || response["error"] != "Free allows up to 1 board." {
+	if response["code"] != "free_list_limit_reached" || response["error"] != "Free allows up to 5 lists." {
 		t.Fatalf("response = %#v", response)
 	}
 }
@@ -240,33 +239,6 @@ func TestStoredTextLimitsAcceptExactBoundariesAndRejectOneOver(t *testing.T) {
 		exact func(http.ResponseWriter) bool
 		over  func(http.ResponseWriter) bool
 	}{
-		{
-			name: "board name", field: "name",
-			exact: func(w http.ResponseWriter) bool {
-				return validateCreateBoardText(w, CreateBoardInput{Name: strings.Repeat("🙂", httpapi.BoardNameRunes)})
-			},
-			over: func(w http.ResponseWriter) bool {
-				return validateCreateBoardText(w, CreateBoardInput{Name: strings.Repeat("🙂", httpapi.BoardNameRunes+1)})
-			},
-		},
-		{
-			name: "board background kind", field: "backgroundKind",
-			exact: func(w http.ResponseWriter) bool {
-				return validateCreateBoardText(w, CreateBoardInput{Name: "Board", BackgroundKind: strings.Repeat("a", httpapi.BoardBackgroundKind)})
-			},
-			over: func(w http.ResponseWriter) bool {
-				return validateCreateBoardText(w, CreateBoardInput{Name: "Board", BackgroundKind: strings.Repeat("a", httpapi.BoardBackgroundKind+1)})
-			},
-		},
-		{
-			name: "board background value", field: "backgroundValue",
-			exact: func(w http.ResponseWriter) bool {
-				return validateCreateBoardText(w, CreateBoardInput{Name: "Board", BackgroundValue: strings.Repeat("🙂", httpapi.BoardBackgroundRunes)})
-			},
-			over: func(w http.ResponseWriter) bool {
-				return validateCreateBoardText(w, CreateBoardInput{Name: "Board", BackgroundValue: strings.Repeat("🙂", httpapi.BoardBackgroundRunes+1)})
-			},
-		},
 		{
 			name: "list name", field: "name",
 			exact: func(w http.ResponseWriter) bool {

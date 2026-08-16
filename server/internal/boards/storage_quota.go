@@ -102,30 +102,6 @@ func accountStorageUsage(ctx context.Context, db queryRower, userID string, lock
 	return usage, err
 }
 
-func lockedBoardTaskStorage(ctx context.Context, tx pgx.Tx, boardID string) (storageUsage, error) {
-	return lockedTaskStorage(ctx, tx, `
-		WITH RECURSIVE cascade_tasks AS (
-			SELECT t.id
-			FROM tasks t
-			WHERE t.board_id = $1
-
-			UNION
-
-			SELECT child.id
-			FROM tasks child
-			JOIN cascade_tasks parent ON parent.id = child.parent_task_id
-		)
-		SELECT t.storage_bytes + COALESCE((
-			SELECT sum(octet_length(entry.body))
-			FROM card_entries entry
-			WHERE entry.task_id = t.id
-		), 0)
-		FROM tasks t
-		JOIN cascade_tasks deleted_task ON deleted_task.id = t.id
-		FOR UPDATE OF t
-	`, boardID)
-}
-
 func lockedBucketTaskStorage(ctx context.Context, tx pgx.Tx, bucketID string) (storageUsage, error) {
 	return lockedTaskStorage(ctx, tx, `
 		WITH RECURSIVE cascade_tasks AS (

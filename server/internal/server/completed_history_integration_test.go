@@ -28,11 +28,7 @@ func TestBoardAPIUsesSummaryCollectionsAndExactTaskDetail(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := boards.NewStore(db)
-	board, err := store.CreateBoard(ctx, owner.ID, boards.CreateBoardInput{Name: "History API"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, owner.ID, board.ID, boards.CreateBucketInput{Name: "Done"})
+	bucket, err := store.CreateBucket(ctx, owner.ID, boards.CreateBucketInput{Name: "Done"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,16 +52,16 @@ func TestBoardAPIUsesSummaryCollectionsAndExactTaskDetail(t *testing.T) {
 	}
 
 	handler := NewApp(fstest.MapFS{"index.html": {Data: []byte("app")}}, db, false, auth.Options{}).Routes()
-	boardResponse := agentRequest(t, handler, token, http.MethodGet, "/api/v1/boards/"+board.ID, "")
-	if boardResponse.Code != http.StatusOK || strings.Contains(boardResponse.Body.String(), "description") || strings.Contains(boardResponse.Body.String(), "private detail") {
-		t.Fatalf("board summary response = %d %s", boardResponse.Code, boardResponse.Body.String())
+	listResponse := agentRequest(t, handler, token, http.MethodGet, "/api/v1/lists/"+bucket.ID, "")
+	if listResponse.Code != http.StatusOK || strings.Contains(listResponse.Body.String(), "description") || strings.Contains(listResponse.Body.String(), "private detail") {
+		t.Fatalf("list summary response = %d %s", listResponse.Code, listResponse.Body.String())
 	}
-	var loaded boards.Board
-	if err := json.Unmarshal(boardResponse.Body.Bytes(), &loaded); err != nil {
+	var loaded boards.Bucket
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &loaded); err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Buckets) != 1 || len(loaded.Buckets[0].Tasks) != 21 || loaded.Buckets[0].CompletedNextCursor == "" {
-		t.Fatalf("bounded board response = %#v", loaded.Buckets)
+	if len(loaded.Tasks) != 21 || loaded.CompletedNextCursor == "" {
+		t.Fatalf("bounded list response = %#v", loaded)
 	}
 
 	detailResponse := agentRequest(t, handler, token, http.MethodGet, "/api/v1/tasks/"+exactID, "")

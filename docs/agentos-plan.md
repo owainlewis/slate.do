@@ -47,45 +47,45 @@ The two hard problems, isolated execution and the human-in-the-loop channel, are
 
 Continuing from `043_managed_agent_runs`.
 
-`044_inbox_index` shipped with the inbox, so agent config is `045` and everything after it shifts by one.
+`044_inbox_index` shipped with the inbox, and the boards collapse took `045` and `046`, so agent config starts at `047`.
 
 ```
-045_agent_config
+047_agent_config
     ALTER agents ADD instructions, backend, workspace,
                      limits_json, backend_overrides_json
 
-046_runs
+048_runs
     CREATE runs (id, account_id, task_id, agent_id, agent_snapshot,
                  runner_id, status, session_id, resume_from_run_id,
                  lease_expires_at, attempt, turns, tokens_in, tokens_out,
                  exit_reason, branch, started_at, ended_at, created_at)
     Partial unique index on (task_id) where status is active
 
-047_runners
+049_runners
     CREATE runners (id, account_id, name, backends_json, workspaces_json,
                     concurrency, os, arch, status, last_heartbeat_at, created_at)
     CREATE runner_registration_tokens (id, account_id, hash, expires_at, consumed_at)
 
-048_run_events
+050_run_events
     CREATE run_events (run_id, seq, ts, type, payload_json)
     PRIMARY KEY (run_id, seq)
 
-049_task_execution_policy
+051_task_execution_policy
     ALTER tasks ADD requires_approval, target_runner, attempts, workspace
     Status gains 'blocked'
 
-050_task_entry_questions
+052_task_entry_questions
     ALTER card_entries ADD direction, options_json, answer, answered_at
     Partial index on unanswered questions
 
-051_run_tokens
+053_run_tokens
     Token kind 'run' with scope_json and expires_at, scoped to one run and task
 
-052_attachments
+054_attachments
     CREATE attachments (id, account_id, task_id, run_id, name, content_type,
                         size, sha256, content, created_at)
 
-053_task_schedules
+055_task_schedules
     ALTER tasks ADD schedule_cron, schedule_tz, next_run_at,
                     spawned_from_task_id, last_spawned_at
 ```
@@ -127,17 +127,39 @@ Pure deletion and renaming. No schema. Do this first because everything after is
 | 0.5 | Rebuild task detail as Details, Description, Attachments placeholder, Subtasks. Details holds Agent, Assignee, Workspace, Schedule, Requires approval | Description is full-width and inline-editable. Details shows five fields |
 | 0.6 | Nav becomes Board, Inbox, Runs, Agents, Runners, Settings, with a runner status indicator in the sidebar footer | Six items. Runs and Runners can be empty states |
 
-Two decisions taken while doing this work, recorded because they are not obvious from the task list:
+Three decisions taken while doing this work, recorded because they are not obvious from the task list:
 
 - **Boards leave the primary sidebar.** Lists are what people navigate by, so they became direct links carrying the scope in the URL. Board rename, delete and create moved to the settings sidebar rather than being deleted, because a board is still the storage parent of a list until lists become account-wide.
 - **Per-list completed history was removed, not ported.** Its only trigger lived inside the lists grid. The Done column needs real paging, which belongs with runs in M2 rather than as a control with nowhere to live.
 - **`/app/boards/{id}` folds into the board.** Once the board became status columns, the board route rendered a second board identical to `/app/tasks`. It now redirects there, keeping any task permalink. Board rows survive in the settings sidebar as a label with rename and delete, because a board is still the storage parent of a list.
 
+### M0.5 - Boards collapse into lists
+
+A board was a container of lists, and an account could have several. With one
+status board and lists as the way to navigate, the extra level bought nothing
+and cost an ownership hop in every query. Lists become account-wide.
+
+The database cannot change in one step, because main deploys continuously and a
+running revision must find the schema it expects on both sides of a migration.
+Three phases, one pull request each.
+
+| # | Phase | Done when |
+| --- | --- | --- |
+| A | `045_lists_own_themselves`: lists get a `user_id`, backfilled, kept correct by a trigger. Nothing reads it | Every list has an owner and the running server is untouched |
+| B | `046_lists_leave_boards`: `board_id` becomes optional, task ownership comes from the list, the server and UI stop mentioning boards | Lists are account-wide. No route, query, or screen refers to a board |
+| C | Drop the `boards` table and both `board_id` columns | The word board survives only as the name of the status view |
+
+Decisions inside this work:
+
+- **Multiple Inboxes are consolidated, not merged.** Creating a board created an Inbox inside it, so an account with three boards has three. Phase B keeps the oldest as the capture target and demotes the rest to ordinary lists. No task moves, and the account gets the uniqueness constraint that was impossible before.
+- **The list limit moves onto the list.** `boards.max_tasks_per_list` shadowed `buckets.limit_count` at read time, so a list already had a limit that nothing could see. Phase B copies the visible number down onto each list rather than inventing an account-level setting.
+- **Plan limits collapse too.** `boards` and `listsPerBoard` become one `lists` limit, keeping each plan's existing capacity: free was one board of five lists, pro was five of nine.
+
 ### M1 - Agents become config
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 1.1 | `045_agent_config` migration and `agents` store fields | Instructions, backend, workspace, limits, overrides persist |
+| 1.1 | `047_agent_config` migration and `agents` store fields | Instructions, backend, workspace, limits, overrides persist |
 | 1.2 | Agent editor UI with an instructions textarea and backend overrides | An agent can be created and edited in the browser |
 | 1.3 | `slate agent list/show/create/update`, with `--instructions-file` | A long prompt can be edited in an editor and pushed |
 
@@ -145,17 +167,17 @@ Two decisions taken while doing this work, recorded because they are not obvious
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 2.1 | `046_runs` migration, `runs` package, lifecycle transitions | A run row is created, transitions, and terminates |
-| 2.2 | `048_run_events`, batched append-only ingest with monotonic seq | Events upload, resume after a network drop, and replay in order |
+| 2.1 | `048_runs` migration, `runs` package, lifecycle transitions | A run row is created, transitions, and terminates |
+| 2.2 | `050_run_events`, batched append-only ingest with monotonic seq | Events upload, resume after a network drop, and replay in order |
 | 2.3 | Run detail view with event replay | Opening a run shows its event stream |
-| 2.4 | `049_task_execution_policy`: `requires_approval`, `attempts`, `target_runner`, `workspace`, `blocked` status | The approval toggle gates the move to Done |
+| 2.4 | `051_task_execution_policy`: `requires_approval`, `attempts`, `target_runner`, `workspace`, `blocked` status | The approval toggle gates the move to Done |
 | 2.5 | Single `canTransitionToDone` guard covering approval and open children | Both guards live in one function with tests |
 
 ### M3 - Runners and leases
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 3.1 | `047_runners`, registration tokens, register and deregister endpoints | A runner registers and appears in the UI |
+| 3.1 | `049_runners`, registration tokens, register and deregister endpoints | A runner registers and appears in the UI |
 | 3.2 | Leases with 60s TTL, heartbeat renewal, and an expiry reaper | An expired lease requeues the task and increments attempts |
 | 3.3 | Long-poll job dispatch with backend and workspace matching | A queued task reaches a matching runner and no other |
 | 3.4 | Retire `boards.AgentClaim` in favour of leases | No permanent claims remain |
@@ -175,9 +197,9 @@ Two decisions taken while doing this work, recorded because they are not obvious
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 5.1 | `051_run_tokens`, run-token guard, token minted per job and expiring with the run | A run token reads and writes exactly one task |
+| 5.1 | `053_run_tokens`, run-token guard, token minted per job and expiring with the run | A run token reads and writes exactly one task |
 | 5.2 | `slate task show/comment/done/block` under the run token, `--json` everywhere | The agent updates its own task from inside the run |
-| 5.3 | `052_attachments`, upload and download API, quota accounting | A file attached in the browser is readable via the API |
+| 5.3 | `054_attachments`, upload and download API, quota accounting | A file attached in the browser is readable via the API |
 | 5.4 | `slate file put/get/list`, attachments materialised to `<workspace>/.slate/attachments/` before the run, parent attachments included | The agent reads its inputs as files and pushes an output back |
 
 ### M6 - Ask, park, resume
@@ -186,7 +208,7 @@ The milestone that decides whether the system is any good.
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 6.1 | `050_task_entry_questions`: direction, options, answer, answered_at | A question is distinguishable from a comment |
+| 6.1 | `052_task_entry_questions`: direction, options, answer, answered_at | A question is distinguishable from a comment |
 | 6.2 | ~~Inbox view~~, plus unread count | **Shipped early.** The inbox is agent-authored entries account-wide, newest first, each linked to its task, with `044_inbox_index` behind it. Unread state still needs 6.1 |
 | 6.3 | `slate inbox ask --wait`, returning the answer or printing `parked` and exiting 75 | A reply inside the budget continues the run |
 | 6.4 | Park semantics: run parks, task blocks, process dies | Nothing burns overnight |
@@ -203,7 +225,7 @@ The milestone that decides whether the system is any good.
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 8.1 | `053_task_schedules`: cron, timezone, next_run_at, spawned_from | A task carries a schedule defaulting to Run once |
+| 8.1 | `055_task_schedules`: cron, timezone, next_run_at, spawned_from | A task carries a schedule defaulting to Run once |
 | 8.2 | Deep-copy spawn of a task and its subtasks, shared by cron and Run now | Clicking Run now produces a new task tree in Todo |
 | 8.3 | Schedule ticker, one query a minute | Monday's task appears on Monday with no runner online |
 | 8.4 | Definition detail UI stating the repeat and listing recent occurrences | Setting a schedule is explicit, never a silent mode change |

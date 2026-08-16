@@ -24,11 +24,7 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	`, ownerID).Scan(&agentID); err != nil {
 		t.Fatal(err)
 	}
-	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Managed work"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Ready"})
+	bucket, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,11 +204,7 @@ func TestAgentQueueOrdersPriorityThenOldest(t *testing.T) {
 	if err := db.QueryRow(ctx, `INSERT INTO agents (owner_user_id, name) VALUES ($1, 'Queue Agent') RETURNING id::text`, ownerID).Scan(&agentID); err != nil {
 		t.Fatal(err)
 	}
-	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Queue"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Ready"})
+	bucket, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}

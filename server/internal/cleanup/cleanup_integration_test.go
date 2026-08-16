@@ -36,18 +36,15 @@ func TestCleanupRemovesOnlyExpiredOperationalDataAndIsIdempotent(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM password_reset_requests WHERE email LIKE $1", marker+"%")
 		_, _ = db.Exec(context.Background(), "DELETE FROM api_rate_limit_metrics WHERE bucket_start IN ($1::timestamptz - interval '31 days', $1::timestamptz - interval '29 days')", now)
 	})
-	var userID, boardID, bucketID, taskID, agentID, oldCredentialID, liveCredentialID string
+	var userID, bucketID, taskID, agentID, oldCredentialID, liveCredentialID string
 	if err := db.QueryRow(ctx, `INSERT INTO users (email, password_hash) VALUES ($1, 'test') RETURNING id::text`, marker+"@slate.test").Scan(&userID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
-	if err := db.QueryRow(ctx, `INSERT INTO boards (user_id, name) VALUES ($1, 'Keep board') RETURNING id::text`, userID).Scan(&boardID); err != nil {
+	if err := db.QueryRow(ctx, `INSERT INTO buckets (user_id, name) VALUES ($1, 'Keep list') RETURNING id::text`, userID).Scan(&bucketID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(ctx, `INSERT INTO buckets (board_id, name) VALUES ($1, 'Keep list') RETURNING id::text`, boardID).Scan(&bucketID); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(ctx, `INSERT INTO tasks (board_id, bucket_id, title) VALUES ($1, $2, 'Keep task') RETURNING id::text`, boardID, bucketID).Scan(&taskID); err != nil {
+	if err := db.QueryRow(ctx, `INSERT INTO tasks (bucket_id, title) VALUES ($1, 'Keep task') RETURNING id::text`, bucketID).Scan(&taskID); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(ctx, `INSERT INTO agents (owner_user_id, name) VALUES ($1, 'Keep agent') RETURNING id::text`, userID).Scan(&agentID); err != nil {
@@ -127,9 +124,9 @@ func TestCleanupRemovesOnlyExpiredOperationalDataAndIsIdempotent(t *testing.T) {
 	if err != nil || second.TotalAffected != 0 {
 		t.Fatalf("second run = %#v err=%v", second, err)
 	}
-	for _, table := range []string{"boards", "tasks", "agents"} {
+	for _, table := range []string{"buckets", "tasks", "agents"} {
 		var count int
-		if err := db.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s WHERE id = $1", table), map[string]string{"boards": boardID, "tasks": taskID, "agents": agentID}[table]).Scan(&count); err != nil || count != 1 {
+		if err := db.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s WHERE id = $1", table), map[string]string{"buckets": bucketID, "tasks": taskID, "agents": agentID}[table]).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("customer row %s count=%d err=%v", table, count, err)
 		}
 	}

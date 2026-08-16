@@ -47,15 +47,11 @@ func TestInboxCaptureRepairsAnAccountWithoutBoardsOrLists(t *testing.T) {
 	}
 
 	store := boards.NewStore(db)
-	accountBoards, err := store.ListBoards(ctx, owner.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	lists, err := store.ListAllBuckets(ctx, owner.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(accountBoards) != 1 || len(lists) != 1 || !lists[0].IsInbox || first.BucketID != lists[0].ID || second.BucketID != lists[0].ID {
-		t.Fatalf("boards = %#v, lists = %#v, first = %#v, second = %#v", accountBoards, lists, first, second)
+	if len(lists) != 1 || !lists[0].IsInbox || first.BucketID != lists[0].ID || second.BucketID != lists[0].ID {
+		t.Fatalf("lists = %#v, first = %#v, second = %#v", lists, first, second)
 	}
 }

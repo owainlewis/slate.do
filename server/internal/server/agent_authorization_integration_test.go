@@ -56,11 +56,7 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	}
 
 	boardStore := boards.NewStore(db)
-	board, err := boardStore.CreateBoard(ctx, owner.ID, boards.CreateBoardInput{Name: "Private board"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := boardStore.CreateBucket(ctx, owner.ID, board.ID, boards.CreateBucketInput{Name: "Private list"})
+	bucket, err := boardStore.CreateBucket(ctx, owner.ID, boards.CreateBucketInput{Name: "Private list"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,18 +73,14 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherList, err := boardStore.CreateBucket(ctx, owner.ID, board.ID, boards.CreateBucketInput{Name: "Agent B list"})
+	otherList, err := boardStore.CreateBucket(ctx, owner.ID, boards.CreateBucketInput{Name: "Agent B list"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := boardStore.CreateTask(ctx, owner.ID, otherList.ID, boards.CreateTaskInput{Title: "Agent B other work", AssigneeAgentID: agentB.ID}); err != nil {
 		t.Fatal(err)
 	}
-	unrelatedBoard, err := boardStore.CreateBoard(ctx, owner.ID, boards.CreateBoardInput{Name: "Unrelated board"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	unrelatedList, err := boardStore.CreateBucket(ctx, owner.ID, unrelatedBoard.ID, boards.CreateBucketInput{Name: "Unrelated list"})
+	unrelatedList, err := boardStore.CreateBucket(ctx, owner.ID, boards.CreateBucketInput{Name: "Unrelated list"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,11 +92,7 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", otherOwner.ID) })
-	otherBoard, err := boardStore.CreateBoard(ctx, otherOwner.ID, boards.CreateBoardInput{Name: "Other account board"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherBucket, err := boardStore.CreateBucket(ctx, otherOwner.ID, otherBoard.ID, boards.CreateBucketInput{Name: "Other account list"})
+	otherBucket, err := boardStore.CreateBucket(ctx, otherOwner.ID, boards.CreateBucketInput{Name: "Other account list"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,23 +116,18 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 		t.Fatalf("sibling task update = %d %s", siblingUpdate.Code, siblingUpdate.Body.String())
 	}
 
-	boardList := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/boards", "")
-	if boardList.Code != http.StatusOK || !strings.Contains(boardList.Body.String(), board.ID) || strings.Contains(boardList.Body.String(), unrelatedBoard.ID) || strings.Contains(boardList.Body.String(), otherBoard.ID) {
-		t.Fatalf("scoped board list = %d %s", boardList.Code, boardList.Body.String())
+	// The list index is account-wide, so an agent must not be able to read it.
+	listIndex := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/lists", "")
+	if listIndex.Code != http.StatusForbidden {
+		t.Fatalf("agent list index = %d %s, want 403", listIndex.Code, listIndex.Body.String())
 	}
-	boardGet := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/boards/"+board.ID, "")
-	if boardGet.Code != http.StatusOK || !strings.Contains(boardGet.Body.String(), bucket.ID) || !strings.Contains(boardGet.Body.String(), `"openCount":1`) || strings.Contains(boardGet.Body.String(), otherList.ID) || strings.Contains(boardGet.Body.String(), `"tasks"`) || strings.Contains(boardGet.Body.String(), taskA.ID) || strings.Contains(boardGet.Body.String(), taskB.Title) {
-		t.Fatalf("scoped board get = %d %s", boardGet.Code, boardGet.Body.String())
-	}
-	listGet := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/buckets/"+bucket.ID, "")
+	listGet := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/lists/"+bucket.ID, "")
 	if listGet.Code != http.StatusOK || !strings.Contains(listGet.Body.String(), bucket.ID) || !strings.Contains(listGet.Body.String(), `"openCount":1`) || strings.Contains(listGet.Body.String(), `"tasks"`) || strings.Contains(listGet.Body.String(), taskA.ID) || strings.Contains(listGet.Body.String(), taskB.Title) {
 		t.Fatalf("scoped list get = %d %s", listGet.Code, listGet.Body.String())
 	}
 	for _, path := range []string{
-		"/api/v1/boards/" + unrelatedBoard.ID,
-		"/api/v1/buckets/" + unrelatedList.ID,
-		"/api/v1/boards/" + otherBoard.ID,
-		"/api/v1/buckets/" + otherBucket.ID,
+		"/api/v1/lists/" + unrelatedList.ID,
+		"/api/v1/lists/" + otherBucket.ID,
 	} {
 		recorder := agentRequest(t, app, agentAToken, http.MethodGet, path, "")
 		if recorder.Code != http.StatusNotFound {
@@ -157,15 +140,12 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 		path   string
 		body   string
 	}{
-		{http.MethodPost, "/api/v1/boards", `{"name":"Injected"}`},
-		{http.MethodPatch, "/api/v1/boards/" + board.ID, `{"name":"Changed"}`},
-		{http.MethodDelete, "/api/v1/boards/" + board.ID, ""},
-		{http.MethodPost, "/api/v1/boards/" + board.ID + "/buckets", `{"name":"Injected"}`},
-		{http.MethodPost, "/api/v1/boards/" + board.ID + "/reorder-buckets", `{"ids":[]}`},
-		{http.MethodPatch, "/api/v1/buckets/" + bucket.ID, `{"name":"Changed"}`},
-		{http.MethodDelete, "/api/v1/buckets/" + bucket.ID, ""},
-		{http.MethodPost, "/api/v1/buckets/" + bucket.ID + "/tasks", `{"title":"Injected"}`},
-		{http.MethodPost, "/api/v1/buckets/" + bucket.ID + "/reorder-tasks", `{"ids":[]}`},
+		{http.MethodPost, "/api/v1/lists", `{"name":"Injected"}`},
+		{http.MethodPost, "/api/v1/lists/reorder", `{"ids":[]}`},
+		{http.MethodPatch, "/api/v1/lists/" + bucket.ID, `{"name":"Changed"}`},
+		{http.MethodDelete, "/api/v1/lists/" + bucket.ID, ""},
+		{http.MethodPost, "/api/v1/lists/" + bucket.ID + "/tasks", `{"title":"Injected"}`},
+		{http.MethodPost, "/api/v1/lists/" + bucket.ID + "/reorder-tasks", `{"ids":[]}`},
 		{http.MethodPost, "/api/v1/tasks/" + taskB.ID + "/move", fmt.Sprintf(`{"bucketId":%q,"position":0}`, bucket.ID)},
 		{http.MethodDelete, "/api/v1/tasks/" + taskB.ID, ""},
 		{http.MethodPatch, "/api/v1/tasks/" + taskA.ID, fmt.Sprintf(`{"bucketId":%q}`, otherList.ID)},
@@ -212,10 +192,6 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	if err != nil || persistedOwn.BucketID != bucket.ID || persistedOwn.SortOrder != taskA.SortOrder || persistedOwn.AssigneeAgentID != agentA.ID {
 		t.Fatalf("own task after denied routing fields = %#v, error = %v", persistedOwn, err)
 	}
-	persistedBoard, err := boardStore.GetBoard(ctx, owner.ID, board.ID)
-	if err != nil || persistedBoard.Name != board.Name {
-		t.Fatalf("board after denied routes = %#v, error = %v", persistedBoard, err)
-	}
 	persistedBucket, err := boardStore.GetBucket(ctx, owner.ID, bucket.ID)
 	if err != nil || persistedBucket.Name != bucket.Name {
 		t.Fatalf("list after denied routes = %#v, error = %v", persistedBucket, err)
@@ -248,11 +224,7 @@ func TestManagedAgentRunHTTPContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := boards.NewStore(db)
-	board, err := store.CreateBoard(ctx, owner.ID, boards.CreateBoardInput{Name: "Managed board"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, owner.ID, board.ID, boards.CreateBucketInput{Name: "Ready"})
+	bucket, err := store.CreateBucket(ctx, owner.ID, boards.CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}

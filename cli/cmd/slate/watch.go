@@ -48,7 +48,7 @@ const (
 
 type watchOptions struct {
 	profileName string
-	boardID     string
+	listID      string
 	workdir     string
 }
 
@@ -59,7 +59,7 @@ type watcher struct {
 	profileName  string
 	profile      profile
 	identity     identity
-	boardID      string
+	listID       string
 	source       sourceCheckout
 	registry     *registry
 	slateBinary  string
@@ -85,7 +85,7 @@ func watchCmd(c client, args []string) error {
 	}
 	fs := newFlagSet("watch")
 	profileName := fs.String("profile", "", "configured profile to run")
-	boardID := fs.String("board", "", "limit to one board")
+	listID := fs.String("list", "", "limit to one list")
 	workdir := fs.String("workdir", ".", "source Git checkout")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -93,12 +93,12 @@ func watchCmd(c client, args []string) error {
 	if fs.NArg() != 0 {
 		return errors.New("unexpected arguments; run 'slate help watch'")
 	}
-	if strings.TrimSpace(*boardID) != "" && !validUUID(strings.TrimSpace(*boardID)) {
-		return errors.New("--board must be a valid board ID")
+	if strings.TrimSpace(*listID) != "" && !validUUID(strings.TrimSpace(*listID)) {
+		return errors.New("--list must be a valid list ID")
 	}
 	options := watchOptions{
 		profileName: strings.TrimSpace(*profileName),
-		boardID:     strings.TrimSpace(*boardID),
+		listID:      strings.TrimSpace(*listID),
 		workdir:     *workdir,
 	}
 	// Setpgid takes the executor out of the terminal's foreground group, so
@@ -196,7 +196,7 @@ func newWatcher(ctx context.Context, c client, options watchOptions, out io.Writ
 		profileName:  options.profileName,
 		profile:      selected,
 		identity:     who,
-		boardID:      options.boardID,
+		listID:       options.listID,
 		source:       source,
 		registry:     runs,
 		slateBinary:  binary,
@@ -220,7 +220,7 @@ func newWatcher(ctx context.Context, c client, options watchOptions, out io.Writ
 func (w *watcher) refuseWhileWorkTaskExists(ctx context.Context) error {
 	var working []taskView
 	err := w.retryRead(ctx, "check for work already in progress", func() error {
-		found, err := w.client.withContext(ctx).agentTasks("working", w.boardID, 1)
+		found, err := w.client.withContext(ctx).agentTasks("working", w.listID, 1)
 		if err != nil {
 			return err
 		}
@@ -231,9 +231,9 @@ func (w *watcher) refuseWhileWorkTaskExists(ctx context.Context) error {
 		return err
 	}
 	if len(working) > 0 {
-		scope := "any visible board"
-		if w.boardID != "" {
-			scope = "board " + w.boardID
+		scope := "any visible list"
+		if w.listID != "" {
+			scope = "list " + w.listID
 		}
 		return fmt.Errorf("task %s (%q) is already in progress on %s; finish it or move it back to Ready before watching",
 			working[0].ID, working[0].Title, scope)
@@ -260,8 +260,8 @@ func (w *watcher) logf(format string, args ...any) {
 
 func (w *watcher) run(ctx context.Context) error {
 	w.logf("Watching as %s (%s) from %s on %s.", w.identity.User.DisplayName, w.identity.User.AgentID, w.source.Root, w.source.Branch)
-	if w.boardID != "" {
-		w.logf("Scoped to board %s.", w.boardID)
+	if w.listID != "" {
+		w.logf("Scoped to list %s.", w.listID)
 	}
 	launchFailures := 0
 	for {
@@ -288,7 +288,7 @@ func (w *watcher) run(ctx context.Context) error {
 		}
 		var candidates []taskView
 		err = w.retryRead(ctx, "look for assigned work", func() error {
-			found, err := w.client.withContext(ctx).agentTasks("queued", w.boardID, 1)
+			found, err := w.client.withContext(ctx).agentTasks("queued", w.listID, 1)
 			if err != nil {
 				return err
 			}
@@ -368,7 +368,7 @@ func (w *watcher) attempt(ctx context.Context, candidate taskView) (string, erro
 	}
 	record := runRecord{
 		RunID: runID, Profile: w.profileName, AgentID: w.identity.User.AgentID,
-		TaskID: candidate.ID, BoardID: candidate.BoardID, Branch: branch, Worktree: worktree,
+		TaskID: candidate.ID, Branch: branch, Worktree: worktree,
 		SourceRepository: w.source.Root, SourceCommit: w.source.Commit, State: runStateLaunching,
 		WatcherPID: os.Getpid(),
 	}
@@ -498,8 +498,8 @@ func (w *watcher) startExecutor(ctx context.Context, candidate taskView, runID s
 		AgentID: w.identity.User.AgentID, AgentName: w.identity.User.DisplayName,
 		AgentPurpose: w.identity.User.AgentPurpose,
 		TaskID:       candidate.ID, TaskTitle: candidate.Title, TaskPriority: candidate.Priority,
-		BoardName: candidate.BoardName, ListName: candidate.ListName,
-		RunID: runID, Worktree: worktree, Branch: branch,
+		ListName: candidate.ListName,
+		RunID:    runID, Worktree: worktree, Branch: branch,
 	})
 	command := exec.Command(w.executorPath, w.profile.Command[1:]...)
 	command.Dir = worktree

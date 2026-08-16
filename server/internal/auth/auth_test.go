@@ -196,7 +196,7 @@ func TestMeExposesResolvedProPlanAndLimits(t *testing.T) {
 	service.Me(recorder, req)
 
 	body := recorder.Body.String()
-	if recorder.Code != http.StatusOK || !strings.Contains(body, `"plan":"pro"`) || !strings.Contains(body, `"boards":5`) || !strings.Contains(body, `"listsPerBoard":9`) || !strings.Contains(body, `"activeItemsPerList":20`) || !strings.Contains(body, `"agents":5`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `"plan":"pro"`) || !strings.Contains(body, `"lists":45`) || !strings.Contains(body, `"activeItemsPerList":20`) || !strings.Contains(body, `"agents":5`) {
 		t.Fatalf("status = %d, body = %s", recorder.Code, body)
 	}
 }
@@ -214,11 +214,10 @@ func TestMeExposesDefaultFreePlanAndMeasuredUsage(t *testing.T) {
 	for _, expected := range []string{
 		`"plan":"free"`,
 		`"source":"free"`,
-		`"boards":1`,
+		`"lists":5`,
 		`"storedTasks":500`,
 		`"storedContentBytes":10485760`,
 		`"apiTokens":3`,
-		`"maxListsPerBoard":4`,
 		`"maxActiveItemsPerList":7`,
 	} {
 		if !strings.Contains(body, expected) {
@@ -907,8 +906,7 @@ func (s *freeUsageAuthStore) FindUserBySessionHash(_ context.Context, tokenHash 
 
 func (s *freeUsageAuthStore) AccountUsage(context.Context, string) (entitlements.Usage, error) {
 	return entitlements.Usage{
-		Boards:                1,
-		MaxListsPerBoard:      4,
+		Lists:                 4,
 		MaxActiveItemsPerList: 7,
 		Agents:                1,
 		StoredTasks:           12,

@@ -14,9 +14,6 @@ const (
 	TaskTitleRunes         = 300
 	TaskDescriptionBytes   = 16 * 1024
 	TaskEntryBytes         = 16 * 1024
-	BoardNameRunes         = 100
-	BoardBackgroundRunes   = 100
-	BoardBackgroundKind    = 32
 	ListNameRunes          = 100
 	ListGoalBytes          = 4 * 1024
 	AgentNameRunes         = 100

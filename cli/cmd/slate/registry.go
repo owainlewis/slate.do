@@ -33,7 +33,6 @@ type runRecord struct {
 	Profile          string `json:"profile"`
 	AgentID          string `json:"agentId"`
 	TaskID           string `json:"taskId"`
-	BoardID          string `json:"boardId,omitempty"`
 	Branch           string `json:"branch"`
 	Worktree         string `json:"worktree"`
 	SourceRepository string `json:"sourceRepository"`

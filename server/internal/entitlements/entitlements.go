@@ -11,8 +11,7 @@ const (
 )
 
 type Limits struct {
-	Boards             int   `json:"boards"`
-	ListsPerBoard      int   `json:"listsPerBoard"`
+	Lists              int   `json:"lists"`
 	ActiveItemsPerList int   `json:"activeItemsPerList"`
 	Agents             int   `json:"agents"`
 	StoredTasks        int   `json:"storedTasks"`
@@ -21,8 +20,7 @@ type Limits struct {
 }
 
 type Usage struct {
-	Boards                int   `json:"boards"`
-	MaxListsPerBoard      int   `json:"maxListsPerBoard"`
+	Lists                 int   `json:"lists"`
 	MaxActiveItemsPerList int   `json:"maxActiveItemsPerList"`
 	Agents                int   `json:"agents"`
 	StoredTasks           int   `json:"storedTasks"`
@@ -36,10 +34,12 @@ type Entitlement struct {
 	Limits Limits `json:"limits"`
 }
 
+// Lists replaced a pair of limits, boards and lists-per-board, when boards
+// stopped being a thing you could have several of. Each plan keeps the capacity
+// it had: free was one board of five lists, pro was five boards of nine.
 var planCatalog = map[string]Limits{
 	PlanFree: {
-		Boards:             1,
-		ListsPerBoard:      5,
+		Lists:              5,
 		ActiveItemsPerList: 20,
 		Agents:             1,
 		StoredTasks:        500,
@@ -47,8 +47,7 @@ var planCatalog = map[string]Limits{
 		APITokens:          3,
 	},
 	PlanPro: {
-		Boards:             5,
-		ListsPerBoard:      9,
+		Lists:              45,
 		ActiveItemsPerList: 20,
 		Agents:             5,
 		StoredTasks:        10_000,

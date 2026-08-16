@@ -22,24 +22,6 @@ func NewHandler(store *Store) *Handler {
 	return &Handler{store: store}
 }
 
-func (h *Handler) ListBoards(w http.ResponseWriter, r *http.Request, user auth.User) {
-	var listed []Board
-	var err error
-	if user.AgentID != "" {
-		listed, err = h.store.ListBoardsForAgent(r.Context(), user.ID, user.AgentID)
-	} else {
-		listed, err = h.store.ListBoards(r.Context(), user.ID)
-	}
-	if err != nil {
-		writeInternalError(w, err, "boards could not be loaded")
-		return
-	}
-	if listed == nil {
-		listed = []Board{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"boards": listed, "maxBoards": user.Entitlement.Limits.Boards})
-}
-
 func (h *Handler) ListAllBuckets(w http.ResponseWriter, r *http.Request, user auth.User) {
 	if user.AgentID != "" {
 		writeError(w, http.StatusForbidden, "agent credentials cannot list workspace lists")
@@ -53,58 +35,6 @@ func (h *Handler) ListAllBuckets(w http.ResponseWriter, r *http.Request, user au
 	writeJSON(w, http.StatusOK, map[string]any{"lists": lists})
 }
 
-func (h *Handler) CreateBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
-	var input CreateBoardInput
-	if !decodeJSON(w, r, &input) {
-		return
-	}
-	if !validateCreateBoardText(w, input) {
-		return
-	}
-	board, err := h.store.CreateBoard(r.Context(), user.ID, input)
-	if handleStoreError(w, err, user.Entitlement) {
-		return
-	}
-	writeJSON(w, http.StatusCreated, board)
-}
-
-func (h *Handler) GetBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
-	var board Board
-	var err error
-	if user.AgentID != "" {
-		board, err = h.store.GetBoardForAgent(r.Context(), user.ID, user.AgentID, r.PathValue("id"))
-	} else {
-		board, err = h.store.GetBoard(r.Context(), user.ID, r.PathValue("id"))
-	}
-	if handleStoreError(w, err, user.Entitlement) {
-		return
-	}
-	writeJSON(w, http.StatusOK, board)
-}
-
-func (h *Handler) UpdateBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
-	var input UpdateBoardInput
-	if !decodeJSON(w, r, &input) {
-		return
-	}
-	if !validateUpdateBoardText(w, input) {
-		return
-	}
-	board, err := h.store.UpdateBoard(r.Context(), user.ID, r.PathValue("id"), input)
-	if handleStoreError(w, err) {
-		return
-	}
-	writeJSON(w, http.StatusOK, board)
-}
-
-func (h *Handler) DeleteBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
-	err := h.store.DeleteBoard(r.Context(), user.ID, r.PathValue("id"))
-	if handleStoreError(w, err) {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
 func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input CreateBucketInput
 	if !decodeJSON(w, r, &input) {
@@ -113,7 +43,7 @@ func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request, user auth
 	if !validateCreateBucketText(w, input) {
 		return
 	}
-	bucket, err := h.store.CreateBucket(r.Context(), user.ID, r.PathValue("id"), input)
+	bucket, err := h.store.CreateBucket(r.Context(), user.ID, input)
 	if handleStoreError(w, err, user.Entitlement) {
 		return
 	}
@@ -162,7 +92,7 @@ func (h *Handler) ReorderBuckets(w http.ResponseWriter, r *http.Request, user au
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	err := h.store.ReorderBuckets(r.Context(), user.ID, r.PathValue("id"), input.IDs)
+	err := h.store.ReorderBuckets(r.Context(), user.ID, input.IDs)
 	if handleStoreError(w, err) {
 		return
 	}
@@ -494,7 +424,6 @@ func (h *Handler) AgentDone(w http.ResponseWriter, r *http.Request, user auth.Us
 func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 	q := r.URL.Query()
 	filter := TaskFilter{
-		BoardID:       strings.TrimSpace(q.Get("boardId")),
 		BucketID:      strings.TrimSpace(q.Get("bucketId")),
 		Status:        strings.TrimSpace(q.Get("status")),
 		Priority:      strings.TrimSpace(q.Get("priority")),
@@ -572,9 +501,6 @@ func validatePathID(w http.ResponseWriter, resource string, id string) bool {
 }
 
 func validateTaskFilterLocationIDs(filter TaskFilter) error {
-	if filter.BoardID != "" && !validUUID(filter.BoardID) {
-		return errors.New("boardId must be a valid ID")
-	}
 	if filter.BucketID != "" && !validUUID(filter.BucketID) {
 		return errors.New("bucketId must be a valid ID")
 	}
@@ -596,18 +522,6 @@ func parseQueryBool(name string, raw string) (*bool, error) {
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	return httpapi.DecodeJSON(w, r, target)
-}
-
-func validateCreateBoardText(w http.ResponseWriter, input CreateBoardInput) bool {
-	return httpapi.RuneLimit(w, "name", strings.TrimSpace(input.Name), httpapi.BoardNameRunes) &&
-		httpapi.RuneLimit(w, "backgroundKind", strings.TrimSpace(input.BackgroundKind), httpapi.BoardBackgroundKind) &&
-		httpapi.RuneLimit(w, "backgroundValue", input.BackgroundValue, httpapi.BoardBackgroundRunes)
-}
-
-func validateUpdateBoardText(w http.ResponseWriter, input UpdateBoardInput) bool {
-	return optionalRuneLimit(w, "name", input.Name, httpapi.BoardNameRunes, true) &&
-		optionalRuneLimit(w, "backgroundKind", input.BackgroundKind, httpapi.BoardBackgroundKind, true) &&
-		optionalRuneLimit(w, "backgroundValue", input.BackgroundValue, httpapi.BoardBackgroundRunes, false)
 }
 
 func validateCreateBucketText(w http.ResponseWriter, input CreateBucketInput) bool {
@@ -658,12 +572,9 @@ func handleStoreError(w http.ResponseWriter, err error, account ...entitlements.
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, ErrLimitFull):
 		writeLimitError(w, "working_limit_reached", "This list's working limit has been reached.")
-	case errors.Is(err, ErrBoardLimit):
-		plan, code, limit := limitContext(account, func(l entitlements.Limits) int { return l.Boards }, defaultMaxBoards)
-		writeLimitError(w, code+"_board_limit_reached", fmt.Sprintf("%s allows up to %d %s.", plan, limit, plural(limit, "board", "boards")))
 	case errors.Is(err, ErrListLimit):
-		plan, code, limit := limitContext(account, func(l entitlements.Limits) int { return l.ListsPerBoard }, defaultMaxListsPerBoard)
-		writeLimitError(w, code+"_list_limit_reached", fmt.Sprintf("%s allows up to %d lists per board.", plan, limit))
+		plan, code, limit := limitContext(account, func(l entitlements.Limits) int { return l.Lists }, defaultMaxLists)
+		writeLimitError(w, code+"_list_limit_reached", fmt.Sprintf("%s allows up to %d %s.", plan, limit, plural(limit, "list", "lists")))
 	case errors.Is(err, ErrActiveItemLimit):
 		plan, code, limit := limitContext(account, func(l entitlements.Limits) int { return l.ActiveItemsPerList }, defaultMaxTasksPerList)
 		writeLimitError(w, code+"_active_item_limit_reached", fmt.Sprintf("Max active items per list is %d on %s.", limit, plan))

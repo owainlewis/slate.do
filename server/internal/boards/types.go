@@ -20,21 +20,8 @@ const (
 	PriorityP2   = "p2"
 )
 
-type Board struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	BackgroundKind  string    `json:"backgroundKind"`
-	BackgroundValue string    `json:"backgroundValue"`
-	MaxTasksPerList int       `json:"maxTasksPerList"`
-	SortOrder       int       `json:"sortOrder"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-	Buckets         []Bucket  `json:"buckets,omitempty"`
-}
-
 type Bucket struct {
 	ID                  string    `json:"id"`
-	BoardID             string    `json:"boardId"`
 	Name                string    `json:"name"`
 	Goal                string    `json:"goal"`
 	IsInbox             bool      `json:"isInbox"`
@@ -45,12 +32,10 @@ type Bucket struct {
 	UpdatedAt           time.Time `json:"updatedAt"`
 	Tasks               []Task    `json:"tasks,omitempty"`
 	CompletedNextCursor string    `json:"completedNextCursor,omitempty"`
-	BoardName           string    `json:"boardName,omitempty"`
 }
 
 type Task struct {
 	ID                string    `json:"id"`
-	BoardID           string    `json:"boardId"`
 	BucketID          string    `json:"bucketId"`
 	Title             string    `json:"title"`
 	Description       string    `json:"description,omitempty"`
@@ -64,7 +49,6 @@ type Task struct {
 	ParentTaskID      string    `json:"parentTaskId,omitempty"`
 	ParentTaskTitle   string    `json:"parentTaskTitle,omitempty"`
 	BucketName        string    `json:"listName,omitempty"`
-	BoardName         string    `json:"boardName,omitempty"`
 	SortOrder         int       `json:"sortOrder"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
@@ -81,21 +65,6 @@ func (task Task) MarshalJSON() ([]byte, error) {
 		taskJSON: taskJSON(task),
 		Done:     task.Status == StatusDone,
 	})
-}
-
-type CreateBoardInput struct {
-	Name            string `json:"name"`
-	BackgroundKind  string `json:"backgroundKind"`
-	BackgroundValue string `json:"backgroundValue"`
-	MaxTasksPerList int    `json:"maxTasksPerList"`
-}
-
-type UpdateBoardInput struct {
-	Name            *string `json:"name"`
-	BackgroundKind  *string `json:"backgroundKind"`
-	BackgroundValue *string `json:"backgroundValue"`
-	MaxTasksPerList *int    `json:"maxTasksPerList"`
-	SortOrder       *int    `json:"sortOrder"`
 }
 
 type CreateBucketInput struct {
@@ -144,7 +113,6 @@ type MoveTaskInput struct {
 }
 
 type TaskFilter struct {
-	BoardID         string
 	BucketID        string
 	Status          string
 	Done            *bool

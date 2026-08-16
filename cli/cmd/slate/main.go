@@ -90,8 +90,6 @@ func run(args []string) error {
 		return printVersion(args[2:], os.Stdout)
 	case "auth":
 		return authCmd(c, args[2:])
-	case "boards":
-		return boardsCmd(c, args[2:])
 	case "lists", "buckets":
 		return listsCmd(c, args[2:])
 	case "tasks":
@@ -115,14 +113,14 @@ func printVersion(args []string, w io.Writer) error {
 func printHelp(topic string) error {
 	help, ok := helpText[topic]
 	if !ok {
-		return fmt.Errorf("unknown help topic %q; choose auth, boards, lists, or tasks", topic)
+		return fmt.Errorf("unknown help topic %q; choose auth, lists, tasks, watch, or runs", topic)
 	}
 	_, err := fmt.Fprint(os.Stdout, help)
 	return err
 }
 
 var helpText = map[string]string{
-	"": `Slate CLI controls boards, lists, tasks, and agent workflow.
+	"": `Slate CLI controls lists, tasks, and agent workflow.
 
 Configuration:
   SLATE_API_TOKEN   Required API token created in Slate settings
@@ -131,9 +129,8 @@ Configuration:
 
 Usage:
   slate version
-  slate help [auth|boards|lists|tasks|watch|runs]
+  slate help [auth|lists|tasks|watch|runs]
   slate auth status
-  slate boards <command>
   slate lists <command>
   slate tasks <command>
   slate watch --profile <name>
@@ -143,7 +140,7 @@ All successful command output is JSON. IDs are returned by list/get commands.
 Run "slate help <topic>" for every command and flag.
 `,
 	"watch": `Usage:
-  slate watch --profile <name> [--board <board-id>] [--workdir <git-path>]
+  slate watch --profile <name> [--list <list-id>] [--workdir <git-path>]
 
 Runs one configured agent against its assigned Ready tasks. The watcher pins
 the source commit at startup. For each task it creates a disposable Git
@@ -155,7 +152,7 @@ CLI. The watcher never claims or writes to the task itself.
 The source checkout must be on a named branch with nothing uncommitted, and
 --workdir defaults to the current directory. An executor never runs in it.
 
---board limits both the search for work and the check for a task already in
+--list limits both the search for work and the check for a task already in
 progress. A task already in progress stops startup: finish it or move it back
 to Ready, because this version has no automatic resume.
 
@@ -191,30 +188,23 @@ never forces and it keeps the branch, so any commits stay reachable.
 	"auth": `Usage:
   slate auth status                 Verify the token and show its user
 `,
-	"boards": `Usage:
-  slate boards list
-  slate boards get <board-id>
-  slate boards create --name <name> [--background-kind <kind>] [--background-value <value>] [--max-tasks-per-list <n>]
-  slate boards update <board-id> [--name <name>] [--background-kind <kind>] [--background-value <value>] [--max-tasks-per-list <n>] [--sort-order <n>]
-  slate boards delete <board-id>
-
-"get" returns every active item and the 20 most recently updated completed
-items per list. Use "tasks list --status done" to page older completed work.
-`,
 	"lists": `Usage:
-  slate lists list --board <board-id>
+  slate lists list
   slate lists get <list-id>
-  slate lists create --board <board-id> --name <name> [--goal <goal>] [--inbox]
+  slate lists create --name <name> [--goal <goal>] [--inbox]
   slate lists update <list-id> [--name <name>] [--goal <goal>] [--inbox=true|false] [--sort-order <n>]
   slate lists delete <list-id>
-  slate lists reorder --board <board-id> <list-id>...
+  slate lists reorder <list-id>...
+
+"get" returns every active item and the 20 most recently updated completed
+items in the list. Use "tasks list --status done" to page older completed work.
 
 "buckets" is accepted as an alias for "lists".
 `,
 	"tasks": `Usage:
-  slate tasks list [--board <board-id>] [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--limit <n>] [--cursor <cursor>]
+  slate tasks list [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--limit <n>] [--cursor <cursor>]
   slate tasks get <task-id>
-  slate tasks pull [--board <board-id>] [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
+  slate tasks pull [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
   slate tasks create --title <title> [--list <list-id> | --parent <task-id>] [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>]
   slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>] [--priority <p0|p1|p2>]
   slate tasks delete <task-id>
@@ -247,78 +237,6 @@ func authCmd(c client, args []string) error {
 	return c.getJSON("/api/v1/me", nil)
 }
 
-func boardsCmd(c client, args []string) error {
-	if wantsHelp(args) {
-		return printHelp("boards")
-	}
-	if len(args) < 1 {
-		return errors.New("usage: slate boards <command>; run 'slate help boards'")
-	}
-	switch args[0] {
-	case "list":
-		if len(args) != 1 {
-			return errors.New("usage: slate boards list")
-		}
-		return c.getJSON("/api/v1/boards", nil)
-	case "get":
-		id, err := singleID("slate boards get <board-id>", args[1:])
-		if err != nil {
-			return err
-		}
-		return c.getJSON("/api/v1/boards/"+url.PathEscape(id), nil)
-	case "create":
-		fs := newFlagSet("boards create")
-		name := fs.String("name", "", "board name")
-		backgroundKind := fs.String("background-kind", "", "background kind")
-		backgroundValue := fs.String("background-value", "", "background value")
-		maxTasks := fs.Int("max-tasks-per-list", 0, "Max active items per list")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		if fs.NArg() != 0 || strings.TrimSpace(*name) == "" {
-			return errors.New("--name is required")
-		}
-		body := map[string]any{"name": *name, "backgroundKind": *backgroundKind, "backgroundValue": *backgroundValue, "maxTasksPerList": *maxTasks}
-		return c.sendJSON(http.MethodPost, "/api/v1/boards", body)
-	case "update":
-		if len(args) < 2 {
-			return errors.New("usage: slate boards update <board-id> [flags]")
-		}
-		id := args[1]
-		fs := newFlagSet("boards update")
-		name := fs.String("name", "", "board name")
-		backgroundKind := fs.String("background-kind", "", "background kind")
-		backgroundValue := fs.String("background-value", "", "background value")
-		maxTasks := fs.Int("max-tasks-per-list", 0, "Max active items per list")
-		sortOrder := fs.Int("sort-order", 0, "sort order")
-		if err := fs.Parse(args[2:]); err != nil {
-			return err
-		}
-		if fs.NArg() != 0 {
-			return errors.New("unexpected arguments")
-		}
-		body := visitedValues(fs, map[string]any{
-			"name": *name, "background-kind": *backgroundKind, "background-value": *backgroundValue,
-			"max-tasks-per-list": *maxTasks, "sort-order": *sortOrder,
-		}, map[string]string{
-			"background-kind": "backgroundKind", "background-value": "backgroundValue",
-			"max-tasks-per-list": "maxTasksPerList", "sort-order": "sortOrder",
-		})
-		if len(body) == 0 {
-			return errors.New("at least one update flag is required")
-		}
-		return c.sendJSON(http.MethodPatch, "/api/v1/boards/"+url.PathEscape(id), body)
-	case "delete":
-		id, err := singleID("slate boards delete <board-id>", args[1:])
-		if err != nil {
-			return err
-		}
-		return c.sendJSON(http.MethodDelete, "/api/v1/boards/"+url.PathEscape(id), nil)
-	default:
-		return fmt.Errorf("unknown boards command %q; run 'slate help boards'", args[0])
-	}
-}
-
 func listsCmd(c client, args []string) error {
 	if wantsHelp(args) {
 		return printHelp("lists")
@@ -328,44 +246,29 @@ func listsCmd(c client, args []string) error {
 	}
 	switch args[0] {
 	case "list":
-		fs := newFlagSet("lists list")
-		boardID := fs.String("board", "", "board id")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
+		if len(args) != 1 {
+			return errors.New("usage: slate lists list")
 		}
-		if fs.NArg() != 0 || *boardID == "" {
-			return errors.New("--board is required")
-		}
-		var board struct {
-			Buckets []json.RawMessage `json:"buckets"`
-		}
-		if err := c.do(http.MethodGet, "/api/v1/boards/"+url.PathEscape(*boardID), nil, &board); err != nil {
-			return err
-		}
-		if board.Buckets == nil {
-			board.Buckets = []json.RawMessage{}
-		}
-		return printJSON(map[string]any{"lists": board.Buckets})
+		return c.getJSON("/api/v1/lists", nil)
 	case "get":
 		id, err := singleID("slate lists get <list-id>", args[1:])
 		if err != nil {
 			return err
 		}
-		return c.getJSON("/api/v1/buckets/"+url.PathEscape(id), nil)
+		return c.getJSON("/api/v1/lists/"+url.PathEscape(id), nil)
 	case "create":
 		fs := newFlagSet("lists create")
-		boardID := fs.String("board", "", "board id")
 		name := fs.String("name", "", "list name")
 		goal := fs.String("goal", "", "list goal")
 		inbox := fs.Bool("inbox", false, "make this the inbox")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		if fs.NArg() != 0 || *boardID == "" || strings.TrimSpace(*name) == "" {
-			return errors.New("--board and --name are required")
+		if fs.NArg() != 0 || strings.TrimSpace(*name) == "" {
+			return errors.New("--name is required")
 		}
 		body := map[string]any{"name": *name, "goal": *goal, "isInbox": *inbox}
-		return c.sendJSON(http.MethodPost, "/api/v1/boards/"+url.PathEscape(*boardID)+"/buckets", body)
+		return c.sendJSON(http.MethodPost, "/api/v1/lists", body)
 	case "update":
 		if len(args) < 2 {
 			return errors.New("usage: slate lists update <list-id> [flags]")
@@ -386,23 +289,22 @@ func listsCmd(c client, args []string) error {
 		if len(body) == 0 {
 			return errors.New("at least one update flag is required")
 		}
-		return c.sendJSON(http.MethodPatch, "/api/v1/buckets/"+url.PathEscape(id), body)
+		return c.sendJSON(http.MethodPatch, "/api/v1/lists/"+url.PathEscape(id), body)
 	case "delete":
 		id, err := singleID("slate lists delete <list-id>", args[1:])
 		if err != nil {
 			return err
 		}
-		return c.sendJSON(http.MethodDelete, "/api/v1/buckets/"+url.PathEscape(id), nil)
+		return c.sendJSON(http.MethodDelete, "/api/v1/lists/"+url.PathEscape(id), nil)
 	case "reorder":
 		fs := newFlagSet("lists reorder")
-		boardID := fs.String("board", "", "board id")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		if *boardID == "" || fs.NArg() == 0 {
-			return errors.New("--board and at least one list id are required")
+		if fs.NArg() == 0 {
+			return errors.New("at least one list id is required")
 		}
-		return c.sendJSON(http.MethodPost, "/api/v1/boards/"+url.PathEscape(*boardID)+"/reorder-buckets", map[string]any{"ids": fs.Args()})
+		return c.sendJSON(http.MethodPost, "/api/v1/lists/reorder", map[string]any{"ids": fs.Args()})
 	default:
 		return fmt.Errorf("unknown lists command %q; run 'slate help lists'", args[0])
 	}
@@ -419,7 +321,6 @@ func tasksCmd(c client, args []string) error {
 	case "list", "pull":
 		command := args[0]
 		fs := newFlagSet("tasks " + command)
-		boardID := fs.String("board", "", "board id")
 		listID := fs.String("list", "", "list id")
 		limit := fs.Int("limit", 0, "maximum tasks")
 		priority := fs.String("priority", "", "priority filter: p0, p1, or p2")
@@ -438,7 +339,6 @@ func tasksCmd(c client, args []string) error {
 			return fmt.Errorf("invalid priority %q; choose p0, p1, or p2", *priority)
 		}
 		q := url.Values{}
-		setQuery(q, "boardId", *boardID)
 		setQuery(q, "bucketId", *listID)
 		setQuery(q, "priority", *priority)
 		if *limit > 0 {
@@ -482,7 +382,7 @@ func tasksCmd(c client, args []string) error {
 		body := map[string]any{"title": *title, "description": *description, "scheduledDate": *date, "kind": "action", "overrideLimit": *override}
 		path := "/api/v1/tasks"
 		if targetList != "" {
-			path = "/api/v1/buckets/" + url.PathEscape(targetList) + "/tasks"
+			path = "/api/v1/lists/" + url.PathEscape(targetList) + "/tasks"
 		} else if strings.TrimSpace(*parentID) != "" {
 			path = "/api/v1/tasks/" + url.PathEscape(strings.TrimSpace(*parentID)) + "/subtasks"
 		}
@@ -543,7 +443,7 @@ func tasksCmd(c client, args []string) error {
 		if *listID == "" || fs.NArg() == 0 {
 			return errors.New("--list and at least one task id are required")
 		}
-		return c.sendJSON(http.MethodPost, "/api/v1/buckets/"+url.PathEscape(*listID)+"/reorder-tasks", map[string]any{"ids": fs.Args()})
+		return c.sendJSON(http.MethodPost, "/api/v1/lists/"+url.PathEscape(*listID)+"/reorder-tasks", map[string]any{"ids": fs.Args()})
 	case "claim":
 		id, err := singleID("slate tasks claim <task-id>", args[1:])
 		if err != nil {

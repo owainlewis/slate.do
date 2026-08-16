@@ -241,7 +241,7 @@ func seedAdmin(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := boards.NewStore(db).SeedDefaultBoard(context.Background(), user.ID); err != nil {
+	if err := boards.NewStore(db).SeedDefaultLists(context.Background(), user.ID); err != nil {
 		return err
 	}
 	fmt.Printf("seeded admin %s\n", user.Email)
