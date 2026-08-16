@@ -60,7 +60,9 @@ func StaticHandler(content fs.FS) http.Handler {
 // These shapes mirror parseRoute in web/dist/app.js; keep the two in step.
 func isAppRoute(clean string) bool {
 	switch clean {
-	case "/", "/login", "/app", "/app/tasks", "/app/inbox", "/app/today", "/app/week", "/app/review", "/app/settings", "/early-access", "/reset-password":
+	case "/", "/login", "/app", "/app/tasks", "/app/inbox", "/app/runs", "/app/runners", "/app/settings", "/early-access", "/reset-password",
+		// Retired views. The frontend redirects these to the board.
+		"/app/today", "/app/week", "/app/review":
 		return true
 	}
 	if listPath, ok := strings.CutPrefix(clean, "/app/lists/"); ok && listPath != "" {

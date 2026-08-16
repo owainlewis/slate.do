@@ -14,6 +14,8 @@ The main rule is: every read and mutation must remain scoped to the authenticate
 
 The approved task-first redesign in [issue #129](https://github.com/owainlewis/slate.do/issues/129) and [PR #130](https://github.com/owainlewis/slate.do/pull/130) is proposed work. It is not included in this current-state document.
 
+The agent control plane pivot in [issue #202](https://github.com/owainlewis/slate.do/issues/202) is also proposed work. Its target design lives in `docs/agentos-architecture.md` and its delivery plan in `docs/agentos-plan.md`. Neither is reflected here until it ships.
+
 ## 2. System context
 
 ```mermaid

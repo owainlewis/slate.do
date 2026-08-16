@@ -1,6 +1,9 @@
 # Slate PRD
 
-Status: Card-first control plane.
+> **Superseded.** This describes the card-first product that came before the agent control plane pivot.
+> Kept for history. The current target is `docs/agentos-architecture.md`; the plan is `docs/agentos-plan.md`.
+
+Status: Card-first control plane. Superseded by the agent control plane.
 
 ## Summary
 
@@ -25,7 +28,7 @@ The card is the core unit of intent. Lists give cards useful context without for
 2. The card is refined with enough prompt and context to act on.
 3. The card can stay in Inbox or move to a list that gives it meaning.
 4. A human owns the card directly, or assigns it to an agent.
-5. Work moves through New, Ready, In Progress, Review, and Done.
+5. Work moves through Todo, Ready, In Progress, Review, and Done.
 6. The agent can comment or return an output on the card.
 7. Complex intent can be split into one level of child cards.
 
@@ -98,7 +101,7 @@ New card creates one card in Inbox and opens it for editing.
 Every view reads and edits the same card records:
 
 - Board: show user-defined lists as columns and move cards between them.
-- Flow: show New, Ready, In Progress, Review, and Done as columns without changing a card's list.
+- Flow: show Todo, Ready, In Progress, Review, and Done as columns without changing a card's list.
 - Table: card, list, status, priority, owner, and planned date.
 - Week: planned cards grouped Monday through Sunday.
 
@@ -108,7 +111,7 @@ Review separates outputs waiting for judgment from cards manually placed in Revi
 
 ## Workflow status
 
-- `new`, labelled New
+- `new`, labelled Todo
 - `queued`, labelled Ready
 - `working`, labelled In Progress
 - `needs_review`, labelled Review

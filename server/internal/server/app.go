@@ -69,6 +69,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/agents/{id}", a.session(a.auth.DeleteAgent))
 	mux.HandleFunc("GET /api/v1/boards", a.accountRead(a.boards.ListBoards))
 	mux.HandleFunc("GET /api/v1/lists", a.accountRead(a.boards.ListAllBuckets))
+	// The inbox is a person's view of what every agent has said, so an agent
+	// credential must not reach it: it would read other agents' messages.
+	mux.HandleFunc("GET /api/v1/inbox", a.person(a.boards.ListInbox))
 	mux.HandleFunc("POST /api/v1/boards", a.accountManage(a.boards.CreateBoard))
 	mux.HandleFunc("GET /api/v1/boards/{id}", a.accountRead(a.boards.GetBoard))
 	mux.HandleFunc("PATCH /api/v1/boards/{id}", a.accountManage(a.boards.UpdateBoard))
@@ -83,23 +86,13 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/tasks", a.user(a.boards.ListTasks))
 	mux.HandleFunc("POST /api/v1/tasks", a.accountManage(a.boards.CreateInboxTask))
 	mux.HandleFunc("GET /api/v1/tasks/{id}", a.user(a.boards.GetTask))
-	mux.HandleFunc("GET /api/v1/tasks/{id}/entries", a.user(a.boards.ListCardEntries))
-	mux.HandleFunc("POST /api/v1/tasks/{id}/entries", a.user(a.boards.CreateCardEntry))
+	mux.HandleFunc("GET /api/v1/tasks/{id}/entries", a.user(a.boards.ListTaskEntries))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/entries", a.user(a.boards.CreateTaskEntry))
 	mux.HandleFunc("POST /api/v1/tasks/{id}/subtasks", a.accountManage(a.boards.CreateSubtask))
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}", a.user(a.boards.UpdateTask))
 	mux.HandleFunc("POST /api/v1/tasks/{id}/move", a.accountManage(a.boards.MoveTask))
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}/status", a.session(a.boards.UpdateTaskStatus))
 	mux.HandleFunc("DELETE /api/v1/tasks/{id}", a.accountManage(a.boards.DeleteTask))
-	// Card aliases expose the product language while task routes remain stable for existing clients.
-	mux.HandleFunc("GET /api/v1/cards", a.user(a.boards.ListTasks))
-	mux.HandleFunc("POST /api/v1/cards", a.accountManage(a.boards.CreateInboxTask))
-	mux.HandleFunc("GET /api/v1/cards/{id}", a.user(a.boards.GetTask))
-	mux.HandleFunc("PATCH /api/v1/cards/{id}", a.user(a.boards.UpdateTask))
-	mux.HandleFunc("DELETE /api/v1/cards/{id}", a.accountManage(a.boards.DeleteTask))
-	mux.HandleFunc("POST /api/v1/cards/{id}/children", a.accountManage(a.boards.CreateSubtask))
-	mux.HandleFunc("GET /api/v1/card-review-kinds", a.user(a.boards.ListCardReviewKinds))
-	mux.HandleFunc("GET /api/v1/cards/{id}/entries", a.user(a.boards.ListCardEntries))
-	mux.HandleFunc("POST /api/v1/cards/{id}/entries", a.user(a.boards.CreateCardEntry))
 	mux.HandleFunc("GET /api/v1/agent/tasks", a.user(a.boards.AgentTasks))
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/claim", a.user(a.boards.AgentClaim))
 	mux.HandleFunc("PATCH /api/v1/agent/tasks/{id}/status", a.user(a.boards.AgentStatus))
@@ -369,8 +362,24 @@ func (a *App) user(next func(http.ResponseWriter, *http.Request, auth.User)) htt
 	}
 }
 
+// accountRead accepts agent credentials, because an agent needs the same
+// account context a person has to work on its own tasks. Handlers behind it
+// must narrow their own results for agents, as ListTasks does.
 func (a *App) accountRead(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {
 	return a.user(next)
+}
+
+// person accepts a browser session or a personal API token and rejects agent
+// credentials. Use it for account-wide surfaces that belong to the human, where
+// there is no per-agent narrowing to apply.
+func (a *App) person(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {
+	return a.user(func(w http.ResponseWriter, r *http.Request, user auth.User) {
+		if user.AgentID != "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "agent credentials cannot read account-wide data"})
+			return
+		}
+		next(w, r, user)
+	})
 }
 
 func (a *App) accountManage(next func(http.ResponseWriter, *http.Request, auth.User)) http.HandlerFunc {

@@ -266,6 +266,12 @@ func TestManagedAgentRunHTTPContract(t *testing.T) {
 	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"agentPurpose":"Implements assigned tasks"`) || !strings.Contains(me.Body.String(), `"managedRuns":true`) {
 		t.Fatalf("managed agent me = %d %s", me.Code, me.Body.String())
 	}
+	// The inbox is account-wide, so an agent reading it would see every other
+	// agent's messages.
+	inbox := agentRequest(t, app, token, http.MethodGet, "/api/v1/inbox", "")
+	if inbox.Code != http.StatusForbidden {
+		t.Fatalf("agent inbox read = %d %s, want 403", inbox.Code, inbox.Body.String())
+	}
 	runID := "33333333-3333-4333-8333-333333333333"
 	claim := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/agent/tasks/"+task.ID+"/claim", `{}`, map[string]string{"X-Slate-Run-ID": runID})
 	if claim.Code != http.StatusOK || !strings.Contains(claim.Body.String(), `"status":"working"`) {
@@ -310,7 +316,7 @@ func TestManagedAgentRunHTTPContract(t *testing.T) {
 		t.Fatalf("managed status = %d %s", status.Code, status.Body.String())
 	}
 	output := agentRequestWithHeaders(t, app, token, http.MethodPost, "/api/v1/tasks/"+task.ID+"/entries", `{"kind":"output","body":"done"}`, map[string]string{"Idempotency-Key": "managed-output", "X-Slate-Run-ID": runID})
-	if output.Code != http.StatusCreated || !strings.Contains(output.Body.String(), `"cardStatus":"needs_review"`) {
+	if output.Code != http.StatusCreated || !strings.Contains(output.Body.String(), `"taskStatus":"needs_review"`) {
 		t.Fatalf("managed output = %d %s", output.Code, output.Body.String())
 	}
 	entries := agentRequest(t, app, token, http.MethodGet, "/api/v1/tasks/"+task.ID+"/entries?runId="+runID, "")

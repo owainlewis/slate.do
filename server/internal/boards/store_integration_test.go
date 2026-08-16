@@ -86,15 +86,15 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	commentInput := CreateCardEntryInput{Kind: "comment", Body: "Keep it concise", IdempotencyKey: "comment-attempt"}
-	comment, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, commentInput)
+	commentInput := CreateTaskEntryInput{Kind: "comment", Body: "Keep it concise", IdempotencyKey: "comment-attempt"}
+	comment, err := store.CreateTaskEntry(ctx, ownerID, "", "Owain", card.ID, commentInput)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if comment.AuthorKind != "human" || comment.AuthorName != "Owain" {
 		t.Fatalf("human comment author = %#v", comment)
 	}
-	retriedComment, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, commentInput)
+	retriedComment, err := store.CreateTaskEntry(ctx, ownerID, "", "Owain", card.ID, commentInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,13 +103,13 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	}
 	changedComment := commentInput
 	changedComment.Body = "A different comment"
-	if _, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, changedComment); !errors.Is(err, ErrIdempotencyKey) {
+	if _, err := store.CreateTaskEntry(ctx, ownerID, "", "Owain", card.ID, changedComment); !errors.Is(err, ErrIdempotencyKey) {
 		t.Fatalf("changed comment retry error = %v, want ErrIdempotencyKey", err)
 	}
 	concurrentIDs := make([]string, 8)
-	concurrentInput := CreateCardEntryInput{Kind: "comment", Body: "One concurrent comment", IdempotencyKey: "concurrent-comment"}
+	concurrentInput := CreateTaskEntryInput{Kind: "comment", Body: "One concurrent comment", IdempotencyKey: "concurrent-comment"}
 	concurrentResults := runConcurrently(len(concurrentIDs), func(index int) error {
-		entry, err := store.CreateCardEntry(ctx, ownerID, "", "Owain", card.ID, concurrentInput)
+		entry, err := store.CreateTaskEntry(ctx, ownerID, "", "Owain", card.ID, concurrentInput)
 		if err == nil {
 			concurrentIDs[index] = entry.ID
 		}
@@ -123,15 +123,15 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 			t.Fatalf("concurrent comment %d = %q, want %q", index, concurrentIDs[index], concurrentIDs[0])
 		}
 	}
-	outputInput := CreateCardEntryInput{Kind: "output", Body: "Draft is ready", IdempotencyKey: "output-attempt"}
-	output, err := store.CreateCardEntry(ctx, ownerID, agentID, "", card.ID, outputInput)
+	outputInput := CreateTaskEntryInput{Kind: "output", Body: "Draft is ready", IdempotencyKey: "output-attempt"}
+	output, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", card.ID, outputInput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.AuthorKind != "agent" || output.AuthorName != "Builder" || output.CardStatus != StatusNeedsReview || output.CardReviewReason != "output" {
+	if output.AuthorKind != "agent" || output.AuthorName != "Builder" || output.TaskStatus != StatusNeedsReview || output.TaskReviewReason != "output" {
 		t.Fatalf("agent output author = %#v", output)
 	}
-	entries, err := store.ListCardEntries(ctx, ownerID, agentID, card.ID)
+	entries, err := store.ListTaskEntries(ctx, ownerID, agentID, card.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,26 +145,12 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if updated.Status != StatusNeedsReview {
 		t.Fatalf("card status = %q", updated.Status)
 	}
-	needsReview := StatusNeedsReview
-	reviewKinds, err := store.ListCardReviewKinds(ctx, ownerID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reviewKinds[card.ID] != "output" {
-		t.Fatalf("review kind = %q, want output", reviewKinds[card.ID])
-	}
-	renamed := "Card edited while reviewing output"
+	renamed := "Task edited while reviewing output"
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Title: &renamed}); err != nil {
 		t.Fatal(err)
 	}
 	card.Title = renamed
-	reviewKinds, err = store.ListCardReviewKinds(ctx, ownerID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reviewKinds[card.ID] != "output" {
-		t.Fatalf("review kind after edit = %q, want output", reviewKinds[card.ID])
-	}
+	needsReview := StatusNeedsReview
 	queued := StatusQueued
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &queued}); err != nil {
 		t.Fatal(err)
@@ -172,32 +158,25 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &needsReview}); err != nil {
 		t.Fatal(err)
 	}
-	reviewKinds, err = store.ListCardReviewKinds(ctx, ownerID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reviewKinds[card.ID] != "other" {
-		t.Fatalf("review kind after manual re-entry = %q, want other", reviewKinds[card.ID])
-	}
 	done := StatusDone
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &done}); err != nil {
 		t.Fatal(err)
 	}
-	replayedOutput, err := store.CreateCardEntry(ctx, ownerID, agentID, "", card.ID, outputInput)
+	replayedOutput, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", card.ID, outputInput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayedOutput.ID != output.ID || replayedOutput.CardStatus != StatusDone || replayedOutput.CardReviewReason != "" {
+	if replayedOutput.ID != output.ID || replayedOutput.TaskStatus != StatusDone || replayedOutput.TaskReviewReason != "" {
 		t.Fatalf("replayed output = %#v", replayedOutput)
 	}
 	updated, err = store.GetTask(ctx, ownerID, card.ID)
 	if err != nil || updated.Status != StatusDone {
 		t.Fatalf("card after output replay = %#v, error = %v", updated, err)
 	}
-	if _, err := store.ListCardEntries(ctx, ownerID, siblingAgentID, card.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := store.ListTaskEntries(ctx, ownerID, siblingAgentID, card.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("sibling agent list error = %v, want ErrNotFound", err)
 	}
-	if _, err := store.ListCardEntries(ctx, otherID, "", card.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := store.ListTaskEntries(ctx, otherID, "", card.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other owner list error = %v, want ErrNotFound", err)
 	}
 	assertStorageUsage(t, ctx, db, ownerID, 1, taskContentBytes(card)+int64(len(comment.Body)+len(concurrentInput.Body)+len(output.Body)))

@@ -1,31 +1,39 @@
 # slate.do
 
-A card-first control plane for clear thinking and focused human and agent execution.
+A control plane for work done by people and coding agents.
 
-Slate captures units of intent as cards, organises them into lists, and shows the same cards as a board, workflow, table, or weekly plan.
+You put work on a board. Agents pick it up, do it on machines you own, and message you when they need you. The control plane holds all the state and none of the execution.
 
 ## Product
 
-The card is the core unit. A card can be a task, goal, project, idea, decision, or agent prompt. New cards enter Inbox, lists provide context, and every card can move through New, Ready, In Progress, Review, and Done.
+Slate is two parts:
 
-Cards can have one level of child cards for shared human and agent work. Agents execute assigned cards through the CLI and return comments or outputs to the card.
+- **The control plane.** The hosted app. Tasks, agents, runs, the inbox. This is what you sign up for.
+- **The runner.** The `slate` CLI, installed separately on your own machine. It polls for work, executes it, and reports back.
+
+You never have to install anything. Slate is a working task manager on its own, and agents are an upgrade to a task rather than a precondition for the product.
+
+Four primitives: **task**, **agent**, **runner**, **run**. A task is a unit of work. An agent is config: instructions, a backend, a workspace. A runner is a registered machine. A run is one execution attempt.
+
+Because runners live on your machines, you bring your own agent runtime (Claude Code, Codex, anything that reads a prompt and exits) and pay for your own tokens on your own subscription. The control plane never holds a repo, a model key, or a deploy credential.
 
 ## Docs
 
+- [Target architecture](docs/agentos-architecture.md)
+- [Delivery plan](docs/agentos-plan.md)
+- [Current implementation](ARCHITECTURE.md)
 - [Install and use the Slate CLI](docs/cli.md)
 - [Run a coding agent on your Slate tasks](docs/watcher.md)
-- [PRD](docs/prd.md)
-- [Initial static prototype](list-app-mockup.html)
+
+`docs/prd.md` describes the card-first product that came before this and is kept for history only.
 
 ## App
 
-Slate now has an admin-only MVP:
-
 - Go server and static JS frontend.
 - Postgres persistence.
-- Admin sign in with a seeded admin.
-- Inbox, account-wide cards, Board grouped by list, Flow grouped by status, Table, filters, planned dates, Week, Today, Review, and theme.
-- One level of child cards with independent owner and workflow state.
+- One board with status columns, an inbox, lists as a scope filter, and task detail.
+- One level of subtasks with independent owner and workflow state.
+- Named agent identities, assignment, scoped tokens, and CLI execution.
 - API tokens for CLI and agent workflows.
 - In-repo CLI at `cli/cmd/slate`.
 - Cloud Run and Cloud Build config.

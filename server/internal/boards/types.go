@@ -168,9 +168,24 @@ type TaskPage struct {
 	NextCursor string `json:"nextCursor,omitempty"`
 }
 
-type CardEntry struct {
+// InboxMessage is an agent-authored card entry read across the whole account.
+// The inbox is one directional: agents post, people read. A person's own
+// comments already live on the task, so echoing them back would be noise.
+type InboxMessage struct {
+	ID         string    `json:"id"`
+	TaskID     string    `json:"taskId"`
+	TaskTitle  string    `json:"taskTitle"`
+	Kind       string    `json:"kind"`
+	Body       string    `json:"body"`
+	AuthorID   string    `json:"authorId"`
+	AuthorName string    `json:"authorName"`
+	RunID      string    `json:"runId,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type TaskEntry struct {
 	ID               string    `json:"id"`
-	TaskID           string    `json:"cardId"`
+	TaskID           string    `json:"taskId"`
 	Kind             string    `json:"kind"`
 	Body             string    `json:"body"`
 	AuthorKind       string    `json:"authorKind"`
@@ -178,15 +193,15 @@ type CardEntry struct {
 	AuthorName       string    `json:"authorName"`
 	RunID            string    `json:"runId,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
-	CardStatus       string    `json:"cardStatus,omitempty"`
-	CardReviewReason string    `json:"cardReviewReason,omitempty"`
+	TaskStatus       string    `json:"taskStatus,omitempty"`
+	TaskReviewReason string    `json:"taskReviewReason,omitempty"`
 }
 
-type CreateCardEntryInput struct {
+type CreateTaskEntryInput struct {
 	Kind           string `json:"kind"`
 	Body           string `json:"body"`
 	IdempotencyKey string `json:"-"`
 	RunID          string `json:"-"`
 }
 
-const MaxCardEntries = 200
+const MaxTaskEntries = 200

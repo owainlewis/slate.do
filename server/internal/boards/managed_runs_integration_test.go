@@ -36,7 +36,7 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyEntry, err := store.CreateCardEntry(ctx, ownerID, "", "Owner", task.ID, CreateCardEntryInput{Kind: "comment", Body: "Existing task context", IdempotencyKey: "existing-context"})
+	legacyEntry, err := store.CreateTaskEntry(ctx, ownerID, "", "Owner", task.ID, CreateTaskEntryInput{Kind: "comment", Body: "Existing task context", IdempotencyKey: "existing-context"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,33 +90,33 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 		t.Fatalf("stored managed claim = %q/%q, want %q/%q", storedRunID, storedStatus, winner, StatusWorking)
 	}
 
-	comment := CreateCardEntryInput{Kind: "comment", Body: "Implementation started", IdempotencyKey: "managed-comment", RunID: winner}
-	if _, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, CreateCardEntryInput{Kind: "comment", Body: "stale", IdempotencyKey: "stale-comment", RunID: loser}); !errors.Is(err, ErrManagedRunMismatch) {
+	comment := CreateTaskEntryInput{Kind: "comment", Body: "Implementation started", IdempotencyKey: "managed-comment", RunID: winner}
+	if _, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", task.ID, CreateTaskEntryInput{Kind: "comment", Body: "stale", IdempotencyKey: "stale-comment", RunID: loser}); !errors.Is(err, ErrManagedRunMismatch) {
 		t.Fatalf("stale comment error = %v, want ErrManagedRunMismatch", err)
 	}
 	missingRun := comment
 	missingRun.IdempotencyKey = "missing-run-comment"
 	missingRun.RunID = ""
-	if _, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, missingRun); !errors.Is(err, ErrManagedRunMismatch) {
+	if _, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", task.ID, missingRun); !errors.Is(err, ErrManagedRunMismatch) {
 		t.Fatalf("missing run comment error = %v, want ErrManagedRunMismatch", err)
 	}
-	createdComment, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, comment)
+	createdComment, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", task.ID, comment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if createdComment.RunID != winner || createdComment.CardStatus != StatusWorking {
+	if createdComment.RunID != winner || createdComment.TaskStatus != StatusWorking {
 		t.Fatalf("managed comment = %#v", createdComment)
 	}
 
-	outputInput := CreateCardEntryInput{Kind: "output", Body: "Implemented and tested", IdempotencyKey: "managed-output", RunID: winner}
-	output, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, outputInput)
+	outputInput := CreateTaskEntryInput{Kind: "output", Body: "Implemented and tested", IdempotencyKey: "managed-output", RunID: winner}
+	output, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", task.ID, outputInput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.RunID != winner || output.CardStatus != StatusNeedsReview || output.CardReviewReason != "output" {
+	if output.RunID != winner || output.TaskStatus != StatusNeedsReview || output.TaskReviewReason != "output" {
 		t.Fatalf("managed output = %#v", output)
 	}
-	entries, err := store.ListCardEntriesForRun(ctx, ownerID, agentID, task.ID, winner)
+	entries, err := store.ListTaskEntriesForRun(ctx, ownerID, agentID, task.ID, winner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,16 +139,16 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	if _, err := store.UpdateTaskForHuman(ctx, ownerID, task.ID, UpdateTaskInput{Status: &done}); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, outputInput)
+	replayed, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", task.ID, outputInput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed.ID != output.ID || replayed.CardStatus != StatusNeedsReview || replayed.CardReviewReason != "output" {
+	if replayed.ID != output.ID || replayed.TaskStatus != StatusNeedsReview || replayed.TaskReviewReason != "output" {
 		t.Fatalf("managed output replay = %#v", replayed)
 	}
 	newOutput := outputInput
 	newOutput.IdempotencyKey = "managed-output-second"
-	if _, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, newOutput); !errors.Is(err, ErrTaskUnavailable) {
+	if _, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", task.ID, newOutput); !errors.Is(err, ErrTaskUnavailable) {
 		t.Fatalf("new output after review error = %v, want ErrTaskUnavailable", err)
 	}
 	var outputCount int
@@ -169,7 +169,7 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	if _, err := db.Exec(ctx, `UPDATE tasks SET assignee_agent_id = $1 WHERE id = $2`, replacementAgentID, task.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, outputInput); !errors.Is(err, ErrNotFound) {
+	if _, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", task.ID, outputInput); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("replay after reassignment error = %v, want ErrNotFound", err)
 	}
 	if _, err := db.Exec(ctx, `
@@ -179,7 +179,7 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	`, agentID, loser, StatusWorking, task.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateCardEntry(ctx, ownerID, agentID, "", task.ID, outputInput); !errors.Is(err, ErrManagedRunMismatch) {
+	if _, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", task.ID, outputInput); !errors.Is(err, ErrManagedRunMismatch) {
 		t.Fatalf("replay after newer run error = %v, want ErrManagedRunMismatch", err)
 	}
 
@@ -187,7 +187,7 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateCardEntry(ctx, ownerID, agentID, "", preclaim.ID, CreateCardEntryInput{Kind: "output", Body: "too early", IdempotencyKey: "preclaim-output", RunID: winner}); !errors.Is(err, ErrManagedRunMismatch) {
+	if _, err := store.CreateTaskEntry(ctx, ownerID, agentID, "", preclaim.ID, CreateTaskEntryInput{Kind: "output", Body: "too early", IdempotencyKey: "preclaim-output", RunID: winner}); !errors.Is(err, ErrManagedRunMismatch) {
 		t.Fatalf("preclaim output error = %v, want ErrManagedRunMismatch", err)
 	}
 	if _, err := store.ClaimTaskForAgent(ctx, ownerID, agentID, preclaim.ID); err != nil {
