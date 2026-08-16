@@ -862,7 +862,7 @@ func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (prepare
 
 func (s *Store) CreateSubtask(ctx context.Context, userID string, parentTaskID string, input CreateTaskInput) (Task, error) {
 	if !validUUID(parentTaskID) {
-		return Task{}, fmt.Errorf("%w: parent card ID must be a valid ID", ErrInvalidData)
+		return Task{}, fmt.Errorf("%w: parent task ID must be a valid ID", ErrInvalidData)
 	}
 	parent, err := s.GetTask(ctx, userID, parentTaskID)
 	if err != nil {
@@ -1981,8 +1981,8 @@ func (s *Store) CreateTaskEntry(ctx context.Context, userID string, agentID stri
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM card_entries WHERE task_id = $1", taskID).Scan(&entryCount); err != nil {
 		return TaskEntry{}, err
 	}
-	if entryCount >= MaxCardEntries {
-		return TaskEntry{}, fmt.Errorf("%w: cards can contain at most %d conversation entries", ErrInvalidData, MaxCardEntries)
+	if entryCount >= MaxTaskEntries {
+		return TaskEntry{}, fmt.Errorf("%w: tasks can contain at most %d conversation entries", ErrInvalidData, MaxTaskEntries)
 	}
 	var entry TaskEntry
 	err = tx.QueryRow(ctx, `

@@ -109,7 +109,7 @@ Every task has a `schedule`, defaulting to **Run once**. That single field repla
 
 A task with a recurring schedule is a **definition**. It does not sit on the board and it never runs itself. When its cron fires, the control plane **spawns a copy**: the task and its subtasks are deep-copied into a new task tree in Todo, with `spawned_from_task_id` set.
 
-**Spawn, do not re-run in place.** A card that resets from Done back to Todo every Monday breaks the board: Done stops being terminal and last week's outputs are overwritten. Each occurrence gets its own card, subtasks, run history, and review.
+**Spawn, do not re-run in place.** A task that resets from Done back to Todo every Monday breaks the board: Done stops being terminal and last week's outputs are overwritten. Each occurrence gets its own task, subtasks, run history, and review.
 
 Three ways to spawn, one code path:
 
@@ -117,7 +117,7 @@ Three ways to spawn, one code path:
 - You click Run now.
 - Later, a webhook hits it. (Not in scope.)
 
-The task detail states this plainly rather than silently moving the card: "Repeats every Monday. Each occurrence creates a new task." The definition lists its recent occurrences underneath, so it doubles as its own history.
+The task detail states this plainly rather than silently moving the task: "Repeats every Monday. Each occurrence creates a new task." The definition lists its recent occurrences underneath, so it doubles as its own history.
 
 **Worked example.** A definition titled "Weekly LinkedIn posts" with seven subtasks, assigned to a writer agent, scheduled every Monday. Monday morning a parent and seven children appear in Todo. The agent works through them. Seven outputs land in Review. The definition is untouched and ready for next week.
 
@@ -344,6 +344,8 @@ No labels and no fallback policy. Fallback needs a timer, a re-dispatch path, an
 }
 ```
 
+The runner's config declares which env names it is willing to resolve, and a job asking for anything outside that list is refused. Without that list a task on a shared runner could name any secret the machine holds, which would undo the point of sending names rather than values.
+
 `env` carries **names, not values**. The runner resolves them from its own environment or keyring. The control plane never holds a model key or a deploy credential, which keeps section 1's promise honest and removes the largest category of secret-handling code from the server. On a shared runner this also stops every task receiving every credential the machine holds.
 
 ### Workspaces belong to the runner
@@ -415,7 +417,7 @@ Register, take exactly one job, deregister, exit. That is a Cloud Run job, a Fly
 
 **Task:** `draft` -> `queued` -> `running` -> `review` -> `done`, plus `blocked` and `cancelled`.
 
-Board columns: Todo (`draft`, `queued`), Doing (`running`, `blocked`), Review, Done.
+Board columns are the statuses themselves: Todo, Ready, In Progress, Review, Done. `blocked` is shown on the task rather than as a sixth column, so a blocked task stays where you left it.
 
 **Run:** `leased` -> `running` -> one of `succeeded`, `failed`, `parked`, `expired`, `cancelled`.
 
@@ -489,7 +491,7 @@ Six items. Adding a seventh means deleting one.
 
 | | |
 | --- | --- |
-| **Board** | Columns are status: Todo, Doing, Review, Done. Lists are a scope filter in the sidebar. |
+| **Board** | Columns are status: Todo, Ready, In Progress, Review, Done. Lists are a scope filter in the sidebar. |
 | **Inbox** | Unanswered questions and notices, account-wide, newest first. The unread count is the one number in the nav. |
 | **Runs** | Run history and the live session view. |
 | **Agents** | Config. Instructions, backend, workspace, overrides. |
@@ -543,7 +545,7 @@ There is no `max_turns`. A turn cap truncates work mid-flight and nobody can pic
 - `slate runs cancel` kills the process group through the runner.
 - Elapsed time is visible, so a six-hour run is obvious without anyone having predicted it.
 
-### The two metrics that matter
+### Outcomes, and the two metrics that matter
 
 Per agent, over a window:
 
@@ -555,6 +557,8 @@ Per agent, over a window:
 | Retries per completed task | `runs` grouped by `task_id` |
 | **Questions asked per run** | `messages` where kind is question |
 | **Time parked waiting on a human** | `messages.created_at` to `answered_at` |
+
+The first four are ordinary operational metrics. The last two are the ones that decide anything.
 
 **The scarce resource is attention, not money.** An agent that finishes every task but interrupts you four times is worse than a slower one that never does. Questions per run tells you which agents you can trust unattended, which is the entire promise.
 

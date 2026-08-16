@@ -47,50 +47,50 @@ The two hard problems, isolated execution and the human-in-the-loop channel, are
 
 Continuing from `043_managed_agent_runs`.
 
-`044_inbox_index` was taken by the inbox, so agent config is `045`.
+`044_inbox_index` shipped with the inbox, so agent config is `045` and everything after it shifts by one.
 
 ```
 045_agent_config
     ALTER agents ADD instructions, backend, workspace,
                      limits_json, backend_overrides_json
 
-045_runs
+046_runs
     CREATE runs (id, account_id, task_id, agent_id, agent_snapshot,
                  runner_id, status, session_id, resume_from_run_id,
                  lease_expires_at, attempt, turns, tokens_in, tokens_out,
                  exit_reason, branch, started_at, ended_at, created_at)
     Partial unique index on (task_id) where status is active
 
-046_runners
+047_runners
     CREATE runners (id, account_id, name, backends_json, workspaces_json,
                     concurrency, os, arch, status, last_heartbeat_at, created_at)
     CREATE runner_registration_tokens (id, account_id, hash, expires_at, consumed_at)
 
-047_run_events
+048_run_events
     CREATE run_events (run_id, seq, ts, type, payload_json)
     PRIMARY KEY (run_id, seq)
 
-048_task_execution_policy
+049_task_execution_policy
     ALTER tasks ADD requires_approval, target_runner, attempts, workspace
     Status gains 'blocked'
 
-049_card_entry_questions
+050_task_entry_questions
     ALTER card_entries ADD direction, options_json, answer, answered_at
     Partial index on unanswered questions
 
-050_run_tokens
+051_run_tokens
     Token kind 'run' with scope_json and expires_at, scoped to one run and task
 
-051_attachments
+052_attachments
     CREATE attachments (id, account_id, task_id, run_id, name, content_type,
                         size, sha256, content, created_at)
 
-052_task_schedules
+053_task_schedules
     ALTER tasks ADD schedule_cron, schedule_tz, next_run_at,
                     spawned_from_task_id, last_spawned_at
 ```
 
-`044`, `048`, `049`, `051`, `052` are additive and safe on live data. `045` is the one with migration risk: `execution_run_id` points at client-generated ids with no server row. Accept that pre-pivot runs have no record.
+`045`, `049`, `050`, `052`, `053` are additive and safe on live data. `045` is the one with migration risk: `execution_run_id` points at client-generated ids with no server row. Accept that pre-pivot runs have no record.
 
 **Reuse `card_entries`, do not build a messages table.** The task timeline and the inbox are the same stream. The Inbox view is a filter. This inherits working idempotency and author-attribution code.
 
@@ -121,7 +121,7 @@ Pure deletion and renaming. No schema. Do this first because everything after is
 | # | Task | Done when |
 | --- | --- | --- |
 | 0.1 | Delete Week, Table, and Today views from `app.js` and their routes, tests, and nav links | The app builds, tests pass, and no route references them. `scheduled_date` and `priority` remain as fields |
-| 0.2 | Make Flow the only board. Columns are Todo, Doing, Review, Done. Delete board-grouped-by-list | One board exists. Dragging a card changes its status |
+| 0.2 | Make Flow the only board. Columns are Todo, Doing, Review, Done. Delete board-grouped-by-list | One board exists. Dragging a task changes its status |
 | 0.3 | Lists become a sidebar scope filter carried in the URL | Selecting a list filters the board. The scope survives reload and is in the URL |
 | 0.4 | Rename card to task across API, UI copy, and tests. Retire `/api/v1/cards` aliases | No `card` in user-facing copy. Entries stay `card_entries` in the database |
 | 0.5 | Rebuild task detail as Details, Description, Attachments placeholder, Subtasks. Details holds Agent, Assignee, Workspace, Schedule, Requires approval | Description is full-width and inline-editable. Details shows five fields |
@@ -137,7 +137,7 @@ Two decisions taken while doing this work, recorded because they are not obvious
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 1.1 | `044_agent_config` migration and `agents` store fields | Instructions, backend, workspace, limits, overrides persist |
+| 1.1 | `045_agent_config` migration and `agents` store fields | Instructions, backend, workspace, limits, overrides persist |
 | 1.2 | Agent editor UI with an instructions textarea and backend overrides | An agent can be created and edited in the browser |
 | 1.3 | `slate agent list/show/create/update`, with `--instructions-file` | A long prompt can be edited in an editor and pushed |
 
@@ -145,17 +145,17 @@ Two decisions taken while doing this work, recorded because they are not obvious
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 2.1 | `045_runs` migration, `runs` package, lifecycle transitions | A run row is created, transitions, and terminates |
-| 2.2 | `047_run_events`, batched append-only ingest with monotonic seq | Events upload, resume after a network drop, and replay in order |
+| 2.1 | `046_runs` migration, `runs` package, lifecycle transitions | A run row is created, transitions, and terminates |
+| 2.2 | `048_run_events`, batched append-only ingest with monotonic seq | Events upload, resume after a network drop, and replay in order |
 | 2.3 | Run detail view with event replay | Opening a run shows its event stream |
-| 2.4 | `048_task_execution_policy`: `requires_approval`, `attempts`, `target_runner`, `workspace`, `blocked` status | The approval toggle gates the move to Done |
+| 2.4 | `049_task_execution_policy`: `requires_approval`, `attempts`, `target_runner`, `workspace`, `blocked` status | The approval toggle gates the move to Done |
 | 2.5 | Single `canTransitionToDone` guard covering approval and open children | Both guards live in one function with tests |
 
 ### M3 - Runners and leases
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 3.1 | `046_runners`, registration tokens, register and deregister endpoints | A runner registers and appears in the UI |
+| 3.1 | `047_runners`, registration tokens, register and deregister endpoints | A runner registers and appears in the UI |
 | 3.2 | Leases with 60s TTL, heartbeat renewal, and an expiry reaper | An expired lease requeues the task and increments attempts |
 | 3.3 | Long-poll job dispatch with backend and workspace matching | A queued task reaches a matching runner and no other |
 | 3.4 | Retire `boards.AgentClaim` in favour of leases | No permanent claims remain |
@@ -175,9 +175,9 @@ Two decisions taken while doing this work, recorded because they are not obvious
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 5.1 | `050_run_tokens`, run-token guard, token minted per job and expiring with the run | A run token reads and writes exactly one task |
+| 5.1 | `051_run_tokens`, run-token guard, token minted per job and expiring with the run | A run token reads and writes exactly one task |
 | 5.2 | `slate task show/comment/done/block` under the run token, `--json` everywhere | The agent updates its own task from inside the run |
-| 5.3 | `051_attachments`, upload and download API, quota accounting | A file attached in the browser is readable via the API |
+| 5.3 | `052_attachments`, upload and download API, quota accounting | A file attached in the browser is readable via the API |
 | 5.4 | `slate file put/get/list`, attachments materialised to `<workspace>/.slate/attachments/` before the run, parent attachments included | The agent reads its inputs as files and pushes an output back |
 
 ### M6 - Ask, park, resume
@@ -186,7 +186,7 @@ The milestone that decides whether the system is any good.
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 6.1 | `049_card_entry_questions`: direction, options, answer, answered_at | A question is distinguishable from a comment |
+| 6.1 | `050_task_entry_questions`: direction, options, answer, answered_at | A question is distinguishable from a comment |
 | 6.2 | ~~Inbox view~~, plus unread count | **Shipped early.** The inbox is agent-authored entries account-wide, newest first, each linked to its task, with `044_inbox_index` behind it. Unread state still needs 6.1 |
 | 6.3 | `slate inbox ask --wait`, returning the answer or printing `parked` and exiting 75 | A reply inside the budget continues the run |
 | 6.4 | Park semantics: run parks, task blocks, process dies | Nothing burns overnight |
@@ -203,7 +203,7 @@ The milestone that decides whether the system is any good.
 
 | # | Task | Done when |
 | --- | --- | --- |
-| 8.1 | `052_task_schedules`: cron, timezone, next_run_at, spawned_from | A task carries a schedule defaulting to Run once |
+| 8.1 | `053_task_schedules`: cron, timezone, next_run_at, spawned_from | A task carries a schedule defaulting to Run once |
 | 8.2 | Deep-copy spawn of a task and its subtasks, shared by cron and Run now | Clicking Run now produces a new task tree in Todo |
 | 8.3 | Schedule ticker, one query a minute | Monday's task appears on Monday with no runner online |
 | 8.4 | Definition detail UI stating the repeat and listing recent occurrences | Setting a schedule is explicit, never a silent mode change |
@@ -228,7 +228,7 @@ M6 decides whether the system is any good. M7 decides whether the architecture i
 
 ## 8. Risks
 
-1. **`045` on live data.** Existing `execution_run_id` values have no server row. Accept that pre-pivot runs have no record. Decide before writing the migration.
+1. **`046` on live data.** Existing `execution_run_id` values have no server row. Accept that pre-pivot runs have no record. Decide before writing the migration.
 2. **Two audiences.** The hosted product and the future self-host build will conflict. Hosted wins ties.
 3. **Onboarding, not architecture, is the product risk.** "Install a daemon and give it a token" is a high bar. Time to first successful run is the metric that decides whether this sells. The zero-runner constraint is the mitigation.
 4. **Prompt boilerplate leaking into task descriptions.** If the same sentence appears in three descriptions, it belongs in the envelope. Watch for this from M4 onward.

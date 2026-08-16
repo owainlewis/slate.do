@@ -101,7 +101,7 @@ New card creates one card in Inbox and opens it for editing.
 Every view reads and edits the same card records:
 
 - Board: show user-defined lists as columns and move cards between them.
-- Flow: show New, Ready, In Progress, Review, and Done as columns without changing a card's list.
+- Flow: show Todo, Ready, In Progress, Review, and Done as columns without changing a card's list.
 - Table: card, list, status, priority, owner, and planned date.
 - Week: planned cards grouped Monday through Sunday.
 

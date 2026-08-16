@@ -204,4 +204,4 @@ type CreateTaskEntryInput struct {
 	RunID          string `json:"-"`
 }
 
-const MaxCardEntries = 200
+const MaxTaskEntries = 200
