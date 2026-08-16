@@ -1725,9 +1725,8 @@ function workspaceDetailHTML(task) {
          <div class="detail-column">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
           ${details}
-          <section class="detail-block" aria-labelledby="detail-description-heading">
-            <h3 id="detail-description-heading" class="detail-block-heading">Description</h3>
-            <label class="sr-only" for="workspace-detail-description">Description</label>
+          <section class="detail-block">
+            <label class="detail-block-heading" for="workspace-detail-description">Description</label>
             <textarea class="detail-description" id="workspace-detail-description" name="description" placeholder="What is the intent? Add the outcome, context, constraints, and useful links…">${escapeHTML(task.description || "")}</textarea>
             <p class="detail-block-hint">An assigned agent receives this as its instruction.</p>
           </section>

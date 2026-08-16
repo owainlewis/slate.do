@@ -38,6 +38,9 @@ function workspaceFixture() {
   return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
 }
 
+// The list view puts its name in an editable field rather than a heading.
+const listTitle = (page, name) => page.locator(`#workspace-list-name[value="${name}"]`);
+
 async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
   const state = workspaceFixture();
   const server = http.createServer(async (request, response) => {
@@ -1230,15 +1233,16 @@ test("desktop navigation collapses with the keyboard and stays collapsed across 
   assert.ok(collapsedToggleBounds.x + collapsedToggleBounds.width < workspaceHeadingBounds.x,
     `toggle=${JSON.stringify(collapsedToggleBounds)} heading=${JSON.stringify(workspaceHeadingBounds)}`);
 
-  await navigateApp(page, "/app/tasks");
-  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
-  const boardShowNavigation = page.getByRole("button", { name: "Show navigation" });
-  assert.equal(await boardShowNavigation.getAttribute("aria-expanded"), "false");
-  assert.ok((await sidebar.boundingBox()).width < 1);
-  const boardToggleBounds = await boardShowNavigation.boundingBox();
-  const boardHeadingBounds = await page.getByRole("heading", { name: "Board", exact: true }).boundingBox();
-  assert.ok(boardToggleBounds.x + boardToggleBounds.width < boardHeadingBounds.x,
-    `toggle=${JSON.stringify(boardToggleBounds)} heading=${JSON.stringify(boardHeadingBounds)}`);
+  await navigateApp(page, "/app/inbox");
+  await page.getByRole("heading", { name: "Inbox", exact: true, level: 1 }).waitFor();
+  const inboxShowNavigation = page.getByRole("button", { name: "Show navigation" });
+  assert.equal(await inboxShowNavigation.getAttribute("aria-expanded"), "false");
+  // A fully collapsed sidebar has no box at all, which is stricter than zero width.
+  assert.ok(((await sidebar.boundingBox())?.width ?? 0) < 1);
+  const inboxToggleBounds = await inboxShowNavigation.boundingBox();
+  const inboxHeadingBounds = await page.getByRole("heading", { name: "Inbox", exact: true, level: 1 }).boundingBox();
+  assert.ok(inboxToggleBounds.x + inboxToggleBounds.width < inboxHeadingBounds.x,
+    `toggle=${JSON.stringify(inboxToggleBounds)} heading=${JSON.stringify(inboxHeadingBounds)}`);
 
   await navigateApp(page, "/app/agents");
   await page.getByRole("heading", { name: "Agents", exact: true, level: 1 }).waitFor();
@@ -1299,7 +1303,7 @@ test("a delayed board creation cannot override newer navigation", async t => {
   await page.getByRole("button", { name: "New board", exact: true }).click();
   await waitFor(() => typeof state.releaseBoardCreate === "function");
   await navigateApp(page, "/app/lists/list-youtube");
-  await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
+  await listTitle(page, "YouTube").waitFor();
   state.releaseBoardCreate();
   await waitFor(() => state.createdBoards.length === 1);
   await page.waitForTimeout(50);
@@ -1356,10 +1360,15 @@ test("board deletion refreshes assigned work counts on the agent directory", asy
   const researchAgent = page.locator(".agent-directory-row").filter({ hasText: "Research agent" });
   await researchAgent.getByText("2 working tasks", { exact: true }).waitFor();
 
+  await page.goto(`${origin}/app/settings/profile`);
+  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
   await page.getByRole("button", { name: "Delete Other", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Delete Other?", exact: true });
   await dialog.getByRole("button", { name: "Delete board", exact: true }).click();
+  await dialog.waitFor({ state: "detached" });
 
+  await page.goto(`${origin}/app/agents`);
+  await page.getByRole("heading", { name: "Agents", level: 1, exact: true }).waitFor();
   await researchAgent.getByText("1 working task", { exact: true }).waitFor();
   assert.equal(state.tasks.some(task => task.id === "task-other-agent"), false);
   assert.equal(await researchAgent.getByText("2 working tasks", { exact: true }).count(), 0);
@@ -1421,6 +1430,7 @@ test("the board keeps its status columns in one horizontal scroll lane", async t
 
   await page.goto(`${origin}/app/tasks`);
   await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
+  const scroller = page.locator("#workspace-task-panel");
   const flow = page.locator(".workspace-flow");
   const columns = flow.locator(".workspace-flow-column");
   assert.equal(await columns.count(), 5);
@@ -1429,7 +1439,7 @@ test("the board keeps its status columns in one horizontal scroll lane", async t
     columns.nth(1).boundingBox(),
     columns.nth(4).boundingBox(),
   ]);
-  const dimensions = await flow.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+  const dimensions = await scroller.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
 
   assert.ok(Math.abs(first.y - second.y) < 2, `columns should share a row: ${first.y} vs ${second.y}`);
   assert.ok(Math.abs(first.y - last.y) < 2, `the final column should not wrap: ${first.y} vs ${last.y}`);
@@ -1444,11 +1454,12 @@ test("the board keeps its status columns in one horizontal scroll lane", async t
   assert.equal(await opener.evaluate(element => element === document.activeElement), true);
   assert.deepEqual(pageErrors, []);
 });
+
 test("a delayed list creation cannot repaint while a newer history route loads", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
   await page.goto(`${origin}/app/tasks`);
-  await page.getByRole("heading", { name: "Other", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
   state.delayNextList = true;
   await page.getByRole("button", { name: "New list", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "New list", exact: true });
@@ -1671,7 +1682,7 @@ test("global scopes surface matching subtasks with parent context", async t => {
   Object.assign(state.subtasks[0], { scheduledDate: today, status: "needs_review" });
 
   await page.goto(`${origin}/app/lists/list-youtube`);
-  await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
+  await listTitle(page, "YouTube").waitFor();
   assert.equal(await page.getByRole("button", { name: "Open task: Research examples", exact: true }).count(), 0);
   assert.deepEqual(pageErrors, []);
 });
@@ -2505,13 +2516,13 @@ test("a delayed post-save refresh failure cannot render into a newer route", asy
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
 
   await navigateApp(page, "/app/lists/list-youtube");
-  await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
+  await listTitle(page, "YouTube").waitFor();
   state.releaseWorkspaceTasks();
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
   await page.waitForTimeout(50);
 
   assert.equal(new URL(page.url()).pathname, "/app/lists/list-youtube");
-  assert.equal(await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).isVisible(), true);
+  assert.equal(await listTitle(page, "YouTube").isVisible(), true);
   assert.equal(await page.getByRole("alert").count(), 0);
   assert.equal(state.patches.at(-1).title, "Committed before navigation");
   assert.deepEqual(pageErrors, []);
@@ -2528,7 +2539,7 @@ test("a delayed subtask refresh failure cannot render into a newer route", async
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
 
   await navigateApp(page, "/app/lists/list-youtube");
-  await page.getByRole("heading", { name: "YouTube", level: 1, exact: true }).waitFor();
+  await listTitle(page, "YouTube").waitFor();
   state.releaseWorkspaceTasks();
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
   await page.waitForTimeout(50);

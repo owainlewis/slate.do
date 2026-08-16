@@ -1082,6 +1082,7 @@ button, input, textarea, select, .task, .board-row, .page-row, .bucket {
 .workspace-detail .detail-title { font-size: 26px; line-height: 1.25; }
 .detail-block { margin-top: 26px; }
 .detail-block-heading {
+  display: block;
   margin: 0 0 12px;
   color: var(--faint);
   font-size: 11px;

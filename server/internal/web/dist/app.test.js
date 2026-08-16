@@ -1839,7 +1839,7 @@ test("detail presents one contextual accessible card editor with clear actions",
   assert.match(html, /Home list/);
   assert.match(html, /<label for="workspace-detail-owner">Agent<\/label>/);
   assert.match(html, />Task ID</);
-  assert.match(html, /<h3[^>]*class="detail-block-heading">Description<\/h3>/);
+  assert.match(html, /<label class="detail-block-heading" for="workspace-detail-description">Description<\/label>/);
   assert.match(html, /id="workspace-task-id"[^>]*>working</);
   assert.match(html, /id="workspace-task-link"[^>]*>\/app\/tasks\?task=working</);
   assert.match(html, /id="copy-task-id"[^>]*aria-label="Copy task ID"/);
