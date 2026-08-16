@@ -145,39 +145,18 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if updated.Status != StatusNeedsReview {
 		t.Fatalf("card status = %q", updated.Status)
 	}
-	needsReview := StatusNeedsReview
-	reviewKinds, err := store.ListCardReviewKinds(ctx, ownerID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reviewKinds[card.ID] != "output" {
-		t.Fatalf("review kind = %q, want output", reviewKinds[card.ID])
-	}
-	renamed := "Card edited while reviewing output"
+	renamed := "Task edited while reviewing output"
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Title: &renamed}); err != nil {
 		t.Fatal(err)
 	}
 	card.Title = renamed
-	reviewKinds, err = store.ListCardReviewKinds(ctx, ownerID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reviewKinds[card.ID] != "output" {
-		t.Fatalf("review kind after edit = %q, want output", reviewKinds[card.ID])
-	}
+	needsReview := StatusNeedsReview
 	queued := StatusQueued
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &queued}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &needsReview}); err != nil {
 		t.Fatal(err)
-	}
-	reviewKinds, err = store.ListCardReviewKinds(ctx, ownerID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reviewKinds[card.ID] != "other" {
-		t.Fatalf("review kind after manual re-entry = %q, want other", reviewKinds[card.ID])
 	}
 	done := StatusDone
 	if _, err := store.UpdateTask(ctx, ownerID, card.ID, UpdateTaskInput{Status: &done}); err != nil {

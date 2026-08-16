@@ -261,14 +261,6 @@ func (h *Handler) ListCardEntries(w http.ResponseWriter, r *http.Request, user a
 	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
-func (h *Handler) ListCardReviewKinds(w http.ResponseWriter, r *http.Request, user auth.User) {
-	kinds, err := h.store.ListCardReviewKinds(r.Context(), user.ID, user.AgentID)
-	if handleStoreError(w, err) {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"kinds": kinds})
-}
-
 func (h *Handler) CreateCardEntry(w http.ResponseWriter, r *http.Request, user auth.User) {
 	if !validatePathID(w, "card", r.PathValue("id")) {
 		return

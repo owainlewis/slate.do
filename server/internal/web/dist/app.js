@@ -1193,7 +1193,7 @@ async function openTaskDetail(taskID, trigger, options = {}) {
     const [detail, subtasks, entryPage] = await Promise.all([
       api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}`),
       loadAllSubtasks(taskID, isCurrent),
-      api.get(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`),
+      api.get(`/api/v1/tasks/${encodeURIComponent(taskID)}/entries`),
     ]);
     if (!isCurrent() || subtasks === null) return false;
     const savedDraft = state.taskDetailDrafts[taskID] || {};
@@ -1498,17 +1498,14 @@ function landingHTML() {
           <div class="tour-tabs rise" style="--d:2" role="tablist" aria-label="Slate views">
             <button class="tour-tab on" type="button" data-tour="lists" role="tab" aria-selected="true">Lists</button>
             <button class="tour-tab" type="button" data-tour="flow" role="tab" aria-selected="false">Flow</button>
-            <button class="tour-tab" type="button" data-tour="week" role="tab" aria-selected="false">Week</button>
           </div>
           <div class="tour-frame" data-reveal>
-            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate Lists view: flexible contexts containing cards">
-            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate Flow view: cards grouped by status">
-            <img class="tour-img" data-tour-img="week" src="/app-week.jpg" alt="Slate Week view: cards laid out across the days of the week">
+            <img class="tour-img on" data-tour-img="lists" src="/app-lists.jpg" alt="Slate lists: flexible contexts containing tasks">
+            <img class="tour-img" data-tour-img="flow" src="/app-flow.jpg" alt="Slate board: tasks grouped by status">
           </div>
           <p class="preview-caption" data-reveal>
             <span class="tour-caption on" data-tour-caption="lists">Use a list as a project, goal, area, or any context that helps you think.</span>
-            <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same five states.</span>
-            <span class="tour-caption" data-tour-caption="week">See the week before you're already in it.</span>
+            <span class="tour-caption" data-tour-caption="flow">You and your agents move work through the same states.</span>
           </p>
         </section>
         <section class="landing-principles">
@@ -1571,14 +1568,14 @@ function appHTML() {
   const list = state.workspaceLists.find(item => item.id === state.workspaceListID);
   const title = state.workspaceScope === "inbox" ? "Inbox"
     : state.workspaceScope === "list" ? list?.name || "List" : "Board";
-  const subtitle = state.workspaceScope === "inbox" ? "New cards waiting for context."
+  const subtitle = state.workspaceScope === "inbox" ? "New tasks waiting for context."
     : state.workspaceScope === "list" ? list?.goal || "A focused bucket of work." : "One control plane for human and agent work.";
   const overview = `
     <header class="workspace-topbar">
       <div><div class="workspace-title"><h1>${escapeHTML(title)}</h1><span>${tasks.length}</span></div><p>${escapeHTML(subtitle)}</p></div>
       <div class="workspace-topbar-actions">
         ${state.workspaceScope === "list" && list && !list.isInbox ? `<button class="plain-btn danger-text" id="delete-workspace-list" type="button" data-list-id="${escapeAttr(list.id)}">${icon("trash")}<span>Delete list</span></button>` : ""}
-        <button class="primary" id="new-task" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New card"}</span></button>
+        <button class="primary" id="new-task" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New task"}</span></button>
       </div>
     </header>
     ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskMutationError?.message)}
@@ -1590,9 +1587,9 @@ function appHTML() {
     </div>
     ${state.workspaceFiltersOpen ? workspaceFilterHTML() : ""}
     <div class="workspace-content" id="workspace-task-panel">
-      ${state.workspaceLoading ? `<div class="workspace-empty">Loading cards…</div>` : workspaceFlowHTML(tasks)}
+      ${state.workspaceLoading ? `<div class="workspace-empty">Loading tasks…</div>` : workspaceFlowHTML(tasks)}
     </div>
-    ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more cards"}</button>` : ""}`;
+    ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more tasks"}</button>` : ""}`;
   return `
     <section class="shell task-shell theme-${theme}">
       ${appSidebarHTML({ theme, showNewTask: false })}
@@ -1620,7 +1617,7 @@ function boardHTML() {
   const overview = `
     <div class="main board-main">
       <header class="topbar board-topbar">
-        <div class="board-heading"><div><h1>${escapeHTML(board?.name || "Board")}</h1><span>${openCards}</span></div><p>Lists keep related cards together.</p></div>
+        <div class="board-heading"><div><h1>${escapeHTML(board?.name || "Board")}</h1><span>${openCards}</span></div><p>Lists keep related tasks together.</p></div>
         <div class="top-actions">
           <button class="secondary" id="add-list" ${listLimitReached ? "disabled" : ""}>${icon("plus")}<span>New list</span></button>
         </div>
@@ -1654,11 +1651,11 @@ function workspaceFilterHTML() {
   const query = new URLSearchParams(globalThis.location?.search || "");
   const agentOptions = state.agents.map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
   return `<form class="workspace-filters" id="workspace-filters">
-    <label class="workspace-search"><span>Search</span><input name="q" value="${escapeAttr(query.get("q") || "")}" placeholder="Search cards…"></label>
+    <label class="workspace-search"><span>Search</span><input name="q" value="${escapeAttr(query.get("q") || "")}" placeholder="Search tasks…"></label>
     <label><span>Status</span><select name="status"><option value="">Any status</option>${FLOW_STATES.map(item => `<option value="${item.value}" ${query.get("status") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
     <label><span>Priority</span><select name="priority"><option value="">Any priority</option>${PRIORITIES.map(item => `<option value="${item.value}" ${query.get("priority") === item.value ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
     <label><span>Owner</span><select name="assigneeAgentId"><option value="">Anyone</option><option value="unassigned" ${query.get("assigneeAgentId") === "unassigned" ? "selected" : ""}>${escapeHTML(state.me?.displayName || "You")}</option>${agentOptions}</select></label>
-    ${["inbox", "list"].includes(state.workspaceScope) ? "" : `<fieldset class="workspace-child-filter"><legend>Child cards</legend><label class="workspace-checkbox"><input type="checkbox" name="children" value="hide" ${query.get("children") === "hide" ? "checked" : ""}><span>Hide child cards</span></label></fieldset>`}
+    ${["inbox", "list"].includes(state.workspaceScope) ? "" : `<fieldset class="workspace-child-filter"><legend>Subtasks</legend><label class="workspace-checkbox"><input type="checkbox" name="children" value="hide" ${query.get("children") === "hide" ? "checked" : ""}><span>Hide subtasks</span></label></fieldset>`}
     <label><span>From</span><input type="date" name="plannedFrom" value="${escapeAttr(query.get("plannedFrom") || "")}"></label>
     <label><span>To</span><input type="date" name="plannedTo" value="${escapeAttr(query.get("plannedTo") || "")}"></label>
     <button class="secondary" type="submit">Apply</button><button class="plain-btn" id="clear-workspace-filters" type="button">Clear</button>
@@ -1671,17 +1668,17 @@ function workspaceTaskOwner(task) {
 
 function workspaceTaskContext(task, includeOwner = false) {
   const context = [];
-  if (task.parentTaskId) context.push(`Child of ${task.parentTaskTitle || "parent card"}`);
+  if (task.parentTaskId) context.push(`Child of ${task.parentTaskTitle || "parent task"}`);
   context.push(task.listName || "Inbox");
   if (includeOwner) context.push(workspaceTaskOwner(task));
   return context.join(" · ");
 }
 
 function workspaceFlowHTML(tasks) {
-  const card = task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open card: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task, true))}</small></button></article>`;
+  const card = task => `<article class="workspace-flow-card" draggable="true" data-task="${task.id}"><button data-open-task="${task.id}" aria-label="Open task: ${escapeAttr(task.title)}"><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(workspaceTaskContext(task, true))}</small></button></article>`;
   return `<section class="workspace-flow grouped-by-status">${FLOW_STATES.map(group => {
     const items = tasks.filter(task => task.status === group.value);
-    return `<section class="workspace-flow-column" data-flow-status="${escapeAttr(group.value)}"><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag cards here</p>`}</div></section>`;
+    return `<section class="workspace-flow-column" data-flow-status="${escapeAttr(group.value)}"><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag tasks here</p>`}</div></section>`;
   }).join("")}</section>`;
 }
 
@@ -1704,7 +1701,7 @@ function workspaceListDialogHTML() {
     <section class="agent-lifecycle-dialog workspace-list-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-list-dialog-title" tabindex="-1">
       <header>
         <span class="agent-state-icon">${icon(deleting ? "trash" : "plus")}</span>
-        <div><h2 id="workspace-list-dialog-title">${deleting ? `Delete ${escapeHTML(targetName)}?` : "New list"}</h2><p>${deletingBoard ? "Every list and card on this board will be permanently deleted. This cannot be undone." : deletingList ? "Cards in this list will also be permanently deleted. This cannot be undone." : "Lists are flexible containers for related cards."}</p></div>
+        <div><h2 id="workspace-list-dialog-title">${deleting ? `Delete ${escapeHTML(targetName)}?` : "New list"}</h2><p>${deletingBoard ? "Every list and task on this board will be permanently deleted. This cannot be undone." : deletingList ? "Tasks in this list will also be permanently deleted. This cannot be undone." : "Lists are flexible containers for related tasks."}</p></div>
       </header>
       <form id="workspace-list-dialog-form">
         ${deleting ? "" : `<label class="workspace-list-dialog-field"><span>Name</span><input id="workspace-list-name" name="name" value="${escapeAttr(state.workspaceListDialogName)}" maxlength="100" autocomplete="off" required ${state.workspaceListPending ? "disabled" : ""}></label>`}
@@ -1738,13 +1735,13 @@ function workspaceDetailHTML(task) {
     <p>${escapeHTML(entry.body).replace(/\n/g, "<br>")}</p>
     <footer>${entry.kind === "output" ? `<span class="card-entry-kind">Output</span>` : ""}</footer>
   </article>`).join("");
-  const subtaskSection = task.parentTaskId ? `<button class="workspace-parent-link" type="button" data-open-parent>${icon("chevronLeft")}<span>Back to parent card</span></button>` : `
+  const subtaskSection = task.parentTaskId ? `<button class="workspace-parent-link" type="button" data-open-parent>${icon("chevronLeft")}<span>Back to parent task</span></button>` : `
     <section class="workspace-subtasks" aria-labelledby="subtasks-heading">
-      <header><div><h3 id="subtasks-heading">Child cards</h3><span>${completed} of ${state.selectedSubtasks.length} done</span></div></header>
+      <header><div><h3 id="subtasks-heading">Subtasks</h3><span>${completed} of ${state.selectedSubtasks.length} done</span></div></header>
       ${state.selectedSubtasks.length ? `<div class="workspace-subtask-list">
         ${state.selectedSubtasks.map(item => `<div class="workspace-subtask-row" data-task="${item.id}"><button class="workspace-subtask-open" type="button" data-open-task="${item.id}"><strong>${escapeHTML(item.title)}</strong><span class="state-badge state-${item.status}">${escapeHTML(statusLabel(item.status))}</span><span>${escapeHTML(workspaceTaskOwner(item))}</span></button></div>`).join("")}
-      </div>` : `<p class="workspace-subtask-empty">Use child cards only when this intent needs smaller pieces.</p>`}
-      <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a child card" aria-label="Child card title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add child"}</span></button></div>
+      </div>` : `<p class="workspace-subtask-empty">Use subtasks only when this task needs smaller pieces.</p>`}
+      <div id="add-subtask" class="workspace-add-subtask"><input name="title" value="${escapeAttr(state.subtaskDraft)}" placeholder="Add a subtask" aria-label="Subtask title" ${state.subtaskPending ? "disabled" : ""}><button type="button" class="plain-btn" ${state.subtaskPending ? "disabled" : ""}>${icon("plus")}<span>${state.subtaskPending ? "Adding…" : "Add subtask"}</span></button></div>
       <p class="error workspace-subtask-error" role="alert">${escapeHTML(state.subtaskError)}</p>
     </section>`;
   const details = `
@@ -1753,14 +1750,14 @@ function workspaceDetailHTML(task) {
             <div class="detail-properties">
               <div class="field"><label for="workspace-detail-owner">Agent</label><select id="workspace-detail-owner" name="assigneeAgentId">${agentOptionsHTML(task.assigneeAgentId)}</select></div>
               <div class="field"><label for="workspace-detail-status">Status</label><select id="workspace-detail-status" name="status">${statusOptionsHTML(task.status)}</select></div>
-              <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Child cards stay with their parent card.</small>` : ""}</div>
+              <div class="field"><label for="workspace-detail-list">List</label><select id="workspace-detail-list" ${task.parentTaskId ? "disabled aria-describedby=\"workspace-detail-list-help\"" : 'name="bucketId"'}>${state.workspaceLists.map(item => `<option value="${item.id}" ${item.id === task.bucketId ? "selected" : ""}>${escapeHTML(workspaceListLabel(item))}</option>`).join("")}</select>${task.parentTaskId ? `<small id="workspace-detail-list-help">Subtasks stay with their parent task.</small>` : ""}</div>
               <div class="field"><label for="workspace-detail-priority">Priority</label><select id="workspace-detail-priority" name="priority">${priorityOptionsHTML(task.priority)}</select></div>
               <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
             </div>
           </section>`;
   const reference = `
-          <section class="task-reference-field" aria-label="Card reference">
-            <span class="task-reference-label">Card ID</span>
+          <section class="task-reference-field" aria-label="Task reference">
+            <span class="task-reference-label">Task ID</span>
             <div class="task-reference-value">
               <code id="workspace-task-id" tabindex="0">${escapeHTML(task.id)}</code>
               <button class="secondary icon-label" id="copy-task-id" type="button" aria-label="Copy task ID">${icon("copy")}<span>Copy ID</span></button>
@@ -1769,8 +1766,8 @@ function workspaceDetailHTML(task) {
             <code class="sr-only" id="workspace-task-link" aria-hidden="true">${escapeHTML(taskPermalink(task.id))}</code>
             <p class="task-reference-status" id="task-reference-status" role="status" aria-live="polite"></p>
           </section>`;
-  return `<section class="workspace-detail" aria-label="Card detail" data-detail-surface tabindex="-1">
-      <header class="detail-head"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Child card" : "Card"}</b></div></header>
+  return `<section class="workspace-detail" aria-label="Task detail" data-detail-surface tabindex="-1">
+      <header class="detail-head"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Subtask" : "Task"}</b></div></header>
       <form id="workspace-detail-form" class="workspace-detail-form">
         <div class="workspace-detail-main">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
@@ -1788,14 +1785,14 @@ function workspaceDetailHTML(task) {
             <div class="card-entry-composer">
               <div class="card-entry-tabs" role="group" aria-label="Entry type"><button type="button" data-entry-kind="comment" class="${state.cardEntryKind === "comment" ? "on" : ""}">Comment</button><button type="button" data-entry-kind="output" class="${state.cardEntryKind === "output" ? "on" : ""}">Output</button></div>
               <textarea id="card-entry-body" placeholder="${state.cardEntryKind === "output" ? "Add the result, links, or deliverable…" : "Add feedback, context, or a question…"}" ${state.cardEntryPending ? "disabled" : ""}>${escapeHTML(state.cardEntryDraft)}</textarea>
-              <footer><span>${state.cardEntryKind === "output" ? "Outputs move the card to Review." : "Comments stay with the card."}</span><button class="primary" id="add-card-entry" type="button" ${state.cardEntryPending ? "disabled" : ""}>${state.cardEntryPending ? "Adding…" : `Add ${state.cardEntryKind}`}</button></footer>
+              <footer><span>${state.cardEntryKind === "output" ? "Outputs move the task to Review." : "Comments stay with the task."}</span><button class="primary" id="add-card-entry" type="button" ${state.cardEntryPending ? "disabled" : ""}>${state.cardEntryPending ? "Adding…" : `Add ${state.cardEntryKind}`}</button></footer>
               <p class="error card-entry-error" role="alert">${escapeHTML(state.cardEntryError)}</p>
             </div>
           </section>
           ${reference}
           <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
         </div>
-        <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete card</button><div><button class="primary" type="submit">Save changes</button></div></footer>
+        <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete task</button><div><button class="primary" type="submit">Save changes</button></div></footer>
       </form>
     </section>`;
 }
@@ -1977,7 +1974,7 @@ function themeSwitchHTML(theme) {
 }
 
 function globalNewTaskButtonHTML() {
-  return `<button class="primary sidebar-new-task" id="global-new-task" type="button" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New card"}</span></button>`;
+  return `<button class="primary sidebar-new-task" id="global-new-task" type="button" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New task"}</span></button>`;
 }
 
 function newTaskCaptureBlocked() {
@@ -1987,7 +1984,7 @@ function newTaskCaptureBlocked() {
 function newTaskRecoveryNoticeHTML() {
   const recovery = state.newTaskRecovery;
   if (!recovery) return "";
-  return `<section class="status-notice new-task-recovery" role="alert" aria-label="Created card recovery"><span><strong>Card created.</strong> Slate saved ${escapeHTML(recovery.task.title)} in Inbox, but could not open it: ${escapeHTML(recovery.message)}</span><button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open card"}</button></section>`;
+  return `<section class="status-notice new-task-recovery" role="alert" aria-label="Created task recovery"><span><strong>Card created.</strong> Slate saved ${escapeHTML(recovery.task.title)} in Inbox, but could not open it: ${escapeHTML(recovery.message)}</span><button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open task"}</button></section>`;
 }
 
 function bindNewTaskRecoveryActions() {
@@ -2281,9 +2278,9 @@ function agentRowHTML(agent) {
   const counts = agent.workCounts || {};
   const assigned = Number(counts.ready || 0) + Number(counts.working || 0) + Number(counts.review || 0);
   const countParts = [
-    counts.ready ? formatCount(counts.ready, "open card", "open cards") : "",
-    counts.working ? formatCount(counts.working, "working card", "working cards") : "",
-    counts.review ? formatCount(counts.review, "review card", "review cards") : "",
+    counts.ready ? formatCount(counts.ready, "open task", "open tasks") : "",
+    counts.working ? formatCount(counts.working, "working task", "working tasks") : "",
+    counts.review ? formatCount(counts.review, "review task", "review tasks") : "",
   ].filter(Boolean);
   return `
     <article class="agent-directory-row">
@@ -2466,7 +2463,7 @@ function agentLifecycleConfirmHTML() {
     },
     delete: {
       title: `Delete ${agent.displayName}?`,
-      body: "The identity and every credential will be deleted. Assigned cards remain and become unassigned. Comments and outputs keep their recorded author name. This cannot be undone.",
+      body: "The identity and every credential will be deleted. Assigned tasks remain and become unassigned. Comments and outputs keep their recorded author name. This cannot be undone.",
       confirm: "Delete agent",
     },
   }[action];
@@ -2513,12 +2510,12 @@ function agentOverviewHTML(agent) {
         </div>
         <span>${counts.working}</span>
       </div>
-      ${working.length ? `<div class="agent-current-list">${working.map(item => agentWorkItemHTML(item)).join("")}</div>` : `<p class="agent-work-truncated">Open the full work view to see active cards.</p>`}
+      ${working.length ? `<div class="agent-current-list">${working.map(item => agentWorkItemHTML(item)).join("")}</div>` : `<p class="agent-work-truncated">Open the full work view to see active tasks.</p>`}
     </section>` : ""}
     <div class="agent-work-groups">
       ${counts.ready ? agentWorkSectionHTML("Ready", "Assigned and ready to pick up.", ready, counts.ready, "queued") : ""}
       ${counts.review ? agentWorkSectionHTML("Review", "Waiting for your review.", review, counts.review, "needs_review") : ""}
-      ${counts.completed ? agentWorkSectionHTML("Recently completed", "Latest completed cards.", recentlyCompleted, counts.completed, "done") : ""}
+      ${counts.completed ? agentWorkSectionHTML("Recently completed", "Latest completed tasks.", recentlyCompleted, counts.completed, "done") : ""}
     </div>
     <div class="agent-view-all">
       <a class="secondary icon-label" href="${agentWorkPath(agent.id)}" data-agent-tab>${icon("rows")}<span>View all work</span></a>
@@ -3022,7 +3019,7 @@ function bindWorkspace() {
 
 function cardContextMenuHTML(task) {
   return `<div class="card-context-menu" role="menu" aria-label="Actions for ${escapeAttr(task.title)}">
-    <button type="button" role="menuitem" data-context-delete>${icon("trash")}<span>Delete card</span></button>
+    <button type="button" role="menuitem" data-context-delete>${icon("trash")}<span>Delete task</span></button>
   </div>`;
 }
 
@@ -3806,7 +3803,7 @@ function bindWorkspaceDetail(options = {}) {
     preserveTaskDraft();
     render();
     try {
-      const entry = await api.post(`/api/v1/cards/${encodeURIComponent(taskID)}/entries`, {
+      const entry = await api.post(`/api/v1/tasks/${encodeURIComponent(taskID)}/entries`, {
         kind: entryKind,
         body,
       }, { headers: { "Idempotency-Key": attemptKey } });
@@ -3931,11 +3928,11 @@ function bindWorkspaceDetail(options = {}) {
         subtaskError: err.message,
       });
       if ((detailVersion !== taskDetailVersion || state.selectedTask?.id !== parentID) && !attemptIsCurrent()) {
-        reportBackgroundMutationFailure("add child card", title, err);
+        reportBackgroundMutationFailure("add subtask", title, err);
         return;
       }
       if (!attemptIsCurrent()) {
-        reportBackgroundMutationFailure("add child card", title, err);
+        reportBackgroundMutationFailure("add subtask", title, err);
         return;
       }
       if (handleError(err)) return;
@@ -3957,7 +3954,7 @@ function bindWorkspaceDetail(options = {}) {
     }
   });
   document.querySelector("#delete-task")?.addEventListener("click", async () => {
-    if (!confirm("Delete this card and its child cards?")) return;
+    if (!confirm("Delete this task and its subtasks?")) return;
     const taskID = state.selectedTask.id;
     const taskTitle = state.selectedTask.title;
     const parentTaskID = state.selectedTask.parentTaskId || "";
@@ -4573,7 +4570,7 @@ async function captureInboxTask(button) {
   try {
     task = await api.post(
       "/api/v1/tasks",
-      { title: "Untitled card", description: "", kind: "action" },
+      { title: "Untitled task", description: "", kind: "action" },
       { headers: { "Idempotency-Key": state.newTaskCaptureAttemptKey } },
     );
   } catch (err) {
@@ -4597,14 +4594,14 @@ async function captureInboxTask(button) {
     }
     let detailError;
     const opened = await openTaskDetail(task.id, null, { onError: err => { detailError = err; } });
-    if (!opened) throw detailError || new Error("The card could not be loaded.");
+    if (!opened) throw detailError || new Error("The task could not be loaded.");
     state.newTaskRecovery = null;
     render();
     focusOpenedTaskDetail();
     return true;
   } catch (err) {
     state.error = "";
-    state.newTaskRecovery = { task, message: err.message || "The card could not be opened.", pending: false };
+    state.newTaskRecovery = { task, message: err.message || "The task could not be opened.", pending: false };
     render();
     return false;
   }
@@ -4622,14 +4619,14 @@ async function recoverCreatedTask() {
     }
     let detailError;
     const opened = await openTaskDetail(recovery.task.id, null, { onError: err => { detailError = err; } });
-    if (!opened) throw detailError || new Error("The card could not be loaded.");
+    if (!opened) throw detailError || new Error("The task could not be loaded.");
     state.newTaskRecovery = null;
     render();
     focusOpenedTaskDetail();
     return true;
   } catch (err) {
     state.error = "";
-    state.newTaskRecovery = { ...recovery, message: err.message || "The card could not be opened.", pending: false };
+    state.newTaskRecovery = { ...recovery, message: err.message || "The task could not be opened.", pending: false };
     render();
     return false;
   }

@@ -1766,34 +1766,6 @@ func (s *Store) listCardEntries(ctx context.Context, userID string, agentID stri
 	return entries, nil
 }
 
-func (s *Store) ListCardReviewKinds(ctx context.Context, userID string, agentID string) (map[string]string, error) {
-	args := []any{userID, StatusNeedsReview}
-	agentSQL := ""
-	if agentID != "" {
-		args = append(args, agentID)
-		agentSQL = " AND t.assignee_agent_id = $3"
-	}
-	rows, err := s.db.Query(ctx, `
-		SELECT t.id::text, COALESCE(NULLIF(t.review_reason, ''), 'other')
-		FROM tasks t
-		JOIN boards b ON b.id = t.board_id
-		WHERE b.user_id = $1 AND t.status = $2`+agentSQL+`
-	`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	kinds := map[string]string{}
-	for rows.Next() {
-		var taskID, kind string
-		if err := rows.Scan(&taskID, &kind); err != nil {
-			return nil, err
-		}
-		kinds[taskID] = kind
-	}
-	return kinds, rows.Err()
-}
-
 func (s *Store) CreateCardEntry(ctx context.Context, userID string, agentID string, authorName string, taskID string, input CreateCardEntryInput) (CardEntry, error) {
 	if !validUUID(taskID) {
 		return CardEntry{}, fmt.Errorf("%w: card ID must be a valid ID", ErrInvalidData)

@@ -374,7 +374,7 @@ test("cards expose a compact viewport-safe delete context menu", () => {
 
   assert.match(menu, /role="menu" aria-label="Actions for Delete me"/);
   assert.match(menu, /role="menuitem" data-context-delete/);
-  assert.match(menu, />Delete card</);
+  assert.match(menu, />Delete task</);
   assert.match(app.workspaceFlowHTML([task]), /data-task="task-one"/);
   assert.match(app.agentWorkItemHTML(task), /data-task="task-one" data-open-task="task-one"/);
   assert.deepEqual(
@@ -559,7 +559,7 @@ test("subtask detail keeps its list fixed to the parent", () => {
   const html = vm.runInContext(`workspaceDetailHTML(state.selectedTask)`, app);
   assert.match(html, /id="workspace-detail-list" disabled aria-describedby="workspace-detail-list-help"/);
   assert.doesNotMatch(html, /name="bucketId"/);
-  assert.match(html, /Child cards stay with their parent card\./);
+  assert.match(html, /Subtasks stay with their parent task\./);
 });
 
 test("card detail shows outputs once in the conversation", () => {
@@ -585,7 +585,7 @@ test("agent work renders the shared inline task detail with parent context", () 
   `, app);
   const html = app.agentDetailHTML();
   assert.match(html, /class="main workspace-main card-detail-main agent-task-main"/);
-  assert.match(html, /class="workspace-detail" aria-label="Card detail"/);
+  assert.match(html, /class="workspace-detail" aria-label="Task detail"/);
   assert.match(html, />Back to agent work<\/span>/);
   assert.match(html, /1 of 1 done/);
   assert.match(html, /Review/);
@@ -611,7 +611,7 @@ test("opening a task loads its full description and subtasks", async () => {
       if (path.includes("parentTaskId=")) {
         return { tasks: [{ id: "subtask-one", parentTaskId: "task-one", title: "Research" }], nextCursor: "children-two" };
       }
-      if (path === "/api/v1/cards/task-one/entries") return { entries: [] };
+      if (path === "/api/v1/tasks/task-one/entries") return { entries: [] };
       return { id: "task-one", bucketId: "list-one", title: "Summary", description: "Full private detail" };
     };
   `, app);
@@ -620,7 +620,7 @@ test("opening a task loads its full description and subtasks", async () => {
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
     "/api/v1/tasks/task-one",
     "/api/v1/tasks?parentTaskId=task-one&limit=200",
-    "/api/v1/cards/task-one/entries",
+    "/api/v1/tasks/task-one/entries",
     "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
   ]);
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
@@ -635,11 +635,11 @@ test("opening a task loads its full description and subtasks", async () => {
   assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(detailRequests)", app)), [
     "/api/v1/tasks/task-one",
     "/api/v1/tasks?parentTaskId=task-one&limit=200",
-    "/api/v1/cards/task-one/entries",
+    "/api/v1/tasks/task-one/entries",
     "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
     "/api/v1/tasks/task-one",
     "/api/v1/tasks?parentTaskId=task-one&limit=200",
-    "/api/v1/cards/task-one/entries",
+    "/api/v1/tasks/task-one/entries",
     "/api/v1/tasks?parentTaskId=task-one&limit=200&cursor=children-two",
   ]);
   assert.equal(vm.runInContext("state.selectedTask.description", app), "Full private detail");
@@ -881,7 +881,7 @@ test("agent directory shows credential facts, work counts, clean cards, and limi
   assert.match(html, /&lt;Builder&gt;/);
   assert.match(html, />Connected</);
   assert.match(html, />Needs connection</);
-  assert.match(html, /2 open cards · 1 working card · 1 review card/);
+  assert.match(html, /2 open tasks · 1 working task · 1 review task/);
   assert.match(html, /href="\/app\/agents\/agent-connected" data-agent-link="agent-connected"/);
   assert.match(html, /No open work assigned/);
   assert.match(html, /class="agent-directory-link"/);
@@ -1376,9 +1376,9 @@ test("the card header stays focused on the workspace and new-card action", () =>
   vm.runInContext(`state.me = null; state.board = null; state.boards = [];`, app);
 });
 
-test("New card remains available from agent and account settings pages", () => {
-  assert.match(app.agentsHTML(), /id="global-new-task"[^>]*>.*New card/s);
-  assert.match(app.settingsHTML(), /id="global-new-task"[^>]*>.*New card/s);
+test("New task remains available from agent and account settings pages", () => {
+  assert.match(app.agentsHTML(), /id="global-new-task"[^>]*>.*New task/s);
+  assert.match(app.settingsHTML(), /id="global-new-task"[^>]*>.*New task/s);
 });
 
 test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
@@ -1732,7 +1732,6 @@ test("an older workspace response cannot overwrite a newer same-route load", asy
     state.workspaceTasks = [];
     let workspaceRequests = 0;
     api.get = async path => {
-      if (path === "/api/v1/card-review-kinds") return { kinds: { task: "other" } };
       if (!path.startsWith("/api/v1/tasks?")) throw new Error("unexpected request " + path);
       workspaceRequests += 1;
       return workspaceRequests === 1
@@ -2023,7 +2022,7 @@ test("detail presents one contextual accessible card editor with clear actions",
   `, app);
   const html = app.workspaceDetailHTML({ ...board.buckets[0].tasks[1], description: "", priority: "", assigneeAgentId: "" });
 
-  assert.match(html, /class="workspace-detail" aria-label="Card detail"/);
+  assert.match(html, /class="workspace-detail" aria-label="Task detail"/);
   assert.doesNotMatch(html, /role="dialog"|aria-modal="true"|detail-overlay/);
   assert.match(html, /class="detail-title"/);
   assert.match(html, /class="detail-description"/);
@@ -2031,10 +2030,10 @@ test("detail presents one contextual accessible card editor with clear actions",
   assert.match(html, />Save changes</);
   assert.match(html, /data-close-detail/);
   assert.match(html, />Back to board<\/span>/);
-  assert.match(html, />Delete card</);
+  assert.match(html, />Delete task</);
   assert.match(html, /Home list/);
   assert.match(html, /<label for="workspace-detail-owner">Agent<\/label>/);
-  assert.match(html, />Card ID</);
+  assert.match(html, />Task ID</);
   assert.match(html, /<h3[^>]*class="detail-block-heading">Description<\/h3>/);
   assert.match(html, /id="workspace-task-id"[^>]*>working</);
   assert.match(html, /id="workspace-task-link"[^>]*>\/app\/tasks\?task=working</);
