@@ -44,13 +44,13 @@ func TestHelpDocumentsEveryResource(t *testing.T) {
 	if !strings.Contains(helpText[""], "slate version") {
 		t.Fatal("help does not document version command")
 	}
-	for _, topic := range []string{"", "auth", "boards", "lists", "tasks", "watch", "runs"} {
+	for _, topic := range []string{"", "auth", "lists", "tasks", "watch", "runs"} {
 		if strings.TrimSpace(helpText[topic]) == "" {
 			t.Fatalf("missing help for %q", topic)
 		}
 	}
-	for _, command := range []string{"boards get", "boards create", "boards update", "boards delete", "lists list", "lists get", "lists create", "lists update", "lists delete", "lists reorder", "tasks list", "tasks get", "tasks create", "tasks update", "tasks delete", "tasks reorder", "tasks pull", "tasks claim", "tasks entries", "tasks comment", "tasks output", "tasks status"} {
-		joined := helpText["boards"] + helpText["lists"] + helpText["tasks"]
+	for _, command := range []string{"lists list", "lists get", "lists create", "lists update", "lists delete", "lists reorder", "tasks list", "tasks get", "tasks create", "tasks update", "tasks delete", "tasks reorder", "tasks pull", "tasks claim", "tasks entries", "tasks comment", "tasks output", "tasks status"} {
+		joined := helpText["lists"] + helpText["tasks"]
 		if !strings.Contains(joined, command) {
 			t.Errorf("help does not document %q", command)
 		}
@@ -388,19 +388,19 @@ func TestTasksListSendsAllFilters(t *testing.T) {
 	defer server.Close()
 
 	err := tasksCmd(client{baseURL: server.URL, token: "test", http: server.Client()}, []string{
-		"list", "--board", "board-1", "--list", "list-1", "--status", "done", "--limit", "12", "--cursor", "next-page",
+		"list", "--list", "list-1", "--status", "done", "--limit", "12", "--cursor", "next-page",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"boardId=board-1", "bucketId=list-1", "cursor=next-page", "limit=12", "status=done"} {
+	for _, value := range []string{"bucketId=list-1", "cursor=next-page", "limit=12", "status=done"} {
 		if !strings.Contains(requestedPath, value) {
 			t.Fatalf("requested %q, missing %q", requestedPath, value)
 		}
 	}
 }
 
-func TestListsGetUsesBucketEndpoint(t *testing.T) {
+func TestListsGetUsesListEndpoint(t *testing.T) {
 	var method, requestedPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, requestedPath = r.Method, r.URL.RequestURI()
@@ -412,7 +412,7 @@ func TestListsGetUsesBucketEndpoint(t *testing.T) {
 	if err := listsCmd(client{baseURL: server.URL, token: "test", http: server.Client()}, []string{"get", "list-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if method != http.MethodGet || requestedPath != "/api/v1/buckets/list-1" {
+	if method != http.MethodGet || requestedPath != "/api/v1/lists/list-1" {
 		t.Fatalf("requested %s %q", method, requestedPath)
 	}
 }
@@ -431,29 +431,6 @@ func TestListsUpdateCanClearInbox(t *testing.T) {
 	}
 	if value, exists := body["isInbox"]; !exists || value != false {
 		t.Fatalf("body = %#v", body)
-	}
-}
-
-func TestBoardsCreateSendsConfiguration(t *testing.T) {
-	var method string
-	var body map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		method = r.Method
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":"board-1"}`))
-	}))
-	defer server.Close()
-
-	err := boardsCmd(client{baseURL: server.URL, token: "test", http: server.Client()}, []string{
-		"create", "--name", "Work", "--background-kind", "color", "--background-value", "blue", "--max-tasks-per-list", "8",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if method != http.MethodPost || body["name"] != "Work" || body["maxTasksPerList"] != float64(8) {
-		t.Fatalf("method = %s, body = %#v", method, body)
 	}
 }
 

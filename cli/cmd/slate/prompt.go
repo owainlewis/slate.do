@@ -16,7 +16,6 @@ type promptDetails struct {
 	TaskID       string
 	TaskTitle    string
 	TaskPriority string
-	BoardName    string
 	ListName     string
 	RunID        string
 	Worktree     string
@@ -49,8 +48,8 @@ func buildPrompt(d promptDetails) string {
 	if d.TaskPriority != "" {
 		write("Priority: %s", d.TaskPriority)
 	}
-	if d.BoardName != "" || d.ListName != "" {
-		write("Location: %s / %s", d.BoardName, d.ListName)
+	if d.ListName != "" {
+		write("List: %s", d.ListName)
 	}
 	write("Run ID: %s", d.RunID)
 	write("Working directory: %s", d.Worktree)

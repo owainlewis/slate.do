@@ -9,33 +9,32 @@ const { chromium } = require("playwright");
 const dist = __dirname;
 
 function workspaceFixture() {
-  const boards = [{ id: "board-one", name: "Workspace" }, { id: "board-two", name: "Other" }];
   const lists = [
-    { id: "list-inbox", boardId: "board-one", boardName: "Workspace", name: "Inbox", goal: "Capture now", isInbox: true, openCount: 1 },
-    { id: "list-youtube", boardId: "board-one", boardName: "Workspace", name: "YouTube", goal: "Plan useful videos", isInbox: false, openCount: 2 },
+    { id: "list-inbox", name: "Inbox", goal: "Capture now", isInbox: true, openCount: 1 },
+    { id: "list-youtube", name: "YouTube", goal: "Plan useful videos", isInbox: false, openCount: 2 },
   ];
   const tasks = [
     {
-      id: "task-parent", boardId: "board-one", bucketId: "list-youtube", listName: "YouTube",
+      id: "task-parent", bucketId: "list-youtube", listName: "YouTube",
       title: "Publish task-first agents video", description: "Explain one control plane for people and agents.",
       scheduledDate: "2026-08-12", kind: "action", status: "working", priority: "p0",
       assigneeAgentId: "agent-research", assigneeAgentName: "Research agent",
     },
     {
-      id: "task-inbox", boardId: "board-one", bucketId: "list-inbox", listName: "Inbox",
+      id: "task-inbox", bucketId: "list-inbox", listName: "Inbox",
       title: "Write the doc my boss asked for", description: "", scheduledDate: "", kind: "action",
       status: "new", priority: "", assigneeAgentId: "",
     },
   ];
   const subtasks = [{
-    id: "task-child", boardId: "board-one", bucketId: "list-youtube", listName: "YouTube",
+    id: "task-child", bucketId: "list-youtube", listName: "YouTube",
     parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", title: "Research examples", description: "", scheduledDate: "", kind: "action",
     status: "done", priority: "p1", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent",
   }];
   const agents = [
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
   ];
-  return { boards, lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, deletedBoards: [], reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdBoards: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextBoardCreate: false, delayNextBoardCreate: false, releaseBoardCreate: null, failNextBoardDelete: false, delayNextBoardDelete: false, releaseBoardDelete: null, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, inboxMessages: [], failNextInbox: false, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextBoards: false, releaseBoards: null, delayNextBoardDetail: false, releaseBoardDetail: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, inboxMessages: [], failNextInbox: false, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 // The list view puts its name in an editable field rather than a heading.
@@ -48,83 +47,9 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
     state.requests.push(`${request.method} ${url.pathname}${url.search}`);
     if (url.pathname === "/api/v1/me") return json(response, {
       authenticated: true,
-      user: { id: "owner", email: "owner@example.com", displayName: "Owain", theme: "dark", entitlement: { plan: "pro", limits: { boards: 5, listsPerBoard: 2, activeItemsPerList: 20, agents: 5 } } },
+      user: { id: "owner", email: "owner@example.com", displayName: "Owain", theme: "dark", entitlement: { plan: "pro", limits: { lists: 3, activeItemsPerList: 20, agents: 5 } } },
     });
-    if (url.pathname === "/api/v1/boards" && request.method === "GET") {
-      if (state.delayNextBoards) {
-        state.delayNextBoards = false;
-        await new Promise(resolve => { state.releaseBoards = resolve; });
-      }
-      return json(response, { boards: state.boards });
-    }
-    if (url.pathname === "/api/v1/boards" && request.method === "POST") {
-      const input = await requestJSON(request);
-      if (state.delayNextBoardCreate) {
-        state.delayNextBoardCreate = false;
-        await new Promise(resolve => { state.releaseBoardCreate = resolve; });
-      }
-      if (state.failNextBoardCreate) {
-        state.failNextBoardCreate = false;
-        return json(response, { error: "Could not create replacement board" }, 500);
-      }
-      const created = { id: `board-created-${state.createdBoards.length + 1}`, name: input.name };
-      state.boards.push(created);
-      state.createdBoards.push(created);
-      return json(response, created, 201);
-    }
-    const boardMatch = url.pathname.match(/^\/api\/v1\/boards\/([^/]+)$/);
-    if (boardMatch && request.method === "GET") {
-      const boardID = boardMatch[1];
-      const board = state.boards.find(item => item.id === boardID);
-      if (!board) return json(response, { error: "board not found" }, 404);
-      const buckets = state.lists.filter(list => list.boardId === boardID).map(list => ({
-        ...list,
-        tasks: [...state.tasks, ...state.subtasks].filter(task => task.bucketId === list.id).map(task => ({ ...task })),
-      }));
-      if (state.delayNextBoardDetail) {
-        state.delayNextBoardDetail = false;
-        await new Promise(resolve => { state.releaseBoardDetail = resolve; });
-      }
-      return json(response, { ...board, buckets });
-    }
-    if (boardMatch && request.method === "DELETE") {
-      if (state.delayNextBoardDelete) {
-        state.delayNextBoardDelete = false;
-        await new Promise(resolve => { state.releaseBoardDelete = resolve; });
-      }
-      if (state.failNextBoardDelete) {
-        state.failNextBoardDelete = false;
-        return json(response, { error: "Could not delete board" }, 500);
-      }
-      const boardID = boardMatch[1];
-      const index = state.boards.findIndex(item => item.id === boardID);
-      if (index < 0) return json(response, { error: "board not found" }, 404);
-      if (!state.lists.some(list => list.isInbox && list.boardId !== boardID)) {
-        // Production maps ErrInvalidData to 400 with no code, so match it exactly.
-        return json(response, { error: "invalid data: the account must keep an Inbox list" }, 400);
-      }
-      const deletedListIDs = new Set(state.lists.filter(list => list.boardId === boardID).map(list => list.id));
-      state.boards.splice(index, 1);
-      state.lists = state.lists.filter(list => list.boardId !== boardID);
-      state.tasks = state.tasks.filter(task => !deletedListIDs.has(task.bucketId));
-      state.subtasks = state.subtasks.filter(task => !deletedListIDs.has(task.bucketId));
-      state.deletedBoards.push(boardID);
-      return json(response, {});
-    }
-    const reorderListsMatch = url.pathname.match(/^\/api\/v1\/boards\/([^/]+)\/reorder-buckets$/);
-    if (reorderListsMatch && request.method === "POST") {
-      const input = await requestJSON(request);
-      const positions = new Map(input.ids.map((id, index) => [id, index]));
-      const boardLists = state.lists
-        .filter(list => list.boardId === reorderListsMatch[1])
-        .sort((a, b) => positions.get(a.id) - positions.get(b.id));
-      let boardIndex = 0;
-      state.lists = state.lists.map(list => list.boardId === reorderListsMatch[1] ? boardLists[boardIndex++] : list);
-      state.reorderedLists = input.ids;
-      return json(response, {});
-    }
-    const createListMatch = url.pathname.match(/^\/api\/v1\/boards\/([^/]+)\/buckets$/);
-    if (createListMatch && request.method === "POST") {
+    if (url.pathname === "/api/v1/lists" && request.method === "POST") {
       const input = await requestJSON(request);
       if (state.delayNextList) {
         state.delayNextList = false;
@@ -134,13 +59,17 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
         state.failNextListCreate = false;
         return json(response, { error: "Could not create list" }, 500);
       }
-      const boardID = createListMatch[1];
-      const board = state.boards.find(item => item.id === boardID);
-      if (!board) return json(response, { error: "board not found" }, 404);
-      const created = { id: `list-created-${state.createdLists.length + 1}`, boardId: boardID, boardName: board.name, name: input.name, goal: "", isInbox: Boolean(input.isInbox), openCount: 0 };
+      const created = { id: `list-created-${state.createdLists.length + 1}`, name: input.name, goal: "", isInbox: Boolean(input.isInbox), openCount: 0 };
       state.lists.push(created);
       state.createdLists.push(created);
       return json(response, created, 201);
+    }
+    if (url.pathname === "/api/v1/lists/reorder" && request.method === "POST") {
+      const input = await requestJSON(request);
+      const positions = new Map(input.ids.map((id, index) => [id, index]));
+      state.lists = [...state.lists].sort((a, b) => positions.get(a.id) - positions.get(b.id));
+      state.reorderedLists = input.ids;
+      return json(response, {});
     }
     if (url.pathname === "/api/v1/inbox" && request.method === "GET") {
       if (state.failNextInbox) {
@@ -225,7 +154,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }
       const items = [...state.tasks, ...state.subtasks]
         .filter(item => item.assigneeAgentId === agentWorkMatch[1])
-        .map(item => ({ ...item, boardName: "Workspace", bucketName: item.listName, updatedAt: "2026-08-05T12:00:00Z" }));
+        .map(item => ({ ...item, bucketName: item.listName, updatedAt: "2026-08-05T12:00:00Z" }));
       const page = Number(url.searchParams.get("page") || 1);
       return json(response, { items, total: items.length, page, pageSize: 50, hasPrevious: page > 1, hasNext: false });
     }
@@ -265,7 +194,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       if (!agent) return json(response, { error: "agent not found" }, 404);
       const assigned = [...state.tasks, ...state.subtasks]
         .filter(item => item.assigneeAgentId === agent.id)
-        .map(item => ({ ...item, boardName: "Workspace", bucketName: item.listName, updatedAt: "2026-08-05T12:00:00Z" }));
+        .map(item => ({ ...item, bucketName: item.listName, updatedAt: "2026-08-05T12:00:00Z" }));
       const visibleAssigned = state.hideSubtasksFromAgentOverview ? assigned.filter(item => !item.parentTaskId) : assigned;
       return json(response, { agent, work: {
         ready: visibleAssigned.filter(item => item.status === "queued"),
@@ -315,7 +244,7 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       state.inboxRequestKeys.push(idempotencyKey);
       const existing = state.inboxIdempotency.get(idempotencyKey);
       if (existing) return json(response, existing, 201);
-      const created = { id: `task-created-${state.created.length + 1}`, boardId: "board-one", bucketId: "list-inbox", listName: "Inbox", title: input.title, description: input.description || "", scheduledDate: "", kind: "action", status: "new", priority: "", assigneeAgentId: "" };
+      const created = { id: `task-created-${state.created.length + 1}`, bucketId: "list-inbox", listName: "Inbox", title: input.title, description: input.description || "", scheduledDate: "", kind: "action", status: "new", priority: "", assigneeAgentId: "" };
       state.tasks.unshift(created);
       state.created.push(created);
       state.lists.find(list => list.id === "list-inbox").openCount += 1;
@@ -326,18 +255,18 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       }
       return json(response, created, 201);
     }
-    const bucketTaskMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)\/tasks$/);
+    const bucketTaskMatch = url.pathname.match(/^\/api\/v1\/lists\/([^/]+)\/tasks$/);
     if (bucketTaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
       const list = state.lists.find(item => item.id === bucketTaskMatch[1]);
       if (!list) return json(response, { error: "list not found" }, 404);
-      const created = { id: `task-created-${state.created.length + 1}`, boardId: list.boardId, bucketId: list.id, listName: list.name, title: input.title, description: input.description || "", scheduledDate: input.scheduledDate || "", kind: "action", status: input.assigneeAgentId ? "queued" : "new", priority: "", assigneeAgentId: input.assigneeAgentId || "" };
+      const created = { id: `task-created-${state.created.length + 1}`, bucketId: list.id, listName: list.name, title: input.title, description: input.description || "", scheduledDate: input.scheduledDate || "", kind: "action", status: input.assigneeAgentId ? "queued" : "new", priority: "", assigneeAgentId: input.assigneeAgentId || "" };
       state.tasks.unshift(created);
       state.created.push(created);
       list.openCount += 1;
       return json(response, created, 201);
     }
-    const bucketMatch = url.pathname.match(/^\/api\/v1\/buckets\/([^/]+)$/);
+    const bucketMatch = url.pathname.match(/^\/api\/v1\/lists\/([^/]+)$/);
     if (bucketMatch && request.method === "PATCH") {
       const input = await requestJSON(request);
       if (state.failNextListRename && "name" in input) {
@@ -408,9 +337,9 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
           state.lists.find(item => item.id === previousBucketID).openCount -= 1;
           list.openCount += 1;
         }
-        Object.assign(task, { boardId: list.boardId, listName: list.name });
+        Object.assign(task, { listName: list.name });
         state.subtasks.filter(item => item.parentTaskId === task.id).forEach(item => {
-          Object.assign(item, { boardId: list.boardId, bucketId: list.id, listName: list.name });
+          Object.assign(item, { bucketId: list.id, listName: list.name });
         });
       }
       if (previousStatus !== task.status && (previousStatus === "done" || task.status === "done")) {
@@ -426,8 +355,8 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       const task = state.tasks.find(item => item.id === moveMatch[1]);
       const list = state.lists.find(item => item.id === input.bucketId);
       if (!task || !list) return json(response, { error: "not found" }, 404);
-      Object.assign(task, { boardId: list.boardId, bucketId: list.id, listName: list.name });
-      state.subtasks.filter(item => item.parentTaskId === task.id).forEach(item => Object.assign(item, { boardId: list.boardId, bucketId: list.id, listName: list.name }));
+      Object.assign(task, { bucketId: list.id, listName: list.name });
+      state.subtasks.filter(item => item.parentTaskId === task.id).forEach(item => Object.assign(item, { bucketId: list.id, listName: list.name }));
       return json(response, task);
     }
     if (taskMatch && request.method === "DELETE") {
@@ -826,9 +755,9 @@ test("a context-menu delete invalidates a stale navigation response", async t =>
   await page.getByRole("link", { name: "Board", exact: true }).click();
   await waitFor(() => typeof state.releaseWorkspaceTasks === "function");
   const taskRequestsBeforeDelete = state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length;
-  const boardRequestsBeforeDelete = state.requests.filter(request => request === "GET /api/v1/boards").length;
+  const listRequestsBeforeDelete = state.requests.filter(request => request === "GET /api/v1/lists").length;
   state.releaseDelete();
-  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/boards").length > boardRequestsBeforeDelete);
+  await waitFor(() => state.requests.filter(request => request === "GET /api/v1/lists").length > listRequestsBeforeDelete);
   state.releaseWorkspaceTasks();
   await waitFor(() => state.delayedWorkspaceTasksCompleted);
   await waitFor(() => state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length > taskRequestsBeforeDelete);
@@ -1266,25 +1195,6 @@ test("board settings are removed and legacy links return to the board", async t 
   assert.deepEqual(pageErrors, []);
 });
 
-test("a board can be created from settings, where board storage now lives", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-
-  await page.goto(`${origin}/app/settings/boards`);
-  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
-  state.delayNextBoardCreate = true;
-  await page.evaluate(() => {
-    const button = document.querySelector("#new-board");
-    button.click();
-    button.click();
-  });
-  await waitFor(() => typeof state.releaseBoardCreate === "function");
-  assert.equal(state.requests.filter(request => request === "POST /api/v1/boards").length, 1);
-  assert.equal(await page.getByRole("button", { name: "New board", exact: true }).isDisabled(), true);
-  state.releaseBoardCreate();
-  await waitFor(() => state.createdBoards.length === 1);
-  assert.deepEqual(pageErrors, []);
-});
-
 test("desktop navigation collapses with the keyboard and stays collapsed across routes", async t => {
   const { page, pageErrors } = await startWorkspace(t);
   const sidebar = page.locator("#primary-navigation");
@@ -1380,65 +1290,14 @@ test("mobile navigation keeps its existing closed dropdown behaviour", async t =
   assert.deepEqual(pageErrors, []);
 });
 
-test("a delayed board creation cannot override newer navigation", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-
-  await page.goto(`${origin}/app/settings/boards`);
-  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
-  state.delayNextBoardCreate = true;
-  await page.getByRole("button", { name: "New board", exact: true }).click();
-  await waitFor(() => typeof state.releaseBoardCreate === "function");
-  await navigateApp(page, "/app/lists/list-youtube");
-  await listTitle(page, "YouTube").waitFor();
-  state.releaseBoardCreate();
-  await waitFor(() => state.createdBoards.length === 1);
-  await page.waitForTimeout(50);
-
-  assert.equal(new URL(page.url()).pathname, "/app/lists/list-youtube");
-  assert.deepEqual(pageErrors, []);
-});
-
-test("board deletion uses a recoverable designed dialog in settings", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
-
-  await page.goto(`${origin}/app/settings/boards`);
-  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
-  const protectedDelete = page.getByRole("button", { name: "Delete Workspace", exact: true });
-  assert.equal(await protectedDelete.isDisabled(), true);
-  assert.equal(await protectedDelete.getAttribute("title"), "This board holds your only Inbox, so it cannot be deleted");
-  state.lists.push({ id: "list-other-inbox", boardId: "board-two", boardName: "Other", name: "Other Inbox", goal: "", isInbox: true, openCount: 0 });
-  await page.reload();
-  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
-  assert.equal(await protectedDelete.isEnabled(), true);
-
-  const deleteOther = page.getByRole("button", { name: "Delete Other", exact: true });
-  await deleteOther.click();
-  let dialog = page.getByRole("dialog", { name: "Delete Other?", exact: true });
-  assert.equal(await dialog.getByText("Every list and task on this board will be permanently deleted. This cannot be undone.", { exact: true }).isVisible(), true);
-  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-  assert.equal(await deleteOther.evaluate(element => element === document.activeElement), true);
-
-  await deleteOther.click();
-  state.failNextBoardDelete = true;
-  dialog = page.getByRole("dialog", { name: "Delete Other?", exact: true });
-  await dialog.getByRole("button", { name: "Delete board", exact: true }).click();
-  await dialog.getByRole("alert").filter({ hasText: "Could not delete board" }).waitFor();
-  assert.equal(await dialog.getByRole("button", { name: "Delete board", exact: true }).evaluate(element => element === document.activeElement), true);
-
-  await dialog.getByRole("button", { name: "Delete board", exact: true }).click();
-  await dialog.waitFor({ state: "detached" });
-  assert.deepEqual(state.deletedBoards, ["board-two"]);
-  assert.equal(await protectedDelete.isDisabled(), true);
-  assert.deepEqual(pageErrors, []);
-});
-test("board deletion refreshes assigned work counts on the agent directory", async t => {
+test("list deletion refreshes assigned work counts on the agent directory", async t => {
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
   state.dynamicAgentCounts = true;
-  state.lists.push({ id: "list-other-work", boardId: "board-two", boardName: "Other", name: "Other work", goal: "", isInbox: false, openCount: 1 });
+  state.lists.push({ id: "list-other-work", name: "Other work", goal: "", isInbox: false, openCount: 1 });
   state.tasks.push({
-    id: "task-other-agent", boardId: "board-two", bucketId: "list-other-work", listName: "Other work",
-    title: "Research the other board", description: "", scheduledDate: "", kind: "action",
+    id: "task-other-agent", bucketId: "list-other-work", listName: "Other work",
+    title: "Research the other list", description: "", scheduledDate: "", kind: "action",
     status: "working", priority: "", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent",
   });
   await page.goto(`${origin}/app/agents`);
@@ -1446,11 +1305,10 @@ test("board deletion refreshes assigned work counts on the agent directory", asy
   const researchAgent = page.locator(".agent-directory-row").filter({ hasText: "Research agent" });
   await researchAgent.getByText("2 working tasks", { exact: true }).waitFor();
 
-  await page.goto(`${origin}/app/settings/boards`);
-  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
-  await page.getByRole("button", { name: "Delete Other", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Delete Other?", exact: true });
-  await dialog.getByRole("button", { name: "Delete board", exact: true }).click();
+  await page.goto(`${origin}/app/lists/list-other-work`);
+  await page.getByRole("button", { name: "Delete list", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete Other work?", exact: true });
+  await dialog.getByRole("button", { name: "Delete list", exact: true }).click();
   await dialog.waitFor({ state: "detached" });
 
   await page.goto(`${origin}/app/agents`);
@@ -1561,18 +1419,15 @@ test("a delayed list creation cannot repaint while a newer history route loads",
   await page.keyboard.press("Tab");
   assert.equal(await dialog.evaluate(element => element === document.activeElement), true);
 
-  state.delayNextBoards = true;
   await page.evaluate(() => {
     history.pushState({}, "", "/app/settings/profile");
     dispatchEvent(new PopStateEvent("popstate"));
   });
-  await waitFor(() => typeof state.releaseBoards === "function");
-  const listResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().includes("/buckets"));
+  const listResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/api/v1/lists"));
   state.releaseList();
   await listResponse;
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(new URL(page.url()).pathname, "/app/settings/profile");
-  state.releaseBoards();
   await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
   assert.equal(new URL(page.url()).pathname, "/app/settings/profile");
   assert.equal(state.createdLists.some(list => list.name === "Later list"), true);
@@ -1812,7 +1667,7 @@ test("a list created on a board is immediately available for agent assignment", 
 
   await page.getByRole("button", { name: "Assign work", exact: true }).click();
 
-  await page.getByLabel("Board", { exact: true }).selectOption("board-two");
+  assert.equal(await page.getByLabel("Board", { exact: true }).count(), 0);
   const list = page.getByLabel("List", { exact: true });
   await list.selectOption(state.createdLists[0].id);
   assert.equal(await list.inputValue(), state.createdLists[0].id);
@@ -2458,8 +2313,8 @@ test("a delayed parent move reconciles descendant locations across agent tabs", 
   state.releaseStatus();
   await waitFor(() => state.subtasks.find(item => item.id === "task-child")?.bucketId === "list-inbox");
   await waitFor(() => state.requests.filter(request => request === "GET /api/v1/agents/agent-research").length > detailRequestsBeforeRelease);
-  await page.getByRole("button", { name: /Publish task-first agents video/ }).getByText("Workspace / Inbox", { exact: true }).waitFor();
-  await page.getByRole("button", { name: /Research examples/ }).getByText("Workspace / Inbox", { exact: true }).waitFor();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).getByText("Inbox", { exact: true }).waitFor();
+  await page.getByRole("button", { name: /Research examples/ }).getByText("Inbox", { exact: true }).waitFor();
 
   assert.deepEqual(pageErrors, []);
 });
@@ -3221,15 +3076,15 @@ test("a parent cascade closes a descendant created while deletion is pending", a
   assert.deepEqual(pageErrors, []);
 });
 
-test("direct settings keeps board navigation and can create a board", async t => {
-  const { page, state, origin, pageErrors } = await startWorkspace(t);
+test("settings tabs switch panels without touching the primary navigation", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t);
 
   await page.goto(`${origin}/app/settings/profile`);
   await page.getByRole("heading", { name: "Profile", exact: true }).waitFor();
-  await page.getByRole("tab", { name: "Boards", exact: true }).click();
-  await page.getByRole("heading", { name: "Boards", exact: true }).waitFor();
-  await page.getByRole("button", { name: "New board", exact: true }).click();
-  await waitFor(() => state.createdBoards.length === 1);
+  assert.equal(await page.getByRole("tab", { name: "Boards", exact: true }).count(), 0);
+  await page.getByRole("tab", { name: "Preferences", exact: true }).click();
+  await page.getByRole("heading", { name: "Preferences", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/app/settings/preferences");
   assert.deepEqual(pageErrors, []);
 });
 

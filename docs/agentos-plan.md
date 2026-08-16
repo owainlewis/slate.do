@@ -127,11 +127,33 @@ Pure deletion and renaming. No schema. Do this first because everything after is
 | 0.5 | Rebuild task detail as Details, Description, Attachments placeholder, Subtasks. Details holds Agent, Assignee, Workspace, Schedule, Requires approval | Description is full-width and inline-editable. Details shows five fields |
 | 0.6 | Nav becomes Board, Inbox, Runs, Agents, Runners, Settings, with a runner status indicator in the sidebar footer | Six items. Runs and Runners can be empty states |
 
-Two decisions taken while doing this work, recorded because they are not obvious from the task list:
+Three decisions taken while doing this work, recorded because they are not obvious from the task list:
 
 - **Boards leave the primary sidebar.** Lists are what people navigate by, so they became direct links carrying the scope in the URL. Board rename, delete and create moved to the settings sidebar rather than being deleted, because a board is still the storage parent of a list until lists become account-wide.
 - **Per-list completed history was removed, not ported.** Its only trigger lived inside the lists grid. The Done column needs real paging, which belongs with runs in M2 rather than as a control with nowhere to live.
 - **`/app/boards/{id}` folds into the board.** Once the board became status columns, the board route rendered a second board identical to `/app/tasks`. It now redirects there, keeping any task permalink. Board rows survive in the settings sidebar as a label with rename and delete, because a board is still the storage parent of a list.
+
+### M0.5 - Boards collapse into lists
+
+A board was a container of lists, and an account could have several. With one
+status board and lists as the way to navigate, the extra level bought nothing
+and cost an ownership hop in every query. Lists become account-wide.
+
+The database cannot change in one step, because main deploys continuously and a
+running revision must find the schema it expects on both sides of a migration.
+Three phases, one pull request each.
+
+| # | Phase | Done when |
+| --- | --- | --- |
+| A | `045_lists_own_themselves`: lists get a `user_id`, backfilled, kept correct by a trigger. Nothing reads it | Every list has an owner and the running server is untouched |
+| B | `046_lists_leave_boards`: `board_id` becomes optional, task ownership comes from the list, the server and UI stop mentioning boards | Lists are account-wide. No route, query, or screen refers to a board |
+| C | Drop the `boards` table and both `board_id` columns | The word board survives only as the name of the status view |
+
+Decisions inside this work:
+
+- **Multiple Inboxes are consolidated, not merged.** Creating a board created an Inbox inside it, so an account with three boards has three. Phase B keeps the oldest as the capture target and demotes the rest to ordinary lists. No task moves, and the account gets the uniqueness constraint that was impossible before.
+- **The list limit moves onto the list.** `boards.max_tasks_per_list` shadowed `buckets.limit_count` at read time, so a list already had a limit that nothing could see. Phase B copies the visible number down onto each list rather than inventing an account-level setting.
+- **Plan limits collapse too.** `boards` and `listsPerBoard` become one `lists` limit, keeping each plan's existing capacity: free was one board of five lists, pro was five of nine.
 
 ### M1 - Agents become config
 

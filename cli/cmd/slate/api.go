@@ -26,8 +26,6 @@ type taskView struct {
 	Title           string `json:"title"`
 	Status          string `json:"status"`
 	Priority        string `json:"priority"`
-	BoardID         string `json:"boardId"`
-	BoardName       string `json:"boardName"`
 	ListName        string `json:"listName"`
 	AssigneeAgentID string `json:"assigneeAgentId"`
 	ExecutionRunID  string `json:"executionRunId"`
@@ -58,11 +56,11 @@ func (c client) identity() (identity, error) {
 }
 
 // agentTasks reads the server-ordered queue for one status, optionally scoped
-// to a board. The server decides order, so the first entry is the right offer.
-func (c client) agentTasks(status string, boardID string, limit int) ([]taskView, error) {
+// to a list. The server decides order, so the first entry is the right offer.
+func (c client) agentTasks(status string, listID string, limit int) ([]taskView, error) {
 	q := url.Values{}
 	setQuery(q, "status", status)
-	setQuery(q, "boardId", boardID)
+	setQuery(q, "bucketId", listID)
 	if limit > 0 {
 		q.Set("limit", fmt.Sprint(limit))
 	}

@@ -2,13 +2,10 @@ package migrations
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/owainlewis/slate.do/server/internal/boards"
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
 
@@ -50,202 +47,6 @@ func TestManagedRunMigrationAddsFencingColumnsAndLookupIndex(t *testing.T) {
 		if !strings.Contains(indexDefinition, column) {
 			t.Fatalf("managed run index missing %s: %s", column, indexDefinition)
 		}
-	}
-}
-
-func TestEnsureAccountInboxMigrationSkipsAnInFlightBoardCreation(t *testing.T) {
-	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
-	}
-
-	ctx := context.Background()
-	db, err := database.Open(ctx, databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := Apply(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-
-	email := fmt.Sprintf("inbox-migration-race-%d@example.invalid", time.Now().UnixNano())
-	var userID string
-	if err := db.QueryRow(ctx, "INSERT INTO users (email, password_hash) VALUES ($1, 'test') RETURNING id::text", email).Scan(&userID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
-
-	createTx, err := db.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer createTx.Rollback(ctx)
-	if _, err := createTx.Exec(ctx, "SELECT id FROM users WHERE id = $1 FOR UPDATE", userID); err != nil {
-		t.Fatal(err)
-	}
-	var boardCount int
-	if err := createTx.QueryRow(ctx, "SELECT count(*) FROM boards WHERE user_id = $1", userID).Scan(&boardCount); err != nil {
-		t.Fatal(err)
-	}
-	if boardCount != 0 {
-		t.Fatalf("boards before create = %d, want 0", boardCount)
-	}
-
-	migrationConn, err := db.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer migrationConn.Release()
-	body, err := files.ReadFile("032_repair_account_inbox.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	migrationResult := make(chan error, 1)
-	go func() {
-		_, err := migrationConn.Exec(context.Background(), string(body))
-		migrationResult <- err
-	}()
-
-	select {
-	case err := <-migrationResult:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("migration waited for an account with an in-flight board creation")
-	}
-
-	if _, err := createTx.Exec(ctx, `
-		INSERT INTO boards (user_id, name, max_tasks_per_list, sort_order)
-		VALUES ($1, 'User board', 25, 0)
-	`, userID); err != nil {
-		t.Fatal(err)
-	}
-	if err := createTx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := boards.NewStore(db).EnsureInboxBucketID(ctx, userID); err != nil {
-		t.Fatal(err)
-	}
-
-	var boards, lists, inboxes int
-	if err := db.QueryRow(ctx, `
-		SELECT count(DISTINCT b.id)::int, count(l.id)::int,
-			count(l.id) FILTER (WHERE l.is_inbox)::int
-		FROM boards b
-		LEFT JOIN buckets l ON l.board_id = b.id
-		WHERE b.user_id = $1
-	`, userID).Scan(&boards, &lists, &inboxes); err != nil {
-		t.Fatal(err)
-	}
-	if boards != 1 || lists != 1 || inboxes != 1 {
-		t.Fatalf("boards = %d, lists = %d, inboxes = %d", boards, lists, inboxes)
-	}
-}
-
-func TestEnsureAccountInboxMigrationRepairsEveryExistingAccountState(t *testing.T) {
-	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
-	}
-
-	ctx := context.Background()
-	db, err := database.Open(ctx, databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := Apply(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
-
-	marker := fmt.Sprintf("inbox-migration-%d", time.Now().UnixNano())
-	emails := map[string]string{
-		"noBoard":       marker + "-no-board@example.invalid",
-		"noList":        marker + "-no-list@example.invalid",
-		"existingList":  marker + "-existing-list@example.invalid",
-		"existingInbox": marker + "-existing-inbox@example.invalid",
-	}
-	for _, email := range emails {
-		if _, err := tx.Exec(ctx, "INSERT INTO users (email, password_hash) VALUES ($1, 'test')", email); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO boards (user_id, name, sort_order)
-		SELECT id, 'Empty board', 0 FROM users WHERE email = $1
-		UNION ALL
-		SELECT id, 'List board', 0 FROM users WHERE email = $2
-		UNION ALL
-		SELECT id, 'Inbox board', 0 FROM users WHERE email = $3
-	`, emails["noList"], emails["existingList"], emails["existingInbox"]); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO buckets (board_id, name, is_inbox, sort_order)
-		SELECT b.id, 'First list', false, 0 FROM boards b JOIN users u ON u.id = b.user_id WHERE u.email = $1
-		UNION ALL
-		SELECT b.id, 'Second list', false, 1 FROM boards b JOIN users u ON u.id = b.user_id WHERE u.email = $1
-		UNION ALL
-		SELECT b.id, 'Existing Inbox', true, 0 FROM boards b JOIN users u ON u.id = b.user_id WHERE u.email = $2
-		UNION ALL
-		SELECT b.id, 'Other list', false, 1 FROM boards b JOIN users u ON u.id = b.user_id WHERE u.email = $2
-	`, emails["existingList"], emails["existingInbox"]); err != nil {
-		t.Fatal(err)
-	}
-
-	body, err := files.ReadFile("032_repair_account_inbox.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for attempt := 0; attempt < 2; attempt++ {
-		if _, err := tx.Exec(ctx, string(body)); err != nil {
-			t.Fatalf("apply attempt %d: %v", attempt+1, err)
-		}
-	}
-
-	tests := []struct {
-		name      string
-		email     string
-		boards    int
-		lists     int
-		inboxes   int
-		inboxName string
-	}{
-		{"no board", emails["noBoard"], 1, 1, 1, "Inbox"},
-		{"board without lists", emails["noList"], 1, 1, 1, "Inbox"},
-		{"existing lists", emails["existingList"], 1, 2, 1, "First list"},
-		{"existing Inbox", emails["existingInbox"], 1, 2, 1, "Existing Inbox"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var boards, lists, inboxes int
-			var inboxName string
-			err := tx.QueryRow(ctx, `
-				SELECT
-					count(DISTINCT b.id)::int,
-					count(l.id)::int,
-					count(l.id) FILTER (WHERE l.is_inbox)::int,
-					COALESCE(min(l.name) FILTER (WHERE l.is_inbox), '')
-				FROM users u
-				LEFT JOIN boards b ON b.user_id = u.id
-				LEFT JOIN buckets l ON l.board_id = b.id
-				WHERE u.email = $1
-				GROUP BY u.id
-			`, test.email).Scan(&boards, &lists, &inboxes, &inboxName)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if boards != test.boards || lists != test.lists || inboxes != test.inboxes || inboxName != test.inboxName {
-				t.Fatalf("boards = %d, lists = %d, inboxes = %d, Inbox = %q", boards, lists, inboxes, inboxName)
-			}
-		})
 	}
 }
 
@@ -1662,7 +1463,7 @@ func TestLegacyTaskIdempotencyMigrationClearsMutableDevelopmentBackfill(t *testi
 	}
 }
 
-func TestListsOwnThemselvesDerivesOwnerFromBoardAndAllowsTwoInboxes(t *testing.T) {
+func TestListsLeaveBoardsOwningThemselvesWithOneInboxEach(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
@@ -1683,12 +1484,9 @@ func TestListsOwnThemselvesDerivesOwnerFromBoardAndAllowsTwoInboxes(t *testing.T
 	defer tx.Rollback(ctx)
 
 	const (
-		ownerA  = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
-		ownerB  = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
-		boardA  = "cccccccc-3333-4333-8333-cccccccccccc"
-		boardB  = "dddddddd-4444-4444-8444-dddddddddddd"
-		listID  = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
-		inboxID = "ffffffff-6666-4666-8666-ffffffffffff"
+		ownerA = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+		ownerB = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+		listID = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
 	)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO users (id, email, password_hash, display_name, role) VALUES
@@ -1697,52 +1495,60 @@ func TestListsOwnThemselvesDerivesOwnerFromBoardAndAllowsTwoInboxes(t *testing.T
 	`, ownerA, ownerB); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO boards (id, user_id, name) VALUES ($1, $3, 'A'), ($2, $4, 'B')
-	`, boardA, boardB, ownerA, ownerB); err != nil {
-		t.Fatal(err)
-	}
 
-	// board_id is the source of truth, so a supplied owner must not be trusted.
-	var owner string
+	// A list needs no board, and carries its owner itself.
+	var boardID *string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO buckets (id, board_id, user_id, name) VALUES ($1, $2, $3, 'Wrong owner')
-		RETURNING user_id::text
-	`, listID, boardA, ownerB).Scan(&owner); err != nil {
+		INSERT INTO buckets (id, user_id, name, is_inbox) VALUES ($1, $2, 'Inbox', true)
+		RETURNING board_id::text
+	`, listID, ownerA).Scan(&boardID); err != nil {
 		t.Fatal(err)
 	}
-	if owner != ownerA {
-		t.Fatalf("insert with a mismatched owner kept %s, want the board owner %s", owner, ownerA)
+	if boardID != nil {
+		t.Fatalf("board_id = %q, want null", *boardID)
 	}
 
-	// Moving a list to another account's board must move its ownership too.
-	if err := tx.QueryRow(ctx, `UPDATE buckets SET board_id = $2 WHERE id = $1 RETURNING user_id::text`, listID, boardB).Scan(&owner); err != nil {
+	// A task takes its owner from its list rather than from a board.
+	var taskOwner string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tasks (bucket_id, title, kind, status) VALUES ($1, 'Owned', 'action', 'new')
+		RETURNING owner_user_id::text
+	`, listID).Scan(&taskOwner); err != nil {
 		t.Fatal(err)
 	}
-	if owner != ownerB {
-		t.Fatalf("moving to another owner's board left %s, want %s", owner, ownerB)
+	if taskOwner != ownerA {
+		t.Fatalf("task owner = %s, want the list owner %s", taskOwner, ownerA)
 	}
 
-	// Writing user_id directly must not be able to hand a list to another account.
-	if err := tx.QueryRow(ctx, `UPDATE buckets SET user_id = $2 WHERE id = $1 RETURNING user_id::text`, listID, ownerA).Scan(&owner); err != nil {
+	// One Inbox per account, so capture always has a single target. The failed
+	// insert is wrapped in a savepoint so the rest of the test can continue.
+	if _, err := tx.Exec(ctx, "SAVEPOINT second_inbox"); err != nil {
 		t.Fatal(err)
 	}
-	if owner != ownerB {
-		t.Fatalf("a direct user_id write set %s, want the board owner %s", owner, ownerB)
+	_, err = tx.Exec(ctx, `INSERT INTO buckets (user_id, name, is_inbox) VALUES ($1, 'Second inbox', true)`, ownerA)
+	if err == nil {
+		t.Fatal("an account was allowed two Inbox lists")
 	}
-
-	// Creating a board creates an Inbox inside it, so one account can already
-	// hold several. A uniqueness constraint here would fail on live data.
+	if !strings.Contains(err.Error(), "buckets_one_inbox_per_user_idx") {
+		t.Fatalf("second inbox error = %v, want a uniqueness violation", err)
+	}
+	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT second_inbox"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO buckets (id, board_id, name, is_inbox) VALUES ($1, $2, 'Inbox', true)
-	`, inboxID, boardB); err != nil {
-		t.Fatalf("a second inbox for one account must be allowed: %v", err)
+		INSERT INTO buckets (user_id, name, is_inbox) VALUES ($1, 'Inbox', true)
+	`, ownerB); err != nil {
+		t.Fatalf("another account's inbox must be allowed: %v", err)
 	}
-	var inboxes int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM buckets WHERE user_id = $1 AND is_inbox`, ownerB).Scan(&inboxes); err != nil {
+
+	// The trigger that derived ownership from a board is gone with it.
+	var triggers int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM pg_trigger WHERE tgname = 'buckets_inherit_board_owner_trigger'
+	`).Scan(&triggers); err != nil {
 		t.Fatal(err)
 	}
-	if inboxes < 1 {
-		t.Fatalf("inbox count = %d", inboxes)
+	if triggers != 0 {
+		t.Fatalf("board ownership triggers = %d, want none", triggers)
 	}
 }

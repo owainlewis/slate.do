@@ -22,11 +22,7 @@ func TestCompletedHistoryPaginationIsBoundedStableAndScoped(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
 	})
 
-	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "History"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Completed"})
+	bucket, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Completed"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,14 +35,14 @@ func TestCompletedHistoryPaginationIsBoundedStableAndScoped(t *testing.T) {
 	base := time.Date(2035, time.January, 1, 12, 0, 0, 0, time.UTC)
 	completedIDs := make([]string, 0, 45)
 	for index := 0; index < 20; index++ {
-		completedIDs = append(completedIDs, insertHistoryTask(t, ctx, db, board.ID, bucket.ID, "", index, base.Add(time.Duration(index)*time.Minute)))
+		completedIDs = append(completedIDs, insertHistoryTask(t, ctx, db, bucket.ID, "", index, base.Add(time.Duration(index)*time.Minute)))
 	}
 	exact, err := store.ListTaskPage(ctx, ownerID, filter)
 	if err != nil || len(exact.Tasks) != 20 || exact.NextCursor != "" {
 		t.Fatalf("exact boundary = %#v err=%v", exact, err)
 	}
 	for index := 20; index < 45; index++ {
-		completedIDs = append(completedIDs, insertHistoryTask(t, ctx, db, board.ID, bucket.ID, "", index, base.Add(time.Duration(index)*time.Minute)))
+		completedIDs = append(completedIDs, insertHistoryTask(t, ctx, db, bucket.ID, "", index, base.Add(time.Duration(index)*time.Minute)))
 	}
 
 	first, err := store.ListTaskPage(ctx, ownerID, filter)
@@ -101,15 +97,11 @@ func TestCompletedHistoryPaginationIsBoundedStableAndScoped(t *testing.T) {
 		t.Fatalf("collection JSON included descriptions: %s", encoded)
 	}
 
-	otherBoard, err := store.CreateBoard(ctx, otherID, CreateBoardInput{Name: "Other"})
+	otherBucket, err := store.CreateBucket(ctx, otherID, CreateBucketInput{Name: "Other"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherBucket, err := store.CreateBucket(ctx, otherID, otherBoard.ID, CreateBucketInput{Name: "Other"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreignID := insertHistoryTask(t, ctx, db, otherBoard.ID, otherBucket.ID, "", 99, base.Add(24*time.Hour))
+	foreignID := insertHistoryTask(t, ctx, db, otherBucket.ID, "", 99, base.Add(24*time.Hour))
 	ownerHistory, err := store.ListTaskPage(ctx, ownerID, TaskFilter{Status: StatusDone, Limit: 100})
 	if err != nil || containsTask(ownerHistory.Tasks, foreignID) {
 		t.Fatalf("tenant-scoped history = %#v err=%v", ownerHistory, err)
@@ -122,8 +114,8 @@ func TestCompletedHistoryPaginationIsBoundedStableAndScoped(t *testing.T) {
 	if err := db.QueryRow(ctx, "INSERT INTO agents (owner_user_id, name) VALUES ($1, 'Second') RETURNING id::text", ownerID).Scan(&secondAgentID); err != nil {
 		t.Fatal(err)
 	}
-	firstAssigned := insertHistoryTask(t, ctx, db, board.ID, bucket.ID, firstAgentID, 100, base.Add(25*time.Hour))
-	secondAssigned := insertHistoryTask(t, ctx, db, board.ID, bucket.ID, secondAgentID, 101, base.Add(26*time.Hour))
+	firstAssigned := insertHistoryTask(t, ctx, db, bucket.ID, firstAgentID, 100, base.Add(25*time.Hour))
+	secondAssigned := insertHistoryTask(t, ctx, db, bucket.ID, secondAgentID, 101, base.Add(26*time.Hour))
 	agentPage, err := store.ListTaskPage(ctx, ownerID, TaskFilter{Status: StatusDone, AssigneeAgentID: firstAgentID})
 	if err != nil || !containsTask(agentPage.Tasks, firstAssigned) || containsTask(agentPage.Tasks, secondAssigned) {
 		t.Fatalf("agent-scoped history = %#v err=%v", agentPage, err)
@@ -134,17 +126,13 @@ func TestCompletedHistoryPaginationIsBoundedStableAndScoped(t *testing.T) {
 	}
 }
 
-func TestBoardResponseIsBoundedAtStoredTaskCeiling(t *testing.T) {
+func TestListResponseIsBoundedAtStoredTaskCeiling(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Ceiling"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "All tasks"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "All tasks"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,24 +146,24 @@ func TestBoardResponseIsBoundedAtStoredTaskCeiling(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, kind, status, sort_order, updated_at)
-		SELECT $1, $2, 'Task ' || generated, repeat('x', 1024), 'action',
+		INSERT INTO tasks (bucket_id, title, description, kind, status, sort_order, updated_at)
+		SELECT $1, 'Task ' || generated, repeat('x', 1024), 'action',
 			CASE WHEN generated > 20 THEN 'done' ELSE 'queued' END, generated,
-			$3::timestamptz + generated * interval '1 second'
+			$2::timestamptz + generated * interval '1 second'
 		FROM generate_series(1, 10000) generated
-	`, board.ID, bucket.ID, time.Date(2036, time.January, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+	`, bucket.ID, time.Date(2036, time.January, 1, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	loaded, err := store.GetBoard(ctx, userID, board.ID)
+	loaded, err := store.GetBucket(ctx, userID, bucket.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Buckets) != 1 || len(loaded.Buckets[0].Tasks) != 40 || loaded.Buckets[0].CompletedNextCursor == "" {
-		t.Fatalf("bounded board rows = %#v", loaded.Buckets)
+	if len(loaded.Tasks) != 40 || loaded.CompletedNextCursor == "" {
+		t.Fatalf("bounded list rows = %d cursor=%t", len(loaded.Tasks), loaded.CompletedNextCursor != "")
 	}
 	defaultPage, err := store.ListTaskPage(ctx, userID, TaskFilter{BucketID: bucket.ID, Status: StatusDone})
 	if err != nil || len(defaultPage.Tasks) != 20 || defaultPage.NextCursor == "" {
@@ -190,18 +178,18 @@ func TestBoardResponseIsBoundedAtStoredTaskCeiling(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(encoded) > 64*1024 || strings.Contains(string(encoded), "description") || strings.Contains(string(encoded), strings.Repeat("x", 128)) {
-		t.Fatalf("bounded board payload bytes=%d", len(encoded))
+		t.Fatalf("bounded list payload bytes=%d", len(encoded))
 	}
 }
 
-func insertHistoryTask(t *testing.T, ctx context.Context, db *database.Pool, boardID, bucketID, agentID string, index int, updatedAt time.Time) string {
+func insertHistoryTask(t *testing.T, ctx context.Context, db *database.Pool, bucketID, agentID string, index int, updatedAt time.Time) string {
 	t.Helper()
 	var id string
 	err := db.QueryRow(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, kind, status, sort_order, assignee_agent_id, updated_at)
-		VALUES ($1, $2, $3, $4, 'action', 'done', $5, NULLIF($6, '')::uuid, $7)
+		INSERT INTO tasks (bucket_id, title, description, kind, status, sort_order, assignee_agent_id, updated_at)
+		VALUES ($1, $2, $3, 'action', 'done', $4, NULLIF($5, '')::uuid, $6)
 		RETURNING id::text
-	`, boardID, bucketID, fmt.Sprintf("Completed %02d", index), fmt.Sprintf("full description %d", index), index, agentID, updatedAt).Scan(&id)
+	`, bucketID, fmt.Sprintf("Completed %02d", index), fmt.Sprintf("full description %d", index), index, agentID, updatedAt).Scan(&id)
 	if err != nil {
 		t.Fatal(err)
 	}

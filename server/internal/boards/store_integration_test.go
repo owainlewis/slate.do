@@ -22,32 +22,22 @@ func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	boardResults := runConcurrently(12, func(index int) error {
-		_, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: fmt.Sprintf("Board %d", index)})
+	listResults := runConcurrently(defaultMaxLists+6, func(index int) error {
+		_, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: fmt.Sprintf("List %d", index)})
 		return err
 	})
-	assertConcurrentResults(t, boardResults, defaultMaxBoards, ErrBoardLimit)
+	assertConcurrentResults(t, listResults, defaultMaxLists, ErrListLimit)
 
-	boards, err := store.ListBoards(ctx, userID)
+	lists, err := store.ListAllBuckets(ctx, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	listResults := runConcurrently(15, func(index int) error {
-		_, err := store.CreateBucket(ctx, userID, boards[0].ID, CreateBucketInput{Name: fmt.Sprintf("List %d", index)})
-		return err
-	})
-	assertConcurrentResults(t, listResults, defaultMaxListsPerBoard, ErrListLimit)
-
-	loaded, err := store.GetBoard(ctx, userID, boards[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Buckets) != defaultMaxListsPerBoard {
-		t.Fatalf("lists = %d, want %d", len(loaded.Buckets), defaultMaxListsPerBoard)
+	if len(lists) != defaultMaxLists {
+		t.Fatalf("lists = %d, want %d", len(lists), defaultMaxLists)
 	}
 
 	taskResults := runConcurrently(30, func(index int) error {
-		_, err := store.CreateTask(ctx, userID, loaded.Buckets[0].ID, CreateTaskInput{Title: fmt.Sprintf("Task %d", index), OverrideLimit: true})
+		_, err := store.CreateTask(ctx, userID, lists[0].ID, CreateTaskInput{Title: fmt.Sprintf("Task %d", index), OverrideLimit: true})
 		return err
 	})
 	for index, err := range taskResults {
@@ -74,11 +64,7 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	if err := db.QueryRow(ctx, `INSERT INTO agents (owner_user_id, name) VALUES ($1, 'Sibling') RETURNING id::text`, ownerID).Scan(&siblingAgentID); err != nil {
 		t.Fatal(err)
 	}
-	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Work"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	list, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Launch"})
+	list, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Launch"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,26 +172,19 @@ func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	assertStorageUsage(t, ctx, db, ownerID, 0, 0)
 }
 
-func TestFreeAccountUsesCatalogBoardAndListLimits(t *testing.T) {
+func TestFreeAccountUsesCatalogListLimits(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	userID := createFreeIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 	store := NewStore(db)
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Free board"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Second board"}); !errors.Is(err, ErrBoardLimit) {
-		t.Fatalf("second free board error = %v", err)
-	}
-	for index := 0; index < entitlements.FreeLimits.ListsPerBoard; index++ {
-		if _, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: fmt.Sprintf("List %d", index+1)}); err != nil {
+	for index := 0; index < entitlements.FreeLimits.Lists; index++ {
+		if _, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: fmt.Sprintf("List %d", index+1)}); err != nil {
 			t.Fatalf("create free list %d: %v", index+1, err)
 		}
 	}
-	if _, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "One too many"}); !errors.Is(err, ErrListLimit) {
+	if _, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "One too many"}); !errors.Is(err, ErrListLimit) {
 		t.Fatalf("sixth free list error = %v", err)
 	}
 }
@@ -244,11 +223,7 @@ func TestAgentAssignmentsAreAccountScopedAndClearOnAgentDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Agent work"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	list, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Queue"})
+	list, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Queue"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,15 +303,11 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Workspace"})
+	inbox, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Inbox", IsInbox: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	inbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	content, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "YouTube", Goal: "Plan useful videos"})
+	content, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "YouTube", Goal: "Plan useful videos"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,11 +353,7 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	}
 	otherUserID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", otherUserID) })
-	otherBoard, err := store.CreateBoard(ctx, otherUserID, CreateBoardInput{Name: "Private workspace"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherList, err := store.CreateBucket(ctx, otherUserID, otherBoard.ID, CreateBucketInput{Name: "Private list"})
+	otherList, err := store.CreateBucket(ctx, otherUserID, CreateBucketInput{Name: "Private list"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +387,7 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lists) != 2 || lists[0].BoardName != board.Name || lists[1].BoardName != board.Name {
+	if len(lists) != 2 {
 		t.Fatalf("workspace lists = %#v", lists)
 	}
 
@@ -440,11 +407,7 @@ func TestTaskSearchTreatsPatternCharactersAsLiteralText(t *testing.T) {
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Search"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Cards"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Cards"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,11 +453,7 @@ func TestAccountAlwaysKeepsAnInboxForUniversalCapture(t *testing.T) {
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	firstBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "First"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstInbox, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
+	firstInbox, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Inbox", IsInbox: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,20 +464,14 @@ func TestAccountAlwaysKeepsAnInboxForUniversalCapture(t *testing.T) {
 	if err := store.DeleteBucket(ctx, userID, firstInbox.ID); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("delete final Inbox error = %v, want ErrInvalidData", err)
 	}
-	if err := store.DeleteBoard(ctx, userID, firstBoard.ID); !errors.Is(err, ErrInvalidData) {
-		t.Fatalf("delete board containing final Inbox error = %v, want ErrInvalidData", err)
-	}
 
-	secondBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Second"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondInbox, err := store.CreateBucket(ctx, userID, secondBoard.ID, CreateBucketInput{Name: "Inbox", IsInbox: true})
+	// One Inbox per account, so naming a replacement moves the marker.
+	secondInbox, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Capture", IsInbox: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeleteBucket(ctx, userID, firstInbox.ID); err != nil {
-		t.Fatalf("delete Inbox with replacement: %v", err)
+		t.Fatalf("delete replaced list: %v", err)
 	}
 	resolved, err := store.InboxBucketID(ctx, userID)
 	if err != nil || resolved != secondInbox.ID {
@@ -534,7 +487,7 @@ func TestEnsureInboxBucketIDRepairsEveryEmptyAccountState(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(db)
 
-	t.Run("no boards", func(t *testing.T) {
+	t.Run("no lists", func(t *testing.T) {
 		userID := createIntegrationUser(t, ctx, db)
 		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
@@ -546,51 +499,18 @@ func TestEnsureInboxBucketIDRepairsEveryEmptyAccountState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		boards, err := store.ListBoards(ctx, userID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(boards) != 1 || inbox.BoardID != boards[0].ID || !inbox.IsInbox || inbox.Name != "Inbox" {
-			t.Fatalf("boards = %#v, inbox = %#v", boards, inbox)
+		if !inbox.IsInbox || inbox.Name != "Inbox" {
+			t.Fatalf("inbox = %#v", inbox)
 		}
 		if _, err := store.CreateTask(ctx, userID, inboxID, CreateTaskInput{Title: "First captured task"}); err != nil {
 			t.Fatalf("capture after repair: %v", err)
 		}
 	})
 
-	t.Run("board without lists", func(t *testing.T) {
-		userID := createIntegrationUser(t, ctx, db)
-		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
-		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		inboxID, err := store.EnsureInboxBucketID(ctx, userID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		inbox, err := store.GetBucket(ctx, userID, inboxID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lists, err := store.ListAllBuckets(ctx, userID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(lists) != 1 || inbox.BoardID != board.ID || !inbox.IsInbox {
-			t.Fatalf("lists = %#v, inbox = %#v", lists, inbox)
-		}
-	})
-
 	t.Run("existing list without Inbox", func(t *testing.T) {
 		userID := createIntegrationUser(t, ctx, db)
 		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
-		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		list, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ideas"})
+		list, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ideas"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -615,11 +535,7 @@ func TestEnsureInboxBucketIDRepairsEveryEmptyAccountState(t *testing.T) {
 	t.Run("existing Inbox is stable", func(t *testing.T) {
 		userID := createIntegrationUser(t, ctx, db)
 		t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
-		board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Existing board"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		inbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Capture", IsInbox: true})
+		inbox, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Capture", IsInbox: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -656,16 +572,12 @@ func TestEnsureInboxBucketIDRepairsEveryEmptyAccountState(t *testing.T) {
 			return err
 		})
 		assertConcurrentResults(t, results, len(results), nil)
-		boards, err := store.ListBoards(ctx, userID)
-		if err != nil {
-			t.Fatal(err)
-		}
 		lists, err := store.ListAllBuckets(ctx, userID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(boards) != 1 || len(lists) != 1 || len(inboxIDs) != len(results) {
-			t.Fatalf("boards = %#v, lists = %#v, inbox IDs = %#v", boards, lists, inboxIDs)
+		if len(lists) != 1 || len(inboxIDs) != len(results) {
+			t.Fatalf("lists = %#v, inbox IDs = %#v", lists, inboxIDs)
 		}
 		for _, inboxID := range inboxIDs {
 			if inboxID != lists[0].ID {
@@ -682,22 +594,11 @@ func TestLegacyActiveItemConfigurationDoesNotBlockCreateRetryOrMove(t *testing.T
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	tooHigh := defaultMaxTasksPerList + 1
-	if _, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Invalid", MaxTasksPerList: tooHigh}); !errors.Is(err, ErrInvalidData) {
-		t.Fatalf("create board above Pro maximum error = %v, want ErrInvalidData", err)
-	}
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Limits", MaxTasksPerList: 1})
+	target, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Target", LimitCount: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &tooHigh}); !errors.Is(err, ErrInvalidData) {
-		t.Fatalf("update board above Pro maximum error = %v, want ErrInvalidData", err)
-	}
-	target, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Target"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Source"})
+	source, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Source"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +613,7 @@ func TestLegacyActiveItemConfigurationDoesNotBlockCreateRetryOrMove(t *testing.T
 		t.Fatalf("deprecated override remains compatible: %v", err)
 	}
 	hardMaximum := defaultMaxTasksPerList
-	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &hardMaximum}); err != nil {
+	if _, err := store.UpdateBucket(ctx, userID, target.ID, UpdateBucketInput{LimitCount: &hardMaximum}); err != nil {
 		t.Fatal(err)
 	}
 	for index := 3; index < defaultMaxTasksPerList; index++ {
@@ -751,19 +652,11 @@ func TestMoveTaskAcrossBoardsPreservesMetadataAndOrdersBothLists(t *testing.T) {
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	sourceBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Source"})
+	source, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ideas"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := store.CreateBucket(ctx, userID, sourceBoard.ID, CreateBucketInput{Name: "Ideas"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destinationBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Destination"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination, err := store.CreateBucket(ctx, userID, destinationBoard.ID, CreateBucketInput{Name: "Ready"})
+	destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,8 +697,8 @@ func TestMoveTaskAcrossBoardsPreservesMetadataAndOrdersBothLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if moved.BoardID != destinationBoard.ID || moved.BucketID != destination.ID || moved.SortOrder != position {
-		t.Fatalf("moved location = board %q, list %q, position %d", moved.BoardID, moved.BucketID, moved.SortOrder)
+	if moved.BucketID != destination.ID || moved.SortOrder != position {
+		t.Fatalf("moved location = list %q, position %d", moved.BucketID, moved.SortOrder)
 	}
 	if moved.Title != moving.Title || moved.Description != moving.Description || moved.ScheduledDate != moving.ScheduledDate || moved.Status != moving.Status {
 		t.Fatalf("moved metadata = %#v, want metadata from %#v", moved, moving)
@@ -846,26 +739,15 @@ func TestProLimitLocksPreserveAccountOwnershipIsolation(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
 	})
 
-	ownerBoard, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Owner"})
+	ownerList, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Private"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	ownerList, err := store.CreateBucket(ctx, ownerID, ownerBoard.ID, CreateBucketInput{Name: "Private"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CreateBucket(ctx, otherID, ownerBoard.ID, CreateBucketInput{Name: "Intruder"}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("cross-account list create error = %v, want ErrNotFound", err)
 	}
 	if _, err := store.CreateTask(ctx, otherID, ownerList.ID, CreateTaskInput{Title: "Intruder"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-account task create error = %v, want ErrNotFound", err)
 	}
 
-	otherBoard, err := store.CreateBoard(ctx, otherID, CreateBoardInput{Name: "Other"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherList, err := store.CreateBucket(ctx, otherID, otherBoard.ID, CreateBucketInput{Name: "Other list"})
+	otherList, err := store.CreateBucket(ctx, otherID, CreateBucketInput{Name: "Other list"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -932,15 +814,11 @@ func TestBoardMaxTasksPerListIsLegacyMetadataOnly(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Limits", MaxTasksPerList: 2})
+	first, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First", LimitCount: 99})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "First", LimitCount: 99})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Second", LimitCount: 1})
+	second, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Second", LimitCount: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -961,7 +839,7 @@ func TestBoardMaxTasksPerListIsLegacyMetadataOnly(t *testing.T) {
 	}
 
 	next := 3
-	if _, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &next}); err != nil {
+	if _, err := store.UpdateBucket(ctx, userID, first.ID, UpdateBucketInput{LimitCount: &next}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.CreateTask(ctx, userID, first.ID, CreateTaskInput{Title: "still allowed", Kind: KindAction}); err != nil {
@@ -969,25 +847,7 @@ func TestBoardMaxTasksPerListIsLegacyMetadataOnly(t *testing.T) {
 	}
 }
 
-func TestCreateBoardDefaultsToTwentyTasksPerList(t *testing.T) {
-	db := openIntegrationDB(t)
-	ctx := context.Background()
-	store := NewStore(db)
-	userID := createIntegrationUser(t, ctx, db)
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
-	})
-
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Default limit"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if board.MaxTasksPerList != 20 {
-		t.Fatalf("MaxTasksPerList = %d, want 20", board.MaxTasksPerList)
-	}
-}
-
-func TestUpdateBoardNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
+func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -997,11 +857,7 @@ func TestUpdateBoardNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
 	})
 
-	board, err := store.CreateBoard(ctx, ownerID, CreateBoardInput{Name: "Business"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	list, err := store.CreateBucket(ctx, ownerID, board.ID, CreateBucketInput{Name: "Ideas"})
+	list, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Ideas"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1010,32 +866,32 @@ func TestUpdateBoardNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 	}
 
 	name := "  Growth plan  "
-	updated, err := store.UpdateBoard(ctx, ownerID, board.ID, UpdateBoardInput{Name: &name})
+	updated, err := store.UpdateBucket(ctx, ownerID, list.ID, UpdateBucketInput{Name: &name})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.Name != "Growth plan" {
 		t.Fatalf("updated name = %q, want %q", updated.Name, "Growth plan")
 	}
-	loaded, err := store.GetBoard(ctx, ownerID, board.ID)
+	loaded, err := store.GetBucket(ctx, ownerID, list.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Name != "Growth plan" || len(loaded.Buckets) != 1 || len(loaded.Buckets[0].Tasks) != 1 || loaded.Buckets[0].Tasks[0].Title != "Keep me" {
-		t.Fatalf("loaded board after rename = %#v", loaded)
+	if loaded.Name != "Growth plan" || len(loaded.Tasks) != 1 || loaded.Tasks[0].Title != "Keep me" {
+		t.Fatalf("loaded list after rename = %#v", loaded)
 	}
 
 	blank := "   "
-	if _, err := store.UpdateBoard(ctx, ownerID, board.ID, UpdateBoardInput{Name: &blank}); !errors.Is(err, ErrInvalidData) {
+	if _, err := store.UpdateBucket(ctx, ownerID, list.ID, UpdateBucketInput{Name: &blank}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("blank rename error = %v, want ErrInvalidData", err)
 	}
-	if _, err := store.UpdateBoard(ctx, otherID, board.ID, UpdateBoardInput{Name: &name}); !errors.Is(err, ErrNotFound) {
+	if _, err := store.UpdateBucket(ctx, otherID, list.ID, UpdateBucketInput{Name: &name}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-account rename error = %v, want ErrNotFound", err)
 	}
-	if _, err := store.UpdateBoard(ctx, ownerID, "00000000-0000-0000-0000-000000000000", UpdateBoardInput{Name: &name}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("missing board rename error = %v, want ErrNotFound", err)
+	if _, err := store.UpdateBucket(ctx, ownerID, "00000000-0000-0000-0000-000000000000", UpdateBucketInput{Name: &name}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing list rename error = %v, want ErrNotFound", err)
 	}
-	unchanged, err := store.GetBoard(ctx, ownerID, board.ID)
+	unchanged, err := store.GetBucket(ctx, ownerID, list.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1044,7 +900,7 @@ func TestUpdateBoardNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 	}
 }
 
-func TestConcurrentDisjointBoardUpdatesPreserveBothFields(t *testing.T) {
+func TestConcurrentDisjointListUpdatesPreserveBothFields(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -1052,17 +908,17 @@ func TestConcurrentDisjointBoardUpdatesPreserveBothFields(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
-
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Business"})
+	list, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ideas"})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	locker, err := db.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer locker.Rollback(ctx)
-	if _, err := locker.Exec(ctx, "SELECT id FROM boards WHERE id = $1 FOR UPDATE", board.ID); err != nil {
+	if _, err := locker.Exec(ctx, "SELECT id FROM buckets WHERE id = $1 FOR UPDATE", list.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1070,15 +926,15 @@ func TestConcurrentDisjointBoardUpdatesPreserveBothFields(t *testing.T) {
 	limit := 12
 	results := make(chan error, 2)
 	go func() {
-		_, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{Name: &name})
+		_, err := store.UpdateBucket(ctx, userID, list.ID, UpdateBucketInput{Name: &name})
 		results <- err
 	}()
 	go func() {
-		_, err := store.UpdateBoard(ctx, userID, board.ID, UpdateBoardInput{MaxTasksPerList: &limit})
+		_, err := store.UpdateBucket(ctx, userID, list.ID, UpdateBucketInput{LimitCount: &limit})
 		results <- err
 	}()
 
-	waitForBlockedBoardUpdates(t, ctx, db, 2)
+	waitForBlockedListUpdates(t, ctx, db, 2)
 	if err := locker.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -1088,12 +944,12 @@ func TestConcurrentDisjointBoardUpdatesPreserveBothFields(t *testing.T) {
 		}
 	}
 
-	loaded, err := store.GetBoard(ctx, userID, board.ID)
+	loaded, err := store.GetBucket(ctx, userID, list.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Name != name || loaded.MaxTasksPerList != limit {
-		t.Fatalf("board after disjoint updates = name %q, limit %d; want name %q, limit %d", loaded.Name, loaded.MaxTasksPerList, name, limit)
+	if loaded.Name != name || loaded.LimitCount != limit {
+		t.Fatalf("list after disjoint updates = name %q, limit %d; want name %q, limit %d", loaded.Name, loaded.LimitCount, name, limit)
 	}
 }
 
@@ -1106,11 +962,7 @@ func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Agent work"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1126,7 +978,7 @@ func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 	if second.ID != first.ID {
 		t.Fatalf("retry created %q, want original %q", second.ID, first.ID)
 	}
-	otherBucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	otherBucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Working"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1169,15 +1021,11 @@ func TestInboxCaptureIdempotencySurvivesInboxReplacement(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Capture"})
+	firstInbox, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First Inbox", IsInbox: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstInbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "First Inbox", IsInbox: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacement, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Replacement"})
+	replacement, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Replacement"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1234,15 +1082,11 @@ func TestInboxCaptureSerializesResolutionAndCreationAgainstInboxDeletion(t *test
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Concurrent capture"})
+	selectedInbox, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First Inbox", IsInbox: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectedInbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "First Inbox", IsInbox: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacementInbox, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Replacement Inbox", IsInbox: true})
+	replacementInbox, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Replacement Inbox"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1274,6 +1118,12 @@ func TestInboxCaptureSerializesResolutionAndCreationAgainstInboxDeletion(t *test
 	}()
 	waitForBlockedQueryContaining(t, ctx, db, "pg_advisory_xact_lock")
 
+	// An account keeps exactly one Inbox, so the marker moves before the list
+	// holding it can go.
+	inbox := true
+	if _, err := store.UpdateBucket(ctx, userID, replacementInbox.ID, UpdateBucketInput{IsInbox: &inbox}); err != nil {
+		t.Fatalf("move the Inbox marker: %v", err)
+	}
 	if err := store.DeleteBucket(ctx, userID, selectedInbox.ID); err != nil {
 		t.Fatalf("delete selected Inbox: %v", err)
 	}
@@ -1308,11 +1158,7 @@ func TestTaskCreationAcceptsALegacyStoredFingerprint(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Legacy retries"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1369,11 +1215,7 @@ func TestTaskCreationAcceptsTheImmediatePredeploymentFingerprint(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Rolling deployment retries"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1444,15 +1286,11 @@ func TestSubtaskCreationUsesParentInIdempotencyFingerprint(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Subtask retries"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Working"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1504,15 +1342,11 @@ func TestPreparedSubtaskCreationResolvesTheLockedParentList(t *testing.T) {
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Concurrent child creation"})
+	originalList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalList, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Working"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1544,15 +1378,11 @@ func TestSubtaskCreationAcceptsThePredeploymentFingerprintAfterParentMoves(t *te
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Rolling child retries"})
+	originalList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalList, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Working"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1620,15 +1450,11 @@ func TestLegacySubtaskRetryUsesStableParentAfterCardEditAndSourceDeletion(t *tes
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Legacy child retry"})
+	originalList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalList, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+	destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Working"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1711,23 +1537,15 @@ func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	firstBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "First"})
+	firstList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstList, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Ready"})
+	secondList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Working"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondList, err := store.CreateBucket(ctx, userID, firstBoard.ID, CreateBucketInput{Name: "Working"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondBoard, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Second"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	thirdList, err := store.CreateBucket(ctx, userID, secondBoard.ID, CreateBucketInput{Name: "Review"})
+	thirdList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Review"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1755,9 +1573,9 @@ func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 	// paths may repair them, but only by returning to the locked parent list.
 	if _, err := db.Exec(ctx, `
 		UPDATE tasks
-		SET board_id = $2, bucket_id = $3, updated_at = now()
+		SET bucket_id = $2, updated_at = now()
 		WHERE id = $1
-	`, child.ID, secondBoard.ID, thirdList.ID); err != nil {
+	`, child.ID, thirdList.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.UpdateTaskForHuman(ctx, userID, child.ID, UpdateTaskInput{BucketID: &secondList.ID}); !errors.Is(err, ErrInvalidData) {
@@ -1768,9 +1586,9 @@ func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 	}
 	if _, err := db.Exec(ctx, `
 		UPDATE tasks
-		SET board_id = $2, bucket_id = $3, updated_at = now()
+		SET bucket_id = $2, updated_at = now()
 		WHERE id = $1
-	`, child.ID, secondBoard.ID, thirdList.ID); err != nil {
+	`, child.ID, thirdList.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.MoveTask(ctx, userID, child.ID, MoveTaskInput{BucketID: secondList.ID, Position: &position}); !errors.Is(err, ErrInvalidData) {
@@ -1788,7 +1606,7 @@ func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if childAfterUpdate.BucketID != secondList.ID || childAfterUpdate.BoardID != firstBoard.ID {
+	if childAfterUpdate.BucketID != secondList.ID {
 		t.Fatalf("child after parent update = %#v", childAfterUpdate)
 	}
 
@@ -1799,7 +1617,7 @@ func TestSubtasksStayWithTheirParentWhenTasksMove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if childAfterMove.BucketID != thirdList.ID || childAfterMove.BoardID != secondBoard.ID {
+	if childAfterMove.BucketID != thirdList.ID {
 		t.Fatalf("child after parent move = %#v", childAfterMove)
 	}
 }
@@ -1813,15 +1631,11 @@ func TestUpdateTaskMovesParentAndChildrenAsOrderedGroup(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Grouped moves"})
+	source, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Source"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Source"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination"})
+	destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Destination"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1877,15 +1691,11 @@ func TestTaskMovesPreserveUnrelatedTaskTimestamps(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "History"})
+	source, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Source"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Source"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Destination"})
+	destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Destination"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1944,15 +1754,11 @@ func TestSubtaskCreationRacingParentMoveNeverSplitsLists(t *testing.T) {
 				_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 			})
 
-			board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Work"})
+			source, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Ready"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			source, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Ready"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			destination, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Working"})
+			destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Working"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2042,11 +1848,7 @@ func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Inbox settings"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Capture"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Capture"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2055,14 +1857,14 @@ func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
 	if err != nil || !updated.IsInbox {
 		t.Fatalf("set Inbox = %#v, %v", updated, err)
 	}
-	replacement, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Replacement", IsInbox: true})
+	replacement, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Replacement", IsInbox: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	value = false
-	updated, err = store.UpdateBucket(ctx, userID, bucket.ID, UpdateBucketInput{IsInbox: &value})
-	if err != nil || updated.IsInbox {
-		t.Fatalf("clear Inbox with replacement = %#v, %v", updated, err)
+	// Naming a new Inbox moves the marker rather than adding a second one.
+	previous, err := store.GetBucket(ctx, userID, bucket.ID)
+	if err != nil || previous.IsInbox {
+		t.Fatalf("previous Inbox after replacement = %#v, %v", previous, err)
 	}
 	resolved, err := store.InboxBucketID(ctx, userID)
 	if err != nil || resolved != replacement.ID {
@@ -2070,7 +1872,7 @@ func TestUpdateBucketCanSetAndClearInbox(t *testing.T) {
 	}
 }
 
-func TestCreateBoardEnforcesDefaultBoardLimit(t *testing.T) {
+func TestCreateBucketEnforcesDefaultListLimit(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -2079,13 +1881,13 @@ func TestCreateBoardEnforcesDefaultBoardLimit(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	for index := 0; index < defaultMaxBoards; index++ {
-		if _, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: fmt.Sprintf("Board %d", index+1)}); err != nil {
-			t.Fatalf("create board %d: %v", index+1, err)
+	for index := 0; index < defaultMaxLists; index++ {
+		if _, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: fmt.Sprintf("List %d", index+1)}); err != nil {
+			t.Fatalf("create list %d: %v", index+1, err)
 		}
 	}
-	if _, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "One too many"}); !errors.Is(err, ErrBoardLimit) {
-		t.Fatalf("create board above limit error = %v, want ErrBoardLimit", err)
+	if _, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "One too many"}); !errors.Is(err, ErrListLimit) {
+		t.Fatalf("create list above limit error = %v, want ErrListLimit", err)
 	}
 }
 
@@ -2098,15 +1900,11 @@ func TestUnifiedListItemsAndActions(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Operating plan", MaxTasksPerList: 2})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "YouTube", Goal: "Publish one strong video each week"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "YouTube", Goal: "Publish one strong video each week"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherBucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "LinkedIn"})
+	otherBucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "LinkedIn"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2175,12 +1973,12 @@ func TestUnifiedListItemsAndActions(t *testing.T) {
 	if len(actions) != 4 {
 		t.Fatalf("actions = %#v, want all four list items", actions)
 	}
-	loaded, err := store.GetBoard(ctx, userID, board.ID)
+	loaded, err := store.GetBucket(ctx, userID, bucket.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Buckets[0].Goal != "Publish one strong video each week" || loaded.Buckets[0].OpenCount != 3 {
-		t.Fatalf("loaded bucket = %#v", loaded.Buckets[0])
+	if loaded.Goal != "Publish one strong video each week" || loaded.OpenCount != 3 {
+		t.Fatalf("loaded list = %#v", loaded)
 	}
 }
 
@@ -2193,11 +1991,7 @@ func TestAnyQueuedTaskCanBeClaimed(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Shared work"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Work"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2263,11 +2057,7 @@ func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Flow", MaxTasksPerList: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Home"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Home"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2296,7 +2086,7 @@ func TestHumanStatusTransitionsPersistWithoutMovingHomeList(t *testing.T) {
 		}
 	}
 
-	target, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Target"})
+	target, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Target"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2338,11 +2128,7 @@ func TestLegacyDoneUpdatesAndFiltersMapToStatus(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
 	})
 
-	board, err := store.CreateBoard(ctx, userID, CreateBoardInput{Name: "Legacy completion"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := store.CreateBucket(ctx, userID, board.ID, CreateBucketInput{Name: "Cards"})
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Cards"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2453,7 +2239,10 @@ func createFreeIntegrationUser(t *testing.T, ctx context.Context, db *database.P
 	return id
 }
 
-func waitForBlockedBoardUpdates(t *testing.T, ctx context.Context, db *database.Pool, want int) {
+// waitForBlockedListUpdates waits for concurrent list writes to queue up. Each
+// takes the account row before the list row, so with the list already locked
+// one waits on the list and the other waits behind it on the account.
+func waitForBlockedListUpdates(t *testing.T, ctx context.Context, db *database.Pool, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -2465,7 +2254,6 @@ func waitForBlockedBoardUpdates(t *testing.T, ctx context.Context, db *database.
 			  AND pid <> pg_backend_pid()
 			  AND state = 'active'
 			  AND wait_event_type = 'Lock'
-			  AND query LIKE '%UPDATE boards%'
 		`).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
@@ -2474,7 +2262,7 @@ func waitForBlockedBoardUpdates(t *testing.T, ctx context.Context, db *database.
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %d blocked board updates", want)
+	t.Fatalf("timed out waiting for %d blocked list updates", want)
 }
 
 func waitForBlockedQueryContaining(t *testing.T, ctx context.Context, db *database.Pool, fragment string) {

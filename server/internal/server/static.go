@@ -80,8 +80,9 @@ func isAppRoute(clean string) bool {
 		parts := strings.Split(agentPath, "/")
 		return len(parts) == 1 || (len(parts) == 2 && (parts[1] == "work" || parts[1] == "settings"))
 	}
-	// A board id is one non-empty path segment, optionally followed by its
-	// settings surface. Whether it names an owned board is the app's decision.
+	// Boards were folded into lists, but old links still have to boot the app so
+	// it can send them to the board. The shapes it redirects are a board id on
+	// its own and a board's settings page.
 	rest, ok := strings.CutPrefix(clean, "/app/boards/")
 	if !ok || rest == "" {
 		return false

@@ -78,14 +78,6 @@ func (s *PGStore) CreateInvitedMember(ctx context.Context, email string, passwor
 		return User{}, err
 	}
 
-	var boardID string
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO boards (user_id, name, max_tasks_per_list)
-		VALUES ($1, 'Today', $2)
-		RETURNING id::text
-	`, user.ID, entitlements.ProLimits.ActiveItemsPerList).Scan(&boardID); err != nil {
-		return User{}, err
-	}
 	defaultLists := []struct {
 		name  string
 		goal  string
@@ -99,9 +91,9 @@ func (s *PGStore) CreateInvitedMember(ctx context.Context, email string, passwor
 	}
 	for index, list := range defaultLists {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO buckets (board_id, name, goal, is_inbox, limit_count, sort_order)
+			INSERT INTO buckets (user_id, name, goal, is_inbox, limit_count, sort_order)
 			VALUES ($1, $2, $3, $4, $5, $6)
-		`, boardID, list.name, list.goal, list.inbox, entitlements.ProLimits.ActiveItemsPerList, index); err != nil {
+		`, user.ID, list.name, list.goal, list.inbox, entitlements.ProLimits.ActiveItemsPerList, index); err != nil {
 			return User{}, err
 		}
 	}
@@ -115,10 +107,7 @@ func (s *PGStore) CreateInvitedMember(ctx context.Context, email string, passwor
 		return User{}, err
 	}
 	user.Entitlement = entitlements.Pro(entitlements.SourceInviteCode)
-	user.Usage = entitlements.Usage{
-		Boards:           1,
-		MaxListsPerBoard: len(defaultLists),
-	}
+	user.Usage = entitlements.Usage{Lists: len(defaultLists)}
 	return user, nil
 }
 
@@ -582,8 +571,7 @@ func (s *PGStore) ListAgents(ctx context.Context, userID string) ([]AgentUser, e
 				count(*) FILTER (WHERE t.status = 'working') AS working,
 				count(*) FILTER (WHERE t.status = 'needs_review') AS review
 			FROM tasks t
-			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
-			WHERE t.assignee_agent_id = a.id
+			WHERE t.owner_user_id = a.owner_user_id AND t.assignee_agent_id = a.id
 		) work ON true
 		WHERE a.owner_user_id = $1 AND a.archived_at IS NULL
 		ORDER BY lower(a.name), a.created_at
@@ -622,8 +610,7 @@ func (s *PGStore) GetAgent(ctx context.Context, userID string, agentID string) (
 				count(*) FILTER (WHERE t.status = 'working') AS working,
 				count(*) FILTER (WHERE t.status = 'needs_review') AS review
 			FROM tasks t
-			JOIN boards b ON b.id = t.board_id AND b.user_id = a.owner_user_id
-			WHERE t.assignee_agent_id = a.id
+			WHERE t.owner_user_id = a.owner_user_id AND t.assignee_agent_id = a.id
 		) work ON true
 		WHERE a.owner_user_id = $1 AND a.id::text = $2 AND a.archived_at IS NULL
 	`, userID, agentID)
@@ -872,26 +859,18 @@ func (s *PGStore) AccountUsage(ctx context.Context, userID string) (entitlements
 	var usage entitlements.Usage
 	err := s.db.QueryRow(ctx, `
 		SELECT
-			(SELECT count(*) FROM boards WHERE user_id = $1),
-			(SELECT COALESCE(max(list_count), 0) FROM (
-				SELECT count(*) AS list_count FROM buckets bu
-				JOIN boards b ON b.id = bu.board_id
-				WHERE b.user_id = $1 GROUP BY b.id
-			) lists),
+			(SELECT count(*) FROM buckets WHERE user_id = $1),
 			(SELECT COALESCE(max(active_count), 0) FROM (
-				SELECT count(*) AS active_count FROM tasks t
-				JOIN boards b ON b.id = t.board_id
-				WHERE b.user_id = $1 AND t.kind = 'action' AND t.status <> 'done'
-				GROUP BY t.bucket_id
+				SELECT count(*) AS active_count FROM tasks
+				WHERE owner_user_id = $1 AND kind = 'action' AND status <> 'done'
+				GROUP BY bucket_id
 			) active),
 			(SELECT count(*) FROM agents WHERE owner_user_id = $1 AND archived_at IS NULL),
-			(SELECT count(*) FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.user_id = $1),
-			(SELECT COALESCE(sum(t.storage_bytes), 0)
-				FROM tasks t JOIN boards b ON b.id = t.board_id WHERE b.user_id = $1),
+			(SELECT count(*) FROM tasks WHERE owner_user_id = $1),
+			(SELECT COALESCE(sum(storage_bytes), 0) FROM tasks WHERE owner_user_id = $1),
 			(SELECT count(*) FROM api_tokens WHERE user_id = $1 AND revoked_at IS NULL)
 	`, userID).Scan(
-		&usage.Boards,
-		&usage.MaxListsPerBoard,
+		&usage.Lists,
 		&usage.MaxActiveItemsPerList,
 		&usage.Agents,
 		&usage.StoredTasks,

@@ -81,14 +81,13 @@ func (s *Store) ListWork(ctx context.Context, userID string, agentID string, pag
 	if err := s.db.QueryRow(ctx, `
 		SELECT count(*)
 		FROM tasks t
-		JOIN boards b ON b.id = t.board_id
-		WHERE b.user_id = $1 AND t.assignee_agent_id = $2 AND t.kind = 'action'
+		WHERE t.owner_user_id = $1 AND t.assignee_agent_id = $2 AND t.kind = 'action'
 	`, userID, agentID).Scan(&total); err != nil {
 		return WorkPage{}, err
 	}
 	offset := (page - 1) * pageSize
 	rows, err := s.db.Query(ctx, workSelect+`
-		WHERE b.user_id = $1 AND t.assignee_agent_id = $2 AND t.kind = 'action'
+		WHERE t.owner_user_id = $1 AND t.assignee_agent_id = $2 AND t.kind = 'action'
 		ORDER BY t.updated_at DESC, t.id
 		LIMIT $3 OFFSET $4
 	`, userID, agentID, pageSize, offset)
@@ -251,15 +250,14 @@ func (s *Store) workTotals(ctx context.Context, userID string, agentID string) (
 			count(*) FILTER (WHERE t.status = 'needs_review'),
 			count(*) FILTER (WHERE t.status = 'done')
 		FROM tasks t
-		JOIN boards b ON b.id = t.board_id
-		WHERE b.user_id = $1 AND t.assignee_agent_id = $2 AND t.kind = 'action'
+		WHERE t.owner_user_id = $1 AND t.assignee_agent_id = $2 AND t.kind = 'action'
 	`, userID, agentID).Scan(&totals.Ready, &totals.Working, &totals.Review, &totals.Completed)
 	return totals, err
 }
 
 func (s *Store) listInitialOpen(ctx context.Context, userID string, agentID string) ([]WorkItem, error) {
 	rows, err := s.db.Query(ctx, workSelect+`
-		WHERE b.user_id = $1
+		WHERE t.owner_user_id = $1
 			AND t.assignee_agent_id = $2
 			AND t.kind = 'action'
 			AND t.status IN ('queued', 'working', 'needs_review')
@@ -278,7 +276,7 @@ func (s *Store) listInitialOpen(ctx context.Context, userID string, agentID stri
 
 func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentID string) ([]WorkItem, error) {
 	rows, err := s.db.Query(ctx, workSelect+`
-		WHERE b.user_id = $1
+		WHERE t.owner_user_id = $1
 			AND t.assignee_agent_id = $2
 			AND t.kind = 'action'
 			AND t.status = 'done'
@@ -292,11 +290,10 @@ func (s *Store) listRecentlyCompleted(ctx context.Context, userID string, agentI
 }
 
 const workSelect = `
-	SELECT t.id::text, COALESCE(t.parent_task_id::text, ''), t.board_id::text, b.name, t.bucket_id::text, bucket.name,
+	SELECT t.id::text, COALESCE(t.parent_task_id::text, ''), t.bucket_id::text, bucket.name,
 		t.title, '', COALESCE(t.scheduled_date::text, ''), t.kind,
 		t.status, COALESCE(t.assignee_agent_id::text, ''), t.created_at, t.updated_at
 	FROM tasks t
-	JOIN boards b ON b.id = t.board_id
 	JOIN buckets bucket ON bucket.id = t.bucket_id
 `
 
@@ -306,7 +303,7 @@ func scanWorkItems(rows pgx.Rows) ([]WorkItem, error) {
 	for rows.Next() {
 		var item WorkItem
 		if err := rows.Scan(
-			&item.ID, &item.ParentTaskID, &item.BoardID, &item.BoardName, &item.BucketID, &item.BucketName,
+			&item.ID, &item.ParentTaskID, &item.BucketID, &item.BucketName,
 			&item.Title, &item.Description, &item.ScheduledDate, &item.Kind,
 			&item.Status, &item.AssigneeAgentID, &item.CreatedAt, &item.UpdatedAt,
 		); err != nil {

@@ -49,18 +49,15 @@ func TestInviteSignupIsAtomicRateLimitedAndDisableable(t *testing.T) {
 	if user.Role != "member" || user.Entitlement.Plan != entitlements.PlanPro || user.Entitlement.Source != entitlements.SourceInviteCode || user.Entitlement.Limits != entitlements.ProLimits {
 		t.Fatalf("invited access = %#v", user)
 	}
-	var boards, lists, sessions int
-	if err := db.QueryRow(ctx, "SELECT count(*) FROM boards WHERE user_id = $1", user.ID).Scan(&boards); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(ctx, "SELECT count(*) FROM buckets WHERE board_id IN (SELECT id FROM boards WHERE user_id = $1)", user.ID).Scan(&lists); err != nil {
+	var lists, sessions int
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM buckets WHERE user_id = $1", user.ID).Scan(&lists); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(ctx, "SELECT count(*) FROM sessions WHERE user_id = $1", user.ID).Scan(&sessions); err != nil {
 		t.Fatal(err)
 	}
-	if boards != 1 || lists != 5 || sessions != 1 {
-		t.Fatalf("created boards/lists/sessions = %d/%d/%d, want 1/5/1", boards, lists, sessions)
+	if lists != 5 || sessions != 1 {
+		t.Fatalf("created lists/sessions = %d/%d, want 5/1", lists, sessions)
 	}
 	rotatedService := NewService(store, false, "a-new-invite-code")
 	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(fmt.Sprintf(`{"email":%q,"password":%q}`, email, password)))
@@ -517,7 +514,7 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer setupTx.Rollback(ctx)
-	var userID, inboxBoardID string
+	var userID string
 	if err := setupTx.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, role)
 		VALUES ($1, 'hash', 'member')
@@ -525,16 +522,10 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 	`, email).Scan(&userID); err != nil {
 		t.Fatal(err)
 	}
-	if err := setupTx.QueryRow(ctx, `
-		INSERT INTO boards (user_id, name) VALUES ($1, 'Today')
-		RETURNING id::text
-	`, userID).Scan(&inboxBoardID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := setupTx.Exec(ctx, `
-		INSERT INTO buckets (board_id, name, is_inbox)
+		INSERT INTO buckets (user_id, name, is_inbox)
 		VALUES ($1, 'Inbox', true)
-	`, inboxBoardID); err != nil {
+	`, userID); err != nil {
 		t.Fatal(err)
 	}
 	if err := setupTx.Commit(ctx); err != nil {
@@ -614,26 +605,23 @@ func TestPGStoreDefaultsMissingEntitlementToFreeAndMeasuresUsage(t *testing.T) {
 		t.Fatalf("second free agent error = %v", err)
 	}
 
-	var boardID, bucketID string
-	if err := db.QueryRow(ctx, `INSERT INTO boards (user_id, name) VALUES ($1, 'Free board') RETURNING id::text`, userID).Scan(&boardID); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(ctx, `INSERT INTO buckets (board_id, name) VALUES ($1, 'Free list') RETURNING id::text`, boardID).Scan(&bucketID); err != nil {
+	var bucketID string
+	if err := db.QueryRow(ctx, `INSERT INTO buckets (user_id, name) VALUES ($1, 'Free list') RETURNING id::text`, userID).Scan(&bucketID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, description, kind, status)
+		INSERT INTO tasks (bucket_id, title, description, kind, status)
 		VALUES
-			($1, $2, 'é', '🙂', 'action', 'queued'),
-			($1, $2, 'abc', '', 'action', 'done')
-	`, boardID, bucketID); err != nil {
+			($1, 'é', '🙂', 'action', 'queued'),
+			($1, 'abc', '', 'action', 'done')
+	`, bucketID); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := store.AccountUsage(ctx, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.Boards != 2 || usage.MaxListsPerBoard != 1 || usage.MaxActiveItemsPerList != 1 || usage.Agents != 1 || usage.StoredTasks != 2 || usage.StoredContentBytes != 9 || usage.APITokens != 3 {
+	if usage.Lists != 2 || usage.MaxActiveItemsPerList != 1 || usage.Agents != 1 || usage.StoredTasks != 2 || usage.StoredContentBytes != 9 || usage.APITokens != 3 {
 		t.Fatalf("free usage = %#v", usage)
 	}
 
@@ -703,20 +691,12 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 		t.Fatalf("agent entitlement = %#v", identity.Entitlement)
 	}
 
-	var boardID string
-	if err := db.QueryRow(ctx, `
-		INSERT INTO boards (user_id, name)
-		VALUES ($1, 'Agent count board')
-		RETURNING id::text
-	`, owner.ID).Scan(&boardID); err != nil {
-		t.Fatal(err)
-	}
 	var bucketID string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO buckets (board_id, name)
+		INSERT INTO buckets (user_id, name)
 		VALUES ($1, 'Agent count list')
 		RETURNING id::text
-	`, boardID).Scan(&bucketID); err != nil {
+	`, owner.ID).Scan(&bucketID); err != nil {
 		t.Fatal(err)
 	}
 	for _, item := range []struct {
@@ -728,9 +708,9 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 		{status: "done"},
 	} {
 		if _, err := db.Exec(ctx, `
-			INSERT INTO tasks (board_id, bucket_id, title, status, assignee_agent_id)
-			VALUES ($1, $2, $3, $4, $5)
-		`, boardID, bucketID, "Count "+item.status, item.status, agent.ID); err != nil {
+			INSERT INTO tasks (bucket_id, title, status, assignee_agent_id)
+			VALUES ($1, $2, $3, $4)
+		`, bucketID, "Count "+item.status, item.status, agent.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -739,26 +719,18 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", other.ID) })
-	var otherBoardID string
-	if err := db.QueryRow(ctx, `
-		INSERT INTO boards (user_id, name)
-		VALUES ($1, 'Other owner board')
-		RETURNING id::text
-	`, other.ID).Scan(&otherBoardID); err != nil {
-		t.Fatal(err)
-	}
 	var otherBucketID string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO buckets (board_id, name)
+		INSERT INTO buckets (user_id, name)
 		VALUES ($1, 'Other owner list')
 		RETURNING id::text
-	`, otherBoardID).Scan(&otherBucketID); err != nil {
+	`, other.ID).Scan(&otherBucketID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `
-		INSERT INTO tasks (board_id, bucket_id, title, status, assignee_agent_id)
-		VALUES ($1, $2, 'Must not count', 'working', $3)
-	`, otherBoardID, otherBucketID, agent.ID); err != nil {
+		INSERT INTO tasks (bucket_id, title, status, assignee_agent_id)
+		VALUES ($1, 'Must not count', 'working', $2)
+	`, otherBucketID, agent.ID); err != nil {
 		t.Fatal(err)
 	}
 	counted, err := store.ListAgents(ctx, owner.ID)
@@ -810,8 +782,8 @@ func TestAgentTokensAuthenticateAsAccountScopedRevocableIdentities(t *testing.T)
 	if err := db.QueryRow(ctx, `
 		SELECT count(*), count(*) FILTER (WHERE assignee_agent_id IS NULL)
 		FROM tasks
-		WHERE board_id IN ($1, $2)
-	`, boardID, otherBoardID).Scan(&taskCount, &unassignedCount); err != nil {
+		WHERE bucket_id IN ($1, $2)
+	`, bucketID, otherBucketID).Scan(&taskCount, &unassignedCount); err != nil {
 		t.Fatal(err)
 	}
 	if taskCount != 5 || unassignedCount != taskCount {

@@ -49,7 +49,7 @@ func newFakeSlate(t *testing.T) *fakeSlate {
 		status: "queued",
 		queued: []taskView{{
 			ID: testTaskID, Title: "Add the thing", Status: "queued", Priority: "p1",
-			BoardName: "Delivery", ListName: "Ready", AssigneeAgentID: testAgentID,
+			ListName: "Ready", AssigneeAgentID: testAgentID,
 		}},
 	}
 }
@@ -584,37 +584,37 @@ func TestStartupRefusesBeforeCreatingAnything(t *testing.T) {
 	}
 }
 
-func TestBoardScopeAppliesToBothQueries(t *testing.T) {
+func TestListScopeAppliesToBothQueries(t *testing.T) {
 	executor := writeExecutor(t, "scoped", "cat >/dev/null\n")
 	fixture := newWatcherFixture(t, executor)
 	var scopes []string
 	base := fixture.fake
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agent/tasks" {
-			scopes = append(scopes, r.URL.Query().Get("status")+":"+r.URL.Query().Get("boardId"))
+			scopes = append(scopes, r.URL.Query().Get("status")+":"+r.URL.Query().Get("bucketId"))
 		}
 		base.serve(w, r)
 	}))
 	t.Cleanup(server.Close)
 
-	boardID := "5f6d8a1e-1c2b-4d3e-8f90-abcdefabcdef"
+	listID := "5f6d8a1e-1c2b-4d3e-8f90-abcdefabcdef"
 	c := client{baseURL: server.URL, http: server.Client()}
-	w, err := newWatcher(context.Background(), c, watchOptions{profileName: "codex", workdir: fixture.source, boardID: boardID}, &strings.Builder{})
+	w, err := newWatcher(context.Background(), c, watchOptions{profileName: "codex", workdir: fixture.source, listID: listID}, &strings.Builder{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.client.agentTasks("queued", w.boardID, 1); err != nil {
+	if _, err := w.client.agentTasks("queued", w.listID, 1); err != nil {
 		t.Fatal(err)
 	}
 	if len(scopes) < 2 {
 		t.Fatalf("scoped queries = %v, want the working check and the queued poll", scopes)
 	}
 	for _, scope := range scopes {
-		if !strings.HasSuffix(scope, ":"+boardID) {
-			t.Fatalf("query %q is not scoped to board %s", scope, boardID)
+		if !strings.HasSuffix(scope, ":"+listID) {
+			t.Fatalf("query %q is not scoped to list %s", scope, listID)
 		}
 	}
-	if scopes[0] != "working:"+boardID {
+	if scopes[0] != "working:"+listID {
 		t.Fatalf("first query = %q, want the working check", scopes[0])
 	}
 }
@@ -1582,29 +1582,29 @@ func TestAnEmptyGroupIsNeverSignalledAfterReaping(t *testing.T) {
 	}
 }
 
-// TestTheLoopCarriesTheBoardScope runs one real iteration and asserts the
+// TestTheLoopCarriesTheListScope runs one real iteration and asserts the
 // queued query is scoped, alongside the startup check.
-func TestTheLoopCarriesTheBoardScope(t *testing.T) {
+func TestTheLoopCarriesTheListScope(t *testing.T) {
 	executor := writeExecutor(t, "scoped-loop", "cat >/dev/null\n")
 	fixture := newWatcherFixture(t, executor)
 	var queries []string
 	base := fixture.fake
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agent/tasks" {
-			queries = append(queries, r.URL.Query().Get("status")+":"+r.URL.Query().Get("boardId"))
+			queries = append(queries, r.URL.Query().Get("status")+":"+r.URL.Query().Get("bucketId"))
 		}
 		base.serve(w, r)
 	}))
 	t.Cleanup(server.Close)
 
-	boardID := "5f6d8a1e-1c2b-4d3e-8f90-abcdefabcdef"
+	listID := "5f6d8a1e-1c2b-4d3e-8f90-abcdefabcdef"
 	// Nothing is queued, so the loop polls and then stops when the context ends.
 	base.mu.Lock()
 	base.status = "needs_review"
 	base.mu.Unlock()
 
 	c := client{baseURL: server.URL, http: server.Client()}
-	w, err := newWatcher(context.Background(), c, watchOptions{profileName: "codex", workdir: fixture.source, boardID: boardID}, &strings.Builder{})
+	w, err := newWatcher(context.Background(), c, watchOptions{profileName: "codex", workdir: fixture.source, listID: listID}, &strings.Builder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1622,17 +1622,17 @@ func TestTheLoopCarriesTheBoardScope(t *testing.T) {
 	if len(queries) < 2 {
 		t.Fatalf("queries = %v, want the startup check and at least one poll", queries)
 	}
-	if queries[0] != "working:"+boardID {
+	if queries[0] != "working:"+listID {
 		t.Fatalf("first query = %q, want the scoped working check", queries[0])
 	}
 	queuedQueries := 0
 	for _, query := range queries[1:] {
-		if query == "queued:"+boardID {
+		if query == "queued:"+listID {
 			queuedQueries++
 			continue
 		}
-		if query != "working:"+boardID {
-			t.Fatalf("loop query %q is not scoped to board %s", query, boardID)
+		if query != "working:"+listID {
+			t.Fatalf("loop query %q is not scoped to list %s", query, listID)
 		}
 	}
 	if queuedQueries == 0 {
