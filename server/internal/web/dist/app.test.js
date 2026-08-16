@@ -346,6 +346,33 @@ test("the board includes subtasks while an individual list stays a parent rollup
   delete app.location;
 });
 
+test("the board groups statuses into four columns and Ready sits in Todo", () => {
+  const tasks = [
+    { id: "a", title: "Fresh", status: "new", bucketId: "list" },
+    { id: "b", title: "Assigned", status: "queued", bucketId: "list" },
+    { id: "c", title: "Running", status: "working", bucketId: "list" },
+    { id: "d", title: "Back to me", status: "needs_review", bucketId: "list" },
+    { id: "e", title: "Finished", status: "done", bucketId: "list" },
+  ];
+  const html = app.workspaceFlowHTML(tasks);
+  assert.equal((html.match(/class="workspace-flow-column"/g) || []).length, 4);
+  for (const label of ["Todo", "In Progress", "Review", "Done"]) assert.match(html, new RegExp(`<h2>${label}</h2>`));
+  assert.doesNotMatch(html, /<h2>Ready<\/h2>/, "Ready is a status inside Todo, not a column");
+
+  // Todo holds both the unassigned and the agent-queued task, so its count is 2.
+  const todo = html.slice(html.indexOf('data-flow-status="new"'), html.indexOf('data-flow-status="working"'));
+  assert.match(todo, /<span>2<\/span>/);
+  assert.match(todo, /Fresh/);
+  assert.match(todo, /Assigned/);
+
+  // Dropping on Todo sets new; the store promotes it back to queued when an
+  // agent is assigned, which keeps the task in the same column.
+  for (const value of ["new", "working", "needs_review", "done"]) {
+    assert.match(html, new RegExp(`data-flow-status="${value}"`));
+  }
+  assert.doesNotMatch(html, /data-flow-status="queued"/);
+});
+
 test("the board filter keeps search, agent and priority, and applies without a button", () => {
   app.location = { search: "?q=spec&priority=p1" };
   vm.runInContext(`state.workspaceScope = "all"; state.me = { id: "owner", displayName: "Owain" }; state.agents = [];`, app);
