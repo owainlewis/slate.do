@@ -232,10 +232,6 @@ const NEW_AGENT_PATH = "/app/agents/new";
 const EARLY_ACCESS_PATH = "/early-access";
 const RESET_PASSWORD_PATH = "/reset-password";
 
-function boardPath(id) {
-  return `/app/boards/${encodeURIComponent(id)}`;
-}
-
 function listPath(id) {
   return `/app/lists/${encodeURIComponent(id)}`;
 }
@@ -334,7 +330,8 @@ function parseRoute(pathname) {
   const board = /^\/app\/boards\/([^/]+)$/.exec(path);
   if (board) {
     try {
-      return { name: "board", boardId: decodeURIComponent(board[1]) };
+      // A board is storage, not a surface. Its route folds into the one board.
+      return { name: "board", boardId: decodeURIComponent(board[1]), redirect: true };
     } catch {
       return { name: "not-found" };
     }
@@ -378,7 +375,7 @@ function taskIDFromLocation(locationRef = globalThis.location) {
 }
 
 function routeSupportsTaskDetail(route) {
-  return route.name === "workspace" || route.name === "board"
+  return route.name === "workspace"
     || ["agent-detail", "agent-work", "agent-settings"].includes(route.name);
 }
 
@@ -596,7 +593,7 @@ async function applyRoute() {
       : route.name === "agents"
       ? navigate(AGENTS_PATH, { replace: true })
       : route.name === "board"
-      ? navigate(boardPath(route.boardId), { replace: true })
+      ? navigate(`${TASKS_PATH}${location.search}`, { replace: true })
       : navigate(settingsPath(route.settingsPage), { replace: true });
   }
   if (["agent-detail", "agent-work", "agent-settings"].includes(route.name)) prepareAgentRoute(route);
@@ -672,16 +669,6 @@ async function applyRoute() {
       if (workspaceLoaded === null) return;
       if (!workspaceLoaded) return showRoute("not-found");
       showRoute("app");
-      if (routeTaskID) await openTaskDetail(routeTaskID, null, { syncURL: false, preserveTaskDrafts: true });
-      return;
-    }
-    if (route.name === "board") {
-      if (!state.boards.some(board => board.id === route.boardId)) {
-        return showRoute("not-found");
-      }
-      if (state.board?.id !== route.boardId && !await loadBoard(route.boardId, authVersion, version)) return;
-      if (routeVersion !== version) return;
-      showRoute("board");
       if (routeTaskID) await openTaskDetail(routeTaskID, null, { syncURL: false, preserveTaskDrafts: true });
       return;
     }
@@ -1315,9 +1302,6 @@ function render() {
     bindApp();
     return;
   }
-  syncPath(state.board ? boardPath(state.board.id) : APP_PATH);
-  root.innerHTML = boardHTML();
-  bindApp();
 }
 
 function renderKeepingSidebarOpen(open) {
@@ -1599,41 +1583,6 @@ function appHTML() {
     </section>`;
 }
 
-function boardSurfaceTasks(board = state.board) {
-  return (board?.buckets || []).flatMap(list => (list.tasks || []).map(task => ({
-    ...task,
-    boardId: task.boardId || board.id,
-    boardName: task.boardName || board.name,
-    bucketId: task.bucketId || list.id,
-    listName: task.listName || list.name,
-  })));
-}
-
-function boardHTML() {
-  const board = state.board;
-  const theme = currentTheme();
-  const listLimitReached = (board?.buckets || []).length >= state.maxListsPerBoard;
-  const openCards = boardSurfaceTasks(board).filter(task => task.status !== "done").length;
-  const overview = `
-    <div class="main board-main">
-      <header class="topbar board-topbar">
-        <div class="board-heading"><div><h1>${escapeHTML(board?.name || "Board")}</h1><span>${openCards}</span></div><p>Lists keep related tasks together.</p></div>
-        <div class="top-actions">
-          <button class="secondary" id="add-list" ${listLimitReached ? "disabled" : ""}>${icon("plus")}<span>New list</span></button>
-        </div>
-      </header>
-      ${statusErrorHTML(state.error || state.taskMutationError?.message)}
-      ${statusNoticeHTML(state.moveNotice)}
-      ${flowHTML(board)}
-      ${footerHTML(board)}
-    </div>`;
-  return `
-    <section class="shell theme-${theme}">
-      ${appSidebarHTML({ theme, showNewTask: false })}
-      ${state.selectedTask ? `<div class="main workspace-main card-detail-main">${workspaceDetailHTML(state.selectedTask)}</div>` : overview}
-    </section>`;
-}
-
 function workspaceScopedTasks() {
   if (state.workspaceScope !== "inbox") return state.workspaceTasks;
   const inboxIDs = new Set(state.workspaceLists.filter(list => list.isInbox).map(list => list.id));
@@ -1770,6 +1719,7 @@ function workspaceDetailHTML(task) {
       <header class="detail-head"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Subtask" : "Task"}</b></div></header>
       <form id="workspace-detail-form" class="workspace-detail-form">
         <div class="workspace-detail-main">
+         <div class="detail-column">
           <label class="sr-only" for="workspace-detail-title">Title</label><input class="detail-title" id="workspace-detail-title" name="title" value="${escapeAttr(task.title)}" required>
           ${details}
           <section class="detail-block" aria-labelledby="detail-description-heading">
@@ -1791,6 +1741,7 @@ function workspaceDetailHTML(task) {
           </section>
           ${reference}
           <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
+         </div>
         </div>
         <footer class="detail-actions"><button class="danger" type="button" id="delete-task">Delete task</button><div><button class="primary" type="submit">Save changes</button></div></footer>
       </form>
@@ -2010,7 +1961,7 @@ function boardRowHTML(board) {
   }
   return `
     <div class="board-row ${current ? "on" : ""}">
-      <button class="board-select" data-board="${board.id}"><span>${escapeHTML(board.name)}</span></button>
+      <span class="board-select" data-board="${board.id}">${escapeHTML(board.name)}</span>
       <div class="board-actions">
         <button data-start-rename-board="${board.id}" aria-label="Rename ${escapeAttr(board.name)}" title="Rename board">${icon("pencil")}</button>
         <button data-delete-board="${board.id}" aria-label="Delete ${escapeAttr(board.name)}" title="${deletable ? "Delete board" : "Move or create another Inbox before deleting this board"}" ${deletable ? "" : "disabled"}>${icon("trash")}</button>
@@ -2104,46 +2055,6 @@ function priorityOptionsHTML(selected) {
   return options.map(p => `<option value="${escapeAttr(p.value)}" ${p.value === (selected || "") ? "selected" : ""}>${escapeHTML(p.label)}</option>`).join("");
 }
 
-function flowHTML(board) {
-  const lists = board?.buckets || [];
-  const selectedList = lists.find(list => list.id === state.flowListId);
-  const actions = allTasks(board).filter(item => !selectedList || item.list.id === selectedList.id);
-  return `
-    <section class="flow-view" aria-label="Item flow">
-      <div class="flow-toolbar">
-        <label for="flow-list-filter">List</label>
-        <select id="flow-list-filter" aria-label="Filter Flow by list">
-          <option value="">All lists</option>
-          ${lists.map(list => `<option value="${escapeAttr(list.id)}" ${list.id === selectedList?.id ? "selected" : ""}>${escapeHTML(list.name)}</option>`).join("")}
-        </select>
-      </div>
-      <div class="flow">
-        ${FLOW_STATES.map(state => flowColumnHTML(state, actions.filter(item => item.task.status === state.value))).join("")}
-      </div>
-    </section>`;
-}
-
-function flowColumnHTML(flowState, items) {
-  return `
-    <section class="flow-column" data-flow-status="${flowState.value}" aria-labelledby="flow-${flowState.value}">
-      <header><h2 id="flow-${flowState.value}">${flowState.label}</h2><span>${items.length}</span></header>
-      <ul class="flow-cards">
-        ${items.length ? items.map(flowCardHTML).join("") : `<li class="flow-empty">Drag items here</li>`}
-      </ul>
-    </section>`;
-}
-
-function flowCardHTML(item) {
-  const { task, list } = item;
-  return `
-    <li class="flow-card status-${task.status || "new"}" draggable="true" data-task="${task.id}">
-      <button class="task-open flow-card-open" type="button" data-open-task="${task.id}" aria-label="${escapeAttr(task.title)}">
-        <span class="flow-card-title">${escapeHTML(task.title)}</span>
-        <span class="flow-card-meta"><span>${escapeHTML(list.name)}</span>${task.scheduledDate ? `<span>${formatTaskDate(task.scheduledDate)}</span>` : ""}${taskAssigneeHTML(task, true)}</span>
-      </button>
-    </li>`;
-}
-
 function calendarDayHTML(day, tasks) {
   const key = dateKey(day);
   const items = tasks.filter(item => item.task.scheduledDate === key);
@@ -2187,11 +2098,6 @@ function statusOptionsHTML(selected) {
 
 function statusLabel(status) {
   return FLOW_STATES.find(item => item.value === status)?.label || "New";
-}
-
-function footerHTML(board) {
-  const counts = statusCounts(board);
-  return `<footer class="footer"><span>${openTaskCount(board)} open items</span><span class="foot-stat"><span class="dot dot-working"></span>${counts.working} working</span><span class="foot-stat"><span class="dot dot-review"></span>${counts.needs_review} in review</span></footer>`;
 }
 
 function statusErrorHTML(error) {
@@ -3157,7 +3063,6 @@ function contextDeleteSurfaceMatchesRoute(route) {
     return state.view === "app" && state.workspaceScope === route.scope
       && (route.scope !== "list" || state.workspaceListID === route.listId);
   }
-  if (route.name === "board") return state.view === "board" && state.board?.id === route.boardId;
   if (["agent-detail", "agent-work"].includes(route.name)) {
     return state.view === route.name && state.agentDetailLoadState === "ready" && state.agentDetail?.agent?.id === route.agentId;
   }
@@ -3176,7 +3081,7 @@ async function refreshAfterContextDelete() {
 
   const refreshRouteVersion = routeVersion;
   try {
-    if (route.name === "workspace" || route.name === "board") {
+    if (route.name === "workspace") {
       const loaded = await reload();
       return Boolean(loaded) && refreshRouteVersion === routeVersion;
     }
@@ -4353,7 +4258,6 @@ function bindDesktopSidebarToggle() {
 desktopNavigationMedia?.addEventListener?.("change", syncDesktopSidebar);
 
 function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar")) {
-  document.querySelectorAll("[data-board]").forEach(el => el.onclick = () => navigate(boardPath(el.dataset.board)));
   document.querySelectorAll("[data-start-rename-board]").forEach(el => el.onclick = () => {
     const keepSidebarOpen = sidebar?.classList.contains("open");
     state.renamingBoardId = el.dataset.startRenameBoard;
@@ -4385,7 +4289,7 @@ function bindBoardNavigationControls(sidebar = document.querySelector(".sidebar"
       if (currentButton) currentButton.disabled = state.boards.length >= state.maxBoards;
       return;
     }
-    if (result?.complete) navigate(boardPath(result.board.id));
+    if (result?.complete) navigate(TASKS_PATH);
     else render();
   };
 }
@@ -6246,10 +6150,6 @@ function findTask(id) {
   return null;
 }
 
-function allTasks(board) {
-  return (board?.buckets || []).flatMap(list => (list.tasks || []).map(task => ({ task, list })));
-}
-
 function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
@@ -6274,18 +6174,6 @@ function ordinal(value) {
 
 function formatTaskDate(value) {
   return parseDateKey(value).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-}
-
-function openTaskCount(board) {
-  return (board?.buckets || []).reduce((sum, b) => sum + b.openCount, 0);
-}
-
-function statusCounts(board) {
-  const counts = { new: 0, queued: 0, working: 0, needs_review: 0, done: 0 };
-  for (const { task } of allTasks(board)) {
-    if (Object.hasOwn(counts, task.status)) counts[task.status] += 1;
-  }
-  return counts;
 }
 
 function formatCount(count, singular, plural) {

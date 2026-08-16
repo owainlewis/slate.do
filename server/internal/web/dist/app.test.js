@@ -150,7 +150,7 @@ test("sidebar makes work, lists, and agents the primary control plane", () => {
   const settings = app.settingsHTML();
   for (const label of ["Work", "Board", "Lists", "Boards", "Content"]) assert.match(settings, new RegExp(`>${label}<`));
   for (const label of ["Today", "Week", "Review", "All cards"]) assert.doesNotMatch(settings, new RegExp(`>${label}<`));
-  assert.match(settings, /data-board="content"><span>Content<\/span>/);
+  assert.match(settings, /data-board="content">Content</);
   assert.match(settings, /id="new-board"/);
   vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
 });
@@ -1778,21 +1778,6 @@ const board = {
   ],
 };
 
-test("Flow groups every list item into five fixed states without redundant move controls", () => {
-  const html = app.flowHTML(board);
-
-  assert.deepEqual([...html.matchAll(/data-flow-status="([^"]+)"/g)].map(match => match[1]), ["new", "queued", "working", "needs_review", "done"]);
-  assert.match(html, /Working action/);
-  assert.match(html, /Home list/);
-  assert.match(html, /Fri, Jul 17/);
-  assert.match(html, /Reference item/);
-  assert.match(html, /aria-label="Filter Flow by list"/);
-  assert.match(html, />All lists</);
-  assert.match(html, />YouTube</);
-  assert.doesNotMatch(html, /data-set-task-status/);
-  assert.doesNotMatch(html, /aria-label="Move Working action to/);
-});
-
 test("dropping a card while filtered lands it against the real task order", () => {
   vm.runInContext(`state.board = { buckets: [{ id: "home", tasks: [
     { id: "a", priority: "p1" },
@@ -1991,17 +1976,6 @@ test("card assignment offers listed agents and preserves an unavailable current 
   vm.runInContext("state.agents = []", app);
 });
 
-test("Flow filters cards to one selected list", () => {
-  vm.runInContext('state.flowListId = "youtube"', app);
-  const html = app.flowHTML(board);
-
-  assert.match(html, /value="youtube" selected>YouTube/);
-  assert.match(html, /Write video script/);
-  assert.doesNotMatch(html, /Working action/);
-  assert.doesNotMatch(html, /Reference item/);
-  vm.runInContext('state.flowListId = ""', app);
-});
-
 test("detail exposes state without a type control", () => {
   vm.runInContext(`
     state.workspaceLists = [{ id: "inbox", name: "Home list" }];
@@ -2044,12 +2018,12 @@ test("detail presents one contextual accessible card editor with clear actions",
 });
 
 test("task permalinks preserve the current surface and filters", () => {
-  const location = { pathname: "/app/boards/board-one", search: "?view=flow&priority=p0", origin: "https://slate.do" };
+  const location = { pathname: "/app/tasks", search: "?status=queued&priority=p0", origin: "https://slate.do" };
 
   assert.equal(app.taskIDFromLocation(location), "");
-  assert.equal(app.taskLocationPath("task-one", location), "/app/boards/board-one?view=flow&priority=p0&task=task-one");
-  assert.equal(app.taskPermalink("task-one", location), "https://slate.do/app/boards/board-one?view=flow&priority=p0&task=task-one");
-  assert.equal(app.taskLocationPath("", { ...location, search: "?view=flow&task=task-one" }), "/app/boards/board-one?view=flow");
+  assert.equal(app.taskLocationPath("task-one", location), "/app/tasks?status=queued&priority=p0&task=task-one");
+  assert.equal(app.taskPermalink("task-one", location), "https://slate.do/app/tasks?status=queued&priority=p0&task=task-one");
+  assert.equal(app.taskLocationPath("", { ...location, search: "?status=queued&task=task-one" }), "/app/tasks?status=queued");
   assert.equal(app.routeSupportsTaskDetail(app.parseRoute(location.pathname)), true);
   assert.equal(app.routeSupportsTaskDetail(app.parseRoute("/app/settings/profile")), false);
 });
@@ -2069,12 +2043,6 @@ test("detail can move a parent task between account-wide lists", () => {
   assert.match(html, /value="other-list" >Campaigns \/ Inbox<\/option>|value="other-list">Campaigns \/ Inbox<\/option>/);
   assert.doesNotMatch(html, /id="move-panel"|id="move-position"/);
   vm.runInContext(`state.boards = []; state.workspaceLists = [];`, app);
-});
-
-test("footer reports live Working and Review counts", () => {
-  const html = app.footerHTML(board, false);
-  assert.match(html, /1 working/);
-  assert.match(html, /1 in review/);
 });
 
 test("failed status updates restore persisted state and expose an accessible error", async () => {
@@ -2617,9 +2585,9 @@ test("routes parse into the surface they name", () => {
   assert.deepEqual(route("/app/agents/agent-one/work"), { name: "agent-work", agentId: "agent-one" });
   assert.deepEqual(route("/early-access"), { name: "early-access" });
   assert.deepEqual(route("/reset-password"), { name: "reset-password" });
-  assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1" });
+  assert.deepEqual(route("/app/boards/board_1"), { name: "board", boardId: "board_1", redirect: true });
   assert.deepEqual(route("/app/boards/board_1/settings"), { name: "board", boardId: "board_1", redirect: true });
-  assert.deepEqual(route("/app/boards/a%20b"), { name: "board", boardId: "a b" });
+  assert.deepEqual(route("/app/boards/a%20b"), { name: "board", boardId: "a b", redirect: true });
   assert.deepEqual(route("/app/boards/a%20b/settings"), { name: "board", boardId: "a b", redirect: true });
   assert.deepEqual(route("/app/boards/%ED%A0%80"), { name: "not-found" });
 
@@ -2730,81 +2698,15 @@ test("the brand link goes to the board when signed in, and home when signed out"
   assert.equal(signedOut.url(), "/");
 });
 
-test("a board deep link loads that board, and an unknown id is not found", async () => {
+test("board deep links fold into the one board, keeping any task permalink", async () => {
   const it = router({ url: "/app/boards/board_2", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
   await it.apply();
-  assert.equal(it.board(), "board_2");
-  assert.equal(it.view(), "board");
+  assert.equal(it.url(), "/app/tasks");
+  assert.equal(it.view(), "app");
 
-  const missing = router({ url: "/app/boards/board_9", signedIn: true, boards: [{ id: "board_1" }] });
-  await missing.apply();
-  assert.equal(missing.view(), "not-found");
-  assert.equal(missing.url(), "/app/boards/board_9", "a not-found board keeps its URL rather than silently swapping boards");
-  assert.equal(missing.board(), null);
-});
-
-test("legacy board settings URLs return to the board", async () => {
-  const existing = router({ url: "/app/boards/board_1/settings", signedIn: true, boards: [{ id: "board_1" }] });
-  await existing.apply();
-  assert.equal(existing.url(), "/app/boards/board_1");
-  assert.equal(existing.view(), "board");
-
-  const missing = router({ url: "/app/boards/missing/settings", signedIn: true, boards: [{ id: "board_1" }] });
-  await missing.apply();
-  assert.equal(missing.view(), "not-found");
-  assert.equal(missing.url(), "/app/boards/missing");
-  assert.equal(missing.board(), null);
-});
-
-test("a failed board-list navigation renders an error for the requested URL and retries in place", async () => {
-  const boards = [{ id: "board_1" }, { id: "board_2" }];
-  const it = router({ url: "/app/boards/board_1", signedIn: true, boards });
-  await it.apply();
-  const depth = it.depth();
-  vm.runInContext(`api.get = async () => { throw new Error("Boards are unavailable"); };`, it.context);
-
-  await assert.doesNotReject(it.go("/app/boards/board_2"));
-
-  assert.equal(it.url(), "/app/boards/board_2");
-  assert.equal(it.depth(), depth + 1);
-  assert.equal(it.view(), "route-error");
-  assert.equal(it.routeError(), "board");
-  assert.equal(it.error(), "Boards are unavailable");
-  assert.equal(it.board(), "board_1", "the previous board may remain cached but must not be rendered");
-
-  vm.runInContext(`
-    api.get = async path => {
-      if (path === "/api/v1/boards") return { boards: ${JSON.stringify(boards)} };
-      return { id: "board_2", name: "Board two", buckets: [] };
-    };
-  `, it.context);
-  await it.apply();
-
-  assert.equal(it.url(), "/app/boards/board_2");
-  assert.equal(it.depth(), depth + 1, "retry must not add another history entry");
-  assert.equal(it.view(), "board");
-  assert.equal(it.board(), "board_2");
-  assert.equal(it.error(), "");
-});
-
-test("a failed board-detail navigation renders an error for that board without rejecting", async () => {
-  const boards = [{ id: "board_1" }, { id: "board_2" }];
-  const it = router({ url: "/app/boards/board_1", signedIn: true, boards });
-  await it.apply();
-  vm.runInContext(`
-    api.get = async path => {
-      if (path === "/api/v1/boards") return { boards: ${JSON.stringify(boards)} };
-      if (path === "/api/v1/boards/board_2") throw new Error("Board could not be loaded");
-      return { id: "board_1", name: "Board one", buckets: [] };
-    };
-  `, it.context);
-
-  await assert.doesNotReject(it.go("/app/boards/board_2"));
-
-  assert.equal(it.url(), "/app/boards/board_2");
-  assert.equal(it.view(), "route-error");
-  assert.equal(it.routeError(), "board");
-  assert.equal(it.error(), "Board could not be loaded");
+  const unknown = router({ url: "/app/boards/board_9", signedIn: true, boards: [{ id: "board_1" }] });
+  await unknown.apply();
+  assert.equal(unknown.url(), "/app/tasks", "a board id is storage, so an unknown one is not a dead end");
 });
 
 test("failed token loads render route-owned errors at the requested page", async () => {
@@ -2829,48 +2731,49 @@ test("failed token loads render route-owned errors at the requested page", async
 });
 
 test("a route failure during back navigation preserves the history destination", async () => {
-  const boards = [{ id: "board_1" }, { id: "board_2" }];
+  const boards = [{ id: "board_1" }];
   const it = router({ url: "/", signedIn: true, boards });
   await it.apply();
-  await it.go("/app/boards/board_1");
-  await it.go("/app/boards/board_2");
+  await it.go("/app/tasks");
+  await it.go("/app/lists/list_1");
   const depth = it.depth();
   vm.runInContext(`api.get = async () => { throw new Error("History destination unavailable"); };`, it.context);
 
   await assert.doesNotReject(it.back());
 
-  assert.equal(it.url(), "/app/boards/board_1");
+  assert.equal(it.url(), "/app/tasks");
   assert.equal(it.depth(), depth - 1);
   assert.equal(it.view(), "route-error");
-  assert.equal(it.routeError(), "board");
+  assert.equal(it.routeError(), "workspace");
   assert.equal(it.error(), "History destination unavailable");
 });
 
-test("a stale board response cannot overwrite newer route navigation", async () => {
+test("a stale list response cannot overwrite newer route navigation", async () => {
   const it = router({ url: "/", signedIn: true });
-  let releaseBoardOne;
-  const boardOneResponse = new Promise(resolve => { releaseBoardOne = resolve; });
-  it.context.boardOneResponse = boardOneResponse;
+  let releaseListOne;
+  it.context.listOneResponse = new Promise(resolve => { releaseListOne = resolve; });
   vm.runInContext(`
     api.get = async path => {
-      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }, { id: "board_2" }] };
-      if (path === "/api/v1/boards/board_1") return boardOneResponse;
-      if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
-      if (path === "/api/v1/lists") return { lists: [] };
+      if (path === "/api/v1/boards") return { boards: [{ id: "board_1" }] };
+      if (path === "/api/v1/boards/board_1") return { id: "board_1", name: "Board one", buckets: [] };
+      if (path === "/api/v1/agents") return { agents: [] };
+      if (path === "/api/v1/lists") return { lists: [{ id: "list_1", name: "One" }, { id: "list_2", name: "Two" }] };
+      if (path.includes("bucketId=list_1")) return listOneResponse;
       if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
       throw new Error("unexpected request: " + path);
     };
   `, it.context);
 
-  const staleNavigation = it.go("/app/boards/board_1");
+  const staleNavigation = it.go("/app/lists/list_1");
   await new Promise(resolve => setImmediate(resolve));
-  await it.go("/app/boards/board_2");
-  releaseBoardOne({ id: "board_1", name: "Board one", buckets: [] });
+  await it.go("/app/lists/list_2");
+  releaseListOne({ tasks: [{ id: "stale-task" }] });
   await staleNavigation;
 
-  assert.equal(it.url(), "/app/boards/board_2");
-  assert.equal(it.board(), "board_2");
-  assert.equal(it.view(), "board");
+  assert.equal(it.url(), "/app/lists/list_2");
+  assert.equal(it.view(), "app");
+  assert.equal(vm.runInContext("state.workspaceListID", it.context), "list_2");
+  assert.equal(vm.runInContext("JSON.stringify(state.workspaceTasks)", it.context), "[]");
 });
 
 test("a stale board-list response cannot overwrite newer route navigation", async () => {
@@ -2882,22 +2785,23 @@ test("a stale board-list response cannot overwrite newer route navigation", asyn
     api.get = async path => {
       if (path === "/api/v1/boards" && ++boardListRequests === 1) return oldBoardListResponse;
       if (path === "/api/v1/boards") return { boards: [{ id: "board_2" }] };
-      if (path === "/api/v1/lists") return { lists: [] };
       if (path === "/api/v1/boards/board_2") return { id: "board_2", name: "Board two", buckets: [] };
+      if (path === "/api/v1/agents") return { agents: [] };
+      if (path === "/api/v1/lists") return { lists: [] };
+      if (path.startsWith("/api/v1/tasks?")) return { tasks: [] };
       throw new Error("unexpected request: " + path);
     };
   `, it.context);
 
-  const staleNavigation = it.go("/app/boards/board_1");
+  const staleNavigation = it.go("/app/inbox");
   await new Promise(resolve => setImmediate(resolve));
-  await it.go("/app/boards/board_2");
+  await it.go("/app/tasks");
   releaseOldBoardList({ boards: [{ id: "board_1" }] });
   await staleNavigation;
 
   const boardIds = JSON.parse(vm.runInContext("JSON.stringify(state.boards.map(board => board.id))", it.context));
   assert.deepEqual(boardIds, ["board_2"]);
-  assert.equal(it.board(), "board_2");
-  assert.equal(it.url(), "/app/boards/board_2");
+  assert.equal(it.url(), "/app/tasks");
 });
 
 test("a stale workspace response cannot render Not Found over newer navigation", async () => {
@@ -2998,33 +2902,32 @@ test("a stale agent response cannot overwrite newer route data", async () => {
     };
   `, it.context);
 
-  const staleRoute = it.go("/app/boards/board_1");
+  const staleRoute = it.go("/app/inbox");
   await new Promise(resolve => setImmediate(resolve));
-  await it.go("/app/boards/board_2");
+  await it.go("/app/tasks");
   releaseOldAgents({ agents: [{ id: "old" }] });
   await staleRoute;
 
   const agentIDs = JSON.parse(vm.runInContext("JSON.stringify(state.agents.map(agent => agent.id))", it.context));
   assert.deepEqual(agentIDs, ["new"]);
-  assert.equal(it.url(), "/app/boards/board_2");
-  assert.equal(it.board(), "board_2");
+  assert.equal(it.url(), "/app/tasks");
 });
 
-test("back and forward move between landing, boards, and settings", async () => {
-  const it = router({ url: "/", signedIn: true, boards: [{ id: "board_1" }, { id: "board_2" }] });
+test("back and forward move between landing, the board, and settings", async () => {
+  const it = router({ url: "/", signedIn: true, boards: [{ id: "board_1" }] });
   await it.apply();
   assert.equal(it.view(), "home");
 
   await it.go("/app");
   assert.equal(it.url(), "/app/tasks");
-  await it.go("/app/boards/board_2");
-  assert.equal(it.board(), "board_2");
+  await it.go("/app/inbox");
+  assert.equal(it.url(), "/app/inbox");
   await it.go("/app/settings/profile");
   assert.equal(it.view(), "app:settings");
 
   await it.back();
-  assert.equal(it.url(), "/app/boards/board_2");
-  assert.equal(it.view(), "board");
+  assert.equal(it.url(), "/app/inbox");
+  assert.equal(it.view(), "app");
   await it.back();
   assert.equal(it.url(), "/app/tasks");
   await it.back();
