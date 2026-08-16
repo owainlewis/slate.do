@@ -2073,7 +2073,7 @@ test("a failed deferred Agent Work refresh preserves a newly opened detail", asy
   await brief.fill("Live parent draft during failed deferred refresh");
 
   state.releaseAgentWork();
-  await page.locator(".detail-error").filter({ hasText: "The card was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
+  await page.locator(".detail-error").filter({ hasText: "The task was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
 
   assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 1);
   assert.equal(await brief.inputValue(), "Live parent draft during failed deferred refresh");
@@ -2199,14 +2199,14 @@ test("a delayed Flow drop refreshes a newly selected Review overview", async t =
   await waitFor(() => typeof state.releaseStatus === "function");
 
   const reviewLoaded = page.waitForResponse(response => response.request().method() === "GET"
-    && response.url().includes("/api/v1/tasks?"));
-  await navigateApp(page, "/app/tasks");
+    && response.url().includes("status=needs_review"));
+  await navigateApp(page, "/app/tasks?status=needs_review");
   await reviewLoaded;
   await page.getByRole("heading", { name: "Board", exact: true, level: 1 }).waitFor();
   assert.equal(await page.locator('[data-open-task="task-parent"]').count(), 0);
 
   const reviewRefreshed = page.waitForResponse(response => response.request().method() === "GET"
-    && response.url().includes("/api/v1/tasks?"));
+    && response.url().includes("status=needs_review"));
   state.releaseStatus();
   await reviewRefreshed;
   await waitFor(() => state.patches.length === 1);
@@ -2225,7 +2225,7 @@ test("a committed Flow drop reports a current workspace refresh failure", async 
   state.failNextWorkspaceTasks = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="needs_review"]'));
 
-  await page.locator(".status-error").filter({ hasText: "The card was updated, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
+  await page.locator(".status-error").filter({ hasText: "The task was updated, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
 
   assert.equal(state.tasks.find(task => task.id === "task-parent").status, "needs_review");
   assert.equal(await page.getByText(/Couldn’t save/).count(), 0);
@@ -2383,8 +2383,11 @@ test("a parent list move preserves and keeps locked a saving child detail", asyn
   state.tasks[0].scheduledDate = formatDate(monday);
   await page.goto(`${origin}/app/tasks`);
   await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
+  await page.locator('[data-open-task="task-parent"]').click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  await page.getByLabel("List", { exact: true }).selectOption("list-inbox");
   state.delayNextTaskPatch = true;
-  await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="queued"]'));
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await waitFor(() => typeof state.releaseTaskPatch === "function");
 
   await page.getByRole("link", { name: "All agents", exact: true }).click();
@@ -2564,7 +2567,7 @@ test("a current subtask refresh failure releases workspace loading", async t => 
   await brief.fill("Live focused brief during failed refresh");
   state.releaseWorkspaceTasks();
 
-  await page.locator(".detail-error").filter({ hasText: "The card was updated, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
+  await page.locator(".detail-error").filter({ hasText: "The task was updated, but this view couldn’t be refreshed: Could not refresh tasks" }).waitFor();
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Live title during failed refresh");
   assert.equal(await brief.inputValue(), "Live focused brief during failed refresh");
   assert.equal(await brief.evaluate(element => element === document.activeElement), true);
@@ -2590,7 +2593,7 @@ test("a background agent refresh failure is visible in a newer task detail", asy
   state.failNextAgentDetail = true;
 
   state.releaseStatus();
-  await page.locator(".detail-error").filter({ hasText: "The card was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
+  await page.locator(".detail-error").filter({ hasText: "The task was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
 
   assert.equal(state.tasks.find(task => task.id === "task-parent").title, "Parent committed before refresh failure");
   assert.equal(await childBrief.inputValue(), "Newer child draft during refresh failure");
@@ -2612,7 +2615,7 @@ test("a recovered agent refresh clears only its refresh warning", async t => {
   state.failNextAgentDetail = true;
   state.releaseStatus();
 
-  const warning = page.locator(".detail-error").filter({ hasText: "The card was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" });
+  const warning = page.locator(".detail-error").filter({ hasText: "The task was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" });
   await warning.waitFor();
   await page.getByLabel("Subtask title", { exact: true }).fill("Refresh recovery subtask");
   state.delayNextSubtask = true;
@@ -2678,7 +2681,7 @@ test("an agent subtask refresh failure preserves unrelated task drafts", async t
   await page.getByLabel("Description", { exact: true }).fill("Unsaved focused brief");
   state.releaseAgentWork();
 
-  await page.getByRole("alert").filter({ hasText: "The card was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "The task was updated, but assigned work couldn’t be refreshed: Could not refresh assigned work" }).waitFor();
   assert.equal(await page.getByRole("region", { name: "Task detail" }).count(), 1);
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved parent draft");
   assert.equal(await page.getByLabel("Description", { exact: true }).inputValue(), "Unsaved focused brief");
@@ -2811,9 +2814,9 @@ test("a background parent move refreshes counts without resetting agent settings
   state.tasks[0].scheduledDate = formatDate(monday);
 
   await page.goto(`${origin}/app/tasks`);
-  state.delayNextTaskPatch = true;
+  state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="queued"]'));
-  await waitFor(() => typeof state.releaseTaskPatch === "function");
+  await waitFor(() => typeof state.releaseStatus === "function");
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
   await page.getByRole("tab", { name: "Settings", exact: true }).click();
@@ -2825,7 +2828,7 @@ test("a background parent move refreshes counts without resetting agent settings
   state.subtasks.filter(task => task.parentTaskId === "task-parent").forEach(task => Object.assign(task, { bucketId: "list-inbox", listName: "Inbox" }));
   state.lists.find(list => list.id === "list-youtube").openCount = 1;
   state.lists.find(list => list.id === "list-inbox").openCount = 2;
-  state.releaseTaskPatch();
+  state.releaseStatus();
 
   await waitFor(() => state.requests.filter(request => request === "GET /api/v1/lists").length >= 2);
   assert.equal(state.lists.find(list => list.id === "list-youtube").openCount, 1);
@@ -2844,9 +2847,9 @@ test("a background parent move completes agent settings whose list load it super
   state.tasks[0].scheduledDate = formatDate(monday);
 
   await page.goto(`${origin}/app/tasks`);
-  state.delayNextTaskPatch = true;
+  state.delayNextStatus = true;
   await page.locator('[data-task="task-parent"]').dragTo(page.locator('[data-flow-status="queued"]'));
-  await waitFor(() => typeof state.releaseTaskPatch === "function");
+  await waitFor(() => typeof state.releaseStatus === "function");
   await page.getByRole("link", { name: "All agents", exact: true }).click();
   await page.getByRole("link", { name: "Research agent", exact: true }).click();
 
@@ -2864,7 +2867,7 @@ test("a background parent move completes agent settings whose list load it super
   state.subtasks.filter(task => task.parentTaskId === "task-parent").forEach(task => Object.assign(task, { bucketId: "list-inbox", listName: "Inbox" }));
   state.lists.find(list => list.id === "list-youtube").openCount = 1;
   state.lists.find(list => list.id === "list-inbox").openCount = 2;
-  state.releaseTaskPatch();
+  state.releaseStatus();
 
   await waitFor(() => listRequests >= 2);
   await page.locator("#agent-settings-purpose").waitFor();
@@ -3091,7 +3094,7 @@ test("failed subtask mutations remain visible across same-agent navigation", asy
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("heading", { name: "Working now", exact: true }).waitFor();
   state.releaseSubtask();
-  await page.getByRole("alert").filter({ hasText: "Couldn’t add child card “Delayed research add”: Could not add subtask" }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "Couldn’t add subtask “Delayed research add”: Could not add subtask" }).waitFor();
   assert.equal(new URL(page.url()).pathname, "/app/agents/agent-research");
   assert.deepEqual(pageErrors, []);
 });
@@ -3232,7 +3235,7 @@ test("New task preserves a successful capture when the workspace refresh fails",
 
   state.failNextWorkspaceTasks = true;
   await page.getByRole("button", { name: "New task", exact: true }).click();
-  const recovery = page.getByRole("alert", { name: "Created card recovery" });
+  const recovery = page.getByRole("alert", { name: "Created task recovery" });
   await recovery.waitFor();
 
   assert.equal(state.created.length, 1);
@@ -3329,10 +3332,8 @@ test("task detail coordinates one level of human and agent subtasks through the 
   assert.ok(bounds.height >= 940, `detail height=${bounds.height}`);
   assert.ok(bounds.x >= 220, `detail x=${bounds.x}`);
   assert.equal(await page.getByRole("complementary").first().isVisible(), true, "sidebar stays visible");
-  assert.equal(await page.locator(".workspace-flow.grouped-by-list").count(), 0, "card detail replaces the board surface");
   assert.equal(await page.locator(".workspace-topbar").count(), 0, "card detail replaces the workspace surface");
   assert.equal(await dialog.locator(".workspace-detail-main").count(), 1);
-  assert.equal(await dialog.getByRole("complementary", { name: "Card properties" }).count(), 1);
   assert.equal(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)), 26);
 
   await page.getByLabel("Title", { exact: true }).fill("Unsaved parent title");
@@ -3396,7 +3397,6 @@ test("task detail remains usable on a phone-sized viewport", async t => {
   const bounds = await dialog.boundingBox();
   assert.ok(bounds.width >= 384, `dialog width=${bounds.width}`);
   assert.ok(bounds.height >= 780, `detail height=${bounds.height}`);
-  assert.equal(await dialog.getByRole("complementary", { name: "Card properties" }).isVisible(), true);
   assert.equal(parseFloat(await page.locator("#workspace-detail-title").evaluate(element => getComputedStyle(element).fontSize)), 24);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });

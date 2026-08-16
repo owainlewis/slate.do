@@ -3468,7 +3468,7 @@ function bindWorkspaceDetail(options = {}) {
       if (handleError(err)) return false;
       latestFocus = captureDetailFocus() || latestFocus;
       preserveTaskDraft();
-      state.error = `The card was updated, but this view couldn’t be refreshed: ${err.message}`;
+      state.error = `The task was updated, but this view couldn’t be refreshed: ${err.message}`;
       render();
       restoreDetailFocus(latestFocus);
       return false;
@@ -3565,7 +3565,7 @@ function bindWorkspaceDetail(options = {}) {
         render();
         return false;
       }
-      state.agentTaskRefreshError = `The card was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      state.agentTaskRefreshError = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
       state.agentTaskMutationError = state.agentTaskRefreshError;
       if (state.selectedTask) {
         state.error = state.agentTaskMutationError;
@@ -4059,7 +4059,7 @@ async function refreshAfterTaskMutation(startedRouteVersion) {
   } catch (err) {
     if (refreshRouteVersion !== routeVersion) return false;
     state.workspaceLoading = false;
-    state.error = `The card was updated, but this view couldn’t be refreshed: ${err.message}`;
+    state.error = `The task was updated, but this view couldn’t be refreshed: ${err.message}`;
     renderPreservingCurrentTaskDetail();
     return false;
   }
@@ -5433,7 +5433,7 @@ async function refreshAgentSurface(options = {}) {
     if (version !== routeVersion) return false;
     if (handleAgentUnauthorized(err, route)) return false;
     if (options.preserveTaskDetail && state.selectedTask) {
-      const message = `The card was updated, but assigned work couldn’t be refreshed: ${err.message}`;
+      const message = `The task was updated, but assigned work couldn’t be refreshed: ${err.message}`;
       options.beforeTaskDetailRender?.();
       state.agentDetailLoadState = "ready";
       state.agentTaskRefreshError = message;
