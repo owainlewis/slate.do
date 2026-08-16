@@ -1980,7 +1980,7 @@ function newTaskCaptureBlocked() {
 function newTaskRecoveryNoticeHTML() {
   const recovery = state.newTaskRecovery;
   if (!recovery) return "";
-  return `<section class="status-notice new-task-recovery" role="alert" aria-label="Created task recovery"><span><strong>Card created.</strong> Slate saved ${escapeHTML(recovery.task.title)} in Inbox, but could not open it: ${escapeHTML(recovery.message)}</span><button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open task"}</button></section>`;
+  return `<section class="status-notice new-task-recovery" role="alert" aria-label="Created task recovery"><span><strong>Task created.</strong> Slate saved ${escapeHTML(recovery.task.title)} in Inbox, but could not open it: ${escapeHTML(recovery.message)}</span><button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open task"}</button></section>`;
 }
 
 function bindNewTaskRecoveryActions() {
@@ -4426,14 +4426,14 @@ async function captureInboxTask(button) {
 
   state.newTaskCapturePending = false;
   state.newTaskCaptureAttemptKey = "";
-  state.newTaskRecovery = { task, message: "The Inbox could not be refreshed.", pending: false };
+  state.newTaskRecovery = { task, message: "The board could not be refreshed.", pending: false };
   try {
     if (parseRoute(location.pathname).name === "workspace") {
-      if (!await reload()) throw new Error(state.error || "The Inbox could not be refreshed.");
+      if (!await reload()) throw new Error(state.error || "The board could not be refreshed.");
     } else {
-      await navigate(INBOX_PATH);
+      await navigate(TASKS_PATH);
       if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
-        throw new Error(state.error || "The Inbox could not be loaded.");
+        throw new Error(state.error || "The board could not be loaded.");
       }
     }
     let detailError;
@@ -4457,9 +4457,11 @@ async function recoverCreatedTask() {
   state.newTaskRecovery = { ...recovery, pending: true };
   render();
   try {
-    await navigate(INBOX_PATH);
+    // A captured task lands in Inbox but is opened from the board, since the
+    // inbox surface holds agent messages rather than tasks.
+    await navigate(TASKS_PATH);
     if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
-      throw new Error(state.error || "The Inbox could not be loaded.");
+      throw new Error(state.error || "The board could not be loaded.");
     }
     let detailError;
     const opened = await openTaskDetail(recovery.task.id, null, { onError: err => { detailError = err; } });
