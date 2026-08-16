@@ -1496,16 +1496,16 @@ func TestListsLeaveBoardsOwningThemselvesWithOneInboxEach(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A list needs no board, and carries its owner itself.
-	var boardID *string
+	// A list carries its owner itself, with nothing above it.
+	var listOwner string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO buckets (id, user_id, name, is_inbox) VALUES ($1, $2, 'Inbox', true)
-		RETURNING board_id::text
-	`, listID, ownerA).Scan(&boardID); err != nil {
+		RETURNING user_id::text
+	`, listID, ownerA).Scan(&listOwner); err != nil {
 		t.Fatal(err)
 	}
-	if boardID != nil {
-		t.Fatalf("board_id = %q, want null", *boardID)
+	if listOwner != ownerA {
+		t.Fatalf("list owner = %s, want %s", listOwner, ownerA)
 	}
 
 	// A task takes its owner from its list rather than from a board.

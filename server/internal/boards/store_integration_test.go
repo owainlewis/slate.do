@@ -1820,7 +1820,7 @@ func TestSubtaskCreationRacingParentMoveNeverSplitsLists(t *testing.T) {
 				FROM tasks child
 				JOIN tasks parent ON parent.id = child.parent_task_id
 				WHERE child.parent_task_id = $1
-				  AND (child.board_id <> parent.board_id OR child.bucket_id <> parent.bucket_id)
+				  AND child.bucket_id <> parent.bucket_id
 			`, parent.ID).Scan(&splitChildren); err != nil {
 				t.Fatal(err)
 			}
