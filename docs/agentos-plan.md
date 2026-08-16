@@ -47,8 +47,10 @@ The two hard problems, isolated execution and the human-in-the-loop channel, are
 
 Continuing from `043_managed_agent_runs`.
 
+`044_inbox_index` was taken by the inbox, so agent config is `045`.
+
 ```
-044_agent_config
+045_agent_config
     ALTER agents ADD instructions, backend, workspace,
                      limits_json, backend_overrides_json
 
@@ -185,7 +187,7 @@ The milestone that decides whether the system is any good.
 | # | Task | Done when |
 | --- | --- | --- |
 | 6.1 | `049_card_entry_questions`: direction, options, answer, answered_at | A question is distinguishable from a comment |
-| 6.2 | Inbox view and unread count, account-wide, newest first | Unanswered questions are the home screen signal |
+| 6.2 | ~~Inbox view~~, plus unread count | **Shipped early.** The inbox is agent-authored entries account-wide, newest first, each linked to its task, with `044_inbox_index` behind it. Unread state still needs 6.1 |
 | 6.3 | `slate inbox ask --wait`, returning the answer or printing `parked` and exiting 75 | A reply inside the budget continues the run |
 | 6.4 | Park semantics: run parks, task blocks, process dies | Nothing burns overnight |
 | 6.5 | Resume: replying creates a new run with `resume_from_run_id`, envelope prepends the exchange | Ask at 2pm, answer at 6pm, it picks up where it left off |
