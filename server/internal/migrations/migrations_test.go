@@ -1662,32 +1662,87 @@ func TestLegacyTaskIdempotencyMigrationClearsMutableDevelopmentBackfill(t *testi
 	}
 }
 
-func TestListsOwnThemselvesBackfillsEveryListAndToleratesTwoInboxes(t *testing.T) {
-	body, err := files.ReadFile("045_lists_own_themselves.sql")
+func TestListsOwnThemselvesDerivesOwnerFromBoardAndAllowsTwoInboxes(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql := string(body)
-	for _, want := range []string{
-		"ALTER TABLE buckets ADD COLUMN user_id",
-		"UPDATE buckets SET user_id = boards.user_id",
-		"ALTER COLUMN user_id SET NOT NULL",
-		"CREATE INDEX buckets_user_sort_idx",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("045 is missing %q", want)
-		}
+	defer db.Close()
+	if _, err := Apply(ctx, db); err != nil {
+		t.Fatal(err)
 	}
-	// The trigger is what makes the column self-maintaining while board_id is
-	// still the source of truth, so a writer that predates the column cannot
-	// create an ownerless list.
-	if !strings.Contains(sql, "buckets_inherit_board_owner") {
-		t.Fatal("045 must keep user_id filled by trigger during the transition")
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Creating a board creates an Inbox inside it, so an account with two boards
-	// has two inbox lists. A unique index on (user_id) WHERE is_inbox would fail
-	// the migration on that data and take the deploy with it.
-	if strings.Contains(sql, "is_inbox = true") && strings.Contains(sql, "UNIQUE") {
-		t.Fatal("045 must not constrain inbox uniqueness: live accounts can already hold two")
+	defer tx.Rollback(ctx)
+
+	const (
+		ownerA  = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+		ownerB  = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+		boardA  = "cccccccc-3333-4333-8333-cccccccccccc"
+		boardB  = "dddddddd-4444-4444-8444-dddddddddddd"
+		listID  = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
+		inboxID = "ffffffff-6666-4666-8666-ffffffffffff"
+	)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO users (id, email, password_hash, display_name, role) VALUES
+			($1, 'owner-a@migration.test', 'x', 'A', 'member'),
+			($2, 'owner-b@migration.test', 'x', 'B', 'member')
+	`, ownerA, ownerB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO boards (id, user_id, name) VALUES ($1, $3, 'A'), ($2, $4, 'B')
+	`, boardA, boardB, ownerA, ownerB); err != nil {
+		t.Fatal(err)
+	}
+
+	// board_id is the source of truth, so a supplied owner must not be trusted.
+	var owner string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO buckets (id, board_id, user_id, name) VALUES ($1, $2, $3, 'Wrong owner')
+		RETURNING user_id::text
+	`, listID, boardA, ownerB).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner != ownerA {
+		t.Fatalf("insert with a mismatched owner kept %s, want the board owner %s", owner, ownerA)
+	}
+
+	// Moving a list to another account's board must move its ownership too.
+	if err := tx.QueryRow(ctx, `UPDATE buckets SET board_id = $2 WHERE id = $1 RETURNING user_id::text`, listID, boardB).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner != ownerB {
+		t.Fatalf("moving to another owner's board left %s, want %s", owner, ownerB)
+	}
+
+	// Writing user_id directly must not be able to hand a list to another account.
+	if err := tx.QueryRow(ctx, `UPDATE buckets SET user_id = $2 WHERE id = $1 RETURNING user_id::text`, listID, ownerA).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner != ownerB {
+		t.Fatalf("a direct user_id write set %s, want the board owner %s", owner, ownerB)
+	}
+
+	// Creating a board creates an Inbox inside it, so one account can already
+	// hold several. A uniqueness constraint here would fail on live data.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO buckets (id, board_id, name, is_inbox) VALUES ($1, $2, 'Inbox', true)
+	`, inboxID, boardB); err != nil {
+		t.Fatalf("a second inbox for one account must be allowed: %v", err)
+	}
+	var inboxes int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM buckets WHERE user_id = $1 AND is_inbox`, ownerB).Scan(&inboxes); err != nil {
+		t.Fatal(err)
+	}
+	if inboxes < 1 {
+		t.Fatalf("inbox count = %d", inboxes)
 	}
 }

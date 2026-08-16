@@ -15,17 +15,19 @@
 -- data decision that belongs with the step that removes boards.
 ALTER TABLE buckets ADD COLUMN user_id uuid REFERENCES users(id) ON DELETE CASCADE;
 
+-- Always derive, never trust what was supplied. board_id is the source of
+-- truth until it goes, so an insert naming the wrong owner, a list moved to
+-- another owner's board, or a direct write to user_id must all end up with the
+-- board's owner rather than leaving a list owned by the wrong account.
 CREATE FUNCTION buckets_inherit_board_owner() RETURNS trigger AS $$
 BEGIN
-	IF NEW.user_id IS NULL THEN
-		SELECT boards.user_id INTO NEW.user_id FROM boards WHERE boards.id = NEW.board_id;
-	END IF;
+	SELECT boards.user_id INTO NEW.user_id FROM boards WHERE boards.id = NEW.board_id;
 	RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER buckets_inherit_board_owner_trigger
-BEFORE INSERT OR UPDATE OF board_id ON buckets
+BEFORE INSERT OR UPDATE OF board_id, user_id ON buckets
 FOR EACH ROW EXECUTE FUNCTION buckets_inherit_board_owner();
 
 UPDATE buckets SET user_id = boards.user_id
