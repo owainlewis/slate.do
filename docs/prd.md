@@ -28,7 +28,7 @@ The card is the core unit of intent. Lists give cards useful context without for
 2. The card is refined with enough prompt and context to act on.
 3. The card can stay in Inbox or move to a list that gives it meaning.
 4. A human owns the card directly, or assigns it to an agent.
-5. Work moves through New, Ready, In Progress, Review, and Done.
+5. Work moves through Todo, Ready, In Progress, Review, and Done.
 6. The agent can comment or return an output on the card.
 7. Complex intent can be split into one level of child cards.
 
@@ -111,7 +111,7 @@ Review separates outputs waiting for judgment from cards manually placed in Revi
 
 ## Workflow status
 
-- `new`, labelled New
+- `new`, labelled Todo
 - `queued`, labelled Ready
 - `working`, labelled In Progress
 - `needs_review`, labelled Review

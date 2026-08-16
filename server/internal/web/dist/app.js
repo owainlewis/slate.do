@@ -207,7 +207,7 @@ const DEFAULT_MAX_BOARDS = 5;
 const DEFAULT_MAX_LISTS_PER_BOARD = 9;
 const DEFAULT_MAX_AGENTS = 5;
 const FLOW_STATES = [
-  { value: "new", label: "New" },
+  { value: "new", label: "Todo" },
   { value: "queued", label: "Ready" },
   { value: "working", label: "In Progress" },
   { value: "needs_review", label: "Review" },
@@ -2090,7 +2090,7 @@ function statusOptionsHTML(selected) {
 }
 
 function statusLabel(status) {
-  return FLOW_STATES.find(item => item.value === status)?.label || "New";
+  return FLOW_STATES.find(item => item.value === status)?.label || "Todo";
 }
 
 function statusErrorHTML(error) {
@@ -2447,7 +2447,7 @@ function agentWorkPageHTML(agent) {
     return `<section class="agents-state agent-detail-state"><h2>Work couldn’t be loaded.</h2><button class="secondary" id="retry-agent-detail" type="button">Try again</button></section>`;
   }
   const groups = [
-    ["New", "new"],
+    ["Todo", "new"],
     ["Ready", "queued"],
     ["In Progress", "working"],
     ["Review", "needs_review"],

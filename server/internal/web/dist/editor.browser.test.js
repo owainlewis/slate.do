@@ -545,7 +545,7 @@ test("a failed inbox load reports itself without leaving a blank surface", async
 test("the board is grouped by status and dragging changes status", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
-  for (const status of ["New", "Ready", "In Progress", "Review", "Done"]) {
+  for (const status of ["Todo", "Ready", "In Progress", "Review", "Done"]) {
     await page.locator(".workspace-flow-column").getByText(status, { exact: true }).waitFor();
   }
   assert.equal(await page.locator(".workspace-flow.grouped-by-status").count(), 1);

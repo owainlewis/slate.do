@@ -498,6 +498,14 @@ Six items. Adding a seventh means deleting one.
 
 A runner status indicator is pinned in the sidebar footer. A green dot and "Runner running" answers "is my execution layer alive" from every screen without a dashboard.
 
+### Columns are not configurable
+
+The five columns map to the statuses that drive dispatch, so they are fixed. Assigning an agent moves a task to Ready, a runner claiming it moves it to In Progress, and an agent posting an output moves it to Review. If a person could invent columns, Slate would need a per-board mapping saying which column means "an agent may start" and which means "hand this back", which is exactly the second config surface this design avoids.
+
+Renaming the labels without letting people add columns is a setting that changes nothing, so that is not offered either.
+
+This holds only while dispatch is driven by status. If execution ever moved to an explicit action, status would stop being load-bearing and configurable columns would become cheap. Status-driven dispatch is what makes the unattended promise work, so that is not a trade worth making.
+
 ### Deleted
 
 Week, Table, Today, and Board-grouped-by-list all go. Six views over one dataset is a task manager's surface area and it is what makes the product read as a Trello variant. Flow, grouped by status, becomes the only board.
