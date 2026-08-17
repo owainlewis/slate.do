@@ -362,6 +362,54 @@ test("the board groups statuses into four columns and Ready sits in Todo", () =>
   assert.doesNotMatch(html, /data-flow-status="queued"/);
 });
 
+test("the table shows one row per task with the fields the board hides", () => {
+  vm.runInContext(`
+    location = { pathname: "/app/tasks", search: "?view=table" };
+    state.agents = [{ id: "agent-research", displayName: "Research agent" }];
+    state.me = { id: "owner", displayName: "Owain" };
+  `, app);
+
+  const html = app.workspaceTableHTML([
+    { id: "task-one", title: "Publish the video", status: "working", priority: "p0", scheduledDate: "2026-08-20", listName: "YouTube", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
+    { id: "task-two", title: "Unplanned idea", status: "new", priority: "", scheduledDate: "", listName: "Inbox", assigneeAgentId: "" },
+  ]);
+
+  for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned"]) {
+    assert.match(html, new RegExp(`<th scope="col">${heading}</th>`));
+  }
+  assert.equal(html.match(/<tr data-task=/g).length, 2);
+  assert.match(html, /Publish the video/);
+  assert.match(html, /Research agent/);
+  assert.match(html, /YouTube/);
+  assert.match(html, /2026-08-20/);
+  // A row opens the same detail the board cards open.
+  assert.match(html, /data-open-task="task-one"/);
+  // Empty fields say so rather than rendering a blank cell.
+  assert.match(html, /Unplanned/);
+  assert.match(html, />None</);
+
+  vm.runInContext(`location = { pathname: "/app/tasks", search: "" };`, app);
+});
+
+test("the layout switch marks the current view and keeps board as the default", () => {
+  vm.runInContext(`location = { pathname: "/app/tasks", search: "" };`, app);
+  assert.equal(app.workspaceLayout(), "board");
+  const board = app.workspaceLayoutSwitchHTML();
+  assert.match(board, /data-workspace-layout="board" aria-pressed="true"/);
+  assert.match(board, /data-workspace-layout="table" aria-pressed="false"/);
+  // The icons are the ones the old switcher used.
+  assert.match(board, /<rect x="4" y="4.5"/, "board keeps the kanban icon");
+
+  vm.runInContext(`location = { pathname: "/app/tasks", search: "?view=table&q=video" };`, app);
+  assert.equal(app.workspaceLayout(), "table");
+  assert.match(app.workspaceLayoutSwitchHTML(), /data-workspace-layout="table" aria-pressed="true"/);
+
+  // Anything else is the board, so a stale link cannot land on a missing view.
+  vm.runInContext(`location = { pathname: "/app/tasks", search: "?view=week" };`, app);
+  assert.equal(app.workspaceLayout(), "board");
+  vm.runInContext(`location = { pathname: "/app/tasks", search: "" };`, app);
+});
+
 test("the board filter keeps search, agent and priority, and applies without a button", () => {
   app.location = { search: "?q=spec&priority=p1" };
   vm.runInContext(`state.workspaceScope = "all"; state.me = { id: "owner", displayName: "Owain" }; state.agents = [];`, app);
