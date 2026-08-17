@@ -2809,7 +2809,12 @@ function bindWorkspace() {
       const query = new URLSearchParams(location.search);
       if (layout === "table") query.set("view", "table");
       else query.delete("view");
-      navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
+      // Redraw rather than navigate. Navigating reloads the workspace from the
+      // first page, which would throw away anything reached with Load more,
+      // and there is nothing to fetch: both layouts draw the tasks already
+      // held. Back still works, and pays for its own reload.
+      history.pushState({}, "", `${location.pathname}${query.size ? `?${query}` : ""}`);
+      render();
     });
   });
   document.querySelector("#clear-workspace-filters")?.addEventListener("click", () => {

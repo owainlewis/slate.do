@@ -34,7 +34,7 @@ function workspaceFixture() {
   const agents = [
     { id: "agent-research", displayName: "Research agent", purpose: "Research assigned work", credential: {}, workCounts: { ready: 1 } },
   ];
-  return { lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], created: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, inboxMessages: [], failNextInbox: false, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
+  return { lists, tasks, subtasks, agents, entries: {}, entryAttempts: {}, failNextEntryResponse: false, delayNextEntry: false, releaseEntry: null, deletedAgents: [], commitNextAgentDeleteThenFail: false, reorderedLists: [], dynamicAgentCounts: false, taskQueries: [], paginateWorkspaceTasks: false, created: [], createdLists: [], patches: [], requests: [], inboxIdempotency: new Map(), inboxRequestKeys: [], commitNextInboxThenFail: false, subtaskIdempotency: new Map(), subtaskRequestKeys: [], commitNextSubtaskThenFail: false, hideSubtasksFromAgentOverview: false, failNextAgentDetail: false, unauthorizeNextAgentDetail: false, delayNextAgentDetail: false, releaseAgentDetail: null, failNextLists: false, failNextListCreate: false, failNextListRename: false, failNextAgentWork: false, delayNextAgentWork: false, agentWorkRefreshCompleted: false, releaseAgentWork: null, failNextSubtask: false, delayNextSubtask: false, releaseSubtask: null, inboxMessages: [], failNextInbox: false, failNextStatus: false, delayNextStatus: false, releaseStatus: null, failNextTaskPatch: false, delayNextTaskPatch: false, releaseTaskPatch: null, failNextDelete: false, unauthorizeNextDelete: false, delayNextDelete: false, releaseDelete: null, failNextWorkspaceTasks: false, delayNextWorkspaceTasks: false, delayedWorkspaceTasksCompleted: false, releaseWorkspaceTasks: null, delayNextList: false, releaseList: null };
 }
 
 // The list view puts its name in an editable field rather than a heading.
@@ -235,6 +235,12 @@ async function startWorkspace(t, viewport = { width: 1440, height: 960 }) {
       } else if (state.failNextWorkspaceTasks) {
         state.failNextWorkspaceTasks = false;
         return json(response, { error: "Could not refresh tasks" }, 500);
+      }
+      if (state.paginateWorkspaceTasks) {
+        const cursor = url.searchParams.get("cursor") || "";
+        const start = cursor ? tasks.findIndex(item => item.id === cursor) + 1 : 0;
+        const page = tasks.slice(start, start + 1);
+        return json(response, { tasks: page, nextCursor: start + 1 < tasks.length ? page[page.length - 1]?.id || "" : "" });
       }
       return json(response, { tasks });
     }
@@ -544,6 +550,30 @@ test("the table lists every task and keeps filters when switching layout", async
   // The layout is in the URL, so a reload lands back on the table.
   await page.goto(`${origin}/app/tasks?view=table`);
   await page.getByRole("table").waitFor();
+  assert.deepEqual(pageErrors, []);
+});
+
+test("switching layout keeps tasks reached with Load more and fetches nothing", async t => {
+  const { page, state, pageErrors } = await startWorkspace(t);
+  state.paginateWorkspaceTasks = true;
+
+  await page.reload();
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll("[data-task]").length === 1);
+  await page.getByRole("button", { name: "Load more tasks", exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll("[data-task]").length === 2);
+
+  const fetchesBeforeSwitch = state.taskQueries.length;
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+  await page.getByRole("table").waitFor();
+
+  // The second page survives the switch, and nothing was refetched to draw it.
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr").length === 2);
+  assert.equal(state.taskQueries.length, fetchesBeforeSwitch, "switching layout must not refetch");
+
+  // Back returns to the board, and may reload, so only the layout is asserted.
+  await page.goBack();
+  await page.locator(".workspace-flow").waitFor();
   assert.deepEqual(pageErrors, []);
 });
 
