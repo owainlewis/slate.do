@@ -1887,7 +1887,7 @@ function clearResolvedAgentTaskRefreshError() {
 }
 
 function globalNewTaskButtonHTML() {
-  return `<button class="primary sidebar-new-task" id="global-new-task" type="button" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New task"}</span></button>`;
+  return `<button class="sidebar-new-task" id="global-new-task" type="button" ${newTaskCaptureBlocked() ? "disabled" : ""}>${icon("plus")}<span>${state.newTaskCapturePending ? "Creating…" : "New task"}</span></button>`;
 }
 
 function newTaskCaptureBlocked() {
