@@ -1046,7 +1046,7 @@ test("account-wide lists are immediately available for agent assignment", () => 
   `, app);
 });
 
-test("task list options disambiguate duplicate list names", () => {
+test("duplicate list names are numbered, never labelled with an id", () => {
   vm.runInContext(`
     state.workspaceLists = [
       { id: "list-one", name: "YouTube" },
@@ -1055,9 +1055,31 @@ test("task list options disambiguate duplicate list names", () => {
     ];
   `, app);
 
-  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[0]", app)), "YouTube (list-one)");
-  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[1]", app)), "YouTube (list-two)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[0]", app)), "YouTube (1)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[1]", app)), "YouTube (2)");
   assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[2]", app)), "LinkedIn");
+
+  // A demoted Inbox keeps its name, so it collides with the account Inbox.
+  vm.runInContext(`
+    state.workspaceLists = [
+      { id: "list-inbox", name: "Inbox", isInbox: true },
+      { id: "list-old-inbox", name: "Inbox", isInbox: false },
+    ];
+  `, app);
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[0]", app)), "Inbox (1)");
+  assert.equal(app.workspaceListLabel(vm.runInContext("state.workspaceLists[1]", app)), "Inbox (2)");
+
+  // No label ever shows an id.
+  vm.runInContext(`
+    state.workspaceLists = [
+      { id: "9f6d8a1e-1c2b-4d3e-8f90-abcdefabcdef", name: "YouTube" },
+      { id: "5f6d8a1e-1c2b-4d3e-8f90-abcdefabcdef", name: "YouTube" },
+    ];
+  `, app);
+  for (const index of [0, 1]) {
+    const label = app.workspaceListLabel(vm.runInContext(`state.workspaceLists[${index}]`, app));
+    assert.doesNotMatch(label, /[0-9a-f]{8}-/, `label ${label} leaked a list id`);
+  }
 
   vm.runInContext(`state.workspaceLists = [];`, app);
 });
