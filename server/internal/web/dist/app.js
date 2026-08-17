@@ -1,3 +1,16 @@
+// The board renders the same tasks two ways. The choice lives in the URL so a
+// reload keeps it and a link can carry it.
+function workspaceLayout() {
+  return new URLSearchParams(globalThis.location?.search || "").get("view") === "table" ? "table" : "board";
+}
+
+function workspaceLayoutSwitchHTML() {
+  const layout = workspaceLayout();
+  const button = (value, label, name) =>
+    `<button type="button" data-workspace-layout="${value}" aria-pressed="${layout === value}" class="${layout === value ? "on" : ""}" title="${label}">${icon(name)}<span>${label}</span></button>`;
+  return `<div class="view-switch" role="group" aria-label="Task layout">${button("board", "Board", "kanban")}${button("table", "Table", "rows")}</div>`;
+}
+
 function workspaceFilterHTML() {
   const query = new URLSearchParams(globalThis.location?.search || "");
   const agentOptions = state.agents.map(agent => `<option value="${escapeAttr(agent.id)}" ${query.get("assigneeAgentId") === agent.id ? "selected" : ""}>${escapeHTML(agent.displayName)}</option>`).join("");
@@ -1505,9 +1518,11 @@ function appHTML() {
       </div>
     </header>
     ${state.selectedTask ? "" : statusErrorHTML(state.error || state.taskMutationError?.message)}
-    <div class="workspace-viewbar">${workspaceFilterHTML()}</div>
+    <div class="workspace-viewbar">${workspaceFilterHTML()}${workspaceLayoutSwitchHTML()}</div>
     <div class="workspace-content" id="workspace-task-panel">
-      ${state.workspaceLoading ? `<div class="workspace-empty">Loading tasks…</div>` : workspaceFlowHTML(tasks)}
+      ${state.workspaceLoading
+        ? `<div class="workspace-empty">Loading tasks…</div>`
+        : workspaceLayout() === "table" ? workspaceTableHTML(tasks) : workspaceFlowHTML(tasks)}
     </div>
     ${state.workspaceNextCursor ? `<button class="secondary workspace-load-more" id="workspace-load-more" ${state.workspaceLoading ? "disabled" : ""}>${state.workspaceLoading ? "Loading…" : "Load more tasks"}</button>` : ""}`;
   return `
@@ -1549,6 +1564,25 @@ function workspaceFlowHTML(tasks) {
     const items = tasks.filter(task => group.statuses.includes(task.status));
     return `<section class="workspace-flow-column" data-flow-status="${escapeAttr(group.value)}"><header><h2>${escapeHTML(group.label)}</h2><span>${items.length}</span></header><div>${items.length ? items.map(card).join("") : `<p>Drag tasks here</p>`}</div></section>`;
   }).join("")}</section>`;
+}
+
+function workspaceTableHTML(tasks) {
+  if (!tasks.length) return `<div class="workspace-empty">No tasks match these filters.</div>`;
+  const cell = task => `
+    <tr data-task="${escapeAttr(task.id)}">
+      <td class="workspace-table-title"><button type="button" data-open-task="${escapeAttr(task.id)}" aria-label="Open task: ${escapeAttr(task.title)}">${escapeHTML(task.title)}${task.parentTaskId ? `<small>Child of ${escapeHTML(task.parentTaskTitle || "parent task")}</small>` : ""}</button></td>
+      <td><span class="state-badge state-${escapeAttr(task.status)}">${escapeHTML(statusLabel(task.status))}</span></td>
+      <td>${escapeHTML(workspaceTaskOwner(task))}</td>
+      <td>${escapeHTML(task.listName || "Inbox")}</td>
+      <td>${task.priority ? taskPriorityBadgeHTML(task) : `<span class="workspace-table-none">None</span>`}</td>
+      <td>${task.scheduledDate ? escapeHTML(task.scheduledDate) : `<span class="workspace-table-none">Unplanned</span>`}</td>
+    </tr>`;
+  return `<div class="workspace-table-wrap">
+    <table class="workspace-table">
+      <thead><tr><th scope="col">Task</th><th scope="col">Status</th><th scope="col">Agent</th><th scope="col">List</th><th scope="col">Priority</th><th scope="col">Planned</th></tr></thead>
+      <tbody>${tasks.map(cell).join("")}</tbody>
+    </table>
+  </div>`;
 }
 
 function taskDetailBackLabel() {
@@ -2767,8 +2801,21 @@ function bindWorkspace() {
       });
     }
   }
+  document.querySelectorAll("[data-workspace-layout]").forEach(element => {
+    element.addEventListener("click", () => {
+      const layout = element.dataset.workspaceLayout;
+      if (layout === workspaceLayout()) return;
+      // Switching layout keeps the filters: it is the same tasks, drawn twice.
+      const query = new URLSearchParams(location.search);
+      if (layout === "table") query.set("view", "table");
+      else query.delete("view");
+      navigate(`${location.pathname}${query.size ? `?${query}` : ""}`);
+    });
+  });
   document.querySelector("#clear-workspace-filters")?.addEventListener("click", () => {
-    navigate(location.pathname);
+    // Clearing filters must not throw away the layout.
+    const layout = workspaceLayout();
+    navigate(`${location.pathname}${layout === "table" ? "?view=table" : ""}`);
   });
   document.querySelector("#workspace-load-more")?.addEventListener("click", loadMoreWorkspaceTasks);
   document.querySelectorAll("[data-bucket-name]").forEach(element => {

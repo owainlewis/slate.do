@@ -503,6 +503,50 @@ test("a failed inbox load reports itself without leaving a blank surface", async
   assert.deepEqual(pageErrors, []);
 });
 
+test("the table lists every task and keeps filters when switching layout", async t => {
+  const { page, origin, pageErrors } = await startWorkspace(t);
+
+  await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+  await page.waitForFunction(() => new URLSearchParams(location.search).get("view") === "table");
+
+  const table = page.getByRole("table");
+  await table.waitFor();
+  for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned"]) {
+    assert.equal(await table.getByRole("columnheader", { name: heading, exact: true }).count(), 1);
+  }
+  // Every task shows, whatever its status, rather than only one column's worth.
+  await table.getByRole("button", { name: /Publish task-first agents video/ }).waitFor();
+  await table.getByRole("button", { name: /Write the doc my boss asked for/ }).waitFor();
+
+  // A filter narrows the table and survives switching back to the board.
+  await page.getByLabel("Search tasks", { exact: true }).fill("boss");
+  await page.waitForFunction(() => new URLSearchParams(location.search).get("q") === "boss");
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr").length === 1);
+  await page.getByRole("button", { name: "Board", exact: true }).click();
+  await page.waitForFunction(() => !new URLSearchParams(location.search).get("view"));
+  await page.locator(".workspace-flow").waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("q"), "boss");
+  assert.equal(await page.locator(".workspace-table").count(), 0);
+
+  // Clearing filters keeps the layout rather than snapping back to the board.
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+  await page.waitForFunction(() => new URLSearchParams(location.search).get("view") === "table");
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  await page.waitForFunction(() => !new URLSearchParams(location.search).get("q"));
+  assert.equal(new URL(page.url()).searchParams.get("view"), "table");
+
+  // A row opens the same task detail the board opens.
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
+
+  // The layout is in the URL, so a reload lands back on the table.
+  await page.goto(`${origin}/app/tasks?view=table`);
+  await page.getByRole("table").waitFor();
+  assert.deepEqual(pageErrors, []);
+});
+
 test("the board is grouped by status and dragging changes status", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 

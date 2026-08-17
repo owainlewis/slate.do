@@ -85,6 +85,64 @@
 .workspace-content { flex: 1; min-height: 0; overflow: auto; padding: 22px 30px 50px; }
 .workspace-load-more { align-self: center; margin: 0 24px 20px; }
 .workspace-empty { padding: 60px 20px; color: var(--faint); text-align: center; font-size: 13px; }
+
+/* ---------- Task layout switch and table ---------- */
+.view-switch { display: flex; gap: 2px; flex: 0 0 auto; }
+.view-switch button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--soft);
+  padding: 6px 9px;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.view-switch .icon { width: 14px; height: 14px; color: var(--faint); }
+.view-switch button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.view-switch button.on { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+.view-switch button:hover .icon { color: inherit; }
+.view-switch button.on .icon { color: var(--accent); }
+
+/* Wide content scrolls inside its own lane so the page never scrolls sideways. */
+.workspace-table-wrap { overflow-x: auto; padding: 11px 30px 30px; }
+.workspace-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
+.workspace-table th {
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  font-weight: 600;
+  padding: 0 12px 9px;
+  border-bottom: 1px solid var(--line-2);
+}
+.workspace-table td { padding: 9px 12px; border-bottom: 1px solid var(--line-2); color: var(--soft); vertical-align: middle; }
+.workspace-table tbody tr:hover td { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.workspace-table-title { width: 45%; }
+.workspace-table-title button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+.workspace-table-title button:hover { color: var(--accent); }
+.workspace-table-title small { color: var(--faint); font-weight: 500; }
+.workspace-table-none { color: var(--faint); }
+.workspace-table .state-badge, .workspace-table .priority-badge { margin: 0; }
+
+@media (max-width: 720px) {
+  .workspace-table-wrap { padding-left: 18px; padding-right: 18px; }
+}
 /* Columns stretch to the tallest, so a short column does not stop halfway up
    the board while its neighbour runs long. */
 .workspace-flow.grouped-by-status { width: 100%; min-width: 960px; display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); align-items: stretch; gap: 11px; }
