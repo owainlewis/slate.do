@@ -1577,10 +1577,15 @@ function workspaceListDialogHTML() {
   </div>`;
 }
 
+// Two lists can share a name, which became common when lists from separate
+// boards were pooled into one account. Number them so they can be told apart
+// and renamed. Never show the id: it is unreadable and says nothing about
+// which list this is.
 function workspaceListLabel(list) {
   const name = list.isInbox ? "Inbox" : list.name;
-  const duplicates = state.workspaceLists.filter(item => (item.isInbox ? "Inbox" : item.name) === name);
-  return duplicates.length < 2 ? name : `${name} (${list.id})`;
+  const sameName = state.workspaceLists.filter(item => (item.isInbox ? "Inbox" : item.name) === name);
+  if (sameName.length < 2) return name;
+  return `${name} (${sameName.findIndex(item => item.id === list.id) + 1})`;
 }
 
 function workspaceDetailHTML(task) {
