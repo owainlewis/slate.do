@@ -3184,6 +3184,27 @@ test("New task captures directly into Inbox and opens a normal task editor", asy
   assert.equal(state.patches.at(-1).priority, "p0");
 });
 
+test("New task on a selected list is created in that list and appears there", async t => {
+  const { page, state, origin, pageErrors } = await startWorkspace(t);
+
+  await navigateApp(page, "/app/lists/list-youtube");
+  await listTitle(page, "YouTube").waitFor();
+  const inboxCount = state.lists.find(list => list.id === "list-inbox").openCount;
+
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+
+  assert.equal(state.created.length, 1);
+  assert.equal(state.created[0].bucketId, "list-youtube");
+  assert.equal(state.lists.find(list => list.id === "list-youtube").openCount, 3);
+  assert.equal(state.lists.find(list => list.id === "list-inbox").openCount, inboxCount);
+
+  await page.getByRole("button", { name: "Back to board", exact: true }).click();
+  await page.locator(`[data-open-task="${state.created[0].id}"]`).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/app/lists/list-youtube");
+  assert.deepEqual(pageErrors, []);
+});
+
 test("a lost Inbox capture response retries without creating a duplicate card", async t => {
   const { page, state, pageErrors } = await startWorkspace(t);
 
