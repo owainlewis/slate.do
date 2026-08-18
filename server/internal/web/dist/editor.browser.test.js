@@ -3188,7 +3188,7 @@ test("New task on a selected list is created in that list and appears there", as
   const { page, state, origin, pageErrors } = await startWorkspace(t);
 
   await navigateApp(page, "/app/lists/list-youtube");
-  await page.getByRole("heading", { name: "YouTube", exact: true, level: 1 }).waitFor();
+  await listTitle(page, "YouTube").waitFor();
   const inboxCount = state.lists.find(list => list.id === "list-inbox").openCount;
 
   await page.getByRole("button", { name: "New task", exact: true }).click();
