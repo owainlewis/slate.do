@@ -1897,7 +1897,8 @@ function newTaskCaptureBlocked() {
 function newTaskRecoveryNoticeHTML() {
   const recovery = state.newTaskRecovery;
   if (!recovery) return "";
-  return `<section class="status-notice new-task-recovery" role="alert" aria-label="Created task recovery"><span><strong>Task created.</strong> Slate saved ${escapeHTML(recovery.task.title)} in Inbox, but could not open it: ${escapeHTML(recovery.message)}</span><button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open task"}</button></section>`;
+  const listName = recovery.task.listName || recovery.listName || "Inbox";
+  return `<section class="status-notice new-task-recovery" role="alert" aria-label="Created task recovery"><span><strong>Task created.</strong> Slate saved ${escapeHTML(recovery.task.title)} in ${escapeHTML(listName)}, but could not open it: ${escapeHTML(recovery.message)}</span><button id="retry-created-task" type="button" ${recovery.pending ? "disabled" : ""}>${recovery.pending ? "Opening…" : "Open task"}</button></section>`;
 }
 
 function bindNewTaskRecoveryActions() {
@@ -4225,8 +4226,24 @@ function bindWorkspaceListDialog() {
   });
 }
 
-async function captureInboxTask(button) {
+function newTaskCaptureTarget() {
+  const route = parseRoute(globalThis.location?.pathname || "");
+  const list = route.name === "workspace" && route.scope === "list"
+    ? state.workspaceLists.find(item => item.id === route.listId)
+    : null;
+  if (list) {
+    return {
+      endpoint: `/api/v1/lists/${encodeURIComponent(list.id)}/tasks`,
+      workspacePath: listPath(list.id),
+      listName: workspaceListLabel(list),
+    };
+  }
+  return { endpoint: "/api/v1/tasks", workspacePath: TASKS_PATH, listName: "Inbox" };
+}
+
+async function captureNewTask() {
   if (newTaskCaptureBlocked()) return false;
+  const target = newTaskCaptureTarget();
   state.newTaskCapturePending = true;
   state.error = "";
   render();
@@ -4234,7 +4251,7 @@ async function captureInboxTask(button) {
   state.newTaskCaptureAttemptKey ||= newClientRequestKey();
   try {
     task = await api.post(
-      "/api/v1/tasks",
+      target.endpoint,
       { title: "Untitled task", description: "", kind: "action" },
       { headers: { "Idempotency-Key": state.newTaskCaptureAttemptKey } },
     );
@@ -4245,9 +4262,7 @@ async function captureInboxTask(button) {
     return false;
   }
 
-  state.newTaskCapturePending = false;
   state.newTaskCaptureAttemptKey = "";
-  state.newTaskRecovery = { task, message: "The board could not be refreshed.", pending: false };
   try {
     if (parseRoute(location.pathname).name === "workspace") {
       if (!await reload()) throw new Error(state.error || "The board could not be refreshed.");
@@ -4260,13 +4275,15 @@ async function captureInboxTask(button) {
     let detailError;
     const opened = await openTaskDetail(task.id, null, { onError: err => { detailError = err; } });
     if (!opened) throw detailError || new Error("The task could not be loaded.");
+    state.newTaskCapturePending = false;
     state.newTaskRecovery = null;
     render();
     focusOpenedTaskDetail();
     return true;
   } catch (err) {
+    state.newTaskCapturePending = false;
     state.error = "";
-    state.newTaskRecovery = { task, message: err.message || "The task could not be opened.", pending: false };
+    state.newTaskRecovery = { task, workspacePath: target.workspacePath, listName: target.listName, message: err.message || "The task could not be opened.", pending: false };
     render();
     return false;
   }
@@ -4278,9 +4295,9 @@ async function recoverCreatedTask() {
   state.newTaskRecovery = { ...recovery, pending: true };
   render();
   try {
-    // A captured task lands in Inbox but is opened from the board, since the
-    // inbox surface holds agent messages rather than tasks.
-    await navigate(TASKS_PATH);
+    // The Inbox is an agent-message surface, so Inbox tasks open on the board.
+    // Tasks captured from a list return to that list instead.
+    await navigate(recovery.workspacePath || TASKS_PATH);
     if (parseRoute(location.pathname).name !== "workspace" || state.view !== "app") {
       throw new Error(state.error || "The board could not be loaded.");
     }
@@ -4300,7 +4317,7 @@ async function recoverCreatedTask() {
 }
 
 function bindGlobalNewTask() {
-  document.querySelector("#global-new-task")?.addEventListener("click", event => captureInboxTask(event.currentTarget));
+  document.querySelector("#global-new-task")?.addEventListener("click", () => captureNewTask());
 }
 
 function bindThemeControls() {

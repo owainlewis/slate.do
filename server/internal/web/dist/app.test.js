@@ -239,9 +239,9 @@ test("workspace reloads refresh list metadata and tasks under one route guard", 
 
 test("New list is bound centrally for shared-shell and settings routes", () => {
   const shellStart = source.indexOf("function bindAppShell()");
-  const shellEnd = source.indexOf("async function captureInboxTask", shellStart);
+  const shellEnd = source.indexOf("async function captureNewTask", shellStart);
   const controlStart = source.indexOf("function bindWorkspaceListControl()");
-  const controlEnd = source.indexOf("async function captureInboxTask", controlStart);
+  const controlEnd = source.indexOf("async function captureNewTask", controlStart);
   const settingsStart = source.indexOf("async function bindSettings()");
   const settingsEnd = source.indexOf("function bindAgents()", settingsStart);
   const workspaceStart = source.indexOf("function bindWorkspace()");
@@ -1290,6 +1290,73 @@ test("the board header stays focused on the workspace, with capture in the sideb
 test("New task remains available from agent and account settings pages", () => {
   assert.match(app.agentsHTML(), /id="global-new-task"[^>]*>.*New task/s);
   assert.match(app.settingsHTML(), /id="global-new-task"[^>]*>.*New task/s);
+});
+
+test("New task targets the selected list and otherwise falls back to Inbox", () => {
+  app.location = { pathname: "/app/lists/list-one", search: "" };
+  vm.runInContext(`state.workspaceLists = [
+    { id: "list-one", name: "Product", isInbox: false },
+    { id: "list-inbox", name: "Inbox", isInbox: true },
+  ];`, app);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(app.newTaskCaptureTarget())), {
+    endpoint: "/api/v1/lists/list-one/tasks",
+    workspacePath: "/app/lists/list-one",
+    listName: "Product",
+  });
+
+  app.location.pathname = "/app/tasks";
+  assert.deepEqual(JSON.parse(JSON.stringify(app.newTaskCaptureTarget())), {
+    endpoint: "/api/v1/tasks",
+    workspacePath: "/app/tasks",
+    listName: "Inbox",
+  });
+
+  vm.runInContext(`state.workspaceLists = [];`, app);
+  delete app.location;
+});
+
+test("successful task creation does not render a recovery notice while opening", async () => {
+  app.location = { pathname: "/app/lists/list-one", search: "" };
+  vm.runInContext(`
+    savedCapturePost = api.post;
+    savedCaptureReload = reload;
+    savedCaptureOpenTaskDetail = openTaskDetail;
+    savedCaptureRender = render;
+    savedCaptureKey = newClientRequestKey;
+    state.workspaceLists = [{ id: "list-one", name: "Product", isInbox: false }];
+    state.newTaskRecovery = null;
+    state.newTaskCapturePending = false;
+    captureRenderStates = [];
+    newClientRequestKey = () => "request-one";
+    api.post = async () => ({ id: "task-one", title: "Untitled task", bucketId: "list-one", listName: "Product" });
+    reload = async () => {
+      captureRenderStates.push({
+        pending: state.newTaskCapturePending,
+        hasRecovery: Boolean(state.newTaskRecovery),
+      });
+      return true;
+    };
+    openTaskDetail = async () => true;
+    render = () => {};
+  `, app);
+
+  assert.equal(await app.captureNewTask(), true);
+  assert.deepEqual(JSON.parse(vm.runInContext(`JSON.stringify(captureRenderStates)`, app)), [
+    { pending: true, hasRecovery: false },
+  ]);
+  assert.equal(vm.runInContext("state.newTaskCapturePending", app), false);
+  assert.equal(vm.runInContext("state.newTaskRecovery", app), null);
+
+  vm.runInContext(`
+    api.post = savedCapturePost;
+    reload = savedCaptureReload;
+    openTaskDetail = savedCaptureOpenTaskDetail;
+    render = savedCaptureRender;
+    newClientRequestKey = savedCaptureKey;
+    state.workspaceLists = [];
+  `, app);
+  delete app.location;
 });
 
 test("successful agent creation keeps the one-time token when metadata refresh fails", async () => {
