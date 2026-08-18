@@ -38,7 +38,7 @@ func TestStaticHandlerServesAppShellForFrontendRoutesOnly(t *testing.T) {
 	handler := StaticHandler(fs.FS(content))
 
 	shell := []string{
-		"/", "/login", "/app", "/app/tasks", "/app/inbox", "/app/runs", "/app/runners", "/app/today", "/app/week", "/app/review", "/app/lists/list_123", "/app/settings",
+		"/", "/login", "/app", "/app/tasks", "/app/tasks/task_123", "/app/inbox", "/app/runs", "/app/runners", "/app/today", "/app/week", "/app/review", "/app/lists/list_123", "/app/settings",
 		"/app/settings/profile", "/app/settings/board", "/app/settings/agents", "/app/settings/api",
 		"/app/settings/unknown", "/app/settings/unknown/nested",
 		"/app/boards/board_123", "/app/boards/board_123/settings", "/app/agents", "/app/agents/new", "/app/agents/agent_123",
@@ -55,7 +55,7 @@ func TestStaticHandlerServesAppShellForFrontendRoutesOnly(t *testing.T) {
 		}
 	}
 
-	missing := []string{"/nonsense", "/app/boards", "/app/agents/agent_123/extra", "/app/agents/agent_123/work/extra", "/app/agents/new/extra", "/app/boards/board_123/extra", "/app/boards/board_123/settings/extra", "/appleseed", "/app/missing.js"}
+	missing := []string{"/nonsense", "/app/boards", "/app/tasks/task_123/extra", "/app/agents/agent_123/extra", "/app/agents/agent_123/work/extra", "/app/agents/new/extra", "/app/boards/board_123/extra", "/app/boards/board_123/settings/extra", "/appleseed", "/app/missing.js"}
 	for _, target := range missing {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))

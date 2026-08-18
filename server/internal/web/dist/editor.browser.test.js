@@ -470,7 +470,7 @@ test("the inbox is agent messages, not another board", async t => {
 
   await page.locator('[data-inbox-task="task-parent"]').click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
-  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/tasks?task=task-parent");
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/tasks/task-parent");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish task-first agents video");
   assert.deepEqual(pageErrors, []);
 });
@@ -592,15 +592,13 @@ test("the board is grouped by status and dragging changes status", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
-test("a board card exposes a copyable task ID and a reloadable permalink", async t => {
+test("a board card uses a reloadable task permalink", async t => {
   const { page, origin, pageErrors } = await startWorkspace(t);
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
   await page.goto(`${origin}/app/tasks`);
 
   await page.locator('[data-open-task="task-parent"]').click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
-  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/tasks?task=task-parent");
-  assert.equal(await page.locator("#workspace-task-id").textContent(), "task-parent");
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/tasks/task-parent");
 
   await page.goBack();
   await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
@@ -608,25 +606,8 @@ test("a board card exposes a copyable task ID and a reloadable permalink", async
   await page.goForward();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
 
-  await page.getByRole("button", { name: "Copy task ID", exact: true }).focus();
-  await page.keyboard.press("Enter");
-  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "task-parent");
-  await page.getByText("Task ID copied.", { exact: true }).waitFor();
-
-  await page.getByRole("button", { name: "Copy link", exact: true }).click();
-  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `${origin}/app/tasks?task=task-parent`);
   await page.reload();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
-  assert.equal(await page.locator("#workspace-task-id").textContent(), "task-parent");
-  await page.evaluate(() => {
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("denied"); } } });
-    document.execCommand = () => {
-      window.__legacyCopiedTaskLink = window.getSelection().toString();
-      return true;
-    };
-  });
-  await page.getByRole("button", { name: "Copy link", exact: true }).click();
-  assert.equal(await page.evaluate(() => window.__legacyCopiedTaskLink), `${origin}/app/tasks?task=task-parent`);
 
   await page.getByRole("button", { name: "Back to board", exact: true }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
@@ -640,6 +621,7 @@ test("closing a directly loaded task permalink replaces it with its list", async
 
   await page.goto(`${origin}/app/tasks?task=task-parent`);
   await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/app/tasks/task-parent");
   await page.getByRole("button", { name: "Back to board", exact: true }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
 
@@ -647,16 +629,14 @@ test("closing a directly loaded task permalink replaces it with its list", async
   assert.deepEqual(pageErrors, []);
 });
 
-test("task references remain usable on a mobile card detail", async t => {
+test("task detail remains usable on a mobile card detail", async t => {
   const { page, pageErrors } = await startWorkspace(t, { width: 390, height: 844 });
 
   await page.locator('[data-open-task="task-parent"]').click();
-  const taskID = page.locator("#workspace-task-id");
-  await taskID.waitFor();
-  const bounds = await taskID.boundingBox();
+  const title = page.getByLabel("Title", { exact: true });
+  await title.waitFor();
+  const bounds = await title.boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390, JSON.stringify(bounds));
-  assert.equal(await page.getByRole("button", { name: "Copy task ID", exact: true }).isVisible(), true);
-  assert.equal(await page.getByRole("button", { name: "Copy link", exact: true }).isVisible(), true);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -667,7 +647,7 @@ test("an unknown task permalink replaces an existing detail with a board error",
   await page.locator('[data-open-task="task-parent"]').click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   await page.evaluate(() => {
-    history.pushState({}, "", "/app/tasks?task=missing-task");
+    history.pushState({}, "", "/app/tasks/missing-task");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
   await page.getByRole("alert").getByText("not found", { exact: true }).waitFor();

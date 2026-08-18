@@ -1816,23 +1816,20 @@ test("detail presents one contextual accessible card editor with clear actions",
   assert.match(html, />Delete task</);
   assert.match(html, /Home list/);
   assert.match(html, /<label for="workspace-detail-owner">Agent<\/label>/);
-  assert.match(html, />Task ID</);
   assert.match(html, /<label class="detail-block-heading" for="workspace-detail-description">Description<\/label>/);
-  assert.match(html, /id="workspace-task-id"[^>]*>working</);
-  assert.match(html, /id="workspace-task-link"[^>]*>\/app\/tasks\?task=working</);
-  assert.match(html, /id="copy-task-id"[^>]*aria-label="Copy task ID"/);
-  assert.match(html, /id="copy-task-link"[^>]*>[^<]*(?:<svg[\s\S]*?<\/svg>)?<span>Copy link<\/span>/);
+  assert.doesNotMatch(html, /Task ID|workspace-task-id|copy-task-id|copy-task-link/);
   assert.doesNotMatch(html, /Act with an agent|Choose an agent as owner|workspace-agent-action/);
   assert.doesNotMatch(html, /aria-label="Close card"/);
 });
 
-test("task permalinks preserve the current surface and filters", () => {
+test("task permalinks use a task path on the workspace", () => {
   const location = { pathname: "/app/tasks", search: "?status=queued&priority=p0", origin: "https://slate.do" };
 
   assert.equal(app.taskIDFromLocation(location), "");
-  assert.equal(app.taskLocationPath("task-one", location), "/app/tasks?status=queued&priority=p0&task=task-one");
-  assert.equal(app.taskPermalink("task-one", location), "https://slate.do/app/tasks?status=queued&priority=p0&task=task-one");
-  assert.equal(app.taskLocationPath("", { ...location, search: "?status=queued&task=task-one" }), "/app/tasks?status=queued");
+  assert.equal(app.taskLocationPath("task-one", location), "/app/tasks/task-one");
+  assert.equal(app.taskPermalink("task-one", location), "https://slate.do/app/tasks/task-one");
+  assert.equal(app.taskLocationPath("", { ...location, pathname: "/app/tasks/task-one", search: "" }), "/app/tasks");
+  assert.equal(app.taskIDFromLocation({ ...location, pathname: "/app/tasks/task-one", search: "" }), "task-one");
   assert.equal(app.routeSupportsTaskDetail(app.parseRoute(location.pathname)), true);
   assert.equal(app.routeSupportsTaskDetail(app.parseRoute("/app/settings/profile")), false);
 });

@@ -65,6 +65,9 @@ func isAppRoute(clean string) bool {
 		"/app/today", "/app/week", "/app/review":
 		return true
 	}
+	if taskPath, ok := strings.CutPrefix(clean, "/app/tasks/"); ok && taskPath != "" {
+		return !strings.Contains(taskPath, "/")
+	}
 	if listPath, ok := strings.CutPrefix(clean, "/app/lists/"); ok && listPath != "" {
 		return !strings.Contains(listPath, "/")
 	}
