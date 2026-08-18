@@ -295,6 +295,14 @@ function parseRoute(pathname) {
   if (path === RESET_PASSWORD_PATH) return { name: "reset-password" };
   if (path === APP_PATH) return { name: "workspace", scope: "all", redirect: true };
   if (path === TASKS_PATH) return { name: "workspace", scope: "all" };
+  const task = /^\/app\/tasks\/([^/]+)$/.exec(path);
+  if (task) {
+    try {
+      return { name: "workspace", scope: "all", taskId: decodeURIComponent(task[1]) };
+    } catch {
+      return { name: "not-found" };
+    }
+  }
   if (path === INBOX_PATH) return { name: "inbox" };
   // Retired views. Old links land on the board rather than a 404.
   if ([TODAY_PATH, REVIEW_PATH, WEEK_PATH].includes(path)) return { name: "workspace", scope: "all", redirect: true };
@@ -392,7 +400,8 @@ function currentLocationPath() {
 }
 
 function taskIDFromLocation(locationRef = globalThis.location) {
-  return new URLSearchParams(locationRef?.search || "").get("task")?.trim() || "";
+  const route = parseRoute(locationRef?.pathname || "");
+  return route.taskId || new URLSearchParams(locationRef?.search || "").get("task")?.trim() || "";
 }
 
 function routeSupportsTaskDetail(route) {
@@ -401,6 +410,10 @@ function routeSupportsTaskDetail(route) {
 }
 
 function taskLocationPath(taskID, locationRef = globalThis.location) {
+  const route = parseRoute(locationRef?.pathname || "");
+  if (route.name === "workspace") {
+    return taskID ? `${TASKS_PATH}/${encodeURIComponent(taskID)}` : TASKS_PATH;
+  }
   const query = new URLSearchParams(locationRef?.search || "");
   if (taskID) query.set("task", taskID);
   else query.delete("task");
@@ -605,6 +618,10 @@ async function applyRoute() {
     return showRoute("login");
   }
   if (!state.me) return navigate(loginPathFor(currentLocationPath()), { replace: true });
+  // Legacy query links still work, but canonicalize them before rendering.
+  if (route.name === "workspace" && routeTaskID && !route.taskId) {
+    return navigate(taskLocationPath(routeTaskID), { replace: true });
+  }
   if (route.redirect) {
     return route.name === "workspace"
       ? navigate(TASKS_PATH, { replace: true })
@@ -1227,7 +1244,7 @@ function render() {
     document.querySelectorAll("[data-inbox-task]").forEach(element => element.addEventListener("click", event => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
-      navigate(`${TASKS_PATH}?task=${encodeURIComponent(element.dataset.inboxTask)}`);
+      navigate(`${TASKS_PATH}/${encodeURIComponent(element.dataset.inboxTask)}`);
     }));
     return;
   }
@@ -1650,17 +1667,6 @@ function workspaceDetailHTML(task) {
               <div class="field"><label for="workspace-detail-date">Planned</label><input id="workspace-detail-date" name="scheduledDate" type="date" value="${escapeAttr(task.scheduledDate || "")}"></div>
             </div>
           </section>`;
-  const reference = `
-          <section class="task-reference-field" aria-label="Task reference">
-            <span class="task-reference-label">Task ID</span>
-            <div class="task-reference-value">
-              <code id="workspace-task-id" tabindex="0">${escapeHTML(task.id)}</code>
-              <button class="secondary icon-label" id="copy-task-id" type="button" aria-label="Copy task ID">${icon("copy")}<span>Copy ID</span></button>
-              <button class="secondary icon-label task-link-copy" id="copy-task-link" type="button">${icon("copy")}<span>Copy link</span></button>
-            </div>
-            <code class="sr-only" id="workspace-task-link" aria-hidden="true">${escapeHTML(taskPermalink(task.id))}</code>
-            <p class="task-reference-status" id="task-reference-status" role="status" aria-live="polite"></p>
-          </section>`;
   return `<section class="workspace-detail" aria-label="Task detail" data-detail-surface tabindex="-1">
       <header class="detail-head"><button class="plain-btn workspace-detail-close" type="button" data-close-detail>${icon("chevronLeft")}<span>${taskDetailBackLabel()}</span></button><div class="detail-context"><span>${escapeHTML(list?.name || "Inbox")}</span><span>/</span><b>${task.parentTaskId ? "Subtask" : "Task"}</b></div></header>
       <form id="workspace-detail-form" class="workspace-detail-form">
@@ -1684,7 +1690,6 @@ function workspaceDetailHTML(task) {
               <p class="error card-entry-error" role="alert">${escapeHTML(state.cardEntryError)}</p>
             </div>
           </section>
-          ${reference}
           <p class="error detail-error" role="alert">${escapeHTML(state.error)}</p>
          </div>
         </div>
@@ -1762,7 +1767,7 @@ function inboxMessageHTML(message) {
     <div class="inbox-message-body">
       <header><strong>${escapeHTML(message.authorName)}</strong>${message.kind === "output" ? `<span class="inbox-message-kind">Output</span>` : ""}<time>${new Date(message.createdAt).toLocaleString()}</time></header>
       <p>${escapeHTML(message.body).replace(/\n/g, "<br>")}</p>
-      <a class="plain-btn inbox-message-task" href="${TASKS_PATH}?task=${encodeURIComponent(message.taskId)}" data-inbox-task="${escapeAttr(message.taskId)}">${icon("kanban")}<span>${escapeHTML(message.taskTitle)}</span></a>
+      <a class="plain-btn inbox-message-task" href="${TASKS_PATH}/${encodeURIComponent(message.taskId)}" data-inbox-task="${escapeAttr(message.taskId)}">${icon("kanban")}<span>${escapeHTML(message.taskTitle)}</span></a>
     </div>
   </li>`;
 }
@@ -3562,22 +3567,6 @@ function bindWorkspaceDetail(options = {}) {
   };
   document.querySelectorAll("[data-close-detail]").forEach(element => element.onclick = close);
   document.onkeydown = event => { if (event.key === "Escape") close(); };
-  const copyTaskReference = async (value, source, button, successMessage, failureMessage) => {
-    const copied = await copyAgentCredential(value, source);
-    const status = document.querySelector("#task-reference-status");
-    if (copied) {
-      button.innerHTML = `${icon("check")}<span>Copied</span>`;
-      if (status) status.textContent = successMessage;
-      return;
-    }
-    if (status) status.textContent = failureMessage;
-  };
-  document.querySelector("#copy-task-id")?.addEventListener("click", event => {
-    copyTaskReference(state.selectedTask.id, document.querySelector("#workspace-task-id"), event.currentTarget, "Task ID copied.", "Copy failed. The task ID is selected so you can copy it manually.");
-  });
-  document.querySelector("#copy-task-link")?.addEventListener("click", event => {
-    copyTaskReference(taskPermalink(state.selectedTask.id), document.querySelector("#workspace-task-link"), event.currentTarget, "Task link copied.", "Copy failed. Copy the link from your browser address bar.");
-  });
   document.querySelectorAll("[data-entry-kind]").forEach(element => element.addEventListener("click", () => {
     preserveTaskDraft();
     state.cardEntryDraft = document.querySelector("#card-entry-body")?.value || state.cardEntryDraft;
