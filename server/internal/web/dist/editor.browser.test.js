@@ -3618,6 +3618,7 @@ test("agents can be deleted directly from settings", async t => {
 
 function isAppShell(pathname) {
   if (["/", "/index.html", "/login", "/app", "/app/tasks", "/app/inbox", "/app/settings", "/early-access", "/reset-password"].includes(pathname)) return true;
+  if (/^\/app\/tasks\/[^/]+$/.test(pathname)) return true;
   if (pathname.startsWith("/app/boards/") || pathname.startsWith("/app/lists/") || pathname.startsWith("/app/settings/") || pathname.startsWith("/app/agents/")) return true;
   return pathname === "/app/agents";
 }
