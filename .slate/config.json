@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "local": {
+      "agentId": "86d79d17-b0a8-4656-babe-8f67c621ac0f",
+      "tokenEnv": "SLATE_LOCAL_AGENT_TOKEN",
+      "command": ["claude", "-p", "--permission-mode", "acceptEdits"]
+    }
+  }
+}
