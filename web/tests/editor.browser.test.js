@@ -71,6 +71,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       if (url.searchParams.get("parentTaskId")) tasks = state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId"));
       if (url.searchParams.get("bucketId")) tasks = tasks.filter(item => item.bucketId === url.searchParams.get("bucketId"));
       if (url.searchParams.get("topLevel") === "true") tasks = tasks.filter(item => !item.parentTaskId);
+      if (url.searchParams.get("status")) tasks = tasks.filter(item => item.status === url.searchParams.get("status"));
       if (url.searchParams.get("q")) tasks = tasks.filter(item => `${item.title} ${item.description}`.toLowerCase().includes(url.searchParams.get("q").toLowerCase()));
       if (url.searchParams.get("priority")) tasks = tasks.filter(item => item.priority === url.searchParams.get("priority"));
       if (url.searchParams.get("assigneeAgentId")) tasks = tasks.filter(item => url.searchParams.get("assigneeAgentId") === "unassigned" ? !item.assigneeAgentId : item.assigneeAgentId === url.searchParams.get("assigneeAgentId"));
@@ -158,6 +159,7 @@ test("React workspace renders the full task board accessibly", async t => {
   const { page, pageErrors } = await startApp(t);
   for (const heading of ["Todo", "In Progress", "Review", "Done"]) await page.getByText(heading, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
+  assert.deepEqual(await page.getByLabel("Filter by agent").locator("option").allTextContents(), ["Any agent", "Research agent"]);
   const results = await new AxeBuilder({ page }).analyze();
   assert.deepEqual(results.violations, []);
   assert.deepEqual(pageErrors, []);
@@ -205,6 +207,10 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   const { page, state } = await startApp(t);
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(await page.getByRole("menuitem", { name: "Delete task" }).count(), 0);
+  await page.getByRole("button", { name: "Task actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete task" }).waitFor();
+  await page.getByRole("menu").press("Escape");
   await page.getByLabel("Title", { exact: true }).fill("Publish the React migration story");
   await page.getByRole("button", { name: "Add subtask" }).click();
   await page.getByLabel("New subtask title").fill("Discard this draft");
@@ -242,6 +248,10 @@ test("lists, inbox, agents, and settings are complete React routes", async t => 
   await page.getByRole("button", { name: "Create list" }).click();
   await page.getByLabel("List name").waitFor();
   assert.equal(await page.getByLabel("List name").inputValue(), "Launch");
+  assert.equal(await page.getByRole("menuitem", { name: "Delete list" }).count(), 0);
+  await page.getByRole("button", { name: "List actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete list" }).waitFor();
+  await page.getByRole("menu").press("Escape");
   await page.goto(`${origin}/app/inbox`);
   await page.getByText("I have drafted the spec. Can you take a look?").waitFor();
   await page.goto(`${origin}/app/agents`);
@@ -253,6 +263,32 @@ test("lists, inbox, agents, and settings are complete React routes", async t => 
   await page.getByPlaceholder("For example, laptop CLI").fill("Laptop CLI");
   await page.getByRole("button", { name: "Create token" }).click();
   await page.getByText("slate_personal_one_time_secret").waitFor();
+});
+
+test("hosted control plane exposes search, runs, runners, and human review", async t => {
+  const { page, state, origin } = await startApp(t);
+  await page.getByRole("button", { name: /Search/ }).click();
+  await page.getByLabel("Search task titles").fill("Publish task");
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).waitFor();
+  await page.getByLabel("Search task titles").press("Escape");
+
+  await page.goto(`${origin}/app/runs`);
+  await page.getByRole("heading", { name: "Runs", exact: true }).waitFor();
+  await page.getByText("Publish task-first agents video", { exact: true }).waitFor();
+  await page.getByText("Running", { exact: true }).first().waitFor();
+
+  await page.goto(`${origin}/app/runners`);
+  await page.getByText("Hosted coordination, local execution", { exact: true }).waitFor();
+  await page.getByText("Research agent", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Connect agent" }).evaluate(element => getComputedStyle(element).color), "rgb(255, 255, 255)");
+
+  state.tasks[0].status = "needs_review";
+  state.tasks[0].reviewReason = "Check the final draft before it ships.";
+  await page.goto(`${origin}/app/inbox`);
+  await page.getByRole("heading", { name: "Needs your review" }).waitFor();
+  await page.getByText("Check the final draft before it ships.").waitFor();
+  await page.getByRole("button", { name: /Publish task-first agents video/ }).first().click();
+  await page.getByRole("button", { name: "Approve" }).waitFor();
 });
 
 test("mobile navigation and task detail fit a narrow viewport", async t => {

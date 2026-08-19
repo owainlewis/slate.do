@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Check } from "lucide-react"
+import { Check, Flag, Minus } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import type { Task } from "@/lib/types"
@@ -17,7 +17,7 @@ export function priorityLabel(value?: string) {
 }
 
 export function PriorityMark({ priority = "" }: { priority?: Priority }) {
-  return <span className={cn("priority-mark", priority && `priority-mark-${priority}`)} aria-hidden="true"><i /><i /><i /></span>
+  return <span className={cn("priority-mark", priority && `priority-mark-${priority}`)} aria-hidden="true">{priority ? <Flag /> : <Minus />}</span>
 }
 
 export function PriorityBadge({ priority, compact = false }: { priority?: Priority; compact?: boolean }) {
