@@ -185,6 +185,21 @@ test("workspace pagination loads and retains subsequent task pages", async t => 
   assert.equal(state.requests.some(request => request.includes("cursor=page-two")), true);
 });
 
+test("new tasks persist a priority and start in the selected column", async t => {
+  const { page, state } = await startApp(t);
+  await page.getByRole("button", { name: "Add task to In Progress" }).click();
+  const dialog = page.getByRole("dialog", { name: "New task" });
+  await dialog.getByRole("textbox", { name: "Task title" }).fill("Prepare the launch review");
+  await dialog.getByRole("textbox", { name: "Task brief" }).fill("Bring the decision and supporting evidence together.");
+  await dialog.getByRole("button", { name: "Priority" }).click();
+  await page.getByRole("menuitem", { name: "Normal" }).click();
+  await dialog.getByRole("button", { name: "Create task" }).click();
+  await page.getByRole("dialog", { name: "Task detail" }).waitFor();
+  const created = state.tasks.find(task => task.title === "Prepare the launch review");
+  assert.equal(created.priority, "p2");
+  assert.equal(created.status, "working");
+});
+
 test("task detail edits, subtasks, and conversation entries use the existing API", async t => {
   const { page, state } = await startApp(t);
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();

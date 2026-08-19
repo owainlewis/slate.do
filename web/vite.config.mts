@@ -5,14 +5,26 @@ import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+const apiTarget = process.env.SLATE_API_URL || "http://127.0.0.1:8080"
+const apiOrigin = new URL(apiTarget).origin
 
 export default defineConfig({
   root: here,
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": path.resolve(here, "src") } },
   server: {
-    port: 5173,
-    proxy: { "/api": "http://127.0.0.1:8080" },
+    host: "127.0.0.1",
+    port: 8081,
+    strictPort: true,
+    proxy: {
+      "/api": {
+        target: apiTarget,
+        changeOrigin: true,
+        configure(proxy) {
+          proxy.on("proxyReq", request => request.setHeader("Origin", apiOrigin))
+        },
+      },
+    },
   },
   build: {
     outDir: path.resolve(here, "../server/internal/web/dist"),

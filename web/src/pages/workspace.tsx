@@ -1,11 +1,12 @@
 import * as React from "react"
 import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query"
-import { Columns3 as BoardIcon, CalendarDays, List as ListIcon, MoreHorizontal, Rows3, Search, Trash2 } from "lucide-react"
+import { Columns3 as BoardIcon, CalendarDays, List as ListIcon, MoreHorizontal, Plus, Rows3, Search, Trash2 } from "lucide-react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input, Select } from "@/components/ui/field"
 import { TaskDetail } from "@/components/task-detail"
+import { PriorityBadge, priorityLabel } from "@/components/priority"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
 import type { Task, TaskStatus } from "@/lib/types"
@@ -18,17 +19,16 @@ const columns: Array<{ value: TaskStatus; label: string; statuses: TaskStatus[];
 ]
 
 const statusName = (value: string) => columns.find(column => column.statuses.includes(value as TaskStatus))?.label || value
-const priorityName = (value?: string) => value ? value.toUpperCase() : ""
 type TasksPage = { tasks: Task[]; nextCursor?: string }
 
 function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () => void; onMove: (status: TaskStatus) => void; onDelete: () => void }) {
   return (
     <div className="task-card group" draggable data-task={task.id} onDragStart={event => { event.dataTransfer.setData("text/task-id", task.id); event.dataTransfer.effectAllowed = "move" }} onDoubleClick={onOpen}>
       <button type="button" className="w-full text-left" data-open-task={task.id} aria-label={`Open task: ${task.title}`} onClick={onOpen}>
+        <span className="task-card-kicker"><PriorityBadge priority={task.priority} compact /><span>{task.listName || task.bucketName || "Inbox"}</span></span>
         <span className="task-title">{task.title}</span>
         {task.description && <span className="task-description">{task.description}</span>}
         <span className="task-meta">
-          {task.priority && <span className={`pill priority-${task.priority}`}>{priorityName(task.priority)}</span>}
           {task.scheduledDate && <span className="pill"><CalendarDays className="size-3" />{new Date(`${task.scheduledDate}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
           {task.assigneeAgentName && <span className="task-agent"><span className="mini-avatar">{initials(task.assigneeAgentName)}</span>{task.assigneeAgentName}</span>}
         </span>
@@ -128,7 +128,7 @@ export function WorkspacePage() {
         <div className="filters" role="search">
           <div className="search-box"><Search /><Input aria-label="Search tasks" placeholder="Search tasks…" value={searchParams.get("q") || ""} onChange={event => updateFilter("q", event.target.value)} /></div>
           <Select className="compact-select" aria-label="Filter by agent" value={searchParams.get("assigneeAgentId") || ""} onChange={event => updateFilter("assigneeAgentId", event.target.value)}><option value="">Any agent</option><option value="unassigned">You</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select>
-          <Select className="compact-select" aria-label="Filter by priority" value={searchParams.get("priority") || ""} onChange={event => updateFilter("priority", event.target.value)}><option value="">Any priority</option><option value="p0">P0</option><option value="p1">P1</option><option value="p2">P2</option></Select>
+          <Select className="compact-select" aria-label="Filter by priority" value={searchParams.get("priority") || ""} onChange={event => updateFilter("priority", event.target.value)}><option value="">Any priority</option><option value="p0">Urgent</option><option value="p1">High</option><option value="p2">Normal</option></Select>
           {["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"].some(key => searchParams.has(key)) && <Button variant="ghost" size="sm" onClick={() => { const view = searchParams.get("view"); setSearchParams(view ? { view } : {}, { replace: true }) }}>Clear</Button>}
         </div>
         <div className="view-toggle" role="group" aria-label="Task layout"><button type="button" className={layout === "board" ? "active" : ""} aria-pressed={layout === "board"} onClick={() => switchLayout("board")}><BoardIcon className="size-3.5" /><span>Board</span></button><button type="button" className={layout === "table" ? "active" : ""} aria-pressed={layout === "table"} onClick={() => switchLayout("table")}><Rows3 className="size-3.5" /><span>Table</span></button></div>
@@ -139,12 +139,12 @@ export function WorkspacePage() {
           <div className="board workspace-flow">
             {columns.map(column => {
               const items = tasks.filter(task => column.statuses.includes(task.status))
-              return <section key={column.value} className={`board-column workspace-flow-column ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => { event.preventDefault(); setDragOver(""); const id = event.dataTransfer.getData("text/task-id"); if (id) moveTask.mutate({ id, status: column.value }) }}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} />{column.label}</div><span className="column-count">{items.length}</span></header><div className="task-stack">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={() => { if (window.confirm(`Delete “${task.title}”?`)) deleteTask.mutate(task.id) }} />)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
+              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => { event.preventDefault(); setDragOver(""); const id = event.dataTransfer.getData("text/task-id"); if (id) moveTask.mutate({ id, status: column.value }) }}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus /></button></header><div className="task-stack">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={() => { if (window.confirm(`Delete “${task.title}”?`)) deleteTask.mutate(task.id) }} />)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
             })}
           </div>
         </div>
       ) : (
-        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id} data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={() => openTask(task.id)}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "You"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <span className={`pill priority-${task.priority}`}>{priorityName(task.priority)}</span> : "—"}</td><td>{task.scheduledDate || "—"}</td></tr>)}</tbody></table></div>
+        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id} data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={() => openTask(task.id)}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "You"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td></tr>)}</tbody></table></div>
       )}
       {tasksQuery.hasNextPage && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
       {taskId && <TaskDetail taskId={taskId} onClose={() => navigate(`/app/tasks${searchParams.toString() ? `?${searchParams}` : ""}`)} onOpenTask={openTask} />}

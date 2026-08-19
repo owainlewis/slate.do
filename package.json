@@ -4,6 +4,7 @@
   "private": true,
   "description": "A card-first control plane for human and agent work.",
   "scripts": {
+    "dev": "sh scripts/dev.sh",
     "dev:web": "vite --config web/vite.config.mts",
     "build:web": "vite build --config web/vite.config.mts",
     "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
