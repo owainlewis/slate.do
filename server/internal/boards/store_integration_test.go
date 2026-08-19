@@ -1286,7 +1286,7 @@ func TestTaskCreationAcceptsTheImmediatePredeploymentFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestData, err := taskCreateRequestData(input.Title, input.Description, "", KindAction, "", "", input.AssigneeAgentID, "")
+	requestData, err := taskCreateRequestData(input.Title, input.Description, "", KindAction, input.AssigneeAgentID, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -534,6 +534,7 @@ type preparedTaskCreate struct {
 	idempotencyKey         string
 	fingerprint            string
 	requestData            string
+	legacyRequestData      string
 	compatibleFingerprints []string
 	strictRequestData      bool
 	overrideLimit          bool
@@ -577,11 +578,16 @@ func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (prepare
 		idempotencyKey: idempotencyKey, strictRequestData: status != "" || priority != "", overrideLimit: input.OverrideLimit,
 	}
 	if idempotencyKey != "" {
-		requestData, err := taskCreateRequestData(title, input.Description, scheduledDate, kind, status, priority, input.AssigneeAgentID, parentTaskID)
+		requestData, err := taskCreateRequestDataV2(title, input.Description, scheduledDate, kind, status, priority, input.AssigneeAgentID, parentTaskID)
 		if err != nil {
 			return preparedTaskCreate{}, err
 		}
 		prepared.requestData = requestData
+		legacyRequestData, err := taskCreateRequestData(title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID)
+		if err != nil {
+			return preparedTaskCreate{}, err
+		}
+		prepared.legacyRequestData = legacyRequestData
 		fingerprint, err := taskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, input.OverrideLimit)
 		if err != nil {
 			return preparedTaskCreate{}, err
@@ -659,23 +665,28 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 			return Task{}, err
 		}
 		var existingFingerprint, existingTaskID, existingParentTaskID string
-		var requestDataMatches, legacyRequestUnknown bool
+		var requestDataMatches, legacyRequestDataMatches, legacyRequestUnknown bool
 		err := tx.QueryRow(ctx, `
 			SELECT key.request_hash, COALESCE(key.task_id::text, ''),
 				COALESCE(key.request_data_hash = encode(sha256(convert_to(($3::jsonb)::text, 'UTF8')), 'hex'), false),
+				COALESCE(key.request_data_hash = encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex'), false),
 				key.request_data_hash IS NULL,
 				COALESCE(task.parent_task_id::text, '')
 			FROM task_idempotency_keys key
 			LEFT JOIN tasks task ON task.id = key.task_id
 			WHERE key.user_id = $1 AND key.key = $2
-		`, userID, input.idempotencyKey, input.requestData).Scan(
+		`, userID, input.idempotencyKey, input.requestData, input.legacyRequestData).Scan(
 			&existingFingerprint,
 			&existingTaskID,
 			&requestDataMatches,
+			&legacyRequestDataMatches,
 			&legacyRequestUnknown,
 			&existingParentTaskID,
 		)
 		if err == nil {
+			if !input.strictRequestData {
+				requestDataMatches = requestDataMatches || legacyRequestDataMatches
+			}
 			fingerprintMatches := existingFingerprint == input.fingerprint
 			for _, compatibleFingerprint := range input.compatibleFingerprints {
 				if existingFingerprint == compatibleFingerprint {
@@ -858,7 +869,19 @@ func parentAwareTaskCreateFingerprint(bucketID string, title string, description
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func taskCreateRequestData(title string, description string, scheduledDate string, kind string, status string, priority string, assigneeAgentID string, parentTaskID string) (string, error) {
+func taskCreateRequestData(title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string) (string, error) {
+	raw, err := json.Marshal(struct {
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		ScheduledDate   string `json:"scheduledDate"`
+		Kind            string `json:"kind"`
+		AssigneeAgentID string `json:"assigneeAgentId"`
+		ParentTaskID    string `json:"parentTaskId"`
+	}{title, description, scheduledDate, kind, strings.TrimSpace(assigneeAgentID), parentTaskID})
+	return string(raw), err
+}
+
+func taskCreateRequestDataV2(title string, description string, scheduledDate string, kind string, status string, priority string, assigneeAgentID string, parentTaskID string) (string, error) {
 	raw, err := json.Marshal(struct {
 		Title           string `json:"title"`
 		Description     string `json:"description"`
