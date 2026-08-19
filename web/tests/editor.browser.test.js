@@ -1,0 +1,229 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const http = require("node:http");
+const path = require("node:path");
+const test = require("node:test");
+const AxeBuilder = require("@axe-core/playwright").default;
+const { chromium } = require("playwright");
+
+const dist = path.resolve(__dirname, "../../server/internal/web/dist");
+
+function fixture() {
+  return {
+    user: { id: "owner", email: "owner@example.com", displayName: "Owain Lewis", theme: "dark", entitlement: { plan: "pro", limits: { lists: 45, agents: 5, apiTokens: 10 } } },
+    lists: [
+      { id: "list-inbox", name: "Inbox", goal: "Capture now", isInbox: true, openCount: 1 },
+      { id: "list-product", name: "Product", goal: "Ship focused improvements", isInbox: false, openCount: 2 },
+    ],
+    agents: [{ id: "agent-research", displayName: "Research agent", purpose: "Find and synthesize useful evidence", workCounts: { ready: 1, working: 1, review: 0, completed: 0 } }],
+    tasks: [
+      { id: "task-parent", bucketId: "list-product", bucketName: "Product", listName: "Product", title: "Publish task-first agents video", description: "Explain one control plane for people and agents.", scheduledDate: "2026-08-20", status: "working", priority: "p0", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
+      { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", assigneeAgentId: "", assigneeAgentName: "" },
+    ],
+    subtasks: [{ id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" }],
+    entries: { "task-parent": [{ id: "entry-one", kind: "comment", body: "The first research pass is ready.", authorKind: "agent", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }] },
+    inbox: [{ id: "message-one", taskId: "task-parent", taskTitle: "Publish task-first agents video", kind: "comment", body: "I have drafted the spec. Can you take a look?", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }],
+    tokens: [],
+    requests: [],
+  };
+}
+
+async function startApp(t, viewport = { width: 1440, height: 960 }) {
+  const state = fixture();
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    state.requests.push(`${request.method} ${url.pathname}${url.search}`);
+    if (url.pathname === "/api/v1/me" && request.method === "GET") return json(response, { authenticated: true, user: state.user });
+    if (url.pathname === "/api/v1/lists" && request.method === "GET") return json(response, { lists: state.lists });
+    if (url.pathname === "/api/v1/lists" && request.method === "POST") {
+      const input = await requestJSON(request);
+      const list = { id: `list-${state.lists.length}`, name: input.name, goal: "", isInbox: false, openCount: 0 };
+      state.lists.push(list);
+      return json(response, list, 201);
+    }
+    const listMatch = url.pathname.match(/^\/api\/v1\/lists\/([^/]+)$/);
+    if (listMatch && request.method === "PATCH") {
+      const list = state.lists.find(item => item.id === listMatch[1]);
+      Object.assign(list, await requestJSON(request));
+      return json(response, list);
+    }
+    if (listMatch && request.method === "DELETE") {
+      state.lists = state.lists.filter(item => item.id !== listMatch[1]);
+      state.tasks = state.tasks.filter(item => item.bucketId !== listMatch[1]);
+      return json(response, {});
+    }
+    const listTaskMatch = url.pathname.match(/^\/api\/v1\/lists\/([^/]+)\/tasks$/);
+    if ((url.pathname === "/api/v1/tasks" || listTaskMatch) && request.method === "POST") {
+      const input = await requestJSON(request);
+      const bucketId = listTaskMatch ? listTaskMatch[1] : "list-inbox";
+      const list = state.lists.find(item => item.id === bucketId);
+      const task = { id: `task-${state.tasks.length + 1}`, bucketId, bucketName: list.name, listName: list.name, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", ...input };
+      state.tasks.push(task);
+      return json(response, task, 201);
+    }
+    if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
+      let tasks = [...state.tasks, ...state.subtasks];
+      if (url.searchParams.get("parentTaskId")) tasks = state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId"));
+      if (url.searchParams.get("bucketId")) tasks = tasks.filter(item => item.bucketId === url.searchParams.get("bucketId"));
+      if (url.searchParams.get("topLevel") === "true") tasks = tasks.filter(item => !item.parentTaskId);
+      if (url.searchParams.get("q")) tasks = tasks.filter(item => `${item.title} ${item.description}`.toLowerCase().includes(url.searchParams.get("q").toLowerCase()));
+      if (url.searchParams.get("priority")) tasks = tasks.filter(item => item.priority === url.searchParams.get("priority"));
+      if (url.searchParams.get("assigneeAgentId")) tasks = tasks.filter(item => url.searchParams.get("assigneeAgentId") === "unassigned" ? !item.assigneeAgentId : item.assigneeAgentId === url.searchParams.get("assigneeAgentId"));
+      return json(response, { tasks });
+    }
+    const taskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)(?:\/status)?$/);
+    if (taskMatch && request.method === "GET") {
+      const task = [...state.tasks, ...state.subtasks].find(item => item.id === taskMatch[1]);
+      return task ? json(response, task) : json(response, { error: "not found" }, 404);
+    }
+    if (taskMatch && request.method === "PATCH") {
+      const task = [...state.tasks, ...state.subtasks].find(item => item.id === taskMatch[1]);
+      Object.assign(task, await requestJSON(request));
+      return json(response, task);
+    }
+    if (taskMatch && request.method === "DELETE") {
+      state.tasks = state.tasks.filter(item => item.id !== taskMatch[1]);
+      state.subtasks = state.subtasks.filter(item => item.id !== taskMatch[1] && item.parentTaskId !== taskMatch[1]);
+      return json(response, {});
+    }
+    const subtaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/subtasks$/);
+    if (subtaskMatch && request.method === "POST") {
+      const input = await requestJSON(request);
+      const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
+      const task = { id: `subtask-${state.subtasks.length + 1}`, parentTaskId: parent.id, parentTaskTitle: parent.title, bucketId: parent.bucketId, bucketName: parent.bucketName, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", ...input };
+      state.subtasks.push(task);
+      return json(response, task, 201);
+    }
+    const entryMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/entries$/);
+    if (entryMatch && request.method === "GET") return json(response, { entries: state.entries[entryMatch[1]] || [] });
+    if (entryMatch && request.method === "POST") {
+      const input = await requestJSON(request);
+      const entry = { id: `entry-${Object.values(state.entries).flat().length + 1}`, ...input, authorKind: "human", authorName: "Owain Lewis", createdAt: new Date().toISOString() };
+      state.entries[entryMatch[1]] = [...(state.entries[entryMatch[1]] || []), entry];
+      if (input.kind === "output") state.tasks.find(item => item.id === entryMatch[1]).status = "needs_review";
+      return json(response, { ...entry, taskStatus: input.kind === "output" ? "needs_review" : undefined }, 201);
+    }
+    if (url.pathname === "/api/v1/inbox") return json(response, { messages: state.inbox });
+    if (url.pathname === "/api/v1/agents" && request.method === "GET") return json(response, { agents: state.agents, maxAgents: 5 });
+    if (url.pathname === "/api/v1/agents" && request.method === "POST") {
+      const input = await requestJSON(request);
+      const agent = { id: `agent-${state.agents.length + 1}`, displayName: input.displayName, purpose: input.purpose, workCounts: {} };
+      state.agents.push(agent);
+      return json(response, { ...agent, token: "slate_agent_one_time_secret" }, 201);
+    }
+    const agentWorkMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/work$/);
+    if (agentWorkMatch) {
+      const items = [...state.tasks, ...state.subtasks].filter(item => item.assigneeAgentId === agentWorkMatch[1]);
+      return json(response, { items, total: items.length, page: 1, pageSize: 50, hasPrevious: false, hasNext: false });
+    }
+    const agentMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)$/);
+    if (agentMatch && request.method === "GET") {
+      const agent = state.agents.find(item => item.id === agentMatch[1]);
+      const assigned = [...state.tasks, ...state.subtasks].filter(item => item.assigneeAgentId === agent.id);
+      return json(response, { agent, work: { ready: assigned.filter(item => item.status === "queued"), working: assigned.filter(item => item.status === "working"), review: assigned.filter(item => item.status === "needs_review"), recentlyCompleted: assigned.filter(item => item.status === "done"), totals: agent.workCounts } });
+    }
+    if (agentMatch && request.method === "PATCH") { Object.assign(state.agents.find(item => item.id === agentMatch[1]), await requestJSON(request)); return json(response, state.agents.find(item => item.id === agentMatch[1])); }
+    if (agentMatch && request.method === "DELETE") { state.agents = state.agents.filter(item => item.id !== agentMatch[1]); return json(response, {}); }
+    if (url.pathname.endsWith("/credential/rotate")) return json(response, { token: "slate_agent_rotated_secret" });
+    if (url.pathname === "/api/v1/api-tokens" && request.method === "GET") return json(response, { tokens: state.tokens });
+    if (url.pathname === "/api/v1/api-tokens" && request.method === "POST") { const input = await requestJSON(request); state.tokens.push({ id: `token-${state.tokens.length + 1}`, name: input.name }); return json(response, { token: "slate_personal_one_time_secret" }, 201); }
+    if (url.pathname.startsWith("/api/v1/api-tokens/") && request.method === "DELETE") { state.tokens = state.tokens.filter(item => item.id !== url.pathname.split("/").at(-1)); return json(response, {}); }
+    if (url.pathname === "/api/v1/me" && request.method === "PATCH") { Object.assign(state.user, await requestJSON(request)); return json(response, state.user); }
+    if (url.pathname.startsWith("/api/v1/auth/")) return json(response, { message: "Done" });
+    if (url.pathname.startsWith("/assets/")) return file(response, url.pathname.slice(1), url.pathname.endsWith(".css") ? "text/css" : url.pathname.endsWith(".js") ? "text/javascript" : "font/woff2");
+    const publicFile = url.pathname.slice(1);
+    if (["favicon.svg", "landing-stones.jpg", "landing-slabs.jpg", "app-lists.jpg", "app-flow.jpg", "cli.html"].includes(publicFile)) return file(response, publicFile, publicFile.endsWith(".svg") ? "image/svg+xml" : publicFile.endsWith(".html") ? "text/html" : "image/jpeg");
+    if (request.method === "GET") return file(response, "index.html", "text/html");
+    return json(response, { error: "not found" }, 404);
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", error => pageErrors.push(error.message));
+  t.after(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  await page.goto(`${origin}/app/tasks`);
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  return { page, state, origin, pageErrors };
+}
+
+test("React workspace renders the full task board accessibly", async t => {
+  const { page, pageErrors } = await startApp(t);
+  for (const heading of ["Todo", "In Progress", "Review", "Done"]) await page.getByText(heading, { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
+  const results = await new AxeBuilder({ page }).analyze();
+  assert.deepEqual(results.violations, []);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("table layout filters tasks and survives layout changes", async t => {
+  const { page } = await startApp(t);
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+  const table = page.getByRole("table");
+  for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned"]) assert.equal(await table.getByRole("columnheader", { name: heading }).count(), 1);
+  await page.getByLabel("Search tasks").fill("boss");
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr").length === 1);
+  await page.getByRole("button", { name: "Board", exact: true }).click();
+  assert.equal(new URL(page.url()).searchParams.get("q"), "boss");
+});
+
+test("task detail edits, subtasks, and conversation entries use the existing API", async t => {
+  const { page, state } = await startApp(t);
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  await page.getByLabel("Title", { exact: true }).fill("Publish the React migration story");
+  await page.getByLabel("New subtask title").fill("Record the final walkthrough");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.locator(".subtask-row").filter({ hasText: "Record the final walkthrough" }).waitFor();
+  await page.getByLabel("Entry").fill("The interface is ready for review.");
+  await page.getByRole("button", { name: "Add comment" }).click();
+  await page.getByText("The interface is ready for review.", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
+  assert.equal(state.tasks[0].title, "Publish the React migration story");
+});
+
+test("dragging a task moves it through the workflow", async t => {
+  const { page, state } = await startApp(t);
+  const card = page.locator('[data-task="task-inbox"]');
+  await card.dragTo(page.locator('[data-status="working"]'));
+  await page.waitForFunction(() => document.querySelector('[data-status="working"] [data-task="task-inbox"]'));
+  assert.equal(state.tasks.find(task => task.id === "task-inbox").status, "working");
+});
+
+test("lists, inbox, agents, and settings are complete React routes", async t => {
+  const { page, origin } = await startApp(t);
+  await page.getByRole("button", { name: "New list" }).click();
+  await page.getByLabel("Name").fill("Launch");
+  await page.getByRole("button", { name: "Create list" }).click();
+  await page.getByLabel("List name").waitFor();
+  assert.equal(await page.getByLabel("List name").inputValue(), "Launch");
+  await page.goto(`${origin}/app/inbox`);
+  await page.getByText("I have drafted the spec. Can you take a look?").waitFor();
+  await page.goto(`${origin}/app/agents`);
+  await page.getByText("Research agent", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Account menu" }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
+  await page.getByRole("tab", { name: "API access" }).click();
+  await page.getByPlaceholder("For example, laptop CLI").fill("Laptop CLI");
+  await page.getByRole("button", { name: "Create token" }).click();
+  await page.getByText("slate_personal_one_time_secret").waitFor();
+});
+
+test("mobile navigation and task detail fit a narrow viewport", async t => {
+  const { page, pageErrors } = await startApp(t, { width: 390, height: 844 });
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  assert.equal(await page.locator("#primary-navigation").evaluate(element => element.classList.contains("open")), true);
+  await page.getByRole("button", { name: "Close navigation" }).first().click();
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  const bounds = await page.getByRole("region", { name: "Task detail" }).boundingBox();
+  assert.ok(bounds.width <= 390);
+  assert.deepEqual(pageErrors, []);
+});
+
+function json(response, body, status = 200) { response.writeHead(status, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); }
+async function requestJSON(request) { let body = ""; for await (const chunk of request) body += chunk; return JSON.parse(body || "{}"); }
+function file(response, name, type) { response.writeHead(200, { "Content-Type": type }); response.end(fs.readFileSync(path.join(dist, name))); }

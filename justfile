@@ -18,20 +18,23 @@ serve:
 test: test-unit
 
 test-unit:
+    npm run build:web
     cd server && SLATE_TEST_DATABASE_URL= go test ./...
     cd cli && go test ./...
-    node --test server/internal/web/dist/app.test.js
+    npm run test:web
     sh scripts/test-install.sh
     sh scripts/test-cloudbuild.sh
 
 test-ci:
+    npm run build:web
     sh scripts/test-server-ci.sh
     cd cli && go test ./...
-    node --test server/internal/web/dist/app.test.js
+    npm run test:web
     npm run test:browser
     sh scripts/test-install.sh
     sh scripts/test-cloudbuild.sh
 
 build:
+    npm run build:web
     cd server && go build ./cmd/slate
     cd cli && go build ./cmd/slate

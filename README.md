@@ -29,7 +29,7 @@ Because runners live on your machines, you bring your own agent runtime (Claude 
 
 ## App
 
-- Go server and static JS frontend.
+- Go server with a React, TypeScript, and shadcn/ui frontend.
 - Postgres persistence.
 - One board with status columns, an inbox, lists as a scope filter, and task detail.
 - One level of subtasks with independent owner and workflow state.
@@ -47,14 +47,21 @@ export ADMIN_EMAIL=you@example.com
 export ADMIN_PASSWORD='use-a-long-password'
 just migrate
 just seed-admin
+npm ci
+npm run build:web
 just serve
 ```
 
 Open `http://localhost:8080`.
 
+For frontend development, run `npm run dev:web` alongside the Go server. Vite
+proxies API requests to `http://localhost:8080` and updates the React UI as you
+work.
+
 ## Tests
 
-`just test-unit` runs the fast suite without external services. The required
+`just test-unit` builds and type-checks the React frontend, runs its component
+tests, and then runs the fast Go and CLI suites without external services. The required
 release gate uses PostgreSQL and Chromium:
 
 ```bash

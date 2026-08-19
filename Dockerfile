@@ -1,3 +1,13 @@
+FROM node:24-bookworm-slim AS web-build
+
+WORKDIR /src
+
+COPY package.json package-lock.json components.json ./
+RUN npm ci
+
+COPY web web
+RUN npm run build:web
+
 FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
@@ -9,6 +19,7 @@ RUN cd server && go mod download
 
 COPY server server
 COPY cli cli
+COPY --from=web-build /src/server/internal/web/dist ./server/internal/web/dist
 RUN cd server && CGO_ENABLED=0 GOOS=linux go build -o /out/slate ./cmd/slate
 RUN cd cli && CGO_ENABLED=0 GOOS=linux go build -o /out/slate-cli ./cmd/slate
 

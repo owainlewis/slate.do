@@ -6,7 +6,7 @@
 
 ## 1. Executive summary
 
-Slate is a task manager for a person and their command-line agents. The current application is one Go service with an embedded HTML, CSS, and JavaScript frontend, a JSON HTTP API, and a PostgreSQL database. The same Go repository also builds the `slate` CLI. Production runs the service, database migration jobs, and a scheduled cleanup job in Google Cloud.
+Slate is a task manager for a person and their command-line agents. The current application is one Go service with an embedded React and TypeScript frontend, a JSON HTTP API, and a PostgreSQL database. Vite produces static browser assets before the Go binary is compiled. The same Go repository also builds the `slate` CLI. Production runs the service, database migration jobs, and a scheduled cleanup job in Google Cloud.
 
 PostgreSQL is the source of truth. It stores accounts, sessions, access grants, boards, lists, tasks, agent identities and credentials, rate-limit state, idempotency records, and storage counters. Browser sessions, personal API tokens, and agent credentials all reach the same API, but they receive different authority.
 
@@ -50,7 +50,8 @@ Inside the repository, `server/cmd/slate` builds the web service and operator co
 
 | Component | Owns | Depends on | Does not own |
 | --- | --- | --- | --- |
-| Browser app (`server/internal/web/dist`) | Routes, rendering, forms, drag interactions, local view state | JSON API and static assets | Authorization, quotas, or durable data |
+| Browser source (`web`) | React routes, components, forms, drag interactions, local view state | JSON API and Vite | Authorization, quotas, or durable data |
+| Embedded browser build (`server/internal/web/dist`) | Generated static assets served by Go | Vite build output | Hand-authored application source |
 | HTTP composition (`server/internal/server`) | Route registration, auth guards, rate-limit coordination, HTTP errors, request deadlines, static fallback | Auth, boards, agents, rate limits, embedded web files | Domain persistence rules |
 | Auth (`server/internal/auth`) | Accounts, password hashing, sessions, personal API tokens, registration, password reset, agent-token resolution | PostgreSQL, entitlements, Resend | Boards, lists, tasks, or agent work transitions |
 | Entitlements (`server/internal/entitlements`) | Free and Pro resolution, limits, usage projection | Account, entitlement, and usage rows | Stripe billing state or checkout |
@@ -168,7 +169,7 @@ The repository has no OpenAPI document. Handler types, route registration, CLI b
 
 The CLI supports authentication checks plus board, list, and task commands. It sends `SLATE_API_TOKEN` as a bearer token, defaults to `https://slate.do`, uses a 30-second client timeout, and prints successful results as JSON.
 
-The browser application is static JavaScript served by the Go service. It uses the same JSON API and does not own durable application state. The embedded frontend and API are released in the same container image, so no separate frontend compatibility window exists.
+The browser application is React and TypeScript compiled by Vite into static assets served by the Go service. It uses the same JSON API and does not own durable application state. The embedded frontend and API are released in the same container image, so no separate frontend compatibility window exists.
 
 ## 7. Security and trust boundaries
 
@@ -242,7 +243,7 @@ Unverified in this document: live Google Cloud configuration, current Secret Man
 - [Schema migrations](server/internal/migrations)
 - [Shared rate limits](server/internal/ratelimit/ratelimit.go)
 - [Operational cleanup](server/internal/cleanup/cleanup.go)
-- [Embedded browser application](server/internal/web/dist/app.js)
+- [React browser application](web/src/App.tsx)
 - [CLI entry point](cli/cmd/slate/main.go)
 - [Required CI](.github/workflows/ci.yml)
 - [Production pipeline](cloudbuild.yaml)
