@@ -206,15 +206,19 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   await page.getByLabel("Title", { exact: true }).fill("Publish the React migration story");
+  await page.getByRole("button", { name: "Add subtask" }).click();
   await page.getByLabel("New subtask title").fill("Record the final walkthrough");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.locator(".subtask-row").filter({ hasText: "Record the final walkthrough" }).waitFor();
+  await page.getByRole("button", { name: "Complete Record the final walkthrough" }).click();
+  await page.getByRole("button", { name: "Reopen Record the final walkthrough" }).waitFor();
   await page.getByLabel("Entry").fill("The interface is ready for review.");
   await page.getByRole("button", { name: "Add comment" }).click();
   await page.getByText("The interface is ready for review.", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Save changes" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
   assert.equal(state.tasks[0].title, "Publish the React migration story");
+  assert.equal(state.subtasks.find(task => task.title === "Record the final walkthrough").status, "done");
 });
 
 test("dragging a task moves it through the workflow", async t => {
