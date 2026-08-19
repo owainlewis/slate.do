@@ -20,7 +20,11 @@ const statuses: Array<{ value: TaskStatus; label: string }> = [
 
 function entryBody(entry: Entry) { return entry.body || entry.content || "" }
 function shortDate(value: string) { return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }) }
-function isPastDate(value: string) { return value < new Date().toISOString().slice(0, 10) }
+function isPastDate(value: string) {
+  const today = new Date()
+  const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`
+  return value < localDate
+}
 
 export function TaskDetail({ taskId, onClose, onOpenTask }: { taskId: string; onClose: () => void; onOpenTask?: (id: string) => void }) {
   const { lists, agents } = useApp()
