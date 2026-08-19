@@ -3,8 +3,9 @@ import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from
 import { Columns3 as BoardIcon, CalendarDays, List as ListIcon, MoreHorizontal, Plus, Rows3, Search, Trash2 } from "lucide-react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input, Select } from "@/components/ui/field"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TaskDetail } from "@/components/task-detail"
 import { PriorityBadge, priorityLabel } from "@/components/priority"
 import { useApp, initials } from "@/app-context"
@@ -36,8 +37,10 @@ function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () =
       <DropdownMenu>
         <DropdownMenuTrigger asChild><button type="button" className="absolute right-1.5 top-1.5 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100 focus:opacity-100" aria-label={`Actions for ${task.title}`}><MoreHorizontal className="size-3.5" /></button></DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <DropdownMenuLabel>Move to</DropdownMenuLabel>
           {columns.map(column => <DropdownMenuItem key={column.value} onSelect={() => onMove(column.value)}>{column.label}</DropdownMenuItem>)}
-          <DropdownMenuItem className="text-destructive" onSelect={onDelete}><Trash2 className="size-4" />Delete task</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" onSelect={onDelete}><Trash2 className="size-4" />Delete task</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -57,8 +60,8 @@ export function WorkspacePage() {
   const layout = searchParams.get("view") === "table" ? "table" : "board"
 
   const taskQueryString = React.useMemo(() => {
-    const query = new URLSearchParams({ limit: "200" })
-    if (listId) { query.set("bucketId", listId); query.set("topLevel", "true") }
+    const query = new URLSearchParams({ limit: "200", topLevel: "true" })
+    if (listId) query.set("bucketId", listId)
     for (const key of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
       const value = searchParams.get(key)
       if (value) query.set(key, value)
@@ -111,7 +114,7 @@ export function WorkspacePage() {
     setSearchParams(next, { replace: true })
   }
   const switchLayout = (value: "board" | "table") => updateFilter("view", value === "table" ? "table" : "")
-  const openTask = (id: string) => navigate(`/app/tasks/${encodeURIComponent(id)}${searchParams.toString() ? `?${searchParams}` : ""}`)
+  const openTask = (id: string) => navigate(`${listId ? `/app/lists/${encodeURIComponent(listId)}` : "/app"}/tasks/${encodeURIComponent(id)}${searchParams.toString() ? `?${searchParams}` : ""}`)
 
   if (listId && !selectedList && !tasksQuery.isPending) return <div className="page-wrap"><div className="empty-state"><div><ListIcon /><h1 className="font-serif text-3xl text-foreground">List not found</h1><p>This list is no longer available.</p><Button className="mt-4" onClick={() => navigate("/app/tasks")}>Open all tasks</Button></div></div></div>
 
@@ -119,15 +122,14 @@ export function WorkspacePage() {
     <div className="page-wrap task-shell">
       <header className="page-header">
         <div className="page-heading">
-          {selectedList && !selectedList.isInbox ? <input className="detail-title-input max-w-xl" aria-label="List name" data-bucket-name={selectedList.id} defaultValue={selectedList.name} onBlur={event => { if (event.target.value.trim() && event.target.value.trim() !== selectedList.name) renameList.mutate(event.target.value) }} /> : <h1>{selectedList?.name || "All tasks"}</h1>}
-          <p>{selectedList?.goal || (selectedList ? "Tasks in this list." : "Tasks across every list.")}</p>
+          {selectedList && !selectedList.isInbox ? <input key={selectedList.id} className="page-title-input max-w-xl" aria-label="List name" data-bucket-name={selectedList.id} defaultValue={selectedList.name} onBlur={event => { if (event.target.value.trim() && event.target.value.trim() !== selectedList.name) renameList.mutate(event.target.value) }} /> : <h1>{selectedList?.name || "All tasks"}</h1>}
         </div>
-        <div className="page-actions">{selectedList && !selectedList.isInbox && <Button id="delete-workspace-list" variant="ghost" size="sm" className="text-destructive" onClick={() => { if (window.confirm(`Delete “${selectedList.name}” and every task in it?`)) removeList.mutate() }}><Trash2 className="size-4" /><span className="button-label">Delete list</span></Button>}</div>
+        <div className="page-actions">{selectedList && !selectedList.isInbox && <DropdownMenu><DropdownMenuTrigger asChild><Button id="workspace-list-actions" variant="ghost" size="icon" aria-label="List actions"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>List options</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem id="delete-workspace-list" className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={removeList.isPending} onSelect={() => { if (window.confirm(`Delete “${selectedList.name}” and every task in it?`)) removeList.mutate() }}><Trash2 className="size-4" />{removeList.isPending ? "Deleting…" : "Delete list"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}</div>
       </header>
       <div className="toolbar">
         <div className="filters" role="search">
           <div className="search-box"><Search /><Input aria-label="Search tasks" placeholder="Search tasks…" value={searchParams.get("q") || ""} onChange={event => updateFilter("q", event.target.value)} /></div>
-          <Select className="compact-select" aria-label="Filter by agent" value={searchParams.get("assigneeAgentId") || ""} onChange={event => updateFilter("assigneeAgentId", event.target.value)}><option value="">Any agent</option><option value="unassigned">You</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select>
+          {agents.length > 0 && <Select className="compact-select" aria-label="Filter by agent" value={searchParams.get("assigneeAgentId") || ""} onChange={event => updateFilter("assigneeAgentId", event.target.value)}><option value="">Any agent</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select>}
           <Select className="compact-select" aria-label="Filter by priority" value={searchParams.get("priority") || ""} onChange={event => updateFilter("priority", event.target.value)}><option value="">Any priority</option><option value="p0">Urgent</option><option value="p1">High</option><option value="p2">Normal</option></Select>
           {["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"].some(key => searchParams.has(key)) && <Button variant="ghost" size="sm" onClick={() => { const view = searchParams.get("view"); setSearchParams(view ? { view } : {}, { replace: true }) }}>Clear</Button>}
         </div>
@@ -139,15 +141,15 @@ export function WorkspacePage() {
           <div className="board workspace-flow">
             {columns.map(column => {
               const items = tasks.filter(task => column.statuses.includes(task.status))
-              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => { event.preventDefault(); setDragOver(""); const id = event.dataTransfer.getData("text/task-id"); if (id) moveTask.mutate({ id, status: column.value }) }}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus /></button></header><div className="task-stack">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={() => { if (window.confirm(`Delete “${task.title}”?`)) deleteTask.mutate(task.id) }} />)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
+              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => { event.preventDefault(); setDragOver(""); const id = event.dataTransfer.getData("text/task-id"); if (id) moveTask.mutate({ id, status: column.value }) }}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add task</TooltipContent></Tooltip></header><div className="task-stack">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={() => { if (window.confirm(`Delete “${task.title}”?`)) deleteTask.mutate(task.id) }} />)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
             })}
           </div>
         </div>
       ) : (
-        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id} data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={() => openTask(task.id)}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "You"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td></tr>)}</tbody></table></div>
+        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id} data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={() => openTask(task.id)}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "—"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td></tr>)}</tbody></table></div>
       )}
       {tasksQuery.hasNextPage && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
-      {taskId && <TaskDetail taskId={taskId} onClose={() => navigate(`/app/tasks${searchParams.toString() ? `?${searchParams}` : ""}`)} onOpenTask={openTask} />}
+      {taskId && <TaskDetail taskId={taskId} backLabel={selectedList ? `Back to ${selectedList.name}` : "Back to all tasks"} onClose={() => navigate(`${listId ? `/app/lists/${encodeURIComponent(listId)}` : "/app/tasks"}${searchParams.toString() ? `?${searchParams}` : ""}`)} onOpenTask={openTask} />}
     </div>
   )
 }

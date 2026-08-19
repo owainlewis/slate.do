@@ -9,6 +9,97 @@ import { useSession } from "@/app-context"
 import { api } from "@/lib/api"
 import type { User } from "@/lib/types"
 
+const landingPreviewColumns = [
+  {
+    title: "Todo",
+    tone: "todo",
+    tasks: [
+      { priority: "High", list: "Product", title: "Tighten first-run onboarding", description: "Help a new operator understand lists, agents and flow.", date: "Aug 21" },
+      { priority: "Urgent", list: "Company", title: "Plan September launch", description: "Turn the product story into a focused launch plan.", date: "Aug 24", agent: "Research" },
+    ],
+  },
+  {
+    title: "In progress",
+    tone: "progress",
+    tasks: [
+      { priority: "Urgent", list: "Product", title: "Ship the React workspace", description: "Replace the global renderer with a calm interface.", date: "Aug 18", agent: "Research" },
+      { priority: "High", list: "Product", title: "Audit agent handoff states", description: "Make every transition between people and agents explicit.", date: "Aug 22", agent: "Research" },
+    ],
+  },
+  {
+    title: "Review",
+    tone: "review",
+    tasks: [
+      { priority: "High", list: "Writing", title: "Edit the agent-speed essay", description: "Make the core argument tighter and more concrete.", date: "Aug 19", agent: "Editorial" },
+      { priority: "Normal", list: "Company", title: "Review the launch brief", description: "Resolve the final positioning questions before design starts.", date: "Aug 23" },
+    ],
+  },
+  {
+    title: "Done",
+    tone: "done",
+    tasks: [
+      { priority: "Normal", list: "Company", title: "Review weekly product signals", description: "Decide what changed and what deserves attention next.", date: "Aug 17" },
+      { priority: "High", list: "Writing", title: "Publish the operator guide", description: "Turn the approved draft into final documentation.", date: "Aug 18", agent: "Editorial" },
+    ],
+  },
+]
+
+function LandingProductPreview() {
+  return (
+    <div className="landing-preview" aria-hidden="true">
+      <aside className="landing-preview-sidebar">
+        <div className="landing-preview-brand"><i /><strong>slate<span>.do</span></strong></div>
+        <div className="landing-preview-new"><b>＋</b><strong>New task</strong><kbd>C</kbd></div>
+        <div className="landing-preview-nav">
+          <span>▱ <b>Inbox</b><small>2</small></span>
+          <span className="active">☷ <b>All tasks</b></span>
+        </div>
+        <p>Lists <b>＋</b></p>
+        <div className="landing-preview-nav muted">
+          <span>○ <b>Product</b><small>5</small></span>
+          <span>○ <b>Company</b><small>3</small></span>
+          <span>○ <b>Writing</b><small>4</small></span>
+        </div>
+        <p>Agents</p>
+        <div className="landing-preview-nav muted">
+          <span>⌁ <b>Agents</b></span>
+          <span>▷ <b>Runs</b></span>
+          <span>⌘ <b>Runners</b></span>
+        </div>
+        <div className="landing-preview-user"><i>OL</i><strong>Owain Lewis</strong></div>
+      </aside>
+      <section className="landing-preview-main">
+        <header>
+          <h3>All tasks</h3>
+        </header>
+        <div className="landing-preview-toolbar">
+          <div className="landing-preview-search">⌕ <span>Search tasks…</span></div>
+          <div className="landing-preview-filter">Any agent⌄</div>
+          <div className="landing-preview-filter">Any priority⌄</div>
+          <div className="landing-preview-views"><b>▥ Board</b><span>▤ Table</span></div>
+        </div>
+        <div className="landing-preview-board">
+          {landingPreviewColumns.map(column => (
+            <section className={`landing-preview-column ${column.tone}`} key={column.title}>
+              <header><strong><i />{column.title}</strong><span>{column.tasks.length}</span><b>＋</b></header>
+              <div>
+                {column.tasks.map(task => (
+                  <article className="landing-preview-card" key={task.title}>
+                    <div className="landing-preview-meta"><span className={task.priority.toLowerCase()}>⚑ {task.priority}</span><small>{task.list}</small></div>
+                    <h4>{task.title}</h4>
+                    <p>{task.description}</p>
+                    <footer><span>▣ {task.date}</span>{task.agent && <small><i>{task.agent.slice(0, 1)}</i>{task.agent}</small>}</footer>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 export function LandingPage() {
   const session = useSession()
   const signedIn = Boolean(session.data?.authenticated)
@@ -21,7 +112,7 @@ export function LandingPage() {
         </nav>
         <section className="hero">
           <div className="hero-copy">
-            <p className="landing-kicker">A control plane for ambitious work</p>
+            <p className="landing-kicker">A control plane for human + agent work</p>
             <h1>Stay on top of everything. <em>Operate at agent speed.</em></h1>
             <p>Slate turns your emails, projects, commitments and loose ends into one clear operating plan. Agents help organise the noise, surface what needs your attention and execute the work.</p>
             <div className="hero-actions"><Button asChild size="lg" className="landing-primary-cta"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open Slate" : "Log in to Slate"}<ArrowRight className="size-4" /></Link></Button><Button asChild size="lg" variant="ghost" className="landing-secondary-cta"><a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a></Button></div>
@@ -29,7 +120,8 @@ export function LandingPage() {
           </div>
           <figure className="hero-product">
             <div className="hero-product-bar" aria-hidden="true"><i /><i /><i /><span>slate.do / focus</span></div>
-            <img src="/app-flow.jpg" alt="Slate showing work moving from ready through working and review to done" width="1600" height="900" />
+            <LandingProductPreview />
+            <figcaption>Slate showing tasks moving from todo through progress and review to done.</figcaption>
           </figure>
         </section>
       </header>
