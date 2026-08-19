@@ -162,7 +162,8 @@ test("table layout filters tasks and survives layout changes", async t => {
   const { page } = await startApp(t);
   await page.getByRole("button", { name: "Table", exact: true }).click();
   const table = page.getByRole("table");
-  for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned"]) assert.equal(await table.getByRole("columnheader", { name: heading }).count(), 1);
+  await table.waitFor();
+  for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned"]) await table.getByRole("columnheader", { name: heading }).waitFor();
   await page.getByLabel("Search tasks").fill("boss");
   await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr").length === 1);
   await page.getByRole("button", { name: "Board", exact: true }).click();
