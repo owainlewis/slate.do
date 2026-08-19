@@ -1,0 +1,42 @@
+:root { color-scheme: light; --bg: #f4f2ee; --paper: #fff; --ink: #1d1b19; --soft: #6c6861; --faint: #9a958d; --line: #ddd8d0; --violet: #7654d6; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+a { color: inherit; }
+.landing { min-height: 100vh; }
+.landing-nav { height: 74px; display: flex; align-items: center; justify-content: space-between; max-width: 1180px; margin: auto; padding: 0 32px; }
+.brand { display: inline-flex; align-items: center; color: var(--ink); font-size: 16px; font-weight: 700; text-decoration: none; }
+.brand::before { width: 19px; height: 19px; margin-right: 8px; border-radius: 6px 6px 6px 2px; background: var(--violet); content: ""; transform: rotate(-5deg); }
+.brand span { color: var(--faint); font-weight: 500; }
+.docs-nav-actions, .docs-footer-links { display: flex; align-items: center; gap: 18px; }
+.docs-nav-actions a, .landing-footer a { color: var(--soft); font-size: 13px; font-weight: 600; text-decoration: none; }
+.nav-action { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: rgb(255 255 255 / .45); }
+.docs-shell { display: grid; grid-template-columns: 190px minmax(0, 720px); gap: 72px; max-width: 1060px; margin: 72px auto 100px; padding: 0 32px; }
+.docs-toc { position: sticky; top: 28px; align-self: start; display: grid; gap: 4px; }
+.docs-toc p { margin: 0 0 10px; color: var(--ink); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.docs-toc a { padding: 7px 9px; border-radius: 7px; color: var(--soft); font-size: 13px; text-decoration: none; }
+.docs-toc a:hover { background: rgb(29 27 25 / .06); color: var(--ink); }
+.docs-hero { padding-bottom: 56px; }
+.docs-eyebrow { margin: 0 0 16px; color: var(--violet); font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.docs-hero h1 { max-width: 660px; margin: 0 0 20px; font-family: Georgia, serif; font-size: clamp(42px, 6vw, 68px); font-weight: 400; line-height: .99; letter-spacing: -.045em; }
+.docs-hero > p:last-child { max-width: 620px; margin: 0; color: var(--soft); font-size: 17px; line-height: 1.65; }
+.docs-section { padding: 48px 0; border-top: 1px solid var(--line); scroll-margin-top: 20px; }
+.docs-section h2 { margin: 0 0 20px; font-family: Georgia, serif; font-size: 30px; font-weight: 400; letter-spacing: -.025em; }
+.docs-section h3 { margin: 32px 0 12px; font-size: 16px; }
+.docs-section p, .docs-section li, .docs-section dd { color: var(--soft); font-size: 15px; line-height: 1.72; }
+.docs-section p { margin: 0 0 18px; }
+.docs-section ol { margin: 0 0 22px; padding-left: 22px; }
+.docs-section li { padding-left: 5px; }
+.docs-section a { color: var(--ink); text-decoration-color: var(--faint); text-underline-offset: 3px; }
+.docs-section code { padding: 2px 5px; border-radius: 5px; background: rgb(29 27 25 / .07); color: var(--ink); font-size: .9em; }
+.docs-section pre { margin: 20px 0 24px; overflow-x: auto; border: 1px solid #252321; border-radius: 12px; background: #1d1b19; padding: 20px 22px; color: #f2efe9; line-height: 1.7; }
+.docs-section pre code { padding: 0; background: transparent; color: inherit; font-size: 13px; }
+.docs-note { margin: 24px 0; border-left: 3px solid var(--violet); border-radius: 0 8px 8px 0; background: rgb(118 84 214 / .07); padding: 16px 18px; }
+.docs-note strong { display: block; margin-bottom: 5px; font-size: 13px; }
+.docs-note p { margin: 0; font-size: 13.5px; }
+.docs-troubleshooting { margin: 0 0 30px; }
+.docs-troubleshooting dt { margin-top: 24px; font-weight: 700; }
+.docs-troubleshooting dd { margin: 7px 0 0; }
+.landing-footer { display: flex; align-items: center; justify-content: space-between; max-width: 1180px; margin: auto; border-top: 1px solid var(--line); padding: 28px 32px 40px; color: var(--faint); font-size: 13px; }
+@media (max-width: 800px) { .docs-shell { grid-template-columns: 1fr; gap: 32px; margin-top: 42px; } .docs-toc { position: static; display: flex; overflow-x: auto; padding-bottom: 8px; } .docs-toc p { display: none; } }
+@media (max-width: 600px) { .landing-nav { height: 60px; padding: 0 18px; } .docs-nav-actions > a:first-child { display: none; } .docs-shell { padding: 0 18px; } .docs-hero { padding-bottom: 42px; } .docs-section { padding: 38px 0; } .landing-footer { padding-inline: 18px; } }
