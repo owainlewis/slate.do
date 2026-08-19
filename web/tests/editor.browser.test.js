@@ -198,6 +198,7 @@ test("new tasks persist a priority and start in the selected column", async t =>
   const created = state.tasks.find(task => task.title === "Prepare the launch review");
   assert.equal(created.priority, "p2");
   assert.equal(created.status, "working");
+  assert.equal(state.requests.some(request => request.startsWith(`PATCH /api/v1/tasks/${created.id}`)), false);
 });
 
 test("task detail edits, subtasks, and conversation entries use the existing API", async t => {

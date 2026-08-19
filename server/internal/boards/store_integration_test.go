@@ -1012,6 +1012,55 @@ func TestTaskCreationIsIdempotentWithinAList(t *testing.T) {
 	}
 }
 
+func TestTaskCreationPersistsStatusAndPriorityAtomically(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Launch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CreateTaskInput{
+		Title:          "Prepare launch review",
+		Status:         StatusWorking,
+		Priority:       PriorityP0,
+		IdempotencyKey: "launch-review-v1",
+	}
+	created, err := store.CreateTask(ctx, userID, bucket.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != StatusWorking || created.Priority != PriorityP0 {
+		t.Fatalf("created task = status %q, priority %q; want %q, %q", created.Status, created.Priority, StatusWorking, PriorityP0)
+	}
+
+	changed := input
+	changed.Priority = PriorityP2
+	if _, err := store.CreateTask(ctx, userID, bucket.ID, changed); !errors.Is(err, ErrIdempotencyKey) {
+		t.Fatalf("changed priority retry error = %v, want ErrIdempotencyKey", err)
+	}
+	tasks, err := store.ListTasks(ctx, userID, TaskFilter{BucketID: bucket.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != created.ID || tasks[0].Priority != PriorityP0 {
+		t.Fatalf("tasks after rejected retry = %#v, want only original task", tasks)
+	}
+
+	child, err := store.CreateSubtask(ctx, userID, created.ID, CreateTaskInput{Title: "Collect evidence", Priority: PriorityP1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Priority != PriorityP1 {
+		t.Fatalf("subtask priority = %q, want %q", child.Priority, PriorityP1)
+	}
+}
+
 func TestInboxCaptureIdempotencySurvivesInboxReplacement(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -1237,7 +1286,7 @@ func TestTaskCreationAcceptsTheImmediatePredeploymentFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestData, err := taskCreateRequestData(input.Title, input.Description, "", KindAction, input.AssigneeAgentID, "")
+	requestData, err := taskCreateRequestData(input.Title, input.Description, "", KindAction, "", "", input.AssigneeAgentID, "")
 	if err != nil {
 		t.Fatal(err)
 	}

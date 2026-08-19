@@ -42,8 +42,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const createTask = useMutation({
     mutationFn: async () => {
       const endpoint = taskList ? `/api/v1/lists/${encodeURIComponent(taskList)}/tasks` : "/api/v1/tasks"
-      const task = await api.post<Task>(endpoint, { title: taskTitle.trim(), description: taskDescription.trim(), kind: "action", assigneeAgentId: taskAgent, scheduledDate: taskDate }, { "Idempotency-Key": crypto.randomUUID() })
-      return api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(task.id)}/status`, { status: taskStatus, priority: taskPriority })
+      return api.post<Task>(endpoint, { title: taskTitle.trim(), description: taskDescription.trim(), kind: "action", status: taskStatus, priority: taskPriority, assigneeAgentId: taskAgent, scheduledDate: taskDate }, { "Idempotency-Key": crypto.randomUUID() })
     },
     onSuccess: async task => {
       await queryClient.invalidateQueries({ queryKey: ["tasks"] })

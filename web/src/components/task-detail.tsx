@@ -68,10 +68,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask }: { taskId: string; on
   })
 
   const createSubtask = useMutation({
-    mutationFn: async () => {
-      const subtask = await api.post<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/subtasks`, { title: subtaskTitle.trim(), kind: "action" }, { "Idempotency-Key": crypto.randomUUID() })
-      return api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(subtask.id)}/status`, { status: subtask.status || "new", priority: task.priority || "p1" })
-    },
+    mutationFn: () => api.post<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/subtasks`, { title: subtaskTitle.trim(), kind: "action", priority: task.priority || "p1" }, { "Idempotency-Key": crypto.randomUUID() }),
     onSuccess: async () => { setSubtaskTitle(""); await queryClient.invalidateQueries({ queryKey: ["subtasks", taskId] }); await queryClient.invalidateQueries({ queryKey: ["tasks"] }) },
     onError: value => setError(value instanceof Error ? value.message : "Could not add subtask"),
   })

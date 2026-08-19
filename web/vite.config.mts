@@ -7,6 +7,7 @@ import { defineConfig } from "vite"
 const here = path.dirname(fileURLToPath(import.meta.url))
 const apiTarget = process.env.SLATE_API_URL || "http://127.0.0.1:8080"
 const apiOrigin = new URL(apiTarget).origin
+const webPort = Number(process.env.SLATE_WEB_PORT || "8081")
 
 export default defineConfig({
   root: here,
@@ -14,7 +15,7 @@ export default defineConfig({
   resolve: { alias: { "@": path.resolve(here, "src") } },
   server: {
     host: "127.0.0.1",
-    port: 8081,
+    port: webPort,
     strictPort: true,
     proxy: {
       "/api": {
