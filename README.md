@@ -54,9 +54,11 @@ just serve
 
 Open `http://localhost:8080`.
 
-For frontend development, run `npm run dev:web` alongside the Go server. Vite
-proxies API requests to `http://localhost:8080` and updates the React UI as you
-work.
+For local development, run `npm run dev` and open `http://localhost:8081`.
+It starts the Go API on port 8080 and Vite on port 8081; Vite proxies API
+requests and hot-reloads the React UI as you work. Use `just serve` only when
+you need to check the production-style embedded frontend. Override the ports
+with `SLATE_API_PORT` and `SLATE_WEB_PORT` when needed.
 
 ## Tests
 

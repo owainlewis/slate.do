@@ -14,20 +14,26 @@ export function LandingPage() {
   const signedIn = Boolean(session.data?.authenticated)
   return (
     <div className="landing-page">
-      <nav className="landing-nav">
-        <Brand />
-        <div className="landing-nav-links"><a href="/cli">CLI guide</a><Button asChild size="sm"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open app" : "Log in"}<ArrowRight className="size-3.5" /></Link></Button></div>
-      </nav>
-      <main>
+      <header className="landing-hero-shell">
+        <nav className="landing-nav">
+          <Brand />
+          <div className="landing-nav-links"><a href="/cli">CLI guide</a><Button asChild size="sm" className="landing-nav-cta"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open app" : "Log in"}<ArrowRight className="size-3.5" /></Link></Button></div>
+        </nav>
         <section className="hero">
           <div className="hero-copy">
             <p className="landing-kicker">A control plane for ambitious work</p>
             <h1>Stay on top of everything. <em>Operate at agent speed.</em></h1>
             <p>Slate turns your emails, projects, commitments and loose ends into one clear operating plan. Agents help organise the noise, surface what needs your attention and execute the work.</p>
-            <div className="hero-actions"><Button asChild size="lg"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open Slate" : "Log in to Slate"}<ArrowRight className="size-4" /></Link></Button><Button asChild size="lg" variant="ghost"><a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a></Button></div>
+            <div className="hero-actions"><Button asChild size="lg" className="landing-primary-cta"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open Slate" : "Log in to Slate"}<ArrowRight className="size-4" /></Link></Button><Button asChild size="lg" variant="ghost" className="landing-secondary-cta"><a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a></Button></div>
+            <div className="hero-proof" aria-label="Slate principles"><span>Human judgement</span><span>Agent execution</span><span>One shared state</span></div>
           </div>
-          <figure className="hero-image"><img src="/landing-stones.jpg" alt="Three balanced slate stones" width="1050" height="1400" /></figure>
+          <figure className="hero-product">
+            <div className="hero-product-bar" aria-hidden="true"><i /><i /><i /><span>slate.do / focus</span></div>
+            <img src="/app-flow.jpg" alt="Slate showing work moving from ready through working and review to done" width="1600" height="900" />
+          </figure>
         </section>
+      </header>
+      <main>
         <section className="landing-section">
           <p className="landing-kicker">Less, on purpose</p>
           <h2>One calm place for people and agents to decide what happens next.</h2>

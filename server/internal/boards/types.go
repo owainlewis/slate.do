@@ -87,6 +87,8 @@ type CreateTaskInput struct {
 	Description     string `json:"description"`
 	ScheduledDate   string `json:"scheduledDate"`
 	Kind            string `json:"kind"`
+	Status          string `json:"status"`
+	Priority        string `json:"priority"`
 	OverrideLimit   bool   `json:"overrideLimit"`
 	AssigneeAgentID string `json:"assigneeAgentId"`
 	ParentTaskID    string `json:"parentTaskId"`

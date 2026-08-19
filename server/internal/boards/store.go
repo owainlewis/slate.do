@@ -527,12 +527,16 @@ type preparedTaskCreate struct {
 	description            string
 	scheduledDate          string
 	kind                   string
+	status                 string
+	priority               string
 	assigneeAgentID        string
 	parentTaskID           string
 	idempotencyKey         string
 	fingerprint            string
 	requestData            string
+	legacyRequestData      string
 	compatibleFingerprints []string
+	strictRequestData      bool
 	overrideLimit          bool
 }
 
@@ -552,6 +556,14 @@ func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (prepare
 	if !validKind(kind) {
 		return preparedTaskCreate{}, fmt.Errorf("%w: invalid item kind", ErrInvalidData)
 	}
+	status := clean(input.Status)
+	if status != "" && !validStatus(status) {
+		return preparedTaskCreate{}, fmt.Errorf("%w: invalid task status", ErrInvalidData)
+	}
+	priority := clean(input.Priority)
+	if !validPriority(priority) {
+		return preparedTaskCreate{}, fmt.Errorf("%w: invalid priority", ErrInvalidData)
+	}
 	parentTaskID := clean(input.ParentTaskID)
 	if parentTaskID != "" && !validUUID(parentTaskID) {
 		return preparedTaskCreate{}, fmt.Errorf("%w: parentTaskId must be a valid ID", ErrInvalidData)
@@ -561,16 +573,21 @@ func prepareTaskCreate(input CreateTaskInput, fingerprintTarget string) (prepare
 		return preparedTaskCreate{}, fmt.Errorf("%w: idempotency key must be %d UTF-8 bytes or fewer", ErrInvalidData, httpapi.TaskIdempotencyBytes)
 	}
 	prepared := preparedTaskCreate{
-		title: title, description: input.Description, scheduledDate: scheduledDate, kind: kind,
+		title: title, description: input.Description, scheduledDate: scheduledDate, kind: kind, status: status, priority: priority,
 		assigneeAgentID: input.AssigneeAgentID, parentTaskID: parentTaskID,
-		idempotencyKey: idempotencyKey, overrideLimit: input.OverrideLimit,
+		idempotencyKey: idempotencyKey, strictRequestData: status != "" || priority != "", overrideLimit: input.OverrideLimit,
 	}
 	if idempotencyKey != "" {
-		requestData, err := taskCreateRequestData(title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID)
+		requestData, err := taskCreateRequestDataV2(title, input.Description, scheduledDate, kind, status, priority, input.AssigneeAgentID, parentTaskID)
 		if err != nil {
 			return preparedTaskCreate{}, err
 		}
 		prepared.requestData = requestData
+		legacyRequestData, err := taskCreateRequestData(title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID)
+		if err != nil {
+			return preparedTaskCreate{}, err
+		}
+		prepared.legacyRequestData = legacyRequestData
 		fingerprint, err := taskCreateFingerprint(fingerprintTarget, title, input.Description, scheduledDate, kind, input.AssigneeAgentID, parentTaskID, input.OverrideLimit)
 		if err != nil {
 			return preparedTaskCreate{}, err
@@ -648,23 +665,28 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 			return Task{}, err
 		}
 		var existingFingerprint, existingTaskID, existingParentTaskID string
-		var requestDataMatches, legacyRequestUnknown bool
+		var requestDataMatches, legacyRequestDataMatches, legacyRequestUnknown bool
 		err := tx.QueryRow(ctx, `
 			SELECT key.request_hash, COALESCE(key.task_id::text, ''),
 				COALESCE(key.request_data_hash = encode(sha256(convert_to(($3::jsonb)::text, 'UTF8')), 'hex'), false),
+				COALESCE(key.request_data_hash = encode(sha256(convert_to(($4::jsonb)::text, 'UTF8')), 'hex'), false),
 				key.request_data_hash IS NULL,
 				COALESCE(task.parent_task_id::text, '')
 			FROM task_idempotency_keys key
 			LEFT JOIN tasks task ON task.id = key.task_id
 			WHERE key.user_id = $1 AND key.key = $2
-		`, userID, input.idempotencyKey, input.requestData).Scan(
+		`, userID, input.idempotencyKey, input.requestData, input.legacyRequestData).Scan(
 			&existingFingerprint,
 			&existingTaskID,
 			&requestDataMatches,
+			&legacyRequestDataMatches,
 			&legacyRequestUnknown,
 			&existingParentTaskID,
 		)
 		if err == nil {
+			if !input.strictRequestData {
+				requestDataMatches = requestDataMatches || legacyRequestDataMatches
+			}
 			fingerprintMatches := existingFingerprint == input.fingerprint
 			for _, compatibleFingerprint := range input.compatibleFingerprints {
 				if existingFingerprint == compatibleFingerprint {
@@ -672,12 +694,15 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 					break
 				}
 			}
+			if input.strictRequestData && !requestDataMatches {
+				fingerprintMatches = false
+			}
 			requestDataFallback := input.parentTaskID != "" && existingTaskID != "" && requestDataMatches
 			// Pre-migration keys did not retain the original request body. A
 			// child retry may still return its original result when the stable
 			// parent relationship matches. Never derive identity from fields on
 			// the mutable task row.
-			legacyParentFallback := input.parentTaskID != "" &&
+			legacyParentFallback := !input.strictRequestData && input.parentTaskID != "" &&
 				existingTaskID != "" &&
 				legacyRequestUnknown &&
 				existingParentTaskID == input.parentTaskID
@@ -721,7 +746,7 @@ func (s *Store) createTask(ctx context.Context, tx pgx.Tx, userID string, bucket
 	if err != nil {
 		return Task{}, err
 	}
-	task, err := insertTask(ctx, tx, bucket, input.title, input.description, input.scheduledDate, input.kind, assigneeAgentID, input.parentTaskID)
+	task, err := insertTask(ctx, tx, bucket, input.title, input.description, input.scheduledDate, input.kind, input.status, input.priority, assigneeAgentID, input.parentTaskID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -780,21 +805,23 @@ func validUUID(value string) bool {
 	return true
 }
 
-func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string, description string, scheduledDate string, kind string, assigneeAgentID string, parentTaskID string) (Task, error) {
-	status := StatusNew
-	if assigneeAgentID != "" {
+func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string, description string, scheduledDate string, kind string, status string, priority string, assigneeAgentID string, parentTaskID string) (Task, error) {
+	if status == "" {
+		status = StatusNew
+	}
+	if assigneeAgentID != "" && status == StatusNew {
 		status = StatusQueued
 	}
 	row := db.QueryRow(ctx, `
-		INSERT INTO tasks (bucket_id, title, description, scheduled_date, kind, status, assignee_agent_id, parent_task_id, sort_order)
+		INSERT INTO tasks (bucket_id, title, description, scheduled_date, kind, status, priority, assignee_agent_id, parent_task_id, sort_order)
 		VALUES (
-			$1, $2, $3, NULLIF($4, '')::date, $5, $6, NULLIF($7, '')::uuid, NULLIF($8, '')::uuid,
+			$1, $2, $3, NULLIF($4, '')::date, $5, $6, $7, NULLIF($8, '')::uuid, NULLIF($9, '')::uuid,
 			COALESCE((SELECT max(sort_order) + 1 FROM tasks WHERE bucket_id = $1), 0)
 		)
 		RETURNING id::text, bucket_id::text, title, description,
 			COALESCE(scheduled_date::text, ''), kind, status, priority, sort_order, created_at, updated_at
 			, COALESCE(assignee_agent_id::text, ''), COALESCE(parent_task_id::text, '')
-	`, bucket.ID, title, description, scheduledDate, kind, status, assigneeAgentID, parentTaskID)
+	`, bucket.ID, title, description, scheduledDate, kind, status, priority, assigneeAgentID, parentTaskID)
 	return scanTask(row)
 }
 
@@ -851,6 +878,20 @@ func taskCreateRequestData(title string, description string, scheduledDate strin
 		AssigneeAgentID string `json:"assigneeAgentId"`
 		ParentTaskID    string `json:"parentTaskId"`
 	}{title, description, scheduledDate, kind, strings.TrimSpace(assigneeAgentID), parentTaskID})
+	return string(raw), err
+}
+
+func taskCreateRequestDataV2(title string, description string, scheduledDate string, kind string, status string, priority string, assigneeAgentID string, parentTaskID string) (string, error) {
+	raw, err := json.Marshal(struct {
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		ScheduledDate   string `json:"scheduledDate"`
+		Kind            string `json:"kind"`
+		Status          string `json:"status"`
+		Priority        string `json:"priority"`
+		AssigneeAgentID string `json:"assigneeAgentId"`
+		ParentTaskID    string `json:"parentTaskId"`
+	}{title, description, scheduledDate, kind, status, priority, strings.TrimSpace(assigneeAgentID), parentTaskID})
 	return string(raw), err
 }
 
