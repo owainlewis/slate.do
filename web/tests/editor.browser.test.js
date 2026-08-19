@@ -207,6 +207,12 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   await page.getByLabel("Title", { exact: true }).fill("Publish the React migration story");
   await page.getByRole("button", { name: "Add subtask" }).click();
+  await page.getByLabel("New subtask title").fill("Discard this draft");
+  await page.keyboard.press("Escape");
+  await page.getByLabel("New subtask title").waitFor({ state: "detached" });
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Publish the React migration story");
+  await page.getByRole("button", { name: "Add subtask" }).click();
   await page.getByLabel("New subtask title").fill("Record the final walkthrough");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.locator(".subtask-row").filter({ hasText: "Record the final walkthrough" }).waitFor();
