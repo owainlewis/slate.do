@@ -60,16 +60,18 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
     ])
   }
 
+  const draftPayload = (status?: TaskStatus) => ({
+    title: String(draft.title || "").trim(),
+    description: draft.description || "",
+    status: status || draft.status || "new",
+    priority: draft.priority || "p1",
+    assigneeAgentId: draft.assigneeAgentId || "",
+    scheduledDate: draft.scheduledDate || "",
+    ...(draft.parentTaskId ? {} : { bucketId: draft.bucketId || lists[0]?.id || "" }),
+  })
+
   const save = useMutation({
-    mutationFn: () => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, {
-      title: String(draft.title || "").trim(),
-      description: draft.description || "",
-      status: draft.status || "new",
-      priority: draft.priority || "p1",
-      assigneeAgentId: draft.assigneeAgentId || "",
-      scheduledDate: draft.scheduledDate || "",
-      ...(draft.parentTaskId ? {} : { bucketId: draft.bucketId || lists[0]?.id || "" }),
-    }),
+    mutationFn: () => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, draftPayload()),
     onSuccess: async task => { queryClient.setQueryData(["task", taskId], task); await invalidateTaskSurfaces(); onClose() },
     onError: value => setError(value instanceof Error ? value.message : "Could not save task"),
   })
@@ -81,7 +83,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   })
 
   const review = useMutation({
-    mutationFn: (status: "working" | "done") => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, { status }),
+    mutationFn: (status: "working" | "done") => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, draftPayload(status)),
     onSuccess: async (updated, status) => {
       queryClient.setQueryData(["task", taskId], updated)
       setDraft({ ...updated, priority: updated.priority || "p1" })

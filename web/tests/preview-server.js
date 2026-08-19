@@ -63,7 +63,7 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname === "/api/v1/api-tokens") return send(response, { tokens: [] });
   if (url.pathname.startsWith("/api/")) return send(response, {});
   const asset = url.pathname.slice(1);
-  const target = url.pathname.startsWith("/assets/") || ["favicon.svg", "landing-stones.jpg", "landing-slabs.jpg", "landing-cinematic.jpg", "app-lists.jpg", "app-flow.jpg", "app-flow-v2.jpg", "app-flow-v3.png", "cli.html"].includes(asset) ? path.join(dist, asset) : path.join(dist, "index.html");
+  const target = url.pathname.startsWith("/assets/") || ["favicon.svg", "landing-stones.jpg", "landing-slabs.jpg", "landing-cinematic.jpg", "app-lists.jpg", "app-flow.jpg", "cli.html"].includes(asset) ? path.join(dist, asset) : path.join(dist, "index.html");
   const type = target.endsWith(".css") ? "text/css" : target.endsWith(".js") ? "text/javascript" : target.endsWith(".woff2") ? "font/woff2" : target.endsWith(".woff") ? "font/woff" : target.endsWith(".jpg") ? "image/jpeg" : target.endsWith(".svg") ? "image/svg+xml" : "text/html";
   return send(response, fs.readFileSync(target), 200, type);
 });
