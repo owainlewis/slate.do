@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query"
 import { Columns3 as BoardIcon, CalendarDays, List as ListIcon, MoreHorizontal, Rows3, Search, Trash2 } from "lucide-react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,7 @@ const columns: Array<{ value: TaskStatus; label: string; statuses: TaskStatus[];
 
 const statusName = (value: string) => columns.find(column => column.statuses.includes(value as TaskStatus))?.label || value
 const priorityName = (value?: string) => value ? value.toUpperCase() : ""
+type TasksPage = { tasks: Task[]; nextCursor?: string }
 
 function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () => void; onMove: (status: TaskStatus) => void; onDelete: () => void }) {
   return (
@@ -65,11 +66,17 @@ export function WorkspacePage() {
     return query.toString()
   }, [listId, searchParams])
 
-  const tasksQuery = useQuery({
+  const tasksQuery = useInfiniteQuery({
     queryKey: ["tasks", scope, listId, taskQueryString],
-    queryFn: () => api.get<{ tasks: Task[]; nextCursor?: string }>(`/api/v1/tasks?${taskQueryString}`),
+    queryFn: ({ pageParam }) => {
+      const query = new URLSearchParams(taskQueryString)
+      if (pageParam) query.set("cursor", pageParam)
+      return api.get<TasksPage>(`/api/v1/tasks?${query}`)
+    },
+    initialPageParam: "",
+    getNextPageParam: page => page.nextCursor || undefined,
   })
-  const tasks = tasksQuery.data?.tasks || []
+  const tasks = tasksQuery.data?.pages.flatMap(page => page.tasks) || []
 
   const refresh = async () => {
     await Promise.all([queryClient.invalidateQueries({ queryKey: ["tasks"] }), refreshLists()])
@@ -77,7 +84,7 @@ export function WorkspacePage() {
   const moveTask = useMutation({
     mutationFn: ({ id, status }: { id: string; status: TaskStatus }) => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(id)}/status`, { status }),
     onMutate: ({ id, status }) => {
-      queryClient.setQueriesData<{ tasks: Task[] }>({ queryKey: ["tasks"] }, old => old ? { ...old, tasks: old.tasks.map(task => task.id === id ? { ...task, status } : task) } : old)
+      queryClient.setQueriesData<InfiniteData<TasksPage, string>>({ queryKey: ["tasks"] }, old => old ? { ...old, pages: old.pages.map(page => ({ ...page, tasks: page.tasks.map(task => task.id === id ? { ...task, status } : task) })) } : old)
     },
     onSuccess: refresh,
     onError: error => { setPageError(error instanceof Error ? error.message : "Could not update task"); void refresh() },
@@ -139,7 +146,7 @@ export function WorkspacePage() {
       ) : (
         <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id} data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={() => openTask(task.id)}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "You"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <span className={`pill priority-${task.priority}`}>{priorityName(task.priority)}</span> : "—"}</td><td>{task.scheduledDate || "—"}</td></tr>)}</tbody></table></div>
       )}
-      {tasksQuery.data?.nextCursor && <div className="mt-4 text-center"><Button variant="secondary">Load more tasks</Button></div>}
+      {tasksQuery.hasNextPage && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
       {taskId && <TaskDetail taskId={taskId} onClose={() => navigate(`/app/tasks${searchParams.toString() ? `?${searchParams}` : ""}`)} onOpenTask={openTask} />}
     </div>
   )

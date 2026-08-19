@@ -25,6 +25,7 @@ function fixture() {
     inbox: [{ id: "message-one", taskId: "task-parent", taskTitle: "Publish task-first agents video", kind: "comment", body: "I have drafted the spec. Can you take a look?", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }],
     tokens: [],
     requests: [],
+    paginate: false,
   };
 }
 
@@ -62,6 +63,10 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       return json(response, task, 201);
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
+      if (state.paginate) {
+        if (url.searchParams.get("cursor") === "page-two") return json(response, { tasks: [state.tasks[1]] });
+        return json(response, { tasks: [state.tasks[0]], nextCursor: "page-two" });
+      }
       let tasks = [...state.tasks, ...state.subtasks];
       if (url.searchParams.get("parentTaskId")) tasks = state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId"));
       if (url.searchParams.get("bucketId")) tasks = tasks.filter(item => item.bucketId === url.searchParams.get("bucketId"));
@@ -168,6 +173,16 @@ test("table layout filters tasks and survives layout changes", async t => {
   await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr").length === 1);
   await page.getByRole("button", { name: "Board", exact: true }).click();
   assert.equal(new URL(page.url()).searchParams.get("q"), "boss");
+});
+
+test("workspace pagination loads and retains subsequent task pages", async t => {
+  const { page, state, origin } = await startApp(t);
+  state.paginate = true;
+  await page.goto(`${origin}/app/tasks?q=pagination`);
+  await page.getByRole("button", { name: "Load more tasks" }).click();
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for" }).waitFor();
+  assert.equal(await page.locator("[data-task]").count(), 2);
+  assert.equal(state.requests.some(request => request.includes("cursor=page-two")), true);
 });
 
 test("task detail edits, subtasks, and conversation entries use the existing API", async t => {
