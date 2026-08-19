@@ -151,9 +151,12 @@ a { color: inherit; text-decoration: none; }
 .board-column.drag-over { border-color: var(--primary); background: color-mix(in srgb, var(--accent) 72%, transparent); }
 .column-head { display: flex; align-items: center; justify-content: space-between; padding: .15rem .2rem 1rem; }
 .column-title { display: flex; align-items: center; gap: .5rem; font-size: .84rem; font-weight: 650; }
-.column-action { display: grid; width: 1.8rem; height: 1.8rem; place-items: center; border: 0; border-radius: .5rem; background: transparent; color: var(--muted-foreground); cursor: pointer; }
-.column-action:hover { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--foreground); }
-.column-action svg { width: .95rem; height: .95rem; }
+.column-action { position: relative; display: grid; width: 2rem; height: 2rem; flex: 0 0 auto; place-items: center; border: 1px solid transparent; border-radius: 999px; background: transparent; color: color-mix(in srgb, var(--muted-foreground) 88%, transparent); transition: border-color .15s ease, background .15s ease, color .15s ease, box-shadow .15s ease, transform .12s ease; cursor: pointer; }
+.column-action:hover { border-color: color-mix(in srgb, var(--border) 72%, transparent); background: color-mix(in srgb, var(--card) 72%, transparent); color: var(--foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
+.column-action:active { transform: scale(.94); }
+.column-action:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.column-action svg { width: 1rem; height: 1rem; stroke-width: 1.8; transition: transform .15s ease; }
+.column-action:hover svg { transform: scale(1.08); }
 .column-dot { width: .48rem; height: .48rem; border-radius: 50%; background: #92939a; }
 .column-dot.working { background: #5680d8; }
 .column-dot.review { background: #d3923f; }
