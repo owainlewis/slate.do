@@ -60,15 +60,32 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
     ])
   }
 
-  const draftPayload = (status?: TaskStatus) => ({
-    title: String(draft.title || "").trim(),
-    description: draft.description || "",
-    status: status || draft.status || "new",
-    priority: draft.priority || "p1",
-    assigneeAgentId: draft.assigneeAgentId || "",
-    scheduledDate: draft.scheduledDate || "",
-    ...(draft.parentTaskId ? {} : { bucketId: draft.bucketId || lists[0]?.id || "" }),
+  const taskPayload = (source: Partial<Task>) => ({
+    title: String(source.title || "").trim(),
+    description: source.description || "",
+    status: source.status || "new",
+    priority: source.priority || "p1",
+    assigneeAgentId: source.assigneeAgentId || "",
+    scheduledDate: source.scheduledDate || "",
+    ...(source.parentTaskId ? {} : { bucketId: source.bucketId || lists[0]?.id || "" }),
   })
+
+  const draftPayload = () => taskPayload(draft)
+
+  // A review decision carries the edits the user made in the open panel, but
+  // nothing else. Sending the whole snapshot would revert any field another
+  // session or an agent changed since the panel loaded, so compare against the
+  // task as it was loaded and send only what this user actually touched. Both
+  // sides go through the same normalisation so an absent value and an empty one
+  // do not read as an edit.
+  const editedFields = (status: TaskStatus) => {
+    const draftValues = draftPayload()
+    const loadedValues = taskPayload(taskQuery.data || {})
+    const edited = Object.fromEntries(
+      Object.entries(draftValues).filter(([key, value]) => value !== loadedValues[key as keyof typeof loadedValues]),
+    )
+    return { ...edited, status }
+  }
 
   const save = useMutation({
     mutationFn: () => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, draftPayload()),
@@ -83,7 +100,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   })
 
   const review = useMutation({
-    mutationFn: (status: "working" | "done") => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, draftPayload(status)),
+    mutationFn: (status: "working" | "done") => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, editedFields(status)),
     onSuccess: async (updated, status) => {
       queryClient.setQueryData(["task", taskId], updated)
       setDraft({ ...updated, priority: updated.priority || "p1" })
