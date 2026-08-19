@@ -21,8 +21,17 @@ export interface Agent {
   displayName: string
   purpose?: string
   archived?: boolean
-  credential?: Record<string, unknown>
-  workCounts?: Record<string, number>
+  credential?: {
+    id?: string
+    tokenPrefix?: string
+    lastUsedAt?: string
+    revokedAt?: string
+    createdAt?: string
+  }
+  workCounts?: { ready?: number; working?: number; review?: number; completed?: number; [key: string]: number | undefined }
+  lastUsedAt?: string
+  revokedAt?: string
+  updatedAt?: string
   [key: string]: unknown
 }
 
@@ -43,6 +52,7 @@ export interface Task {
   assigneeAgentId?: ID
   assigneeAgentName?: string
   reviewReason?: string
+  executionRunId?: string
   updatedAt?: string
   [key: string]: unknown
 }

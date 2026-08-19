@@ -20,6 +20,9 @@ const tasks = [
   { id: "essay", bucketId: "writing", bucketName: "Writing", listName: "Writing", title: "Edit the agent-speed essay", description: "Make the core argument tighter and more concrete.", status: "needs_review", priority: "p1", scheduledDate: "2026-08-19", assigneeAgentId: "editor", assigneeAgentName: "Editorial agent" },
   { id: "metrics", bucketId: "company", bucketName: "Company", listName: "Company", title: "Review weekly product signals", description: "Decide what changed and what deserves attention next.", status: "done", priority: "p2", scheduledDate: "2026-08-17", assigneeAgentId: "", assigneeAgentName: "" },
   { id: "api", bucketId: "product", bucketName: "Product", listName: "Product", title: "Document task entries API", description: "Add examples for agent comments and outputs.", status: "new", priority: "p2", scheduledDate: "", assigneeAgentId: "editor", assigneeAgentName: "Editorial agent" },
+  { id: "handoffs", bucketId: "product", bucketName: "Product", listName: "Product", title: "Audit agent handoff states", description: "Make every transition between people and agents explicit.", status: "working", priority: "p1", scheduledDate: "2026-08-22", assigneeAgentId: "research", assigneeAgentName: "Research agent" },
+  { id: "brief", bucketId: "company", bucketName: "Company", listName: "Company", title: "Review the launch brief", description: "Resolve the final positioning questions before design starts.", status: "needs_review", priority: "p2", scheduledDate: "2026-08-23", assigneeAgentId: "", assigneeAgentName: "" },
+  { id: "guide", bucketId: "writing", bucketName: "Writing", listName: "Writing", title: "Publish the operator guide", description: "Turn the approved draft into the final documentation page.", status: "done", priority: "p1", scheduledDate: "2026-08-18", assigneeAgentId: "editor", assigneeAgentName: "Editorial agent" },
 ];
 const entries = { react: [{ id: "entry-1", kind: "comment", body: "The route and component architecture is in place. I’m checking the final interaction details now.", authorKind: "agent", authorName: "Research agent", createdAt: new Date().toISOString() }] };
 
@@ -32,7 +35,8 @@ async function input(request) { let body = ""; for await (const chunk of request
 
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, "http://localhost");
-  if (url.pathname === "/api/v1/me" && request.method === "GET") return send(response, { authenticated: true, user: { id: "owner", email: "owain@slate.do", displayName: "Owain Lewis", theme: "dark", entitlement: { plan: "pro", limits: { lists: 45, agents: 5, apiTokens: 10 } } } });
+  if (url.pathname === "/capture.html") return send(response, `<!doctype html><html><head><meta charset="utf-8"><title>Slate capture</title><style>*{box-sizing:border-box}html,body{width:1706px;height:998px;margin:0;overflow:hidden;background:#fafafa}iframe{display:block;width:1846px;height:1080px;border:0;transform:scale(.92416);transform-origin:top left}</style></head><body><iframe src="/app/tasks" title="Slate"></iframe></body></html>`, 200, "text/html");
+  if (url.pathname === "/api/v1/me" && request.method === "GET") return send(response, { authenticated: true, user: { id: "owner", email: "owain@slate.do", displayName: "Owain Lewis", theme: "light", entitlement: { plan: "pro", limits: { lists: 45, agents: 5, apiTokens: 10 } } } });
   if (url.pathname === "/api/v1/lists" && request.method === "GET") return send(response, { lists });
   if (url.pathname === "/api/v1/agents" && request.method === "GET") return send(response, { agents, maxAgents: 5 });
   if (url.pathname === "/api/v1/inbox") return send(response, { messages: [{ id: "message", taskId: "react", taskTitle: "Ship the React workspace", kind: "output", body: "The interface is ready for your final review.", authorName: "Research agent" }] });
@@ -59,7 +63,7 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname === "/api/v1/api-tokens") return send(response, { tokens: [] });
   if (url.pathname.startsWith("/api/")) return send(response, {});
   const asset = url.pathname.slice(1);
-  const target = url.pathname.startsWith("/assets/") || ["favicon.svg", "landing-stones.jpg", "landing-slabs.jpg", "app-lists.jpg", "app-flow.jpg", "cli.html"].includes(asset) ? path.join(dist, asset) : path.join(dist, "index.html");
+  const target = url.pathname.startsWith("/assets/") || ["favicon.svg", "landing-stones.jpg", "landing-slabs.jpg", "landing-cinematic.jpg", "app-lists.jpg", "app-flow.jpg", "app-flow-v2.jpg", "app-flow-v3.png", "cli.html"].includes(asset) ? path.join(dist, asset) : path.join(dist, "index.html");
   const type = target.endsWith(".css") ? "text/css" : target.endsWith(".js") ? "text/javascript" : target.endsWith(".woff2") ? "font/woff2" : target.endsWith(".woff") ? "font/woff" : target.endsWith(".jpg") ? "image/jpeg" : target.endsWith(".svg") ? "image/svg+xml" : "text/html";
   return send(response, fs.readFileSync(target), 200, type);
 });

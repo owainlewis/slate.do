@@ -93,7 +93,7 @@ func defaultBuckets() []CreateBucketInput {
 func (s *Store) ListAllBuckets(ctx context.Context, userID string) ([]Bucket, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT l.id::text, l.name, l.goal, l.is_inbox, l.limit_count, l.sort_order,
-			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done')::int AS open_count,
+			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done' AND t.parent_task_id IS NULL)::int AS open_count,
 			l.created_at, l.updated_at
 		FROM buckets l
 		LEFT JOIN tasks t ON t.bucket_id = l.id
@@ -222,7 +222,7 @@ func (s *Store) GetBucket(ctx context.Context, userID string, id string) (Bucket
 func (s *Store) GetBucketForAgent(ctx context.Context, userID string, agentID string, id string) (Bucket, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT b.id::text, b.name, b.goal, b.is_inbox, b.limit_count, b.sort_order,
-			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done')::int AS open_count,
+			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done' AND t.parent_task_id IS NULL)::int AS open_count,
 			b.created_at, b.updated_at
 		FROM buckets b
 		JOIN tasks t ON t.bucket_id = b.id AND t.assignee_agent_id = $3
@@ -1995,7 +1995,7 @@ func taskSearchPattern(query string) string {
 func (s *Store) getBucket(ctx context.Context, userID string, id string) (Bucket, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT b.id::text, b.name, b.goal, b.is_inbox, b.limit_count, b.sort_order,
-			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done')::int AS open_count,
+			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done' AND t.parent_task_id IS NULL)::int AS open_count,
 			b.created_at, b.updated_at
 		FROM buckets b
 		LEFT JOIN tasks t ON t.bucket_id = b.id

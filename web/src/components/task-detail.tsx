@@ -1,8 +1,9 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Bot, CalendarDays, Check, ChevronDown, Circle, MessageSquare, Plus, Send, Trash2 } from "lucide-react"
+import { ArrowLeft, Bot, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, MessageSquare, MoreHorizontal, Plus, RotateCcw, Send, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input, Label, Select, Textarea } from "@/components/ui/field"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { PriorityMark, PriorityPicker, type Priority } from "@/components/priority"
@@ -12,7 +13,7 @@ import type { Entry, Task, TaskStatus } from "@/lib/types"
 
 const statuses: Array<{ value: TaskStatus; label: string }> = [
   { value: "new", label: "Todo" },
-  { value: "queued", label: "Ready" },
+  { value: "queued", label: "Queued" },
   { value: "working", label: "In Progress" },
   { value: "needs_review", label: "Review" },
   { value: "done", label: "Done" },
@@ -26,7 +27,7 @@ function isPastDate(value: string) {
   return value < localDate
 }
 
-export function TaskDetail({ taskId, onClose, onOpenTask }: { taskId: string; onClose: () => void; onOpenTask?: (id: string) => void }) {
+export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel = "Back to all tasks" }: { taskId: string; onClose: () => void; onOpenTask?: (id: string) => void; backLabel?: string }) {
   const { lists, agents } = useApp()
   const queryClient = useQueryClient()
   const [draft, setDraft] = React.useState<Partial<Task>>({})
@@ -52,6 +53,10 @@ export function TaskDetail({ taskId, onClose, onOpenTask }: { taskId: string; on
       queryClient.invalidateQueries({ queryKey: ["task", taskId] }),
       queryClient.invalidateQueries({ queryKey: ["agent"] }),
       queryClient.invalidateQueries({ queryKey: ["lists"] }),
+      queryClient.invalidateQueries({ queryKey: ["inbox"] }),
+      queryClient.invalidateQueries({ queryKey: ["inbox-review"] }),
+      queryClient.invalidateQueries({ queryKey: ["runs-overview"] }),
+      queryClient.invalidateQueries({ queryKey: ["global-task-search"] }),
     ])
   }
 
@@ -73,6 +78,17 @@ export function TaskDetail({ taskId, onClose, onOpenTask }: { taskId: string; on
     mutationFn: () => api.del(`/api/v1/tasks/${encodeURIComponent(taskId)}`),
     onSuccess: async () => { queryClient.removeQueries({ queryKey: ["task", taskId] }); await invalidateTaskSurfaces(); onClose() },
     onError: value => setError(value instanceof Error ? value.message : "Could not delete task"),
+  })
+
+  const review = useMutation({
+    mutationFn: (status: "working" | "done") => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, { status }),
+    onSuccess: async (updated, status) => {
+      queryClient.setQueryData(["task", taskId], updated)
+      setDraft({ ...updated, priority: updated.priority || "p1" })
+      await invalidateTaskSurfaces()
+      if (status === "done") onClose()
+    },
+    onError: value => setError(value instanceof Error ? value.message : "Could not review task"),
   })
 
   const createSubtask = useMutation({
@@ -100,7 +116,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask }: { taskId: string; on
   const task = { ...(taskQuery.data || {}), ...draft } as Task
   const set = <K extends keyof Task>(key: K, value: Task[K]) => setDraft(current => ({ ...current, [key]: value }))
   const list = lists.find(item => item.id === task.bucketId)
-  const backLabel = task.parentTaskId ? "Back to parent task" : "Back to all tasks"
+  const backLabel = task.parentTaskId ? "Back to parent task" : returnLabel
   const subtasks = subtasksQuery.data?.tasks || []
   const completedSubtasks = subtasks.filter(subtask => subtask.status === "done").length
 
@@ -111,7 +127,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask }: { taskId: string; on
         <section aria-label="Task detail" data-detail-surface tabIndex={-1}>
           <header className="detail-head">
             <div className="detail-breadcrumb"><Button variant="ghost" size="sm" type="button" data-close-detail onClick={() => task.parentTaskId && onOpenTask ? onOpenTask(task.parentTaskId) : onClose()}><ArrowLeft className="size-4" />{backLabel}</Button><span>{list?.name || task.bucketName || "Inbox"}</span><span aria-hidden="true">/</span><strong>{task.parentTaskId ? "Subtask" : "Task"}</strong></div>
-            <Button variant="ghost" size="icon" type="button" onClick={onClose} aria-label="Close task"><span className="text-xl leading-none">×</span></Button>
+            <div className="detail-head-actions"><DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" type="button" aria-label="Task actions"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>Task options</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem id="delete-task" className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={remove.isPending} onSelect={() => { if (window.confirm("Delete this task and its subtasks?")) remove.mutate() }}><Trash2 className="size-4" />{remove.isPending ? "Deleting…" : "Delete task"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu><Button variant="ghost" size="icon" type="button" onClick={onClose} aria-label="Close task"><span className="text-xl leading-none">×</span></Button></div>
           </header>
           {taskQuery.isPending ? <div className="loading-page"><div className="spinner" /></div> : taskQuery.isError ? <div className="detail-main"><p className="status-message error" role="alert">{taskQuery.error.message}</p></div> : (
             <form className="detail-form" id="workspace-detail-form" onSubmit={event => { event.preventDefault(); if (!String(draft.title || "").trim()) return setError("Title is required."); save.mutate() }}>
@@ -128,14 +144,14 @@ export function TaskDetail({ taskId, onClose, onOpenTask }: { taskId: string; on
                 <aside className="detail-properties" aria-label="Task properties">
                   <h2>Properties</h2>
                   <div className="property-row"><Label htmlFor="workspace-detail-status">Status</Label><Select id="workspace-detail-status" name="status" value={task.status || "new"} onChange={event => set("status", event.target.value as TaskStatus)}>{statuses.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></div>
-                  <div className="property-row"><Label htmlFor="workspace-detail-owner">Owner</Label><Select id="workspace-detail-owner" name="assigneeAgentId" value={task.assigneeAgentId || ""} onChange={event => set("assigneeAgentId", event.target.value)}><option value="">You</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></div>
+                  <div className="property-row"><Label htmlFor="workspace-detail-owner">Agent</Label><Select id="workspace-detail-owner" name="assigneeAgentId" aria-label="Assigned agent" value={task.assigneeAgentId || ""} disabled={!agents.length} onChange={event => set("assigneeAgentId", event.target.value)}><option value="">{agents.length ? "No agent" : "None connected"}</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></div>
                   <div className="property-row"><Label htmlFor="workspace-detail-list">List</Label><Select id="workspace-detail-list" name="bucketId" value={task.bucketId || ""} disabled={Boolean(task.parentTaskId)} onChange={event => set("bucketId", event.target.value)}>{lists.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></div>
                   <div className="property-row"><Label>Priority</Label><PriorityPicker value={(task.priority || "p1") as Priority} onChange={value => set("priority", value)} allowNone={false} /></div>
                   <div className="property-row"><Label htmlFor="workspace-detail-date">Plan for</Label><Input id="workspace-detail-date" name="scheduledDate" type="date" value={task.scheduledDate || ""} onChange={event => set("scheduledDate", event.target.value)} /></div>
-                  <div className="properties-note"><strong>Task details</strong><p>Keep the outcome clear, assign an owner, and use priority to signal what matters most.</p></div>
+                  <div className="properties-note"><strong>{task.status === "needs_review" ? "Human approval" : "Task details"}</strong><p>{task.status === "needs_review" ? "Agent work is paused in Review. Approve the result or send it back for another pass." : task.assigneeAgentId ? "Assigned work is queued for a connected runner. Agent outputs return here for review." : "Assign an agent when this task is ready to run."}</p></div>
                 </aside>
               </div>
-              <footer className="detail-footer"><Button id="delete-task" type="button" variant="ghost" className="text-destructive" onClick={() => { if (window.confirm("Delete this task and its subtasks?")) remove.mutate() }} disabled={remove.isPending}><Trash2 className="size-4" />{remove.isPending ? "Deleting…" : "Delete task"}</Button><Button type="submit" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save changes"}</Button></footer>
+              <footer className="detail-footer"><div className="detail-footer-actions">{task.status === "needs_review" && <><Button id="send-back-task" type="button" variant="secondary" onClick={() => review.mutate("working")} disabled={review.isPending}><RotateCcw className="size-4" />Send back</Button><Button id="approve-task" type="button" onClick={() => review.mutate("done")} disabled={review.isPending}><CheckCircle2 className="size-4" />{review.isPending ? "Updating…" : "Approve"}</Button></>}<Button type="submit" variant={task.status === "needs_review" ? "secondary" : "default"} disabled={save.isPending || review.isPending}>{save.isPending ? "Saving…" : "Save changes"}</Button></div></footer>
             </form>
           )}
         </section>
