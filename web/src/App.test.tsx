@@ -11,7 +11,7 @@ function renderApp(path = "/") {
 test("login discards cached data from the previous account", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(["lists"], { lists: [{ id: "old-list", name: "Old private list", isInbox: true }] })
-  client.setQueryData(["tasks", "all", undefined, "limit=200&topLevel=true"], {
+  client.setQueryData(["tasks", "all", "", "limit=200&topLevel=true"], {
     pages: [{ tasks: [{ id: "old-task", title: "Old private task", bucketId: "old-list", status: "new", priority: "p1" }] }],
     pageParams: [""],
   })

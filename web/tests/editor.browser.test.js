@@ -26,6 +26,7 @@ function fixture() {
     tokens: [],
     requests: [],
     paginate: false,
+    accountGates: null,
   };
 }
 
@@ -35,7 +36,13 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
     const url = new URL(request.url, "http://localhost");
     state.requests.push(`${request.method} ${url.pathname}${url.search}`);
     if (url.pathname === "/api/v1/me" && request.method === "GET") return json(response, { authenticated: true, user: state.user });
-    if (url.pathname === "/api/v1/lists" && request.method === "GET") return json(response, { lists: state.lists });
+    if (url.pathname === "/api/v1/lists" && request.method === "GET") {
+      if (state.accountGates?.lists) {
+        state.accountGates.lists.markRequested();
+        await state.accountGates.lists.released;
+      }
+      return json(response, { lists: state.lists });
+    }
     if (url.pathname === "/api/v1/lists" && request.method === "POST") {
       const input = await requestJSON(request);
       const list = { id: `list-${state.lists.length}`, name: input.name, goal: "", isInbox: false, openCount: 0 };
@@ -63,6 +70,10 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       return json(response, task, 201);
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
+      if (state.accountGates?.tasks) {
+        state.accountGates.tasks.markRequested();
+        await state.accountGates.tasks.released;
+      }
       if (state.paginate) {
         if (url.searchParams.get("cursor") === "page-two") return json(response, { tasks: [state.tasks[1]] });
         return json(response, { tasks: [state.tasks[0]], nextCursor: "page-two" });
@@ -188,7 +199,17 @@ test("registering a new account cannot reuse the previous account cache", async 
   await page.getByLabel("Password").fill("new-owner-password");
   await page.getByLabel("Invitation code").fill("local-invite");
   const requestStart = state.requests.length;
+  const gates = { lists: requestGate(), tasks: requestGate() };
+  state.accountGates = gates;
   await page.getByRole("button", { name: "Create account" }).click();
+
+  await waitForRequest(gates.lists);
+  assert.equal(await page.locator("[data-task]").count(), 0);
+  gates.lists.release();
+  await waitForRequest(gates.tasks);
+  assert.equal(await page.locator("[data-task]").count(), 0);
+  gates.tasks.release();
+
   await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
   assert.equal(await page.locator("[data-task]").count(), 0);
   const accountRequests = state.requests.slice(requestStart);
@@ -337,3 +358,16 @@ test("mobile navigation and task detail fit a narrow viewport", async t => {
 function json(response, body, status = 200) { response.writeHead(status, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); }
 async function requestJSON(request) { let body = ""; for await (const chunk of request) body += chunk; return JSON.parse(body || "{}"); }
 function file(response, name, type) { response.writeHead(200, { "Content-Type": type }); response.end(fs.readFileSync(path.join(dist, name))); }
+function requestGate() {
+  let markRequested;
+  let release;
+  const requested = new Promise(resolve => { markRequested = resolve; });
+  const released = new Promise(resolve => { release = resolve; });
+  return { requested, released, markRequested, release };
+}
+async function waitForRequest(gate) {
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("account data request did not start")), 2000);
+    gate.requested.then(() => { clearTimeout(timeout); resolve(); }, reject);
+  });
+}
