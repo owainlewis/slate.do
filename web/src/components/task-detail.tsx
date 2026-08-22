@@ -50,6 +50,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   const subtasksQuery = useQuery({
     queryKey: ["subtasks", taskId],
     queryFn: () => api.get<{ tasks: Task[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/subtasks`),
+    enabled: Boolean(taskQuery.data && !taskQuery.data.parentTaskId),
   })
   const entriesQuery = useQuery({ queryKey: ["entries", taskId], queryFn: () => api.get<{ entries: Entry[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/entries`) })
 

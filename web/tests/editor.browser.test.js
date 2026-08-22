@@ -1062,6 +1062,11 @@ test("subtasks start in creation order and mouse or keyboard reordering persists
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Research examples", "Draft outline"]);
+
+  await page.locator(".subtask-open").filter({ hasText: "Research examples" }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Title"]')?.value === "Research examples");
+  await page.waitForLoadState("networkidle");
+  assert.equal(state.requests.includes("GET /api/v1/tasks/task-child/subtasks"), false);
 });
 
 test("dragging a task moves it through the workflow", async t => {

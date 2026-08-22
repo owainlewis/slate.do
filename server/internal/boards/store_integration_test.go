@@ -472,6 +472,10 @@ func TestSubtasksDefaultToCreationOrderAndCanBeReordered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Already in the list"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	parent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Ship onboarding"})
 	if err != nil {
 		t.Fatal(err)
@@ -493,10 +497,12 @@ func TestSubtasksDefaultToCreationOrderAndCanBeReordered(t *testing.T) {
 	}
 
 	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{first.ID, second.ID})
+	assertTaskOrder(t, store, ctx, userID, bucket.ID, []string{before.ID, parent.ID, first.ID, second.ID})
 	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{second.ID, first.ID}); err != nil {
 		t.Fatal(err)
 	}
 	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{second.ID, first.ID})
+	assertTaskOrder(t, store, ctx, userID, bucket.ID, []string{before.ID, parent.ID, second.ID, first.ID})
 
 	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{first.ID}); !errors.Is(err, ErrInvalidData) {
 		t.Fatalf("incomplete subtask order error = %v, want ErrInvalidData", err)
@@ -511,10 +517,31 @@ func TestSubtasksDefaultToCreationOrderAndCanBeReordered(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{second.ID, first.ID, third.ID})
+	legacyBucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Legacy split"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyNeighbor, err := store.CreateTask(ctx, userID, legacyBucket.ID, CreateTaskInput{Title: "Keep this task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET bucket_id = $2 WHERE id = $1", first.ID, legacyBucket.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{first.ID, second.ID, third.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{first.ID, second.ID, third.ID})
+	assertTaskOrder(t, store, ctx, userID, bucket.ID, []string{before.ID, parent.ID, first.ID, second.ID, third.ID})
+	assertTaskOrder(t, store, ctx, userID, legacyBucket.ID, []string{legacyNeighbor.ID})
+	repaired, err := store.GetTask(ctx, userID, first.ID)
+	if err != nil || repaired.BucketID != parent.BucketID {
+		t.Fatalf("repaired split subtask = %#v, %v", repaired, err)
+	}
 
 	if _, err := db.Exec(ctx, `
 		INSERT INTO tasks (bucket_id, parent_task_id, title, kind, status, sort_order, created_at)
-		SELECT $1, $2, 'Completed subtask ' || generated, 'action', 'done', generated + 3,
+		SELECT $1, $2, 'Completed subtask ' || generated, 'action', 'done', generated + 4,
 			now() + generated * interval '1 millisecond'
 		FROM generate_series(1, 201) generated
 	`, bucket.ID, parent.ID); err != nil {
