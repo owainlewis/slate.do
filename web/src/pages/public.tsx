@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowRight, CheckCircle2 } from "lucide-react"
+import { ArrowRight, Bot, CheckCircle2, ListTodo, Mail, ShieldCheck } from "lucide-react"
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom"
 import { Brand } from "@/components/shell"
 import { Button } from "@/components/ui/button"
@@ -112,28 +112,45 @@ export function LandingPage() {
         </nav>
         <section className="hero">
           <div className="hero-copy">
-            <p className="landing-kicker">A control plane for human + agent work</p>
-            <h1>Stay on top of everything. <em>Operate at agent speed.</em></h1>
-            <p>Slate turns your emails, projects, commitments and loose ends into one clear operating plan. Agents help organise the noise, surface what needs your attention and execute the work.</p>
+            <p className="landing-kicker">One plan. Human judgement. Agent execution.</p>
+            <h1>One operating plan <em>for you and your agents.</em></h1>
+            <p>Decide what deserves attention. Give agents clear work to move forward. Review only the decisions that genuinely need you.</p>
             <div className="hero-actions"><Button asChild size="lg" className="landing-primary-cta"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open Slate" : "Log in to Slate"}<ArrowRight className="size-4" /></Link></Button><Button asChild size="lg" variant="ghost" className="landing-secondary-cta"><a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a></Button></div>
-            <div className="hero-proof" aria-label="Slate principles"><span>Human judgement</span><span>Agent execution</span><span>One shared state</span></div>
+            <div className="hero-proof" aria-label="Slate principles"><span>Capture the work</span><span>Agents move it forward</span><span>You stay in control</span></div>
           </div>
-          <figure className="hero-product">
-            <div className="hero-product-bar" aria-hidden="true"><i /><i /><i /><span>slate.do / focus</span></div>
+          <aside className="hero-signal" aria-label="A workflow moving through Slate">
+            <header><span>Today in Slate</span><strong><i />Live</strong></header>
+            <article><span className="signal-icon"><Mail /></span><div><small>New input</small><strong>Launch brief arrived</strong><p>Turn the notes into a decision-ready plan.</p></div><time>09:14</time></article>
+            <div className="signal-line" aria-hidden="true" />
+            <article><span className="signal-icon"><Bot /></span><div><small>Research agent</small><strong>Building the first draft</strong><p>Reviewing context and collecting evidence.</p></div><span className="signal-status">Working</span></article>
+            <footer><ShieldCheck /><span><strong>Ready for your judgement</strong><small>One review, with the full trail attached.</small></span><ArrowRight /></footer>
+          </aside>
+        </section>
+      </header>
+      <main>
+        <section className="landing-section landing-plan-section">
+          <div className="landing-section-heading"><p className="landing-kicker">One shared state</p><h2>Everything becomes clear work in one calm place.</h2><p>Emails, projects and loose ends become tasks with an owner, a brief, a status and a visible next step. People and agents always read the same truth.</p></div>
+          <figure className="hero-product landing-product-stage">
+            <div className="hero-product-bar" aria-hidden="true"><i /><i /><i /><span>slate.do / all tasks</span></div>
             <LandingProductPreview />
             <figcaption>Slate showing tasks moving from todo through progress and review to done.</figcaption>
           </figure>
         </section>
-      </header>
-      <main>
-        <section className="landing-section">
-          <p className="landing-kicker">Less, on purpose</p>
-          <h2>One calm place for people and agents to decide what happens next.</h2>
-          <div className="principles">
-            <article className="principle"><span>01</span><h3>Lists for clear thinking</h3><p>Shape work around projects, goals and areas without turning your system into a maze.</p></article>
-            <article className="principle"><span>02</span><h3>One shared state</h3><p>Every task carries its brief, conversation, output and status. Everyone reads the same truth.</p></article>
-            <article className="principle"><span>03</span><h3>You think, they execute</h3><p>Keep the judgement. Give agents the ground to cover. Review the work that genuinely needs you.</p></article>
+        <section className="landing-workflow-section">
+          <div className="landing-workflow-inner">
+            <div className="landing-section-heading"><p className="landing-kicker">A complete handoff</p><h2>You decide what matters. Agents move it forward.</h2><p>Slate keeps the brief, execution and review together, so delegation never means losing context or control.</p></div>
+            <div className="workflow-stages">
+              <article><span className="workflow-number">01</span><span className="workflow-icon"><Mail /></span><small>Capture</small><h3>Bring the work into focus.</h3><p>An email, idea or commitment becomes one clear task with the right context attached.</p><div className="workflow-example"><Mail /><span><small>From your inbox</small><strong>Prepare the launch decision</strong></span></div></article>
+              <article><span className="workflow-number">02</span><span className="workflow-icon"><Bot /></span><small>Execute</small><h3>Give agents ground to cover.</h3><p>Assign a bounded outcome. The agent works from the same brief and records what it did.</p><div className="workflow-example"><Bot /><span><small>Research agent · Working</small><strong>Comparing three launch options</strong></span></div></article>
+              <article><span className="workflow-number">03</span><span className="workflow-icon"><CheckCircle2 /></span><small>Review</small><h3>Make the decision, not the busywork.</h3><p>See the output, evidence and conversation together. Approve it or send it back with context.</p><div className="workflow-example approved"><CheckCircle2 /><span><small>Decision ready</small><strong>Launch brief ready to approve</strong></span></div></article>
+            </div>
           </div>
+        </section>
+        <section className="landing-final-cta">
+          <span className="workflow-icon"><ListTodo /></span>
+          <p className="landing-kicker">Start with one clear list</p>
+          <h2>Build a plan you can trust. Then let agents help you run it.</h2>
+          <Button asChild size="lg" className="landing-final-button"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open Slate" : "Log in to Slate"}<ArrowRight className="size-4" /></Link></Button>
         </section>
       </main>
     </div>
