@@ -151,7 +151,7 @@ a.bg-primary { color: var(--primary-foreground); }
 
 .board-scroll { min-height: 0; flex: 1; overflow-x: auto; padding-bottom: .75rem; }
 .board { display: grid; width: 100%; min-width: 900px; min-height: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .65rem; align-items: stretch; }
-.board-column { display: flex; min-height: 100%; flex-direction: column; border: 0; border-radius: .85rem; background: color-mix(in srgb, #64748b 3.4%, var(--background)); padding: .7rem; transition: .15s ease; }
+.board-column { display: flex; min-height: 100%; flex-direction: column; border: 1px solid transparent; border-radius: .85rem; background: color-mix(in srgb, #64748b 3.4%, var(--background)); padding: .7rem; transition: .15s ease; }
 .board-column.column-working { background: color-mix(in srgb, #46789f 3.8%, var(--background)); }
 .board-column.column-review { background: color-mix(in srgb, #d97706 2.6%, var(--background)); }
 .board-column.column-done { background: color-mix(in srgb, #059669 2.4%, var(--background)); }

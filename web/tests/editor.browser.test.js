@@ -295,7 +295,17 @@ test("task detail edits, subtasks, and conversation entries use the existing API
 test("dragging a task moves it through the workflow", async t => {
   const { page, state } = await startApp(t);
   const card = page.locator('[data-task="task-inbox"]');
-  await card.dragTo(page.locator('[data-status="working"]'));
+  const target = page.locator('[data-status="working"]');
+  await target.evaluate(element => element.classList.add("drag-over"));
+  const dragBorder = await target.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { color: style.borderColor, style: style.borderStyle, width: style.borderWidth };
+  });
+  assert.equal(dragBorder.style, "solid");
+  assert.equal(dragBorder.width, "1px");
+  assert.notEqual(dragBorder.color, "rgba(0, 0, 0, 0)");
+  await target.evaluate(element => element.classList.remove("drag-over"));
+  await card.dragTo(target);
   await page.waitForFunction(() => document.querySelector('[data-status="working"] [data-task="task-inbox"]'));
   assert.equal(state.tasks.find(task => task.id === "task-inbox").status, "working");
 });
