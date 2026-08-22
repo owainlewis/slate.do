@@ -1,10 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import App from "./App"
 
 afterEach(() => {
+  cleanup()
   document.documentElement.classList.remove("dark")
+  vi.unstubAllGlobals()
 })
 
 function renderApp(path = "/") {

@@ -38,7 +38,11 @@ function ProtectedRoutes() {
 
 function PublicRouteLayout() {
   useLayoutEffect(() => {
+    const wasDark = document.documentElement.classList.contains("dark")
     document.documentElement.classList.remove("dark")
+    return () => {
+      document.documentElement.classList.toggle("dark", wasDark)
+    }
   }, [])
   return <Outlet />
 }
