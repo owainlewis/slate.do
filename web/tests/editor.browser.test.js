@@ -297,6 +297,7 @@ test("dragging a task moves it through the workflow", async t => {
   const card = page.locator('[data-task="task-inbox"]');
   const target = page.locator('[data-status="working"]');
   await target.evaluate(element => element.classList.add("drag-over"));
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-status="working"]')).borderColor !== "rgba(0, 0, 0, 0)");
   const dragBorder = await target.evaluate(element => {
     const style = getComputedStyle(element);
     return { color: style.borderColor, style: style.borderStyle, width: style.borderWidth };
