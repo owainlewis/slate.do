@@ -26,6 +26,7 @@ function fixture() {
     tokens: [],
     requests: [],
     paginate: false,
+    accountGates: null,
   };
 }
 
@@ -35,7 +36,13 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
     const url = new URL(request.url, "http://localhost");
     state.requests.push(`${request.method} ${url.pathname}${url.search}`);
     if (url.pathname === "/api/v1/me" && request.method === "GET") return json(response, { authenticated: true, user: state.user });
-    if (url.pathname === "/api/v1/lists" && request.method === "GET") return json(response, { lists: state.lists });
+    if (url.pathname === "/api/v1/lists" && request.method === "GET") {
+      if (state.accountGates?.lists) {
+        state.accountGates.lists.markRequested();
+        await state.accountGates.lists.released;
+      }
+      return json(response, { lists: state.lists });
+    }
     if (url.pathname === "/api/v1/lists" && request.method === "POST") {
       const input = await requestJSON(request);
       const list = { id: `list-${state.lists.length}`, name: input.name, goal: "", isInbox: false, openCount: 0 };
@@ -63,6 +70,10 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       return json(response, task, 201);
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
+      if (state.accountGates?.tasks) {
+        state.accountGates.tasks.markRequested();
+        await state.accountGates.tasks.released;
+      }
       if (state.paginate) {
         if (url.searchParams.get("cursor") === "page-two") return json(response, { tasks: [state.tasks[1]] });
         return json(response, { tasks: [state.tasks[0]], nextCursor: "page-two" });
@@ -135,6 +146,16 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
     if (url.pathname === "/api/v1/api-tokens" && request.method === "POST") { const input = await requestJSON(request); state.tokens.push({ id: `token-${state.tokens.length + 1}`, name: input.name }); return json(response, { token: "slate_personal_one_time_secret" }, 201); }
     if (url.pathname.startsWith("/api/v1/api-tokens/") && request.method === "DELETE") { state.tokens = state.tokens.filter(item => item.id !== url.pathname.split("/").at(-1)); return json(response, {}); }
     if (url.pathname === "/api/v1/me" && request.method === "PATCH") { Object.assign(state.user, await requestJSON(request)); return json(response, state.user); }
+    if (url.pathname === "/api/v1/auth/register" && request.method === "POST") {
+      const input = await requestJSON(request);
+      state.user = { id: "new-owner", email: input.email, displayName: input.displayName, theme: "light", entitlement: { plan: "pro", limits: { lists: 45, agents: 5, apiTokens: 10 } } };
+      state.lists = [{ id: "new-inbox", name: "Inbox", goal: "Capture now", isInbox: true, openCount: 0 }];
+      state.agents = [];
+      state.tasks = [];
+      state.subtasks = [];
+      state.entries = {};
+      return json(response, { authenticated: true, user: state.user }, 201);
+    }
     if (url.pathname.startsWith("/api/v1/auth/")) return json(response, { message: "Done" });
     if (url.pathname.startsWith("/assets/")) return file(response, url.pathname.slice(1), url.pathname.endsWith(".css") ? "text/css" : url.pathname.endsWith(".js") ? "text/javascript" : "font/woff2");
     const publicFile = url.pathname.slice(1);
@@ -162,6 +183,38 @@ test("React workspace renders the full task board accessibly", async t => {
   assert.deepEqual(await page.getByLabel("Filter by agent").locator("option").allTextContents(), ["Any agent", "Research agent"]);
   const results = await new AxeBuilder({ page }).analyze();
   assert.deepEqual(results.violations, []);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("registering a new account cannot reuse the previous account cache", async t => {
+  const { page, state, pageErrors } = await startApp(t);
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
+  await page.evaluate(() => {
+    window.history.pushState({}, "", "/early-access");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await page.getByRole("heading", { name: "Join Slate." }).waitFor();
+  await page.getByLabel("Display name").fill("New Owner");
+  await page.getByLabel("Email").fill("new-owner@example.com");
+  await page.getByLabel("Password").fill("new-owner-password");
+  await page.getByLabel("Invitation code").fill("local-invite");
+  const requestStart = state.requests.length;
+  const gates = { lists: requestGate(), tasks: requestGate() };
+  state.accountGates = gates;
+  await page.getByRole("button", { name: "Create account" }).click();
+
+  await waitForRequest(gates.lists);
+  assert.equal(await page.locator("[data-task]").count(), 0);
+  gates.lists.release();
+  await waitForRequest(gates.tasks);
+  assert.equal(await page.locator("[data-task]").count(), 0);
+  gates.tasks.release();
+
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  assert.equal(await page.locator("[data-task]").count(), 0);
+  const accountRequests = state.requests.slice(requestStart);
+  assert.equal(accountRequests.includes("GET /api/v1/lists"), true);
+  assert.equal(accountRequests.some(request => request.startsWith("GET /api/v1/tasks")), true);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -305,3 +358,16 @@ test("mobile navigation and task detail fit a narrow viewport", async t => {
 function json(response, body, status = 200) { response.writeHead(status, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); }
 async function requestJSON(request) { let body = ""; for await (const chunk of request) body += chunk; return JSON.parse(body || "{}"); }
 function file(response, name, type) { response.writeHead(200, { "Content-Type": type }); response.end(fs.readFileSync(path.join(dist, name))); }
+function requestGate() {
+  let markRequested;
+  let release;
+  const requested = new Promise(resolve => { markRequested = resolve; });
+  const released = new Promise(resolve => { release = resolve; });
+  return { requested, released, markRequested, release };
+}
+async function waitForRequest(gate) {
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("account data request did not start")), 2000);
+    gate.requested.then(() => { clearTimeout(timeout); resolve(); }, reject);
+  });
+}
