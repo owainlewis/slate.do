@@ -211,6 +211,16 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
     if (url.pathname === "/api/v1/api-tokens" && request.method === "POST") { const input = await requestJSON(request); state.tokens.push({ id: `token-${state.tokens.length + 1}`, name: input.name }); return json(response, { token: "slate_personal_one_time_secret" }, 201); }
     if (url.pathname.startsWith("/api/v1/api-tokens/") && request.method === "DELETE") { state.tokens = state.tokens.filter(item => item.id !== url.pathname.split("/").at(-1)); return json(response, {}); }
     if (url.pathname === "/api/v1/me" && request.method === "PATCH") { Object.assign(state.user, await requestJSON(request)); return json(response, state.user); }
+    if (url.pathname === "/api/v1/auth/register" && request.method === "POST") {
+      const input = await requestJSON(request);
+      state.user = { id: "new-owner", email: input.email, displayName: input.displayName, theme: "light", entitlement: { plan: "pro", limits: { lists: 45, agents: 5, apiTokens: 10 } } };
+      state.lists = [{ id: "new-inbox", name: "Inbox", goal: "Capture now", isInbox: true, openCount: 0 }];
+      state.agents = [];
+      state.tasks = [];
+      state.subtasks = [];
+      state.entries = {};
+      return json(response, { authenticated: true, user: state.user }, 201);
+    }
     if (url.pathname.startsWith("/api/v1/auth/")) return json(response, { message: "Done" });
     if (url.pathname.startsWith("/assets/")) return file(response, url.pathname.slice(1), url.pathname.endsWith(".css") ? "text/css" : url.pathname.endsWith(".js") ? "text/javascript" : "font/woff2");
     const publicFile = url.pathname.slice(1);
@@ -335,6 +345,28 @@ test("public routes stay light and the app restores the saved dark theme", async
   await page.getByRole("link", { name: "Open Slate", exact: true }).click();
   await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), true);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("registering a new account cannot reuse the previous account cache", async t => {
+  const { page, state, pageErrors } = await startApp(t);
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
+  await page.evaluate(() => {
+    window.history.pushState({}, "", "/early-access");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await page.getByRole("heading", { name: "Join Slate." }).waitFor();
+  await page.getByLabel("Display name").fill("New Owner");
+  await page.getByLabel("Email").fill("new-owner@example.com");
+  await page.getByLabel("Password").fill("new-owner-password");
+  await page.getByLabel("Invitation code").fill("local-invite");
+  const requestStart = state.requests.length;
+  await page.getByRole("button", { name: "Create account" }).click();
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  assert.equal(await page.locator("[data-task]").count(), 0);
+  const accountRequests = state.requests.slice(requestStart);
+  assert.equal(accountRequests.includes("GET /api/v1/lists"), true);
+  assert.equal(accountRequests.some(request => request.startsWith("GET /api/v1/tasks")), true);
   assert.deepEqual(pageErrors, []);
 });
 
