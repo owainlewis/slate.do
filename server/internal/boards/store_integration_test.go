@@ -400,6 +400,157 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	assertStorageUsage(t, ctx, db, userID, 0, 0)
 }
 
+func TestSubtasksDefaultToCreationOrderAndCanBeReordered(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	otherUserID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", userID, otherUserID)
+	})
+
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Product"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Already in the list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Ship onboarding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Write the copy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Record the demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE tasks
+		SET created_at = CASE id WHEN $1 THEN now() - interval '2 hours' ELSE now() - interval '1 hour' END
+		WHERE id IN ($1, $2)
+	`, first.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{first.ID, second.ID})
+	assertTaskOrder(t, store, ctx, userID, bucket.ID, []string{before.ID, parent.ID, first.ID, second.ID})
+	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{second.ID, first.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{second.ID, first.ID})
+	assertTaskOrder(t, store, ctx, userID, bucket.ID, []string{before.ID, parent.ID, second.ID, first.ID})
+
+	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{first.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("incomplete subtask order error = %v, want ErrInvalidData", err)
+	}
+	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{first.ID, first.ID}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("duplicate subtask order error = %v, want ErrInvalidData", err)
+	}
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{second.ID, first.ID})
+
+	third, err := store.CreateSubtask(ctx, userID, parent.ID, CreateTaskInput{Title: "Publish the launch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{second.ID, first.ID, third.ID})
+	legacyBucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Legacy split"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyNeighbor, err := store.CreateTask(ctx, userID, legacyBucket.ID, CreateTaskInput{Title: "Keep this task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET bucket_id = $2 WHERE id = $1", first.ID, legacyBucket.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{first.ID, second.ID, third.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{first.ID, second.ID, third.ID})
+	assertTaskOrder(t, store, ctx, userID, bucket.ID, []string{before.ID, parent.ID, first.ID, second.ID, third.ID})
+	assertTaskOrder(t, store, ctx, userID, legacyBucket.ID, []string{legacyNeighbor.ID})
+	repaired, err := store.GetTask(ctx, userID, first.ID)
+	if err != nil || repaired.BucketID != parent.BucketID {
+		t.Fatalf("repaired split subtask = %#v, %v", repaired, err)
+	}
+	otherBucket, err := store.CreateBucket(ctx, otherUserID, CreateBucketInput{Name: "Other account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignChild, err := store.CreateTask(ctx, otherUserID, otherBucket.ID, CreateTaskInput{Title: "Malformed foreign child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET parent_task_id = $2 WHERE id = $1", foreignChild.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{third.ID, second.ID, first.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{third.ID, second.ID, first.ID})
+	foreignAfter, err := store.GetTask(ctx, otherUserID, foreignChild.ID)
+	if err != nil || foreignAfter.BucketID != otherBucket.ID || foreignAfter.ParentTaskID != parent.ID {
+		t.Fatalf("foreign malformed child changed = %#v, %v", foreignAfter, err)
+	}
+
+	if _, err := db.Exec(ctx, `
+		INSERT INTO tasks (bucket_id, parent_task_id, title, kind, status, sort_order, created_at)
+		SELECT $1, $2, 'Completed subtask ' || generated, 'action', 'done', generated + 4,
+			now() + generated * interval '1 millisecond'
+		FROM generate_series(1, 201) generated
+	`, bucket.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	all, err := store.ListSubtasks(ctx, userID, parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 204 {
+		t.Fatalf("complete subtask count = %d, want 204", len(all))
+	}
+	allIDs := make([]string, len(all))
+	for index, task := range all {
+		allIDs[index] = task.ID
+	}
+	for left, right := 0, len(allIDs)-1; left < right; left, right = left+1, right-1 {
+		allIDs[left], allIDs[right] = allIDs[right], allIDs[left]
+	}
+	if err := store.ReorderSubtasks(ctx, userID, parent.ID, allIDs); err != nil {
+		t.Fatal(err)
+	}
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, allIDs)
+	firstPage, err := store.ListTaskPage(ctx, userID, TaskFilter{ParentTaskID: parent.ID, Limit: 1})
+	if err != nil || len(firstPage.Tasks) != 1 || firstPage.NextCursor == "" {
+		t.Fatalf("paginated subtask first page = %#v, %v", firstPage, err)
+	}
+	secondPage, err := store.ListTaskPage(ctx, userID, TaskFilter{ParentTaskID: parent.ID, Limit: 1, Cursor: firstPage.NextCursor})
+	if err != nil || len(secondPage.Tasks) != 1 || secondPage.Tasks[0].ID == firstPage.Tasks[0].ID {
+		t.Fatalf("paginated subtask second page = %#v, %v", secondPage, err)
+	}
+}
+
+func assertSubtaskOrder(t *testing.T, store *Store, ctx context.Context, userID string, parentTaskID string, want []string) {
+	t.Helper()
+	tasks, err := store.ListSubtasks(ctx, userID, parentTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(tasks))
+	for index, task := range tasks {
+		got[index] = task.ID
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("subtask order = %v, want %v", got, want)
+	}
+}
+
 func TestTaskSearchTreatsPatternCharactersAsLiteralText(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

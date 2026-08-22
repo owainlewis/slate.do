@@ -159,6 +159,31 @@ func (h *Handler) CreateSubtask(w http.ResponseWriter, r *http.Request, user aut
 	writeJSON(w, http.StatusCreated, task)
 }
 
+func (h *Handler) ListSubtasks(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validatePathID(w, "parent task", r.PathValue("id")) {
+		return
+	}
+	tasks, err := h.store.ListSubtasks(r.Context(), user.ID, r.PathValue("id"))
+	if handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (h *Handler) ReorderSubtasks(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validatePathID(w, "parent task", r.PathValue("id")) {
+		return
+	}
+	var input reorderInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := h.store.ReorderSubtasks(r.Context(), user.ID, r.PathValue("id"), input.IDs); handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var task Task
 	var err error

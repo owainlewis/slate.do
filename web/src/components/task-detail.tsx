@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowLeft, Bot, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, MessageSquare, MoreHorizontal, Plus, RotateCcw, Send, Trash2 } from "lucide-react"
+import { ArrowLeft, Bot, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, GripVertical, MessageSquare, MoreHorizontal, Plus, RotateCcw, Send, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -40,7 +40,8 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   const taskQuery = useQuery({ queryKey: ["task", taskId], queryFn: () => api.get<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}`) })
   const subtasksQuery = useQuery({
     queryKey: ["subtasks", taskId],
-    queryFn: () => api.get<{ tasks: Task[] }>(`/api/v1/tasks?parentTaskId=${encodeURIComponent(taskId)}&limit=200`),
+    queryFn: () => api.get<{ tasks: Task[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/subtasks`),
+    enabled: Boolean(taskQuery.data && !taskQuery.data.parentTaskId),
   })
   const entriesQuery = useQuery({ queryKey: ["entries", taskId], queryFn: () => api.get<{ entries: Entry[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/entries`) })
 
@@ -122,6 +123,23 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
     onError: value => setError(value instanceof Error ? value.message : "Could not update subtask"),
   })
 
+  const reorderSubtasks = useMutation({
+    mutationFn: (ids: string[]) => api.post(`/api/v1/tasks/${encodeURIComponent(taskId)}/reorder-subtasks`, { ids }),
+    onMutate: async ids => {
+      setError("")
+      await queryClient.cancelQueries({ queryKey: ["subtasks", taskId] })
+      const previous = queryClient.getQueryData<{ tasks: Task[] }>(["subtasks", taskId])
+      const tasksByID = new Map((previous?.tasks || []).map(subtask => [subtask.id, subtask]))
+      queryClient.setQueryData(["subtasks", taskId], { tasks: ids.map(id => tasksByID.get(id)).filter((subtask): subtask is Task => Boolean(subtask)) })
+      return { previous }
+    },
+    onError: (value, _ids, context) => {
+      if (context?.previous) queryClient.setQueryData(["subtasks", taskId], context.previous)
+      setError(value instanceof Error ? value.message : "Could not reorder subtasks")
+    },
+    onSettled: async () => { await queryClient.invalidateQueries({ queryKey: ["subtasks", taskId] }) },
+  })
+
   const createEntry = useMutation({
     mutationFn: () => api.post<Entry & { taskStatus?: TaskStatus; taskReviewReason?: string }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/entries`, { kind: entryKind, body: entryText.trim() }, { "Idempotency-Key": crypto.randomUUID() }),
     onSuccess: async entry => {
@@ -138,6 +156,15 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   const backLabel = task.parentTaskId ? "Back to parent task" : returnLabel
   const subtasks = subtasksQuery.data?.tasks || []
   const completedSubtasks = subtasks.filter(subtask => subtask.status === "done").length
+  const moveSubtask = (id: string, targetIndex: number) => {
+    const currentIndex = subtasks.findIndex(subtask => subtask.id === id)
+    const nextIndex = Math.max(0, Math.min(targetIndex, subtasks.length - 1))
+    if (currentIndex < 0 || currentIndex === nextIndex || reorderSubtasks.isPending) return
+    const ordered = [...subtasks]
+    const [moved] = ordered.splice(currentIndex, 1)
+    ordered.splice(nextIndex, 0, moved)
+    reorderSubtasks.mutate(ordered.map(subtask => subtask.id))
+  }
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
@@ -155,7 +182,46 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
                 <input id="workspace-detail-title" name="title" aria-label="Title" className="detail-title-input" value={String(draft.title || "")} onChange={event => set("title", event.target.value)} autoFocus />
                 <textarea name="description" aria-label="Brief" className="detail-description-input" value={String(draft.description || "")} onChange={event => set("description", event.target.value)} placeholder="Add a clear brief…" />
 
-                {!task.parentTaskId && <section className="detail-section subtask-section"><div className="section-heading subtask-heading"><div className="subtask-heading-copy"><ChevronDown aria-hidden="true" /><h2>Subtasks</h2><span className="subtask-progress"><Circle aria-hidden="true" /><span>{completedSubtasks}/{subtasks.length}</span></span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="subtask-add-trigger" aria-label="Add subtask" aria-expanded={showSubtaskComposer} onClick={() => setShowSubtaskComposer(value => !value)}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add subtask</TooltipContent></Tooltip></div><div className="subtask-list">{subtasks.map(subtask => <article key={subtask.id} className={`subtask-row ${subtask.status === "done" ? "is-complete" : ""}`}><PriorityMark priority={subtask.priority} /><button type="button" className="subtask-status" aria-label={subtask.status === "done" ? `Reopen ${subtask.title}` : `Complete ${subtask.title}`} disabled={toggleSubtask.isPending} onClick={() => toggleSubtask.mutate({ id: subtask.id, status: subtask.status === "done" ? "new" : "done" })}>{subtask.status === "done" ? <Check aria-hidden="true" /> : <span />}</button><button type="button" className="subtask-open" data-open-task={subtask.id} onClick={() => onOpenTask?.(subtask.id)}><span className="subtask-title">{subtask.title}</span></button><div className="subtask-meta">{subtask.scheduledDate && <span className={isPastDate(subtask.scheduledDate) && subtask.status !== "done" ? "is-overdue" : ""}><CalendarDays aria-hidden="true" />{shortDate(subtask.scheduledDate)}</span>}{subtask.assigneeAgentName && <span className="mini-avatar" aria-label={`Assigned to ${subtask.assigneeAgentName}`}>{initials(subtask.assigneeAgentName)}</span>}</div></article>)}{!subtasks.length && !showSubtaskComposer && <button type="button" className="subtask-empty" onClick={() => setShowSubtaskComposer(true)}><Plus aria-hidden="true" />Break this task into smaller steps</button>}{showSubtaskComposer && <div id="add-subtask" className="subtask-composer"><Input name="title" aria-label="New subtask title" value={subtaskTitle} autoFocus onChange={event => setSubtaskTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); if (subtaskTitle.trim()) createSubtask.mutate() } }} placeholder="Add a subtask…" /><Button type="button" size="sm" onClick={() => createSubtask.mutate()} disabled={!subtaskTitle.trim() || createSubtask.isPending}>{createSubtask.isPending ? "Adding…" : "Add"}</Button></div>}</div></section>}
+                {!task.parentTaskId && <section className="detail-section subtask-section">
+                  <div className="section-heading subtask-heading"><div className="subtask-heading-copy"><ChevronDown aria-hidden="true" /><h2>Subtasks</h2><span className="subtask-progress"><Circle aria-hidden="true" /><span>{completedSubtasks}/{subtasks.length}</span></span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="subtask-add-trigger" aria-label="Add subtask" aria-expanded={showSubtaskComposer} onClick={() => setShowSubtaskComposer(value => !value)}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add subtask</TooltipContent></Tooltip></div>
+                  <div className="subtask-list">
+                    {subtasks.map((subtask, index) => <article
+                      key={subtask.id}
+                      className={`subtask-row ${subtask.status === "done" ? "is-complete" : ""}`}
+                      onDragOver={event => event.preventDefault()}
+                      onDrop={event => {
+                        event.preventDefault()
+                        const draggedID = event.dataTransfer.getData("text/subtask-id")
+                        if (draggedID) moveSubtask(draggedID, index)
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="subtask-reorder"
+                        draggable
+                        disabled={reorderSubtasks.isPending}
+                        aria-label={`Reorder ${subtask.title}`}
+                        aria-keyshortcuts="ArrowUp ArrowDown"
+                        title="Drag to reorder. Use the arrow keys for precise movement."
+                        onDragStart={event => {
+                          event.dataTransfer.setData("text/subtask-id", subtask.id)
+                          event.dataTransfer.effectAllowed = "move"
+                        }}
+                        onKeyDown={event => {
+                          if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return
+                          event.preventDefault()
+                          moveSubtask(subtask.id, index + (event.key === "ArrowUp" ? -1 : 1))
+                        }}
+                      ><GripVertical aria-hidden="true" /></button>
+                      <PriorityMark priority={subtask.priority} />
+                      <button type="button" className="subtask-status" aria-label={subtask.status === "done" ? `Reopen ${subtask.title}` : `Complete ${subtask.title}`} disabled={toggleSubtask.isPending} onClick={() => toggleSubtask.mutate({ id: subtask.id, status: subtask.status === "done" ? "new" : "done" })}>{subtask.status === "done" ? <Check aria-hidden="true" /> : <span />}</button>
+                      <button type="button" className="subtask-open" data-open-task={subtask.id} onClick={() => onOpenTask?.(subtask.id)}><span className="subtask-title">{subtask.title}</span></button>
+                      <div className="subtask-meta">{subtask.scheduledDate && <span className={isPastDate(subtask.scheduledDate) && subtask.status !== "done" ? "is-overdue" : ""}><CalendarDays aria-hidden="true" />{shortDate(subtask.scheduledDate)}</span>}{subtask.assigneeAgentName && <span className="mini-avatar" aria-label={`Assigned to ${subtask.assigneeAgentName}`}>{initials(subtask.assigneeAgentName)}</span>}</div>
+                    </article>)}
+                    {!subtasks.length && !showSubtaskComposer && <button type="button" className="subtask-empty" onClick={() => setShowSubtaskComposer(true)}><Plus aria-hidden="true" />Break this task into smaller steps</button>}
+                    {showSubtaskComposer && <div id="add-subtask" className="subtask-composer"><Input name="title" aria-label="New subtask title" value={subtaskTitle} autoFocus onChange={event => setSubtaskTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); if (subtaskTitle.trim()) createSubtask.mutate() } }} placeholder="Add a subtask…" /><Button type="button" size="sm" onClick={() => createSubtask.mutate()} disabled={!subtaskTitle.trim() || createSubtask.isPending}>{createSubtask.isPending ? "Adding…" : "Add"}</Button></div>}
+                  </div>
+                </section>}
 
                 <section className="detail-section activity-section"><div className="section-heading"><h2>Activity</h2><span className="pill">{entriesQuery.data?.entries.length || 0}</span></div><div className="entry-list">{(entriesQuery.data?.entries || []).map(entry => <article className="entry-row" key={entry.id}><div className="entry-meta"><span className="flex items-center gap-1.5">{entry.kind === "output" ? <Bot className="size-3" /> : <MessageSquare className="size-3" />}{entry.authorName || (entry.authorKind === "agent" ? "Agent" : "You")} · {entry.kind}</span><time>{entry.createdAt ? new Date(entry.createdAt).toLocaleString() : ""}</time></div><p>{entryBody(entry)}</p></article>)}</div><div className="composer"><div className="view-toggle w-fit"><button type="button" className={entryKind === "comment" ? "active" : ""} onClick={() => setEntryKind("comment")}>Comment</button><button type="button" className={entryKind === "output" ? "active" : ""} onClick={() => setEntryKind("output")}>Output</button></div><Textarea id="card-entry-body" aria-label="Entry" value={entryText} onChange={event => setEntryText(event.target.value)} placeholder={entryKind === "output" ? "Add the result, links or deliverable…" : "Leave a comment…"} /><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{entryKind === "output" ? "Outputs move the task to Review." : "Comments stay with the task."}</span><Button id="add-card-entry" type="button" size="sm" onClick={() => createEntry.mutate()} disabled={!entryText.trim() || createEntry.isPending}><Send className="size-3.5" />{createEntry.isPending ? "Adding…" : `Add ${entryKind}`}</Button></div></div></section>
                 {error && <p className="status-message error mt-4" role="alert">{error}</p>}
