@@ -45,9 +45,10 @@ export function Authenticated({ children }: { children: React.ReactNode }) {
     enabled: authenticated,
   })
 
-  React.useEffect(() => {
-    const theme = session.data?.user?.theme === "light" ? "light" : "dark"
-    document.documentElement.classList.toggle("dark", theme === "dark")
+  React.useLayoutEffect(() => {
+    const theme = session.data?.user?.theme
+    if (!theme) return
+    document.documentElement.classList.toggle("dark", theme !== "light")
   }, [session.data?.user?.theme])
 
   if (session.isPending) return <div className="loading-page"><div className="spinner" aria-label="Loading Slate" /></div>

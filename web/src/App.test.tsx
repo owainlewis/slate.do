@@ -1,7 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import App from "./App"
+
+afterEach(() => {
+  cleanup()
+  document.documentElement.classList.remove("dark")
+  vi.unstubAllGlobals()
+})
 
 function renderApp(path = "/") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -21,4 +27,19 @@ test("the login form preserves protected destinations", async () => {
   expect(await screen.findByRole("heading", { name: "Welcome back." })).toBeInTheDocument()
   expect(screen.getByLabelText("Email")).toBeRequired()
   expect(screen.getByLabelText("Password")).toBeRequired()
+})
+
+test.each([
+  ["/", /stay on top of everything/i],
+  ["/login", "Welcome back."],
+  ["/forgot-password", "Reset your password."],
+  ["/reset-password", "Choose a new password."],
+  ["/early-access", "Join Slate."],
+  ["/missing", "Not found."],
+])("the public route %s always uses the light theme", async (path, heading) => {
+  document.documentElement.classList.add("dark")
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ authenticated: false }), { status: 200 })))
+  renderApp(path)
+  expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument()
+  expect(document.documentElement).not.toHaveClass("dark")
 })
