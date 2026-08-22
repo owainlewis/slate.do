@@ -116,7 +116,7 @@ export function WorkspacePage() {
   const switchLayout = (value: "board" | "table") => updateFilter("view", value === "table" ? "table" : "")
   const openTask = (id: string) => navigate(`${listId ? `/app/lists/${encodeURIComponent(listId)}` : "/app"}/tasks/${encodeURIComponent(id)}${searchParams.toString() ? `?${searchParams}` : ""}`)
 
-  if (listId && !selectedList && !tasksQuery.isPending) return <div className="page-wrap"><div className="empty-state"><div><ListIcon /><h1 className="font-serif text-3xl text-foreground">List not found</h1><p>This list is no longer available.</p><Button className="mt-4" onClick={() => navigate("/app/tasks")}>Open all tasks</Button></div></div></div>
+  if (listId && !selectedList && !tasksQuery.isPending) return <div className="page-wrap"><div className="empty-state"><div><ListIcon /><h1 className="font-sans text-3xl font-semibold text-foreground">List not found</h1><p>This list is no longer available.</p><Button className="mt-4" onClick={() => navigate("/app/tasks")}>Open all tasks</Button></div></div></div>
 
   return (
     <div className="page-wrap task-shell">

@@ -165,6 +165,36 @@ test("React workspace renders the full task board accessibly", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("wordmark and typography use one neutral Inter system", async t => {
+  const { page, origin, pageErrors } = await startApp(t);
+  const appBrand = page.locator(".brand-mark").first();
+  assert.equal(await appBrand.locator(".brand-suffix").evaluate(element => getComputedStyle(element).color), await appBrand.locator(".brand-word").evaluate(element => getComputedStyle(element).color));
+  const appMarkPaint = await appBrand.evaluate(element => ({ backgroundColor: getComputedStyle(element, "::before").backgroundColor, backgroundImage: getComputedStyle(element, "::before").backgroundImage, foreground: getComputedStyle(element).color }));
+  assert.ok(appMarkPaint.backgroundImage.includes(appMarkPaint.foreground));
+  assert.doesNotMatch(appMarkPaint.backgroundImage, /rgb\(146, 152, 242\)/);
+  const appHeadingFamily = await page.locator(".page-heading h1").evaluate(element => getComputedStyle(element).fontFamily);
+
+  await page.goto(`${origin}/`);
+  await page.getByRole("heading", { name: /Stay on top of everything/ }).waitFor();
+  const landingBrand = page.locator(".brand-mark").first();
+  assert.equal(await landingBrand.locator(".brand-suffix").evaluate(element => getComputedStyle(element).color), await landingBrand.locator(".brand-word").evaluate(element => getComputedStyle(element).color));
+  assert.equal(await landingBrand.evaluate(element => getComputedStyle(element).color), "rgb(255, 255, 255)");
+  const landingMarkPaint = await landingBrand.evaluate(element => ({ backgroundColor: getComputedStyle(element, "::before").backgroundColor, backgroundImage: getComputedStyle(element, "::before").backgroundImage }));
+  assert.equal(landingMarkPaint.backgroundColor, "rgb(255, 255, 255)");
+  assert.match(landingMarkPaint.backgroundImage, /rgb\(31, 53, 82\)/);
+  const landingFamilies = await page.locator(".hero h1, .landing-section h2, .landing-preview-main > header h3").evaluateAll(elements => elements.map(element => getComputedStyle(element).fontFamily));
+
+  await page.goto(`${origin}/early-access`);
+  await page.getByRole("heading", { name: "Join Slate." }).waitFor();
+  const authHeadingFamily = await page.locator(".auth-form-wrap h1").evaluate(element => getComputedStyle(element).fontFamily);
+
+  for (const family of [appHeadingFamily, ...landingFamilies, authHeadingFamily]) {
+    assert.match(family, /Inter/);
+    assert.doesNotMatch(family, /Castoro|Georgia|Iowan/i);
+  }
+  assert.deepEqual(pageErrors, []);
+});
+
 test("public routes stay light and the app restores the saved dark theme", async t => {
   const { page } = await startApp(t);
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), true);
