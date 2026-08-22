@@ -1527,10 +1527,10 @@ func (s *Store) ReorderSubtasks(ctx context.Context, userID string, parentTaskID
 	rows, err := tx.Query(ctx, `
 		SELECT id::text, bucket_id::text
 		FROM tasks
-		WHERE parent_task_id = $1
+		WHERE parent_task_id = $1 AND owner_user_id = $2
 		ORDER BY sort_order, created_at, id
 		FOR UPDATE
-	`, parent.ID)
+	`, parent.ID, userID)
 	if err != nil {
 		return err
 	}
@@ -1597,8 +1597,8 @@ func (s *Store) ReorderSubtasks(ctx context.Context, userID string, parentTaskID
 	if _, err := tx.Exec(ctx, `
 		UPDATE tasks
 		SET bucket_id = $1, updated_at = now()
-		WHERE parent_task_id = $2 AND bucket_id <> $1
-	`, parent.BucketID, parent.ID); err != nil {
+		WHERE parent_task_id = $2 AND owner_user_id = $3 AND bucket_id <> $1
+	`, parent.BucketID, parent.ID, userID); err != nil {
 		return err
 	}
 	for bucketID, order := range bucketOrders {

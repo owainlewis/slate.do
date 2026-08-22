@@ -405,7 +405,10 @@ func TestSubtasksDefaultToCreationOrderAndCanBeReordered(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore(db)
 	userID := createIntegrationUser(t, ctx, db)
-	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+	otherUserID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", userID, otherUserID)
+	})
 
 	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Product"})
 	if err != nil {
@@ -476,6 +479,25 @@ func TestSubtasksDefaultToCreationOrderAndCanBeReordered(t *testing.T) {
 	repaired, err := store.GetTask(ctx, userID, first.ID)
 	if err != nil || repaired.BucketID != parent.BucketID {
 		t.Fatalf("repaired split subtask = %#v, %v", repaired, err)
+	}
+	otherBucket, err := store.CreateBucket(ctx, otherUserID, CreateBucketInput{Name: "Other account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignChild, err := store.CreateTask(ctx, otherUserID, otherBucket.ID, CreateTaskInput{Title: "Malformed foreign child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET parent_task_id = $2 WHERE id = $1", foreignChild.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{third.ID, second.ID, first.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{third.ID, second.ID, first.ID})
+	foreignAfter, err := store.GetTask(ctx, otherUserID, foreignChild.ID)
+	if err != nil || foreignAfter.BucketID != otherBucket.ID || foreignAfter.ParentTaskID != parent.ID {
+		t.Fatalf("foreign malformed child changed = %#v, %v", foreignAfter, err)
 	}
 
 	if _, err := db.Exec(ctx, `
