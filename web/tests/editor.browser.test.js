@@ -175,14 +175,14 @@ test("wordmark and typography use one neutral Inter system", async t => {
   const appHeadingFamily = await page.locator(".page-heading h1").evaluate(element => getComputedStyle(element).fontFamily);
 
   await page.goto(`${origin}/`);
-  await page.getByRole("heading", { name: /Stay on top of everything/ }).waitFor();
+  await page.getByRole("heading", { name: /One operating plan/ }).waitFor();
   const landingBrand = page.locator(".brand-mark").first();
   assert.equal(await landingBrand.locator(".brand-suffix").evaluate(element => getComputedStyle(element).color), await landingBrand.locator(".brand-word").evaluate(element => getComputedStyle(element).color));
   assert.equal(await landingBrand.evaluate(element => getComputedStyle(element).color), "rgb(255, 255, 255)");
   const landingMarkPaint = await landingBrand.evaluate(element => ({ backgroundColor: getComputedStyle(element, "::before").backgroundColor, backgroundImage: getComputedStyle(element, "::before").backgroundImage }));
   assert.equal(landingMarkPaint.backgroundColor, "rgb(255, 255, 255)");
   assert.match(landingMarkPaint.backgroundImage, /rgb\(31, 53, 82\)/);
-  const landingFamilies = await page.locator(".hero h1, .landing-section h2, .landing-preview-main > header h3").evaluateAll(elements => elements.map(element => getComputedStyle(element).fontFamily));
+  const landingFamilies = await page.locator(".hero h1, .landing-section h2, .landing-workflow-section h2, .landing-preview-main > header h3").evaluateAll(elements => elements.map(element => getComputedStyle(element).fontFamily));
 
   await page.goto(`${origin}/early-access`);
   await page.getByRole("heading", { name: "Join Slate." }).waitFor();
@@ -195,14 +195,31 @@ test("wordmark and typography use one neutral Inter system", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("landing tells one workflow and the app shell stays quiet", async t => {
+  const { page, origin, pageErrors } = await startApp(t);
+  const shellPaint = await page.locator(".app-main").evaluate(element => ({ borderRadius: getComputedStyle(element).borderRadius, boxShadow: getComputedStyle(element).boxShadow }));
+  assert.equal(shellPaint.borderRadius, "0px");
+  assert.equal(shellPaint.boxShadow, "none");
+  assert.match(await page.locator(".app-grid").evaluate(element => getComputedStyle(element).gridTemplateColumns), /^232px /);
+
+  await page.goto(`${origin}/`);
+  await page.getByRole("heading", { name: "One operating plan for you and your agents." }).waitFor();
+  assert.equal(await page.locator(".hero").evaluate(element => getComputedStyle(element).textAlign), "left");
+  for (const heading of ["Bring the work into focus.", "Give agents ground to cover.", "Make the decision, not the busywork."]) await page.getByRole("heading", { name: heading }).waitFor();
+  assert.equal(await page.locator(".workflow-stages article").count(), 3);
+  const results = await new AxeBuilder({ page }).analyze();
+  assert.deepEqual(results.violations, []);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("public routes stay light and the app restores the saved dark theme", async t => {
   const { page } = await startApp(t);
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), true);
   await page.getByRole("button", { name: "Slate home" }).click();
-  await page.getByRole("heading", { name: /Stay on top of everything/ }).waitFor();
+  await page.getByRole("heading", { name: /One operating plan/ }).waitFor();
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), false);
   assert.equal(await page.locator("html").evaluate(element => getComputedStyle(element).colorScheme), "light");
-  await page.getByRole("link", { name: "Open Slate", exact: true }).click();
+  await page.getByRole("banner").getByRole("link", { name: "Open Slate", exact: true }).click();
   await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), true);
 });
@@ -322,7 +339,7 @@ test("hosted control plane exposes search, runs, runners, and human review", asy
   await page.goto(`${origin}/app/runners`);
   await page.getByText("Hosted coordination, local execution", { exact: true }).waitFor();
   await page.getByText("Research agent", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("link", { name: "Connect agent" }).evaluate(element => getComputedStyle(element).color), "rgb(255, 255, 255)");
+  assert.equal(await page.getByRole("link", { name: "Connect agent" }).evaluate(element => getComputedStyle(element).color), "rgb(13, 22, 27)");
 
   state.tasks[0].status = "needs_review";
   state.tasks[0].reviewReason = "Check the final draft before it ships.";

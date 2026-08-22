@@ -17,7 +17,7 @@ function renderApp(path = "/") {
 test("the landing page leads with Slate's outcome", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ authenticated: false }), { status: 200 })))
   renderApp()
-  expect(await screen.findByRole("heading", { name: /stay on top of everything/i })).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: /one operating plan/i })).toBeInTheDocument()
   expect(screen.getAllByRole("link", { name: /log in/i })[0]).toHaveAttribute("href", "/login")
 })
 
@@ -30,7 +30,7 @@ test("the login form preserves protected destinations", async () => {
 })
 
 test.each([
-  ["/", /stay on top of everything/i],
+  ["/", /one operating plan/i],
   ["/login", "Welcome back."],
   ["/forgot-password", "Reset your password."],
   ["/reset-password", "Choose a new password."],
