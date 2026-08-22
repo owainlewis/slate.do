@@ -1445,6 +1445,79 @@ func (s *Store) ReorderTasks(ctx context.Context, userID string, bucketID string
 	return tx.Commit(ctx)
 }
 
+func (s *Store) ListSubtasks(ctx context.Context, userID string, parentTaskID string) ([]Task, error) {
+	parent, err := s.GetTask(ctx, userID, parentTaskID)
+	if err != nil {
+		return nil, err
+	}
+	if parent.ParentTaskID != "" {
+		return nil, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT t.id::text, t.bucket_id::text, t.title, '',
+			COALESCE(t.scheduled_date::text, ''), t.kind,
+			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, ''),
+			l.name, COALESCE(a.name, ''), parent.title
+		FROM tasks t
+		JOIN buckets l ON l.id = t.bucket_id
+		LEFT JOIN agents a ON a.id = t.assignee_agent_id
+		JOIN tasks parent ON parent.id = t.parent_task_id
+		WHERE t.owner_user_id = $1 AND t.parent_task_id = $2
+		ORDER BY t.sort_order, t.created_at, t.id
+	`, userID, parent.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks := []Task{}
+	for rows.Next() {
+		task, err := scanTaskSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
+}
+
+func (s *Store) ReorderSubtasks(ctx context.Context, userID string, parentTaskID string, ids []string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	parent, err := lockedTask(ctx, tx, userID, parentTaskID)
+	if err != nil {
+		return err
+	}
+	if parent.ParentTaskID != "" {
+		return fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+	}
+	currentIDs, err := orderedChildTaskIDs(ctx, tx, parent.ID)
+	if err != nil {
+		return err
+	}
+	if len(ids) != len(currentIDs) {
+		return fmt.Errorf("%w: subtask order must include every subtask", ErrInvalidData)
+	}
+	remaining := make(map[string]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		remaining[id] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := remaining[id]; !ok {
+			return fmt.Errorf("%w: subtask order contains an unknown or duplicate task", ErrInvalidData)
+		}
+		delete(remaining, id)
+	}
+	if err := writeTaskOrder(ctx, tx, ids); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) GetTask(ctx context.Context, userID string, id string) (Task, error) {
 	return s.getTask(ctx, userID, "", id)
 }
