@@ -150,6 +150,8 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 		{http.MethodDelete, "/api/v1/lists/" + bucket.ID, ""},
 		{http.MethodPost, "/api/v1/lists/" + bucket.ID + "/tasks", `{"title":"Injected"}`},
 		{http.MethodPost, "/api/v1/lists/" + bucket.ID + "/reorder-tasks", `{"ids":[]}`},
+		{http.MethodGet, "/api/v1/tasks/" + taskB.ID + "/subtasks", ""},
+		{http.MethodPost, "/api/v1/tasks/" + taskB.ID + "/reorder-subtasks", `{"ids":[]}`},
 		{http.MethodPost, "/api/v1/tasks/" + taskB.ID + "/move", fmt.Sprintf(`{"bucketId":%q,"position":0}`, bucket.ID)},
 		{http.MethodDelete, "/api/v1/tasks/" + taskB.ID, ""},
 		{http.MethodPatch, "/api/v1/tasks/" + taskA.ID, fmt.Sprintf(`{"bucketId":%q}`, otherList.ID)},

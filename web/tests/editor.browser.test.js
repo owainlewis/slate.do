@@ -24,7 +24,10 @@ function fixture(options = {}) {
       { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", assigneeAgentId: "", assigneeAgentName: "" },
       { id: "task-writing", bucketId: "list-writing", bucketName: "Writing", listName: "Writing", title: "Draft the weekly note", description: "Share one useful workflow.", scheduledDate: "", status: "new", priority: "p2", assigneeAgentId: "", assigneeAgentName: "" },
     ],
-    subtasks: [{ id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", sortOrder: 0, createdAt: "2026-08-18T09:00:00Z", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" }],
+    subtasks: [
+      { id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", sortOrder: 0, createdAt: "2026-08-18T09:00:00Z", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
+      { id: "task-child-draft", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Draft outline", description: "", scheduledDate: "", status: "new", priority: "p1", sortOrder: 1, createdAt: "2026-08-18T10:00:00Z", assigneeAgentId: "", assigneeAgentName: "" },
+    ],
     entries: { "task-parent": [{ id: "entry-one", kind: "comment", body: "The first research pass is ready.", authorKind: "agent", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }] },
     inbox: [{ id: "message-one", taskId: "task-parent", taskTitle: "Publish task-first agents video", kind: "comment", body: "I have drafted the spec. Can you take a look?", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }],
     tokens: [],
@@ -170,6 +173,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       return json(response, {});
     }
     const subtaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/subtasks$/);
+    if (subtaskMatch && request.method === "GET") return json(response, { tasks: state.subtasks.filter(item => item.parentTaskId === subtaskMatch[1]) });
     if (subtaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
       const idempotencyKey = request.headers["idempotency-key"];
@@ -186,6 +190,15 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
         return response.end("{");
       }
       return json(response, task, 201);
+    }
+    const reorderSubtasksMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/reorder-subtasks$/);
+    if (reorderSubtasksMatch && request.method === "POST") {
+      const input = await requestJSON(request);
+      const siblings = state.subtasks.filter(item => item.parentTaskId === reorderSubtasksMatch[1]);
+      const tasksByID = new Map(siblings.map(item => [item.id, item]));
+      const ordered = input.ids.map(id => tasksByID.get(id));
+      state.subtasks = [...state.subtasks.filter(item => item.parentTaskId !== reorderSubtasksMatch[1]), ...ordered];
+      return json(response, { ok: true });
     }
     const entryMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/entries$/);
     if (entryMatch && request.method === "GET") return json(response, { entries: state.entries[entryMatch[1]] || [] });
@@ -1027,6 +1040,28 @@ test("a delayed priority update stays with its original task", async t => {
   assert.equal(state.subtasks[0].priority, "p2");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
   assert.deepEqual(pageErrors, []);
+});
+
+test("subtasks start in creation order and mouse or keyboard reordering persists", async t => {
+  const { page, state } = await startApp(t);
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Research examples", "Draft outline"]);
+
+  await page.getByRole("button", { name: "Reorder Draft outline" }).press("ArrowUp");
+  await page.waitForFunction(() => document.querySelector(".subtask-title")?.textContent === "Draft outline");
+  assert.deepEqual(state.subtasks.map(task => task.title), ["Draft outline", "Research examples"]);
+  assert.equal(state.requests.includes("POST /api/v1/tasks/task-parent/reorder-subtasks"), true);
+
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Reorder Draft outline"]')?.disabled);
+  await page.getByRole("button", { name: "Reorder Draft outline" }).dragTo(page.locator(".subtask-row").filter({ hasText: "Research examples" }));
+  await page.waitForFunction(() => document.querySelector(".subtask-title")?.textContent === "Research examples");
+  assert.deepEqual(state.subtasks.map(task => task.title), ["Research examples", "Draft outline"]);
+
+  await page.getByRole("button", { name: "Close task" }).click();
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Research examples", "Draft outline"]);
 });
 
 test("dragging a task moves it through the workflow", async t => {
