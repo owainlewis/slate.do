@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from "react-router-dom"
+import { useLayoutEffect } from "react"
+import { Navigate, Outlet, Route, Routes } from "react-router-dom"
 import { Authenticated } from "@/app-context"
 import { AppShell } from "@/components/shell"
 import { LandingPage, LoginPage, ForgotPasswordPage, ResetPasswordPage, EarlyAccessPage, NotFoundPage } from "@/pages/public"
@@ -35,16 +36,25 @@ function ProtectedRoutes() {
   )
 }
 
+function PublicRouteLayout() {
+  useLayoutEffect(() => {
+    document.documentElement.classList.remove("dark")
+  }, [])
+  return <Outlet />
+}
+
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<LandingPage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
-      <Route path="/early-access" element={<EarlyAccessPage />} />
       <Route path="/app/*" element={<ProtectedRoutes />} />
-      <Route path="*" element={<NotFoundPage />} />
+      <Route element={<PublicRouteLayout />}>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/early-access" element={<EarlyAccessPage />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Route>
     </Routes>
   )
 }
