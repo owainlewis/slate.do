@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { NavLink, useLocation, useNavigate } from "react-router-dom"
-import { Bot, CalendarDays, ChevronDown, CircleDot, Inbox, ListTodo, LogOut, Menu, Plus, Play, Search, Settings, UserRound, Workflow, X } from "lucide-react"
+import { Bot, CalendarDays, ChevronDown, CircleDot, Inbox, LayoutTemplate, ListTodo, LogOut, Menu, Plus, Play, Search, Settings, UserRound, Workflow, X } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -133,6 +133,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="nav-label"><span>Work</span></div>
             <NavigationLink to="/app/inbox" icon={Inbox} count={inbox?.openCount}>Inbox</NavigationLink>
             <NavigationLink to="/app/tasks" icon={ListTodo}>All tasks</NavigationLink>
+            <NavigationLink to="/app/templates" icon={LayoutTemplate}>Templates</NavigationLink>
           </div>
           <div className="nav-group">
             <div className="nav-label"><span>Lists</span><button type="button" onClick={() => { setListError(""); setListDialog(true) }} aria-label="New list"><Plus className="size-3.5" /></button></div>
@@ -182,7 +183,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <DialogContent className="task-create-dialog" showClose={false} aria-describedby={undefined}>
           <DialogTitle className="sr-only">New task</DialogTitle>
           <form className="task-create-form" onSubmit={event => { event.preventDefault(); if (taskTitle.trim()) createTask.mutate() }}>
-            <div className="task-create-head"><div><span>{me.displayName || me.email.split("@")[0]}</span><strong>New task</strong></div><button type="button" onClick={() => setTaskDialog(false)} aria-label="Close"><X /></button></div>
+            <div className="task-create-head"><div><span>{me.displayName || me.email.split("@")[0]}</span><strong>New task</strong></div><div className="task-create-head-actions"><button type="button" className="task-template-link" onClick={() => { setTaskDialog(false); navigate("/app/templates") }}><LayoutTemplate />Use template</button><button type="button" onClick={() => setTaskDialog(false)} aria-label="Close"><X /></button></div></div>
             <div className="task-create-body">
               <Input className="task-create-title" aria-label="Task title" value={taskTitle} onChange={event => setTaskTitle(event.target.value)} placeholder="What needs to happen?" autoFocus />
               <Textarea className="task-create-description" aria-label="Task brief" value={taskDescription} onChange={event => setTaskDescription(event.target.value)} placeholder="Add context, an outcome, or a definition of done…" />

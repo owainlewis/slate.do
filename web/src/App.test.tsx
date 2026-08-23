@@ -29,6 +29,21 @@ test("the login form preserves protected destinations", async () => {
   expect(screen.getByLabelText("Password")).toBeRequired()
 })
 
+test("the templates route presents recurring work as one parent task", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://slate.test").pathname
+    if (path === "/api/v1/me") return new Response(JSON.stringify({ authenticated: true, user: { id: "user-1", email: "owain@example.com", displayName: "Owain", theme: "light" } }), { status: 200 })
+    if (path === "/api/v1/lists") return new Response(JSON.stringify({ lists: [{ id: "list-1", name: "YouTube", isInbox: false }] }), { status: 200 })
+    if (path === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }), { status: 200 })
+    return new Response(JSON.stringify({}), { status: 200 })
+  }))
+  renderApp("/app/templates")
+  expect(await screen.findByRole("heading", { name: "Templates" })).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "Publish a YouTube video" })).toBeInTheDocument()
+  expect(screen.getByText("17 subtasks")).toBeInTheDocument()
+  expect(screen.getByText("Creates one parent task")).toBeInTheDocument()
+})
+
 test.each([
   ["/", /stay on top of everything/i],
   ["/login", "Welcome back."],

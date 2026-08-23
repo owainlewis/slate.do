@@ -53,6 +53,8 @@ export interface Task {
   assigneeAgentName?: string
   reviewReason?: string
   executionRunId?: string
+  sortOrder?: number
+  createdAt?: string
   updatedAt?: string
   [key: string]: unknown
 }

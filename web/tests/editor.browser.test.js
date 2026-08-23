@@ -20,7 +20,7 @@ function fixture() {
       { id: "task-parent", bucketId: "list-product", bucketName: "Product", listName: "Product", title: "Publish task-first agents video", description: "Explain one control plane for people and agents.", scheduledDate: "2026-08-20", status: "working", priority: "p0", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
       { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", assigneeAgentId: "", assigneeAgentName: "" },
     ],
-    subtasks: [{ id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" }],
+    subtasks: [{ id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", sortOrder: 0, createdAt: "2026-08-18T09:00:00Z", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" }],
     entries: { "task-parent": [{ id: "entry-one", kind: "comment", body: "The first research pass is ready.", authorKind: "agent", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }] },
     inbox: [{ id: "message-one", taskId: "task-parent", taskTitle: "Publish task-first agents video", kind: "comment", body: "I have drafted the spec. Can you take a look?", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }],
     tokens: [],
@@ -68,7 +68,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
         return json(response, { tasks: [state.tasks[0]], nextCursor: "page-two" });
       }
       let tasks = [...state.tasks, ...state.subtasks];
-      if (url.searchParams.get("parentTaskId")) tasks = state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId"));
+      if (url.searchParams.get("parentTaskId")) tasks = state.subtasks.filter(item => item.parentTaskId === url.searchParams.get("parentTaskId")).sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
       if (url.searchParams.get("bucketId")) tasks = tasks.filter(item => item.bucketId === url.searchParams.get("bucketId"));
       if (url.searchParams.get("topLevel") === "true") tasks = tasks.filter(item => !item.parentTaskId);
       if (url.searchParams.get("status")) tasks = tasks.filter(item => item.status === url.searchParams.get("status"));
@@ -96,7 +96,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
     if (subtaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
       const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
-      const task = { id: `subtask-${state.subtasks.length + 1}`, parentTaskId: parent.id, parentTaskTitle: parent.title, bucketId: parent.bucketId, bucketName: parent.bucketName, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", ...input };
+      const task = { id: `subtask-${state.subtasks.length + 1}`, parentTaskId: parent.id, parentTaskTitle: parent.title, bucketId: parent.bucketId, bucketName: parent.bucketName, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", sortOrder: state.subtasks.length, createdAt: new Date(Date.UTC(2026, 7, 23, 9, 0, state.subtasks.length)).toISOString(), ...input };
       state.subtasks.push(task);
       return json(response, task, 201);
     }
@@ -213,6 +213,42 @@ test("new tasks persist a priority and start in the selected column", async t =>
   assert.equal(created.priority, "p2");
   assert.equal(created.status, "working");
   assert.equal(state.requests.some(request => request.startsWith(`PATCH /api/v1/tasks/${created.id}`)), false);
+});
+
+test("the YouTube template creates one parent task with an ordered workflow", async t => {
+  const { page, state, origin, pageErrors } = await startApp(t);
+  await page.goto(`${origin}/app/templates`);
+  await page.getByRole("heading", { name: "Templates", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Publish a YouTube video", exact: true }).waitFor();
+  assert.equal(await page.getByRole("listitem").count(), 17);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  assert.deepEqual(accessibility.violations, []);
+
+  await page.getByRole("button", { name: "Use template" }).click();
+  const dialog = page.getByRole("dialog", { name: "Start a YouTube task" });
+  assert.deepEqual((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations, []);
+  await dialog.getByLabel("Video name").fill("How I build agent workflows");
+  await dialog.getByLabel("Publish date").fill("2026-08-29");
+  await dialog.getByLabel("List").selectOption("list-product");
+  await dialog.getByLabel("Primary CTA").fill("Join the agent course");
+  await dialog.getByLabel("Content folder").fill("https://drive.example/video-128");
+  await dialog.getByRole("button", { name: "Create task" }).click();
+
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  await page.getByText("0/17", { exact: true }).waitFor();
+  const parent = state.tasks.find(task => task.title === "Publish: How I build agent workflows");
+  assert.ok(parent);
+  assert.equal(parent.bucketId, "list-product");
+  assert.equal(parent.scheduledDate, "2026-08-29");
+  assert.match(parent.description, /Primary CTA: Join the agent course/);
+  assert.match(parent.description, /Content folder: https:\/\/drive\.example\/video-128/);
+  const generated = state.subtasks.filter(task => task.parentTaskId === parent.id);
+  assert.equal(generated.length, 17);
+  assert.deepEqual(generated.slice(0, 6).map(task => task.title), ["Capture the idea", "Generate title options", "Approve the title", "Write the outline", "Handwrite the introduction", "Write the script"]);
+  assert.deepEqual((await page.locator(".subtask-title").allTextContents()).slice(0, 6), ["Capture the idea", "Generate title options", "Approve the title", "Write the outline", "Handwrite the introduction", "Write the script"]);
+  assert.equal(generated.find(task => task.title === "Write the Kit promotional email").assigneeAgentId, "");
+  assert.match(generated.find(task => task.title === "Write the Kit promotional email").description, /Suggested executor: Agent-ready/);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("task detail edits, subtasks, and conversation entries use the existing API", async t => {

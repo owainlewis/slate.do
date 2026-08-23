@@ -136,7 +136,12 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   const set = <K extends keyof Task>(key: K, value: Task[K]) => setDraft(current => ({ ...current, [key]: value }))
   const list = lists.find(item => item.id === task.bucketId)
   const backLabel = task.parentTaskId ? "Back to parent task" : returnLabel
-  const subtasks = subtasksQuery.data?.tasks || []
+  const subtasks = [...(subtasksQuery.data?.tasks || [])].sort((left, right) => {
+    if (typeof left.sortOrder === "number" && typeof right.sortOrder === "number" && left.sortOrder !== right.sortOrder) return left.sortOrder - right.sortOrder
+    const leftCreatedAt = left.createdAt || ""
+    const rightCreatedAt = right.createdAt || ""
+    return leftCreatedAt && rightCreatedAt ? leftCreatedAt.localeCompare(rightCreatedAt) : 0
+  })
   const completedSubtasks = subtasks.filter(subtask => subtask.status === "done").length
 
   return (
