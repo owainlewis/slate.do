@@ -219,19 +219,18 @@ test("the YouTube template creates one parent task with an ordered workflow", as
   const { page, state, origin, pageErrors } = await startApp(t);
   await page.goto(`${origin}/app/templates`);
   await page.getByRole("heading", { name: "Templates", exact: true }).waitFor();
-  await page.getByRole("heading", { name: "Publish a YouTube video", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Publish a YouTube video", exact: true }).first().waitFor();
   assert.equal(await page.getByRole("listitem").count(), 17);
   const accessibility = await new AxeBuilder({ page }).analyze();
   assert.deepEqual(accessibility.violations, []);
 
   await page.getByRole("button", { name: "Use template" }).click();
-  const dialog = page.getByRole("dialog", { name: "Start a YouTube task" });
+  const dialog = page.getByRole("dialog", { name: "Start process" });
   assert.deepEqual((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations, []);
-  await dialog.getByLabel("Video name").fill("How I build agent workflows");
-  await dialog.getByLabel("Publish date").fill("2026-08-29");
+  await dialog.getByLabel("Task name").fill("How I build agent workflows");
+  await dialog.getByLabel("Plan for").fill("2026-08-29");
   await dialog.getByLabel("List").selectOption("list-product");
-  await dialog.getByLabel("Primary CTA").fill("Join the agent course");
-  await dialog.getByLabel("Content folder").fill("https://drive.example/video-128");
+  await dialog.getByLabel("Brief").fill("Join the agent course after watching the final video.");
   await dialog.getByRole("button", { name: "Create task" }).click();
 
   await page.getByRole("region", { name: "Task detail" }).waitFor();
@@ -240,14 +239,62 @@ test("the YouTube template creates one parent task with an ordered workflow", as
   assert.ok(parent);
   assert.equal(parent.bucketId, "list-product");
   assert.equal(parent.scheduledDate, "2026-08-29");
-  assert.match(parent.description, /Primary CTA: Join the agent course/);
-  assert.match(parent.description, /Content folder: https:\/\/drive\.example\/video-128/);
+  assert.match(parent.description, /Join the agent course after watching the final video/);
   const generated = state.subtasks.filter(task => task.parentTaskId === parent.id);
   assert.equal(generated.length, 17);
   assert.deepEqual(generated.slice(0, 6).map(task => task.title), ["Capture the idea", "Generate title options", "Approve the title", "Write the outline", "Handwrite the introduction", "Write the script"]);
   assert.deepEqual((await page.locator(".subtask-title").allTextContents()).slice(0, 6), ["Capture the idea", "Generate title options", "Approve the title", "Write the outline", "Handwrite the introduction", "Write the script"]);
   assert.equal(generated.find(task => task.title === "Write the Kit promotional email").assigneeAgentId, "");
   assert.match(generated.find(task => task.title === "Write the Kit promotional email").description, /Suggested executor: Agent-ready/);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("templates can be created and edited without leaking across accounts", async t => {
+  const { page, state, origin, pageErrors } = await startApp(t);
+  await page.goto(`${origin}/app/templates`);
+  await page.getByRole("button", { name: "New template" }).click();
+  const editor = page.getByRole("dialog", { name: "New template" });
+  assert.deepEqual((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations, []);
+  await editor.getByLabel("Template name").fill("Publish a podcast");
+  await editor.getByLabel("Description").fill("Turn one recording into a published episode.");
+  await editor.getByLabel("Phase 1 subtask 1").fill("Record the episode");
+  await editor.getByRole("button", { name: "Add subtask" }).click();
+  await editor.getByLabel("Phase 1 subtask 2").fill("Edit the episode");
+  await editor.getByRole("button", { name: "Add phase" }).click();
+  await editor.getByLabel("Phase 2 name").fill("Publish");
+  await editor.getByLabel("Publish subtask 1").fill("Write the show notes");
+  const firstPhaseName = editor.getByLabel("Phase 1 name");
+  await firstPhaseName.fill("");
+  await firstPhaseName.pressSequentially("Publish prep");
+  await editor.getByRole("button", { name: "Move Publish up" }).click();
+  await editor.getByRole("button", { name: "Save template" }).click();
+
+  await page.getByRole("heading", { name: "Publish a podcast", exact: true }).first().waitFor();
+  const podcastRow = page.locator(".template-list-row").filter({ hasText: "Publish a podcast" });
+  await podcastRow.getByRole("button", { name: "Use template" }).click();
+  const runDialog = page.getByRole("dialog", { name: "Start process" });
+  await runDialog.getByLabel("Task name").fill("Episode 12");
+  await runDialog.getByLabel("List").selectOption("list-product");
+  await runDialog.getByRole("button", { name: "Create task" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  const parent = state.tasks.find(task => task.title === "Run: Episode 12");
+  assert.ok(parent);
+  const generated = state.subtasks.filter(task => task.parentTaskId === parent.id);
+  assert.deepEqual(generated.map(task => task.title), ["Write the show notes", "Record the episode", "Edit the episode"]);
+  assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Write the show notes", "Record the episode", "Edit the episode"]);
+
+  await page.goto(`${origin}/app/templates`);
+  await page.locator(".template-list-row").filter({ hasText: "Publish a podcast" }).getByRole("button", { name: "Edit" }).click();
+  const editDialog = page.getByRole("dialog", { name: "Edit template" });
+  await editDialog.getByLabel("Template name").fill("Publish a podcast episode");
+  await editDialog.getByRole("button", { name: "Save template" }).click();
+  await page.reload();
+  await page.getByRole("heading", { name: "Publish a podcast episode", exact: true }).first().waitFor();
+
+  state.user = { ...state.user, id: "another-owner", email: "another@example.com" };
+  await page.reload();
+  await page.getByRole("heading", { name: "Publish a YouTube video", exact: true }).first().waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Publish a podcast episode", exact: true }).count(), 0);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -328,7 +375,7 @@ test("hosted control plane exposes search, runs, runners, and human review", asy
   await page.goto(`${origin}/app/runners`);
   await page.getByText("Hosted coordination, local execution", { exact: true }).waitFor();
   await page.getByText("Research agent", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("link", { name: "Connect agent" }).evaluate(element => getComputedStyle(element).color), "rgb(255, 255, 255)");
+  assert.equal(await page.getByRole("link", { name: "Connect agent" }).evaluate(element => getComputedStyle(element).color), "rgb(21, 22, 26)");
 
   state.tasks[0].status = "needs_review";
   state.tasks[0].reviewReason = "Check the final draft before it ships.";
