@@ -30,6 +30,7 @@ function fixture() {
     idempotencyRequests: [],
     loseParentResponse: false,
     loseSubtaskResponseFor: "",
+    taskCreateDelay: null,
   };
 }
 
@@ -60,6 +61,10 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
     const listTaskMatch = url.pathname.match(/^\/api\/v1\/lists\/([^/]+)\/tasks$/);
     if ((url.pathname === "/api/v1/tasks" || listTaskMatch) && request.method === "POST") {
       const input = await requestJSON(request);
+      if (state.taskCreateDelay) {
+        await state.taskCreateDelay;
+        state.taskCreateDelay = null;
+      }
       const idempotencyKey = request.headers["idempotency-key"];
       state.idempotencyRequests.push({ path: url.pathname, key: idempotencyKey });
       const replay = idempotencyKey && state.idempotency.get(idempotencyKey);
@@ -240,6 +245,37 @@ test("new tasks persist a priority and start in the selected column", async t =>
   assert.equal(state.requests.some(request => request.startsWith(`PATCH /api/v1/tasks/${created.id}`)), false);
 });
 
+test("task creation keeps every exit and field disabled while pending", async t => {
+  const { page, state } = await startApp(t);
+  let releaseTaskCreate;
+  state.taskCreateDelay = new Promise(resolve => { releaseTaskCreate = resolve; });
+  await page.getByRole("button", { name: "Add task to Todo" }).click();
+  const dialog = page.getByRole("dialog", { name: "New task" });
+  await dialog.getByRole("textbox", { name: "Task title" }).fill("Wait for the server");
+  await dialog.getByRole("button", { name: "Create task" }).click();
+  await dialog.getByRole("button", { name: "Creating…" }).waitFor();
+  for (const control of [
+    dialog.getByRole("button", { name: "Use template" }),
+    dialog.getByRole("button", { name: "Close" }),
+    dialog.getByRole("button", { name: "Cancel" }),
+    dialog.getByRole("textbox", { name: "Task title" }),
+    dialog.getByRole("textbox", { name: "Task brief" }),
+    dialog.getByLabel("Task list"),
+    dialog.getByLabel("Assigned agent"),
+    dialog.getByLabel("Plan for"),
+    dialog.getByRole("button", { name: "Priority" }),
+  ]) assert.equal(await control.isDisabled(), true);
+  await page.keyboard.press("c");
+  await page.keyboard.press("Control+k");
+  assert.equal(await page.getByRole("dialog", { name: "Search tasks" }).count(), 0);
+  await dialog.getByRole("button", { name: "Creating…" }).waitFor();
+  await page.keyboard.press("Escape");
+  assert.equal(await dialog.isVisible(), true);
+  releaseTaskCreate();
+  await page.getByRole("dialog", { name: "Task detail" }).waitFor();
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/lists/list-inbox/tasks").length, 1);
+});
+
 test("the YouTube template creates one parent task with an ordered workflow", async t => {
   const { page, state, origin, pageErrors } = await startApp(t);
   await page.goto(`${origin}/app/templates`);
@@ -292,6 +328,73 @@ test("the built-in template is read-only and can be duplicated", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
+test("template limits prevent hidden or permanently partial workflow tasks", async t => {
+  const { page, origin, pageErrors } = await startApp(t);
+  const oversized = {
+    id: "oversized-template",
+    name: "Oversized process",
+    summary: "Too many steps",
+    taskPrefix: "Run",
+    phases: [{ id: "phase", name: "Plan" }],
+    steps: Array.from({ length: 201 }, (_, index) => ({ id: `step-${index}`, phaseId: "phase", title: `Step ${index}`, executor: "Human", instruction: "" })),
+  };
+  await page.goto(origin);
+  await page.evaluate(template => localStorage.setItem("slate:process-templates:owner", JSON.stringify([template])), oversized);
+  await page.goto(`${origin}/app/templates`);
+  const oversizedRow = page.locator(".template-list-row").filter({ hasText: "Oversized process" });
+  await oversizedRow.getByRole("button", { name: "Edit" }).click();
+  const editor = page.getByRole("dialog", { name: "Edit template" });
+  await editor.getByRole("alert").getByText("Templates can contain up to 200 subtasks.").waitFor();
+  assert.equal(await editor.getByRole("button", { name: "Save template" }).isDisabled(), true);
+  await editor.getByRole("button", { name: "Cancel" }).click();
+
+  const longInstructions = { ...oversized, id: "long-instructions", name: "Long instructions", steps: [{ id: "step", phaseId: "phase", title: "Draft", executor: "Human", instruction: "x".repeat(17_000) }] };
+  await page.evaluate(template => localStorage.setItem("slate:process-templates:owner", JSON.stringify([template])), longInstructions);
+  await page.reload();
+  const longRow = page.locator(".template-list-row").filter({ hasText: "Long instructions" });
+  await longRow.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("dialog", { name: "Edit template" }).getByRole("alert").getByText("Subtask instructions are too long to create a task.").waitFor();
+  await page.getByRole("dialog", { name: "Edit template" }).getByRole("button", { name: "Cancel" }).click();
+
+  await page.locator(".template-list-row").filter({ hasText: "Publish a YouTube video" }).getByRole("button", { name: "Use template" }).click();
+  const create = page.getByRole("dialog", { name: "Start process" });
+  await create.getByLabel("Task name").fill("x".repeat(294));
+  await create.getByRole("alert").getByText("The generated task name can contain up to 300 characters.").waitFor();
+  assert.equal(await create.getByRole("button", { name: "Create task" }).isDisabled(), true);
+  await create.getByRole("button", { name: "Cancel" }).click();
+
+  await page.evaluate(() => {
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (String(key).startsWith("slate:process-templates:")) throw new DOMException("Quota exceeded", "QuotaExceededError");
+      return setItem.call(this, key, value);
+    };
+  });
+  await page.getByRole("button", { name: "New template" }).click();
+  const freshEditor = page.getByRole("dialog", { name: "New template" });
+  await freshEditor.getByLabel("Template name").fill("In-memory process");
+  await freshEditor.getByLabel("Phase 1 subtask 1").fill("Draft it");
+  await freshEditor.getByRole("button", { name: "Save template" }).click();
+  await page.getByRole("alert").getByText("Templates could not be saved in this browser.").waitFor();
+  await page.locator(".template-list-row").filter({ hasText: "In-memory process" }).waitFor();
+  assert.deepEqual(pageErrors, []);
+});
+
+test("subtasks use persisted order before deterministic legacy fallbacks", async t => {
+  const { page, state } = await startApp(t);
+  const base = { parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", description: "", scheduledDate: "", status: "new", priority: "p2", assigneeAgentId: "", assigneeAgentName: "" };
+  state.subtasks = [
+    { ...base, id: "ordered-2", title: "Ordered second", sortOrder: 2, createdAt: "2026-08-01T09:00:00Z" },
+    { ...base, id: "legacy-b", title: "Legacy B", createdAt: "2026-08-03T09:00:00Z" },
+    { ...base, id: "ordered-1", title: "Ordered first", sortOrder: 1, createdAt: "2026-08-04T09:00:00Z" },
+    { ...base, id: "legacy-a", title: "Legacy A", createdAt: "2026-08-03T09:00:00Z" },
+    { ...base, id: "legacy-missing", title: "Legacy missing" },
+  ];
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Ordered first", "Ordered second", "Legacy missing", "Legacy A", "Legacy B"]);
+});
+
 test("template deletion confirms, selects a neighbour, and leaves generated tasks unchanged", async t => {
   const { page, state, origin, pageErrors } = await startApp(t);
   await page.goto(`${origin}/app/templates`);
@@ -318,7 +421,10 @@ test("template deletion confirms, selects a neighbour, and leaves generated task
   await deleteButton.click();
   const confirmation = page.getByRole("dialog", { name: "Delete template?" });
   const cancel = confirmation.getByRole("button", { name: "Cancel" });
-  assert.equal(await cancel.evaluate(element => document.activeElement === element), true);
+  await cancel.evaluate(element => new Promise(resolve => {
+    const check = () => document.activeElement === element ? resolve() : requestAnimationFrame(check);
+    check();
+  }));
   await cancel.click();
   await savedRow.waitFor();
   await deleteButton.evaluate(element => new Promise(resolve => {
@@ -345,20 +451,25 @@ test("valid legacy templates survive malformed siblings and migrate stable step 
   await page.evaluate(() => localStorage.setItem("slate:process-templates:owner", JSON.stringify([
     { id: "youtube-weekly", name: "Overwritten built-in", summary: "Wrong", taskPrefix: "Wrong", phases: [{ id: "wrong", name: "Wrong" }], steps: [{ phaseId: "wrong", title: "Wrong", executor: "Human", instruction: "Wrong" }] },
     { id: "legacy-podcast", name: "Legacy podcast", summary: "A valid old template", taskPrefix: "Run", phases: ["Draft"], steps: [{ phase: "Draft", title: "Write the outline", executor: "Human", instruction: "Start with the promise." }] },
+    { id: "long-step-id", name: "Long step ID", summary: "A recoverable template", taskPrefix: "Run", phases: [{ id: "phase", name: "Draft" }], steps: [{ id: "x".repeat(300), phaseId: "phase", title: "Write the outline", executor: "Human", instruction: "Start with the promise." }] },
+    { id: "blank-step", name: "Blank step", summary: "Invalid", taskPrefix: "Run", phases: [{ id: "phase", name: "Draft" }], steps: [{ id: "blank", phaseId: "phase", title: "   ", executor: "Human", instruction: "" }] },
     { id: "broken", name: "Broken template" },
   ])));
   await page.goto(`${origin}/app/templates`);
   await page.getByRole("heading", { name: "Publish a YouTube video", exact: true }).first().waitFor();
   await page.getByRole("heading", { name: "Legacy podcast", exact: true }).first().waitFor();
   assert.equal(await page.getByText("Overwritten built-in", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Blank step", { exact: true }).count(), 0);
   assert.equal(await page.getByText("Broken template", { exact: true }).count(), 0);
   const firstStored = await page.evaluate(() => JSON.parse(localStorage.getItem("slate:process-templates:owner")));
-  assert.equal(firstStored.length, 1);
-  assert.match(firstStored[0].steps[0].id, /^legacy-podcast-step-/);
-  const migratedStepId = firstStored[0].steps[0].id;
+  assert.equal(firstStored.length, 2);
+  const migratedStepId = firstStored.find(template => template.id === "legacy-podcast").steps[0].id;
+  assert.match(migratedStepId, /^legacy-podcast-step-/);
+  assert.equal(firstStored.find(template => template.id === "long-step-id").steps[0].id, "step-1");
   await page.reload();
   const reloaded = await page.evaluate(() => JSON.parse(localStorage.getItem("slate:process-templates:owner")));
-  assert.equal(reloaded[0].steps[0].id, migratedStepId);
+  assert.equal(reloaded.find(template => template.id === "legacy-podcast").steps[0].id, migratedStepId);
+  assert.equal(reloaded.find(template => template.id === "long-step-id").steps[0].id, "step-1");
   assert.deepEqual(pageErrors, []);
 });
 

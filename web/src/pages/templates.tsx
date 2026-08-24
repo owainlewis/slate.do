@@ -11,6 +11,11 @@ import type { Task } from "@/lib/types"
 
 type Executor = "Human" | "Agent-ready" | "Automation"
 
+const MAX_TEMPLATE_STEPS = 200
+const MAX_TEMPLATE_STEP_ID_BYTES = 150
+const MAX_TASK_TITLE_RUNES = 300
+const MAX_TASK_DESCRIPTION_BYTES = 16 * 1024
+
 interface TemplateStep {
   id: string
   phaseId: string
@@ -72,6 +77,44 @@ function orderedTemplateSteps(template: ProcessTemplate) {
   return template.phases.flatMap(phase => template.steps.filter(step => step.phaseId === phase.id))
 }
 
+function runeLength(value: string) {
+  return Array.from(value).length
+}
+
+function byteLength(value: string) {
+  return new TextEncoder().encode(value).length
+}
+
+function stepDescription(template: ProcessTemplate, step: TemplateStep) {
+  const phaseName = template.phases.find(phase => phase.id === step.phaseId)?.name || "Process"
+  return `Phase: ${phaseName}\nSuggested executor: ${step.executor}\n\n${step.instruction}`
+}
+
+function parentDescription(template: ProcessTemplate, brief: string) {
+  return [
+    `Created from template: ${template.name}`,
+    brief,
+    "",
+    "Follow the ordered workflow below. Agent-ready subtasks stay unassigned until you choose to queue them.",
+  ].filter(Boolean).join("\n")
+}
+
+function templateLimitError(template: ProcessTemplate) {
+  if (template.steps.length > MAX_TEMPLATE_STEPS) return `Templates can contain up to ${MAX_TEMPLATE_STEPS} subtasks.`
+  if (template.steps.some(step => byteLength(step.id) > MAX_TEMPLATE_STEP_ID_BYTES)) return "This template contains invalid subtask identifiers."
+  if (template.steps.some(step => runeLength(step.title.trim()) > MAX_TASK_TITLE_RUNES)) return `Subtask names can contain up to ${MAX_TASK_TITLE_RUNES} characters.`
+  if (template.steps.some(step => byteLength(stepDescription(template, step)) > MAX_TASK_DESCRIPTION_BYTES)) return "Subtask instructions are too long to create a task."
+  return ""
+}
+
+function creationLimitError(template: ProcessTemplate, taskTitle: string, brief: string) {
+  if (template.steps.some(step => !step.title.trim())) return "Every subtask needs a name."
+  const parentTitle = `${template.taskPrefix || template.name}: ${taskTitle.trim()}`
+  if (runeLength(parentTitle) > MAX_TASK_TITLE_RUNES) return `The generated task name can contain up to ${MAX_TASK_TITLE_RUNES} characters.`
+  if (byteLength(parentDescription(template, brief.trim())) > MAX_TASK_DESCRIPTION_BYTES) return "The generated task brief is too long."
+  return templateLimitError(template)
+}
+
 function isBuiltInTemplate(template: ProcessTemplate) {
   return template.id === youtubeTemplate.id
 }
@@ -92,8 +135,9 @@ function migrateTemplate(value: unknown): ProcessTemplate | null {
     if (!value || typeof value !== "object") return null
     const step = value as Record<string, unknown>
     const phaseId = typeof step.phaseId === "string" ? step.phaseId : migratedPhases.find(phase => phase.name === step.phase)?.id
-    const id = typeof step.id === "string" && step.id.trim() ? step.id : `${template.id}-step-${index + 1}`
-    if (!phaseId || !migratedPhases.some(phase => phase.id === phaseId) || typeof step.title !== "string" || typeof step.instruction !== "string" || typeof step.executor !== "string" || !["Human", "Agent-ready", "Automation"].includes(step.executor)) return null
+    const preferredId = typeof step.id === "string" && step.id.trim() ? step.id : `${template.id}-step-${index + 1}`
+    const id = byteLength(preferredId) <= MAX_TEMPLATE_STEP_ID_BYTES ? preferredId : `step-${index + 1}`
+    if (!phaseId || !migratedPhases.some(phase => phase.id === phaseId) || typeof step.title !== "string" || !step.title.trim() || typeof step.instruction !== "string" || typeof step.executor !== "string" || !["Human", "Agent-ready", "Automation"].includes(step.executor)) return null
     return { id, phaseId, title: step.title, instruction: step.instruction, executor: step.executor as Executor }
   })
   if (migratedSteps.some(step => !step)) return null
@@ -195,6 +239,7 @@ export function TemplatesPage() {
   const [creatingStep, setCreatingStep] = React.useState(0)
   const [partialTask, setPartialTask] = React.useState<Task | null>(null)
   const [creationAttempt, setCreationAttempt] = React.useState<ProcessCreationAttempt | null>(null)
+  const [storageError, setStorageError] = React.useState(false)
   const templateSelectRefs = React.useRef(new Map<string, HTMLButtonElement>())
   const focusAfterDeleteId = React.useRef("")
   const deleteTriggerRef = React.useRef<HTMLButtonElement | null>(null)
@@ -211,7 +256,12 @@ export function TemplatesPage() {
       setSelectedTemplateId(nextTemplates[0].id)
       return
     }
-    localStorage.setItem(storageKey, JSON.stringify(templates.filter(template => !isBuiltInTemplate(template))))
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(templates.filter(template => !isBuiltInTemplate(template))))
+      setStorageError(false)
+    } catch {
+      setStorageError(true)
+    }
   }, [storageKey, templates])
 
   const resetForm = React.useCallback(() => {
@@ -243,7 +293,9 @@ export function TemplatesPage() {
     setEditorOpen(true)
   }
 
-  const editorValid = Boolean(editorDraft?.name.trim() && editorDraft.phases.length && new Set(editorDraft.phases.map(phase => phase.name.trim().toLowerCase())).size === editorDraft.phases.length && editorDraft.phases.every(phase => phase.name.trim() && editorDraft.steps.some(step => step.phaseId === phase.id && step.title.trim())))
+  const editorLimitError = editorDraft ? templateLimitError(editorDraft) : ""
+  const editorValid = Boolean(editorDraft?.name.trim() && editorDraft.phases.length && new Set(editorDraft.phases.map(phase => phase.name.trim().toLowerCase())).size === editorDraft.phases.length && editorDraft.phases.every(phase => phase.name.trim() && editorDraft.steps.some(step => step.phaseId === phase.id && step.title.trim())) && !editorLimitError)
+  const createLimitError = creationAttempt ? "" : creationLimitError(selectedTemplate, taskTitle, brief)
 
   const saveEditor = () => {
     if (!editorDraft || !editorValid) return
@@ -279,12 +331,7 @@ export function TemplatesPage() {
         const selectedList = attempt.listId
         const endpoint = selectedList ? `/api/v1/lists/${encodeURIComponent(selectedList)}/tasks` : "/api/v1/tasks"
         const steps = orderedTemplateSteps(attempt.template)
-        const context = [
-          `Created from template: ${attempt.template.name}`,
-          attempt.brief,
-          "",
-          "Follow the ordered workflow below. Agent-ready subtasks stay unassigned until you choose to queue them.",
-        ].filter(Boolean).join("\n")
+        const context = parentDescription(attempt.template, attempt.brief)
         parent = await api.post<Task>(endpoint, {
           title: `${attempt.template.taskPrefix || attempt.template.name}: ${attempt.taskTitle}`,
           description: context,
@@ -295,11 +342,10 @@ export function TemplatesPage() {
         }, { "Idempotency-Key": `${attempt.id}:parent` })
 
         for (const [index, step] of steps.entries()) {
-          const phaseName = attempt.template.phases.find(phase => phase.id === step.phaseId)?.name || "Process"
           setCreatingStep(index + 1)
           await api.post<Task>(`/api/v1/tasks/${encodeURIComponent(parent.id)}/subtasks`, {
             title: step.title,
-            description: `Phase: ${phaseName}\nSuggested executor: ${step.executor}\n\n${step.instruction}`,
+            description: stepDescription(attempt.template, step),
             kind: "action",
             status: "new",
             priority: "p1",
@@ -326,6 +372,7 @@ export function TemplatesPage() {
   })
 
   const startOrRetryCreation = () => {
+    if (!creationAttempt && creationLimitError(selectedTemplate, taskTitle, brief)) return
     const attempt = creationAttempt || {
       id: crypto.randomUUID(),
       template: cloneTemplate(selectedTemplate),
@@ -349,6 +396,7 @@ export function TemplatesPage() {
         <div className="page-heading"><h1>Templates</h1><p>Reusable processes built from phases and ordered subtasks.</p></div>
         <Button variant="secondary" size="sm" onClick={() => openEditor()}><Plus className="size-3.5" />New template</Button>
       </header>
+      {storageError && <div className="status-message error" role="alert"><strong>Templates could not be saved in this browser.</strong><span>Your changes will remain available until you leave this page.</span></div>}
 
       <section className="template-library" aria-label="Available templates">
         {templates.map(template => <article className={`template-list-row surface-card ${template.id === selectedTemplate.id ? "is-selected" : ""}`} key={template.id}>
@@ -375,7 +423,7 @@ export function TemplatesPage() {
       </section>
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-        <DialogContent className="template-editor-dialog" showClose={false} aria-describedby={undefined}>
+        <DialogContent className="template-editor-dialog" showClose={false}>
           {editorDraft && <form onSubmit={event => { event.preventDefault(); saveEditor() }}>
             <DialogHeader className="template-dialog-header"><div className="template-dialog-title"><div className="template-icon small"><Workflow aria-hidden="true" /></div><div><DialogTitle>{editorMode === "edit" ? "Edit template" : editorMode === "duplicate" ? "Duplicate template" : "New template"}</DialogTitle><DialogDescription>Define the phases and ordered subtasks in this process.</DialogDescription></div><button type="button" onClick={() => setEditorOpen(false)} aria-label="Close"><X aria-hidden="true" /></button></div></DialogHeader>
             <div className="template-editor-body">
@@ -383,7 +431,7 @@ export function TemplatesPage() {
                 <div><Label htmlFor="process-template-name">Template name</Label><Input id="process-template-name" value={editorDraft.name} onChange={event => setEditorDraft({ ...editorDraft, name: event.target.value })} placeholder="Publish a weekly newsletter" autoFocus required /></div>
                 <div><Label htmlFor="process-template-summary">Description</Label><Input id="process-template-summary" value={editorDraft.summary} onChange={event => setEditorDraft({ ...editorDraft, summary: event.target.value })} placeholder="What does this process achieve?" /></div>
               </div>
-              <div className="template-editor-section-head"><div><strong>Process</strong><span>{orderedTemplateSteps(editorDraft).length} ordered subtasks</span></div><Button type="button" variant="ghost" size="sm" onClick={() => { const phase = { id: crypto.randomUUID(), name: `Phase ${editorDraft.phases.length + 1}` }; setEditorDraft({ ...editorDraft, phases: [...editorDraft.phases, phase], steps: [...editorDraft.steps, { id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "Human", instruction: "" }] }) }}><Plus className="size-3.5" />Add phase</Button></div>
+              <div className="template-editor-section-head"><div><strong>Process</strong><span>{orderedTemplateSteps(editorDraft).length} ordered subtasks</span></div><Button type="button" variant="ghost" size="sm" disabled={editorDraft.steps.length >= MAX_TEMPLATE_STEPS} onClick={() => { const phase = { id: crypto.randomUUID(), name: `Phase ${editorDraft.phases.length + 1}` }; setEditorDraft({ ...editorDraft, phases: [...editorDraft.phases, phase], steps: [...editorDraft.steps, { id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "Human", instruction: "" }] }) }}><Plus className="size-3.5" />Add phase</Button></div>
               <div className="template-editor-phases">
                 {editorDraft.phases.map((phase, phaseIndex) => {
                   const phaseSteps = editorDraft.steps.filter(step => step.phaseId === phase.id)
@@ -392,16 +440,17 @@ export function TemplatesPage() {
                     <div className="template-editor-steps">
                       {phaseSteps.map((step, stepIndex) => <div className="template-editor-step" key={step.id}>
                         <span className="template-step-number">{phaseIndex + 1}.{stepIndex + 1}</span>
-                        <div className="template-step-fields"><Input aria-label={`${phase.name || `Phase ${phaseIndex + 1}`} subtask ${stepIndex + 1}`} value={step.title} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item === step ? { ...item, title: event.target.value } : item) })} placeholder="Subtask name" required /><Textarea aria-label={`${step.title || `Subtask ${stepIndex + 1}`} instructions`} value={step.instruction} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item === step ? { ...item, instruction: event.target.value } : item) })} placeholder="Instructions or definition of done" /></div>
-                        <Select aria-label={`${step.title || `Subtask ${stepIndex + 1}`} executor`} value={step.executor} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item === step ? { ...item, executor: event.target.value as Executor } : item) })}><option>Human</option><option>Agent-ready</option><option>Automation</option></Select>
-                        <div className="template-order-actions"><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: movePhaseStep(editorDraft.steps, phase.id, stepIndex, -1) })} disabled={stepIndex === 0} aria-label={`Move ${step.title || `subtask ${stepIndex + 1}`} up`}><ArrowUp /></button><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: movePhaseStep(editorDraft.steps, phase.id, stepIndex, 1) })} disabled={stepIndex === phaseSteps.length - 1} aria-label={`Move ${step.title || `subtask ${stepIndex + 1}`} down`}><ArrowDown /></button><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.filter(item => item !== step) })} disabled={phaseSteps.length === 1} aria-label={`Remove ${step.title || `subtask ${stepIndex + 1}`}`}><Trash2 /></button></div>
+                        <div className="template-step-fields"><Input aria-label={`${phase.name || `Phase ${phaseIndex + 1}`} subtask ${stepIndex + 1}`} value={step.title} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item.id === step.id ? { ...item, title: event.target.value } : item) })} placeholder="Subtask name" required /><Textarea aria-label={`${step.title || `Subtask ${stepIndex + 1}`} instructions`} value={step.instruction} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item.id === step.id ? { ...item, instruction: event.target.value } : item) })} placeholder="Instructions or definition of done" /></div>
+                        <Select aria-label={`${step.title || `Subtask ${stepIndex + 1}`} executor`} value={step.executor} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item.id === step.id ? { ...item, executor: event.target.value as Executor } : item) })}><option>Human</option><option>Agent-ready</option><option>Automation</option></Select>
+                        <div className="template-order-actions"><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: movePhaseStep(editorDraft.steps, phase.id, stepIndex, -1) })} disabled={stepIndex === 0} aria-label={`Move ${step.title || `subtask ${stepIndex + 1}`} up`}><ArrowUp /></button><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: movePhaseStep(editorDraft.steps, phase.id, stepIndex, 1) })} disabled={stepIndex === phaseSteps.length - 1} aria-label={`Move ${step.title || `subtask ${stepIndex + 1}`} down`}><ArrowDown /></button><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.filter(item => item.id !== step.id) })} disabled={phaseSteps.length === 1} aria-label={`Remove ${step.title || `subtask ${stepIndex + 1}`}`}><Trash2 /></button></div>
                       </div>)}
-                      <Button type="button" variant="ghost" size="sm" className="template-add-step" onClick={() => setEditorDraft({ ...editorDraft, steps: [...editorDraft.steps, { id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "Human", instruction: "" }] })}><Plus className="size-3.5" />Add subtask</Button>
+                      <Button type="button" variant="ghost" size="sm" className="template-add-step" disabled={editorDraft.steps.length >= MAX_TEMPLATE_STEPS} onClick={() => setEditorDraft({ ...editorDraft, steps: [...editorDraft.steps, { id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "Human", instruction: "" }] })}><Plus className="size-3.5" />Add subtask</Button>
                     </div>
                   </section>
                 })}
               </div>
             </div>
+            {editorLimitError && <div className="status-message error" role="alert">{editorLimitError}</div>}
             <DialogFooter className="template-dialog-footer"><Button type="button" variant="ghost" onClick={() => setEditorOpen(false)}>Cancel</Button><Button type="submit" disabled={!editorValid}>Save template</Button></DialogFooter>
           </form>}
         </DialogContent>
@@ -426,8 +475,8 @@ export function TemplatesPage() {
       </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={closeDialog}>
-        <DialogContent className="template-create-dialog" showClose={false} aria-describedby={undefined}>
-          <form onSubmit={event => { event.preventDefault(); if (taskTitle.trim() && !creationAttempt) startOrRetryCreation() }}>
+        <DialogContent className="template-create-dialog" showClose={false}>
+          <form onSubmit={event => { event.preventDefault(); if (taskTitle.trim() && !creationAttempt && !createLimitError) startOrRetryCreation() }}>
             <DialogHeader className="template-dialog-header"><div className="template-dialog-title"><div className="template-icon small"><Clapperboard aria-hidden="true" /></div><div><DialogTitle>Start process</DialogTitle><DialogDescription>{selectedTemplate.name} creates one parent task with {selectedSteps.length} ordered subtasks.</DialogDescription></div><button type="button" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending} aria-label="Close"><X aria-hidden="true" /></button></div></DialogHeader>
             <div className="template-form-grid">
               <div className="template-form-wide"><Label htmlFor="template-task-title">Task name</Label><Input id="template-task-title" value={taskTitle} onChange={event => setTaskTitle(event.target.value)} placeholder="This week’s run" autoFocus required disabled={createFromTemplate.isPending || Boolean(creationAttempt)} /></div>
@@ -438,8 +487,9 @@ export function TemplatesPage() {
             <div className="template-create-note"><FileText aria-hidden="true" /><p><strong>Template snapshot</strong><span>This task keeps its original phases and subtasks even if the template changes later.</span></p></div>
             {createFromTemplate.isPending && <div className="template-create-progress" role="status"><span style={{ width: `${Math.max(4, (creatingStep / selectedSteps.length) * 100)}%` }} /><p>Creating subtask {creatingStep || 1} of {selectedSteps.length}…</p></div>}
             {createFromTemplate.isError && <div className="status-message error" role="alert"><strong>{partialTask ? "The parent task was created, but the workflow is incomplete." : "Could not create this task."}</strong><span>{createFromTemplate.error.message}</span></div>}
+            {createLimitError && <div className="status-message error" role="alert">{createLimitError}</div>}
             <DialogFooter className="template-dialog-footer">
-              {createFromTemplate.isError ? <>{partialTask && <Button type="button" variant="ghost" onClick={() => { setDialogOpen(false); navigate(taskUrl(partialTask)) }}>Open partial task</Button>}<Button type="button" onClick={startOrRetryCreation}>Retry creation</Button></> : <><Button type="button" variant="ghost" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createFromTemplate.isPending}>{createFromTemplate.isPending ? `Creating ${creatingStep || 1}/${selectedSteps.length}` : "Create task"}</Button></>}
+              {createFromTemplate.isError ? <>{partialTask && <Button type="button" variant="ghost" onClick={() => { setDialogOpen(false); navigate(taskUrl(partialTask)) }}>Open partial task</Button>}<Button type="button" onClick={startOrRetryCreation}>Retry creation</Button></> : <><Button type="button" variant="ghost" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createFromTemplate.isPending || Boolean(createLimitError)}>{createFromTemplate.isPending ? `Creating ${creatingStep || 1}/${selectedSteps.length}` : "Create task"}</Button></>}
             </DialogFooter>
           </form>
         </DialogContent>

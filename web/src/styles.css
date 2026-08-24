@@ -436,6 +436,7 @@ a.bg-primary { color: var(--primary-foreground); }
 .empty-state svg { width: 2rem; height: 2rem; margin: 0 auto .7rem; opacity: .7; }
 .status-message { border-radius: .7rem; background: var(--muted); padding: .7rem .8rem; color: var(--muted-foreground); font-size: .75rem; }
 .status-message.error { background: color-mix(in srgb, var(--destructive) 12%, var(--card)); color: var(--destructive); }
+.dark .status-message.error { color: #f0808d; }
 .loading-page { display: grid; min-height: 60dvh; place-items: center; color: var(--muted-foreground); }
 .spinner { width: 1.25rem; height: 1.25rem; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .65s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
