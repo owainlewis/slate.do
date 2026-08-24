@@ -185,7 +185,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
             </form>
           )}
         </section>
-        <TaskDeleteDialog task={taskQuery.data ? task : null} open={deleteOpen} pending={remove.isPending} error={remove.error instanceof Error ? remove.error.message : remove.error ? "Could not delete task" : ""} returnFocus={actionsTrigger.current} onCancel={() => setDeleteOpen(false)} onConfirm={() => { remove.reset(); remove.mutate() }} />
+        <TaskDeleteDialog task={taskQuery.data || null} open={deleteOpen} pending={remove.isPending} error={remove.error instanceof Error ? remove.error.message : remove.error ? "Could not delete task" : ""} returnFocus={actionsTrigger.current} onCancel={() => setDeleteOpen(false)} onConfirm={() => { remove.reset(); remove.mutate() }} />
       </DialogContent>
     </Dialog>
   )

@@ -431,6 +431,7 @@ test("task deletion uses one safe confirmation from board, table, and task detai
 
   await page.getByRole("button", { name: `Open task: ${title}` }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
+  await page.getByLabel("Title", { exact: true }).fill("Unsaved replacement title");
   await page.getByRole("button", { name: "Task actions" }).click();
   dialog = await openConfirmation();
   await dialog.getByRole("button", { name: "Cancel" }).click();
