@@ -499,22 +499,30 @@ test("uncertain parent and subtask responses are retry-safe", async t => {
   await dialog.getByRole("button", { name: "Create task" }).click();
   await dialog.getByRole("alert").waitFor();
   assert.equal(state.tasks.filter(task => task.title === "Run: Lost parent response").length, 1);
+  const lostParent = state.tasks.find(task => task.title === "Run: Lost parent response");
   const parentRequests = state.idempotencyRequests.filter(item => item.path === "/api/v1/lists/list-product/tasks");
   const [firstAttemptKey] = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("slate:process-attempt:owner:")));
   assert.ok(firstAttemptKey);
   const secondAttemptKey = "slate:process-attempt:owner:other-tab";
   const expiredAttemptKey = "slate:process-attempt:owner:expired";
-  await page.evaluate(({ firstAttemptKey, secondAttemptKey, expiredAttemptKey }) => {
+  await page.evaluate(({ firstAttemptKey, secondAttemptKey, expiredAttemptKey, lostParentId }) => {
     const otherAttempt = JSON.parse(localStorage.getItem(firstAttemptKey));
     otherAttempt.id = "other-tab";
     otherAttempt.createdAt += 1;
     otherAttempt.taskTitle = "Other tab attempt";
     localStorage.setItem(secondAttemptKey, JSON.stringify(otherAttempt));
-    const expiredAttempt = { ...otherAttempt, id: "expired", createdAt: Date.now() - 7 * 24 * 60 * 60 * 1000, taskTitle: "Expired attempt" };
+    const expiredAttempt = { ...otherAttempt, id: "expired", createdAt: Date.now() - 7 * 24 * 60 * 60 * 1000, parentTaskId: lostParentId, taskTitle: "Expired attempt" };
     localStorage.setItem(expiredAttemptKey, JSON.stringify(expiredAttempt));
-  }, { firstAttemptKey, secondAttemptKey, expiredAttemptKey });
+  }, { firstAttemptKey, secondAttemptKey, expiredAttemptKey, lostParentId: lostParent.id });
   await page.reload();
   dialog = page.getByRole("dialog", { name: "Start process" });
+  await dialog.getByText("This saved process attempt is too old to retry safely.").waitFor();
+  assert.equal(await dialog.getByLabel("Task name").inputValue(), "Expired attempt");
+  assert.equal(await dialog.getByRole("button", { name: "Resume creation" }).count(), 0);
+  await dialog.getByRole("button", { name: "Open partial task" }).waitFor();
+  assert.ok(await page.evaluate(key => localStorage.getItem(key), expiredAttemptKey));
+  page.once("dialog", confirmation => confirmation.accept());
+  await dialog.getByRole("button", { name: "Discard attempt" }).click();
   await dialog.getByText("A previous process attempt may be incomplete.").waitFor();
   assert.equal(await dialog.getByLabel("Task name").inputValue(), "Lost parent response");
   assert.equal(await page.evaluate(key => localStorage.getItem(key), expiredAttemptKey), null);
