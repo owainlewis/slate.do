@@ -196,6 +196,7 @@ test("public routes stay light and the app restores the saved dark theme", async
   await page.getByRole("heading", { name: /Stay on top of everything/ }).waitFor();
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), false);
   assert.equal(await page.locator("html").evaluate(element => getComputedStyle(element).colorScheme), "light");
+  assert.match(await page.locator(".landing-nav .brand-mark").evaluate(element => getComputedStyle(element, "::before").backgroundImage), /^radial-gradient/);
   await page.getByRole("link", { name: "Open Slate", exact: true }).click();
   await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), true);
