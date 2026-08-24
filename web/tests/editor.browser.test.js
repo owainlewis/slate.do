@@ -329,7 +329,7 @@ test("the built-in template is read-only and can be duplicated", async t => {
 });
 
 test("template limits prevent hidden or permanently partial workflow tasks", async t => {
-  const { page, origin, pageErrors } = await startApp(t);
+  const { page, state, origin, pageErrors } = await startApp(t);
   const oversized = {
     id: "oversized-template",
     name: "Oversized process",
@@ -366,7 +366,7 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await page.evaluate(() => {
     const setItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function(key, value) {
-      if (String(key).startsWith("slate:process-templates:")) throw new DOMException("Quota exceeded", "QuotaExceededError");
+      if (String(key).startsWith("slate:process-")) throw new DOMException("Quota exceeded", "QuotaExceededError");
       return setItem.call(this, key, value);
     };
   });
@@ -377,6 +377,12 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await freshEditor.getByRole("button", { name: "Save template" }).click();
   await page.getByRole("alert").getByText("Templates could not be saved in this browser.").waitFor();
   await page.locator(".template-list-row").filter({ hasText: "In-memory process" }).waitFor();
+  await page.locator(".template-list-row").filter({ hasText: "Publish a YouTube video" }).getByRole("button", { name: "Use template" }).click();
+  const blockedCreate = page.getByRole("dialog", { name: "Start process" });
+  await blockedCreate.getByLabel("Task name").fill("Cannot persist retry key");
+  await blockedCreate.getByRole("button", { name: "Create task" }).click();
+  await blockedCreate.getByRole("alert").getByText("Slate could not save a safe retry key in this browser. No task was created.").waitFor();
+  assert.equal(state.tasks.some(task => task.title === "Publish: Cannot persist retry key"), false);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -485,14 +491,37 @@ test("uncertain parent and subtask responses are retry-safe", async t => {
   await dialog.getByRole("alert").waitFor();
   assert.equal(state.tasks.filter(task => task.title === "Publish: Lost parent response").length, 1);
   const parentRequests = state.idempotencyRequests.filter(item => item.path === "/api/v1/lists/list-product/tasks");
-  await dialog.getByRole("button", { name: "Retry creation" }).click();
+  const [firstAttemptKey] = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("slate:process-attempt:owner:")));
+  assert.ok(firstAttemptKey);
+  const secondAttemptKey = "slate:process-attempt:owner:other-tab";
+  await page.evaluate(({ firstAttemptKey, secondAttemptKey }) => {
+    const otherAttempt = JSON.parse(localStorage.getItem(firstAttemptKey));
+    otherAttempt.id = "other-tab";
+    otherAttempt.createdAt += 1;
+    otherAttempt.taskTitle = "Other tab attempt";
+    localStorage.setItem(secondAttemptKey, JSON.stringify(otherAttempt));
+  }, { firstAttemptKey, secondAttemptKey });
+  await page.reload();
+  dialog = page.getByRole("dialog", { name: "Start process" });
+  await dialog.getByText("A previous process attempt may be incomplete.").waitFor();
+  assert.equal(await dialog.getByLabel("Task name").inputValue(), "Lost parent response");
+  await dialog.getByRole("button", { name: "Resume creation" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   const parent = state.tasks.find(task => task.title === "Publish: Lost parent response");
   assert.equal(state.tasks.filter(task => task.title === parent.title).length, 1);
   assert.equal(state.subtasks.filter(task => task.parentTaskId === parent.id).length, 17);
   assert.equal(state.idempotencyRequests.filter(item => item.path === "/api/v1/lists/list-product/tasks")[1].key, parentRequests[0].key);
+  assert.deepEqual(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("slate:process-attempt:owner:"))), [secondAttemptKey]);
 
   await page.goto(`${origin}/app/templates`);
+  dialog = page.getByRole("dialog", { name: "Start process" });
+  await dialog.waitFor();
+  assert.equal(await dialog.getByLabel("Task name").inputValue(), "Other tab attempt");
+  page.once("dialog", confirmation => confirmation.accept());
+  await dialog.getByRole("button", { name: "Discard attempt" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assert.deepEqual(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("slate:process-attempt:owner:"))), []);
+
   state.loseSubtaskResponseFor = "Generate title options";
   await page.getByRole("button", { name: "Use template" }).click();
   dialog = page.getByRole("dialog", { name: "Start process" });
@@ -650,13 +679,26 @@ test("hosted control plane exposes search, runs, runners, and human review", asy
 });
 
 test("mobile navigation and task detail fit a narrow viewport", async t => {
-  const { page, pageErrors } = await startApp(t, { width: 390, height: 844 });
+  const { page, state, origin, pageErrors } = await startApp(t, { width: 390, height: 844 });
   await page.getByRole("button", { name: "Open navigation" }).click();
   assert.equal(await page.locator("#primary-navigation").evaluate(element => element.classList.contains("open")), true);
   await page.getByRole("button", { name: "Close navigation" }).first().click();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   const bounds = await page.getByRole("region", { name: "Task detail" }).boundingBox();
   assert.ok(bounds.width <= 390);
+
+  await page.goto(`${origin}/app/templates`);
+  state.loseSubtaskResponseFor = "Generate title options";
+  await page.getByRole("button", { name: "Use template" }).click();
+  const processDialog = page.getByRole("dialog", { name: "Start process" });
+  await processDialog.getByLabel("Task name").fill("Mobile partial process");
+  await processDialog.getByRole("button", { name: "Create task" }).click();
+  await processDialog.getByText("The parent task was created, but the workflow is incomplete.").waitFor();
+  const dialogBounds = await processDialog.boundingBox();
+  for (const name of ["Discard attempt", "Open partial task", "Keep for later", "Retry creation"]) {
+    const buttonBounds = await processDialog.getByRole("button", { name }).boundingBox();
+    assert.ok(buttonBounds.x >= dialogBounds.x && buttonBounds.x + buttonBounds.width <= dialogBounds.x + dialogBounds.width);
+  }
   assert.deepEqual(pageErrors, []);
 });
 

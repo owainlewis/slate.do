@@ -210,11 +210,39 @@ class TemplateCreationError extends Error {
 
 interface ProcessCreationAttempt {
   id: string
+  createdAt: number
   template: ProcessTemplate
   taskTitle: string
   plannedDate: string
   brief: string
   listId: string
+}
+
+function loadCreationAttempt(key: string): ProcessCreationAttempt | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "null") as Partial<ProcessCreationAttempt> | null
+    if (!value || typeof value.id !== "string" || !value.id.trim() || byteLength(value.id) > MAX_TEMPLATE_STEP_ID_BYTES || typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt) || value.createdAt <= 0 || typeof value.taskTitle !== "string" || !value.taskTitle.trim() || typeof value.plannedDate !== "string" || typeof value.brief !== "string" || typeof value.listId !== "string") return null
+    const template = migrateTemplate(value.template)
+    if (!template || templateLimitError(template) || creationLimitError(template, value.taskTitle, value.brief)) return null
+    return { id: value.id, createdAt: value.createdAt, template, taskTitle: value.taskTitle, plannedDate: value.plannedDate, brief: value.brief, listId: value.listId }
+  } catch {
+    return null
+  }
+}
+
+function loadCreationAttempts(prefix: string) {
+  const attempts: ProcessCreationAttempt[] = []
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (!key?.startsWith(prefix)) continue
+      const attempt = loadCreationAttempt(key)
+      if (attempt && key === `${prefix}${attempt.id}`) attempts.push(attempt)
+    }
+  } catch {
+    return []
+  }
+  return attempts.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
 }
 
 type EditorMode = "new" | "edit" | "duplicate"
@@ -224,28 +252,35 @@ export function TemplatesPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const storageKey = `slate:process-templates:${me.id}`
+  const attemptStoragePrefix = `slate:process-attempt:${me.id}:`
+  const [initialAttempt] = React.useState(() => loadCreationAttempts(attemptStoragePrefix)[0] || null)
   const activeStorageKey = React.useRef(storageKey)
+  const activeAttemptStoragePrefix = React.useRef(attemptStoragePrefix)
   const [templates, setTemplates] = React.useState<ProcessTemplate[]>(() => loadTemplates(storageKey))
   const [selectedTemplateId, setSelectedTemplateId] = React.useState(() => templates[0].id)
   const [editorOpen, setEditorOpen] = React.useState(false)
   const [editorDraft, setEditorDraft] = React.useState<ProcessTemplate | null>(null)
   const [editorMode, setEditorMode] = React.useState<EditorMode>("new")
   const [deleteTarget, setDeleteTarget] = React.useState<ProcessTemplate | null>(null)
-  const [dialogOpen, setDialogOpen] = React.useState(false)
-  const [taskTitle, setTaskTitle] = React.useState("")
-  const [plannedDate, setPlannedDate] = React.useState("")
-  const [brief, setBrief] = React.useState("")
-  const [listId, setListId] = React.useState("")
+  const [dialogOpen, setDialogOpen] = React.useState(Boolean(initialAttempt))
+  const [taskTitle, setTaskTitle] = React.useState(initialAttempt?.taskTitle || "")
+  const [plannedDate, setPlannedDate] = React.useState(initialAttempt?.plannedDate || "")
+  const [brief, setBrief] = React.useState(initialAttempt?.brief || "")
+  const [listId, setListId] = React.useState(initialAttempt?.listId || "")
   const [creatingStep, setCreatingStep] = React.useState(0)
   const [partialTask, setPartialTask] = React.useState<Task | null>(null)
-  const [creationAttempt, setCreationAttempt] = React.useState<ProcessCreationAttempt | null>(null)
+  const [creationAttempt, setCreationAttempt] = React.useState<ProcessCreationAttempt | null>(initialAttempt)
   const [storageError, setStorageError] = React.useState(false)
+  const [attemptStorageError, setAttemptStorageError] = React.useState(false)
+  const [attemptDiscardError, setAttemptDiscardError] = React.useState(false)
   const templateSelectRefs = React.useRef(new Map<string, HTMLButtonElement>())
   const focusAfterDeleteId = React.useRef("")
   const deleteTriggerRef = React.useRef<HTMLButtonElement | null>(null)
 
   const selectedTemplate = templates.find(template => template.id === selectedTemplateId) || templates[0]
+  const activeTemplate = creationAttempt?.template || selectedTemplate
   const selectedSteps = orderedTemplateSteps(selectedTemplate)
+  const activeSteps = orderedTemplateSteps(activeTemplate)
   const defaultList = lists.find(list => list.name.toLowerCase() === "content") || lists.find(list => !list.isInbox) || lists[0]
 
   React.useEffect(() => {
@@ -264,6 +299,20 @@ export function TemplatesPage() {
     }
   }, [storageKey, templates])
 
+  React.useEffect(() => {
+    if (activeAttemptStoragePrefix.current === attemptStoragePrefix) return
+    activeAttemptStoragePrefix.current = attemptStoragePrefix
+    const restored = loadCreationAttempts(attemptStoragePrefix)[0] || null
+    setCreationAttempt(restored)
+    setTaskTitle(restored?.taskTitle || "")
+    setPlannedDate(restored?.plannedDate || "")
+    setBrief(restored?.brief || "")
+    setListId(restored?.listId || "")
+    setDialogOpen(Boolean(restored))
+    setAttemptStorageError(false)
+    setAttemptDiscardError(false)
+  }, [attemptStoragePrefix])
+
   const resetForm = React.useCallback(() => {
     setTaskTitle("")
     setPlannedDate("")
@@ -271,10 +320,13 @@ export function TemplatesPage() {
     setListId(defaultList?.id || "")
     setCreatingStep(0)
     setPartialTask(null)
-    setCreationAttempt(null)
   }, [defaultList?.id])
 
   const openTemplate = (template: ProcessTemplate) => {
+    if (creationAttempt) {
+      setDialogOpen(true)
+      return
+    }
     setSelectedTemplateId(template.id)
     resetForm()
     createFromTemplate.reset()
@@ -295,7 +347,7 @@ export function TemplatesPage() {
 
   const editorLimitError = editorDraft ? templateLimitError(editorDraft) : ""
   const editorValid = Boolean(editorDraft?.name.trim() && editorDraft.phases.length && new Set(editorDraft.phases.map(phase => phase.name.trim().toLowerCase())).size === editorDraft.phases.length && editorDraft.phases.every(phase => phase.name.trim() && editorDraft.steps.some(step => step.phaseId === phase.id && step.title.trim())) && !editorLimitError)
-  const createLimitError = creationAttempt ? "" : creationLimitError(selectedTemplate, taskTitle, brief)
+  const createLimitError = creationAttempt ? "" : creationLimitError(activeTemplate, taskTitle, brief)
 
   const saveEditor = () => {
     if (!editorDraft || !editorValid) return
@@ -357,7 +409,11 @@ export function TemplatesPage() {
       }
     },
     onMutate: () => setCreatingStep(0),
-    onSuccess: async task => {
+    onSuccess: async (task, attempt) => {
+      try { localStorage.removeItem(`${attemptStoragePrefix}${attempt.id}`) } catch { /* A retained successful attempt remains safe to replay. */ }
+      setCreationAttempt(null)
+      setAttemptStorageError(false)
+      setAttemptDiscardError(false)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["tasks"] }),
         queryClient.invalidateQueries({ queryKey: ["subtasks", task.id] }),
@@ -372,17 +428,54 @@ export function TemplatesPage() {
   })
 
   const startOrRetryCreation = () => {
-    if (!creationAttempt && creationLimitError(selectedTemplate, taskTitle, brief)) return
+    if (!creationAttempt && creationLimitError(activeTemplate, taskTitle, brief)) return
     const attempt = creationAttempt || {
       id: crypto.randomUUID(),
-      template: cloneTemplate(selectedTemplate),
+      createdAt: Date.now(),
+      template: cloneTemplate(activeTemplate),
       taskTitle: taskTitle.trim(),
       plannedDate,
       brief: brief.trim(),
       listId: listId || defaultList?.id || "",
     }
-    if (!creationAttempt) setCreationAttempt(attempt)
+    if (!creationAttempt) {
+      try {
+        localStorage.setItem(`${attemptStoragePrefix}${attempt.id}`, JSON.stringify(attempt))
+      } catch {
+        setAttemptStorageError(true)
+        return
+      }
+      setCreationAttempt(attempt)
+      setAttemptStorageError(false)
+      setAttemptDiscardError(false)
+    }
     createFromTemplate.mutate(attempt)
+  }
+
+  const discardCreationAttempt = () => {
+    if (!creationAttempt || !window.confirm("Discard this saved process attempt? Any partial task will remain in Slate.")) return
+    try {
+      localStorage.removeItem(`${attemptStoragePrefix}${creationAttempt.id}`)
+    } catch {
+      setAttemptDiscardError(true)
+      return
+    }
+    const nextAttempt = loadCreationAttempts(attemptStoragePrefix)[0] || null
+    createFromTemplate.reset()
+    setCreationAttempt(nextAttempt)
+    setAttemptStorageError(false)
+    setAttemptDiscardError(false)
+    if (nextAttempt) {
+      setTaskTitle(nextAttempt.taskTitle)
+      setPlannedDate(nextAttempt.plannedDate)
+      setBrief(nextAttempt.brief)
+      setListId(nextAttempt.listId)
+      setCreatingStep(0)
+      setPartialTask(null)
+      return
+    }
+    resetForm()
+    setDialogOpen(false)
   }
 
   const closeDialog = (open: boolean) => {
@@ -477,7 +570,7 @@ export function TemplatesPage() {
       <Dialog open={dialogOpen} onOpenChange={closeDialog}>
         <DialogContent className="template-create-dialog" showClose={false}>
           <form onSubmit={event => { event.preventDefault(); if (taskTitle.trim() && !creationAttempt && !createLimitError) startOrRetryCreation() }}>
-            <DialogHeader className="template-dialog-header"><div className="template-dialog-title"><div className="template-icon small"><Clapperboard aria-hidden="true" /></div><div><DialogTitle>Start process</DialogTitle><DialogDescription>{selectedTemplate.name} creates one parent task with {selectedSteps.length} ordered subtasks.</DialogDescription></div><button type="button" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending} aria-label="Close"><X aria-hidden="true" /></button></div></DialogHeader>
+            <DialogHeader className="template-dialog-header"><div className="template-dialog-title"><div className="template-icon small"><Clapperboard aria-hidden="true" /></div><div><DialogTitle>Start process</DialogTitle><DialogDescription>{activeTemplate.name} creates one parent task with {activeSteps.length} ordered subtasks.</DialogDescription></div><button type="button" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending} aria-label="Close"><X aria-hidden="true" /></button></div></DialogHeader>
             <div className="template-form-grid">
               <div className="template-form-wide"><Label htmlFor="template-task-title">Task name</Label><Input id="template-task-title" value={taskTitle} onChange={event => setTaskTitle(event.target.value)} placeholder="This week’s run" autoFocus required disabled={createFromTemplate.isPending || Boolean(creationAttempt)} /></div>
               <div><Label htmlFor="template-planned-date">Plan for</Label><span className="date-property"><CalendarDays aria-hidden="true" /><Input id="template-planned-date" type="date" value={plannedDate} onChange={event => setPlannedDate(event.target.value)} disabled={createFromTemplate.isPending || Boolean(creationAttempt)} /></span></div>
@@ -485,11 +578,14 @@ export function TemplatesPage() {
               <div className="template-form-wide"><Label htmlFor="template-brief">Brief</Label><Textarea id="template-brief" value={brief} onChange={event => setBrief(event.target.value)} placeholder="Add the context for this run" disabled={createFromTemplate.isPending || Boolean(creationAttempt)} /></div>
             </div>
             <div className="template-create-note"><FileText aria-hidden="true" /><p><strong>Template snapshot</strong><span>This task keeps its original phases and subtasks even if the template changes later.</span></p></div>
-            {createFromTemplate.isPending && <div className="template-create-progress" role="status"><span style={{ width: `${Math.max(4, (creatingStep / selectedSteps.length) * 100)}%` }} /><p>Creating subtask {creatingStep || 1} of {selectedSteps.length}…</p></div>}
+            {createFromTemplate.isPending && <div className="template-create-progress" role="status"><span style={{ width: `${Math.max(4, (creatingStep / activeSteps.length) * 100)}%` }} /><p>Creating subtask {creatingStep || 1} of {activeSteps.length}…</p></div>}
             {createFromTemplate.isError && <div className="status-message error" role="alert"><strong>{partialTask ? "The parent task was created, but the workflow is incomplete." : "Could not create this task."}</strong><span>{createFromTemplate.error.message}</span></div>}
+            {creationAttempt && !createFromTemplate.isPending && !createFromTemplate.isError && <div className="status-message" role="status"><strong>A previous process attempt may be incomplete.</strong><span>Resume it to reuse the same task and subtask keys safely.</span></div>}
+            {attemptStorageError && <div className="status-message error" role="alert">Slate could not save a safe retry key in this browser. No task was created.</div>}
+            {attemptDiscardError && <div className="status-message error" role="alert">Slate could not discard this attempt from browser storage.</div>}
             {createLimitError && <div className="status-message error" role="alert">{createLimitError}</div>}
             <DialogFooter className="template-dialog-footer">
-              {createFromTemplate.isError ? <>{partialTask && <Button type="button" variant="ghost" onClick={() => { setDialogOpen(false); navigate(taskUrl(partialTask)) }}>Open partial task</Button>}<Button type="button" onClick={startOrRetryCreation}>Retry creation</Button></> : <><Button type="button" variant="ghost" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createFromTemplate.isPending || Boolean(createLimitError)}>{createFromTemplate.isPending ? `Creating ${creatingStep || 1}/${selectedSteps.length}` : "Create task"}</Button></>}
+              {creationAttempt && !createFromTemplate.isPending ? <><Button type="button" variant="ghost" onClick={discardCreationAttempt}>Discard attempt</Button>{createFromTemplate.isError && partialTask && <Button type="button" variant="ghost" onClick={() => { setDialogOpen(false); navigate(taskUrl(partialTask)) }}>Open partial task</Button>}<Button type="button" variant="ghost" onClick={() => closeDialog(false)}>Keep for later</Button><Button type="button" onClick={startOrRetryCreation}>{createFromTemplate.isError ? "Retry creation" : "Resume creation"}</Button></> : <><Button type="button" variant="ghost" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createFromTemplate.isPending || Boolean(createLimitError)}>{createFromTemplate.isPending ? `Creating ${creatingStep || 1}/${activeSteps.length}` : "Create task"}</Button></>}
             </DialogFooter>
           </form>
         </DialogContent>
