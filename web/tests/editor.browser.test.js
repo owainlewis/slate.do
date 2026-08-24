@@ -336,7 +336,7 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
     summary: "Too many steps",
     taskPrefix: "Run",
     phases: [{ id: "phase", name: "Plan" }],
-    steps: Array.from({ length: 201 }, (_, index) => ({ id: `step-${index}`, phaseId: "phase", title: `Step ${index}`, executor: "Human", instruction: "" })),
+    steps: Array.from({ length: 51 }, (_, index) => ({ id: `step-${index}`, phaseId: "phase", title: `Step ${index}`, executor: "Human", instruction: "" })),
   };
   await page.goto(origin);
   await page.evaluate(template => localStorage.setItem("slate:process-templates:owner", JSON.stringify([template])), oversized);
@@ -344,7 +344,7 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   const oversizedRow = page.locator(".template-list-row").filter({ hasText: "Oversized process" });
   await oversizedRow.getByRole("button", { name: "Edit" }).click();
   const editor = page.getByRole("dialog", { name: "Edit template" });
-  await editor.getByRole("alert").getByText("Templates can contain up to 200 subtasks.").waitFor();
+  await editor.getByRole("alert").getByText("Templates can contain up to 50 subtasks.").waitFor();
   assert.equal(await editor.getByRole("button", { name: "Save template" }).isDisabled(), true);
   await editor.getByRole("button", { name: "Cancel" }).click();
 

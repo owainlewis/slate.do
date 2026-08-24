@@ -11,7 +11,8 @@ import type { Task } from "@/lib/types"
 
 type Executor = "Human" | "Agent-ready" | "Automation"
 
-const MAX_TEMPLATE_STEPS = 200
+// A process must fit below the server's 60 authenticated writes per minute, including its parent and retry headroom.
+const MAX_TEMPLATE_STEPS = 50
 const MAX_TEMPLATE_STEP_ID_BYTES = 150
 const MAX_TASK_TITLE_RUNES = 300
 const MAX_TASK_DESCRIPTION_BYTES = 16 * 1024
