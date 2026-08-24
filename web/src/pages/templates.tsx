@@ -169,6 +169,8 @@ class TemplateCreationError extends Error {
 interface ProcessCreationAttempt {
   id: string
   createdAt: number
+  parentTaskId: string
+  nextStepIndex: number
   template: ProcessTemplate
   taskTitle: string
   plannedDate: string
@@ -182,7 +184,10 @@ function loadCreationAttempt(key: string): ProcessCreationAttempt | null {
     if (!value || typeof value.id !== "string" || !value.id.trim() || byteLength(value.id) > MAX_TEMPLATE_STEP_ID_BYTES || typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt) || value.createdAt <= 0 || value.createdAt > Date.now() + 5 * 60 * 1000 || typeof value.taskTitle !== "string" || !value.taskTitle.trim() || typeof value.plannedDate !== "string" || typeof value.brief !== "string" || typeof value.listId !== "string") return null
     const template = migrateTemplate(value.template)
     if (!template || templateLimitError(template) || creationLimitError(template, value.taskTitle, value.brief)) return null
-    return { id: value.id, createdAt: value.createdAt, template, taskTitle: value.taskTitle, plannedDate: value.plannedDate, brief: value.brief, listId: value.listId }
+    const parentTaskId = typeof value.parentTaskId === "string" ? value.parentTaskId.trim() : ""
+    const nextStepIndex = value.nextStepIndex === undefined ? 0 : value.nextStepIndex
+    if (byteLength(parentTaskId) > MAX_TEMPLATE_STEP_ID_BYTES || !Number.isInteger(nextStepIndex) || nextStepIndex < 0 || nextStepIndex > template.steps.length || (nextStepIndex > 0 && !parentTaskId)) return null
+    return { id: value.id, createdAt: value.createdAt, parentTaskId, nextStepIndex, template, taskTitle: value.taskTitle, plannedDate: value.plannedDate, brief: value.brief, listId: value.listId }
   } catch {
     return null
   }
@@ -338,20 +343,29 @@ export function TemplatesPage() {
     mutationFn: async (attempt: ProcessCreationAttempt) => {
       let parent: Task | undefined
       try {
+        let progress = attempt
         const selectedList = attempt.listId
         const endpoint = selectedList ? `/api/v1/lists/${encodeURIComponent(selectedList)}/tasks` : "/api/v1/tasks"
         const steps = orderedTemplateSteps(attempt.template)
         const context = parentDescription(attempt.template, attempt.brief)
-        parent = await api.post<Task>(endpoint, {
-          title: `${attempt.template.taskPrefix || attempt.template.name}: ${attempt.taskTitle}`,
-          description: context,
-          kind: "action",
-          status: "new",
-          priority: "p1",
-          scheduledDate: attempt.plannedDate,
-        }, { "Idempotency-Key": `${attempt.id}:parent` })
+        if (attempt.parentTaskId) {
+          parent = await api.get<Task>(`/api/v1/tasks/${encodeURIComponent(attempt.parentTaskId)}`)
+        } else {
+          parent = await api.post<Task>(endpoint, {
+            title: `${attempt.template.taskPrefix || attempt.template.name}: ${attempt.taskTitle}`,
+            description: context,
+            kind: "action",
+            status: "new",
+            priority: "p1",
+            scheduledDate: attempt.plannedDate,
+          }, { "Idempotency-Key": `${attempt.id}:parent` })
+          progress = { ...attempt, parentTaskId: parent.id }
+          localStorage.setItem(`${attemptStoragePrefix}${attempt.id}`, JSON.stringify(progress))
+          setCreationAttempt(progress)
+        }
 
-        for (const [index, step] of steps.entries()) {
+        for (let index = progress.nextStepIndex; index < steps.length; index += 1) {
+          const step = steps[index]
           setCreatingStep(index + 1)
           await api.post<Task>(`/api/v1/tasks/${encodeURIComponent(parent.id)}/subtasks`, {
             title: step.title,
@@ -360,13 +374,16 @@ export function TemplatesPage() {
             status: "new",
             priority: "p1",
           }, { "Idempotency-Key": `${attempt.id}:step:${step.id}` })
+          progress = { ...progress, nextStepIndex: index + 1 }
+          localStorage.setItem(`${attemptStoragePrefix}${attempt.id}`, JSON.stringify(progress))
+          setCreationAttempt(progress)
         }
         return parent
       } catch (error) {
         throw new TemplateCreationError(error instanceof Error ? error.message : "Could not create this task from the template.", parent)
       }
     },
-    onMutate: () => setCreatingStep(0),
+    onMutate: attempt => setCreatingStep(Math.min(orderedTemplateSteps(attempt.template).length, attempt.nextStepIndex + 1)),
     onSuccess: async (task, attempt) => {
       try { localStorage.removeItem(`${attemptStoragePrefix}${attempt.id}`) } catch { /* A retained successful attempt remains safe to replay. */ }
       setCreationAttempt(null)
@@ -391,6 +408,8 @@ export function TemplatesPage() {
     const attempt = creationAttempt || {
       id: crypto.randomUUID(),
       createdAt: Date.now(),
+      parentTaskId: "",
+      nextStepIndex: 0,
       template: cloneTemplate(activeTemplate),
       taskTitle: taskTitle.trim(),
       plannedDate,

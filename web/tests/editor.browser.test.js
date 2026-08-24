@@ -543,12 +543,22 @@ test("uncertain parent and subtask responses are retry-safe", async t => {
   await dialog.getByRole("alert").waitFor();
   const partialParent = state.tasks.find(task => task.title === "Run: Lost subtask response");
   assert.equal(state.subtasks.filter(task => task.parentTaskId === partialParent.id).length, 2);
+  const savedProgress = await page.evaluate(() => {
+    const key = Object.keys(localStorage).find(item => item.startsWith("slate:process-attempt:owner:"));
+    return JSON.parse(localStorage.getItem(key));
+  });
+  assert.equal(savedProgress.parentTaskId, partialParent.id);
+  assert.equal(savedProgress.nextStepIndex, 1);
+  const parentWrites = () => state.idempotencyRequests.filter(item => state.idempotency.get(item.key)?.id === partialParent.id);
+  const completedStepWrites = () => state.idempotencyRequests.filter(item => state.idempotency.get(item.key)?.title === "Capture input" && state.idempotency.get(item.key)?.parentTaskId === partialParent.id);
   const lostStepRequests = () => state.idempotencyRequests.filter(item => state.idempotency.get(item.key)?.title === "Generate output" && state.idempotency.get(item.key)?.parentTaskId === partialParent.id);
   const lostStepKey = lostStepRequests()[0].key;
   await dialog.getByRole("button", { name: "Retry creation" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   assert.equal(state.tasks.filter(task => task.title === partialParent.title).length, 1);
   assert.equal(state.subtasks.filter(task => task.parentTaskId === partialParent.id).length, 2);
+  assert.equal(parentWrites().length, 1);
+  assert.equal(completedStepWrites().length, 1);
   assert.equal(lostStepRequests().length, 2);
   assert.equal(lostStepRequests()[1].key, lostStepKey);
   assert.deepEqual(pageErrors, []);
