@@ -15,6 +15,8 @@ const MAX_TEMPLATE_STEPS = 200
 const MAX_TEMPLATE_STEP_ID_BYTES = 150
 const MAX_TASK_TITLE_RUNES = 300
 const MAX_TASK_DESCRIPTION_BYTES = 16 * 1024
+// Server idempotency keys are retained for seven days. Expire browser retries first.
+const MAX_PROCESS_ATTEMPT_AGE_MS = 6 * 24 * 60 * 60 * 1000
 
 interface TemplateStep {
   id: string
@@ -221,7 +223,7 @@ interface ProcessCreationAttempt {
 function loadCreationAttempt(key: string): ProcessCreationAttempt | null {
   try {
     const value = JSON.parse(localStorage.getItem(key) || "null") as Partial<ProcessCreationAttempt> | null
-    if (!value || typeof value.id !== "string" || !value.id.trim() || byteLength(value.id) > MAX_TEMPLATE_STEP_ID_BYTES || typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt) || value.createdAt <= 0 || typeof value.taskTitle !== "string" || !value.taskTitle.trim() || typeof value.plannedDate !== "string" || typeof value.brief !== "string" || typeof value.listId !== "string") return null
+    if (!value || typeof value.id !== "string" || !value.id.trim() || byteLength(value.id) > MAX_TEMPLATE_STEP_ID_BYTES || typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt) || value.createdAt <= 0 || value.createdAt > Date.now() + 5 * 60 * 1000 || typeof value.taskTitle !== "string" || !value.taskTitle.trim() || typeof value.plannedDate !== "string" || typeof value.brief !== "string" || typeof value.listId !== "string") return null
     const template = migrateTemplate(value.template)
     if (!template || templateLimitError(template) || creationLimitError(template, value.taskTitle, value.brief)) return null
     return { id: value.id, createdAt: value.createdAt, template, taskTitle: value.taskTitle, plannedDate: value.plannedDate, brief: value.brief, listId: value.listId }
@@ -232,12 +234,18 @@ function loadCreationAttempt(key: string): ProcessCreationAttempt | null {
 
 function loadCreationAttempts(prefix: string) {
   const attempts: ProcessCreationAttempt[] = []
+  const expiredKeys: string[] = []
   try {
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index)
       if (!key?.startsWith(prefix)) continue
       const attempt = loadCreationAttempt(key)
-      if (attempt && key === `${prefix}${attempt.id}`) attempts.push(attempt)
+      if (!attempt || key !== `${prefix}${attempt.id}`) continue
+      if (Date.now() - attempt.createdAt >= MAX_PROCESS_ATTEMPT_AGE_MS) expiredKeys.push(key)
+      else attempts.push(attempt)
+    }
+    for (const key of expiredKeys) {
+      try { localStorage.removeItem(key) } catch { /* Ignore stale entries that browser storage will not remove. */ }
     }
   } catch {
     return []

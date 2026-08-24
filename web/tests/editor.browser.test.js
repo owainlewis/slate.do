@@ -494,17 +494,21 @@ test("uncertain parent and subtask responses are retry-safe", async t => {
   const [firstAttemptKey] = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("slate:process-attempt:owner:")));
   assert.ok(firstAttemptKey);
   const secondAttemptKey = "slate:process-attempt:owner:other-tab";
-  await page.evaluate(({ firstAttemptKey, secondAttemptKey }) => {
+  const expiredAttemptKey = "slate:process-attempt:owner:expired";
+  await page.evaluate(({ firstAttemptKey, secondAttemptKey, expiredAttemptKey }) => {
     const otherAttempt = JSON.parse(localStorage.getItem(firstAttemptKey));
     otherAttempt.id = "other-tab";
     otherAttempt.createdAt += 1;
     otherAttempt.taskTitle = "Other tab attempt";
     localStorage.setItem(secondAttemptKey, JSON.stringify(otherAttempt));
-  }, { firstAttemptKey, secondAttemptKey });
+    const expiredAttempt = { ...otherAttempt, id: "expired", createdAt: Date.now() - 7 * 24 * 60 * 60 * 1000, taskTitle: "Expired attempt" };
+    localStorage.setItem(expiredAttemptKey, JSON.stringify(expiredAttempt));
+  }, { firstAttemptKey, secondAttemptKey, expiredAttemptKey });
   await page.reload();
   dialog = page.getByRole("dialog", { name: "Start process" });
   await dialog.getByText("A previous process attempt may be incomplete.").waitFor();
   assert.equal(await dialog.getByLabel("Task name").inputValue(), "Lost parent response");
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), expiredAttemptKey), null);
   await dialog.getByRole("button", { name: "Resume creation" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   const parent = state.tasks.find(task => task.title === "Publish: Lost parent response");
