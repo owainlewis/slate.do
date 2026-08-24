@@ -26,6 +26,10 @@ function fixture() {
     tokens: [],
     requests: [],
     paginate: false,
+    idempotency: new Map(),
+    idempotencyRequests: [],
+    loseParentResponse: false,
+    loseSubtaskResponseFor: "",
   };
 }
 
@@ -56,10 +60,20 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
     const listTaskMatch = url.pathname.match(/^\/api\/v1\/lists\/([^/]+)\/tasks$/);
     if ((url.pathname === "/api/v1/tasks" || listTaskMatch) && request.method === "POST") {
       const input = await requestJSON(request);
+      const idempotencyKey = request.headers["idempotency-key"];
+      state.idempotencyRequests.push({ path: url.pathname, key: idempotencyKey });
+      const replay = idempotencyKey && state.idempotency.get(idempotencyKey);
+      if (replay) return json(response, replay, 200);
       const bucketId = listTaskMatch ? listTaskMatch[1] : "list-inbox";
       const list = state.lists.find(item => item.id === bucketId);
       const task = { id: `task-${state.tasks.length + 1}`, bucketId, bucketName: list.name, listName: list.name, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", ...input };
       state.tasks.push(task);
+      if (idempotencyKey) state.idempotency.set(idempotencyKey, task);
+      if (state.loseParentResponse) {
+        state.loseParentResponse = false;
+        response.writeHead(201, { "Content-Type": "application/json" });
+        return response.end("{");
+      }
       return json(response, task, 201);
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
@@ -95,9 +109,19 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
     const subtaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/subtasks$/);
     if (subtaskMatch && request.method === "POST") {
       const input = await requestJSON(request);
+      const idempotencyKey = request.headers["idempotency-key"];
+      state.idempotencyRequests.push({ path: url.pathname, key: idempotencyKey });
+      const replay = idempotencyKey && state.idempotency.get(idempotencyKey);
+      if (replay) return json(response, replay, 200);
       const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
       const task = { id: `subtask-${state.subtasks.length + 1}`, parentTaskId: parent.id, parentTaskTitle: parent.title, bucketId: parent.bucketId, bucketName: parent.bucketName, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", sortOrder: state.subtasks.length, createdAt: new Date(Date.UTC(2026, 7, 23, 9, 0, state.subtasks.length)).toISOString(), ...input };
       state.subtasks.push(task);
+      if (idempotencyKey) state.idempotency.set(idempotencyKey, task);
+      if (state.loseSubtaskResponseFor === task.title) {
+        state.loseSubtaskResponseFor = "";
+        response.writeHead(201, { "Content-Type": "application/json" });
+        return response.end("{");
+      }
       return json(response, task, 201);
     }
     const entryMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/entries$/);
@@ -246,6 +270,133 @@ test("the YouTube template creates one parent task with an ordered workflow", as
   assert.deepEqual((await page.locator(".subtask-title").allTextContents()).slice(0, 6), ["Capture the idea", "Generate title options", "Approve the title", "Write the outline", "Handwrite the introduction", "Write the script"]);
   assert.equal(generated.find(task => task.title === "Write the Kit promotional email").assigneeAgentId, "");
   assert.match(generated.find(task => task.title === "Write the Kit promotional email").description, /Suggested executor: Agent-ready/);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("the built-in template is read-only and can be duplicated", async t => {
+  const { page, origin, pageErrors } = await startApp(t);
+  await page.goto(`${origin}/app/templates`);
+  const builtIn = page.locator(".template-list-row").filter({ hasText: "Publish a YouTube video" });
+  await builtIn.getByText("Built-in", { exact: true }).waitFor();
+  assert.equal(await builtIn.getByRole("button", { name: "Edit" }).count(), 0);
+  assert.equal(await builtIn.getByRole("button", { name: "Delete" }).count(), 0);
+
+  await builtIn.getByRole("button", { name: "Duplicate" }).click();
+  const duplicate = page.getByRole("dialog", { name: "Duplicate template" });
+  assert.equal(await duplicate.getByLabel("Template name").inputValue(), "Publish a YouTube video copy");
+  await duplicate.getByRole("button", { name: "Save template" }).click();
+  const copy = page.locator(".template-list-row").filter({ hasText: "Publish a YouTube video copy" });
+  await copy.getByRole("button", { name: "Edit" }).waitFor();
+  await copy.getByRole("button", { name: "Delete" }).waitFor();
+  assert.deepEqual(pageErrors, []);
+});
+
+test("template deletion confirms, selects a neighbour, and leaves generated tasks unchanged", async t => {
+  const { page, state, origin, pageErrors } = await startApp(t);
+  await page.goto(`${origin}/app/templates`);
+  await page.getByRole("button", { name: "New template" }).click();
+  const editor = page.getByRole("dialog", { name: "New template" });
+  await editor.getByLabel("Template name").fill("Temporary launch process");
+  await editor.getByLabel("Phase 1 subtask 1").fill("Prepare the launch");
+  await editor.getByRole("button", { name: "Save template" }).click();
+
+  const row = page.locator(".template-list-row").filter({ hasText: "Temporary launch process" });
+  await row.getByRole("button", { name: "Use template" }).click();
+  const create = page.getByRole("dialog", { name: "Start process" });
+  await create.getByLabel("Task name").fill("Autumn launch");
+  await create.getByRole("button", { name: "Create task" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  const generatedParent = state.tasks.find(task => task.title === "Run: Autumn launch");
+  const generatedSubtasks = state.subtasks.filter(task => task.parentTaskId === generatedParent.id).map(task => task.id);
+
+  await page.goto(`${origin}/app/templates`);
+  const savedRow = page.locator(".template-list-row").filter({ hasText: "Temporary launch process" });
+  await savedRow.locator(".template-list-select").click();
+  assert.equal(await savedRow.locator(".template-list-select").getAttribute("aria-pressed"), "true");
+  const deleteButton = savedRow.getByRole("button", { name: "Delete" });
+  await deleteButton.click();
+  const confirmation = page.getByRole("dialog", { name: "Delete template?" });
+  const cancel = confirmation.getByRole("button", { name: "Cancel" });
+  assert.equal(await cancel.evaluate(element => document.activeElement === element), true);
+  await cancel.click();
+  await savedRow.waitFor();
+  await deleteButton.evaluate(element => new Promise(resolve => {
+    const check = () => document.activeElement === element ? resolve() : requestAnimationFrame(check);
+    check();
+  }));
+
+  await deleteButton.click();
+  await confirmation.getByRole("button", { name: "Delete template" }).click();
+  await savedRow.waitFor({ state: "detached" });
+  const builtInSelect = page.locator(".template-list-row").filter({ hasText: "Publish a YouTube video" }).locator(".template-list-select");
+  assert.equal(await builtInSelect.getAttribute("aria-pressed"), "true");
+  await builtInSelect.evaluate(element => new Promise(resolve => {
+    const check = () => document.activeElement === element ? resolve() : requestAnimationFrame(check);
+    check();
+  }));
+  assert.ok(state.tasks.some(task => task.id === generatedParent.id));
+  assert.deepEqual(state.subtasks.filter(task => task.parentTaskId === generatedParent.id).map(task => task.id), generatedSubtasks);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("valid legacy templates survive malformed siblings and migrate stable step IDs", async t => {
+  const { page, origin, pageErrors } = await startApp(t);
+  await page.evaluate(() => localStorage.setItem("slate:process-templates:owner", JSON.stringify([
+    { id: "youtube-weekly", name: "Overwritten built-in", summary: "Wrong", taskPrefix: "Wrong", phases: [{ id: "wrong", name: "Wrong" }], steps: [{ phaseId: "wrong", title: "Wrong", executor: "Human", instruction: "Wrong" }] },
+    { id: "legacy-podcast", name: "Legacy podcast", summary: "A valid old template", taskPrefix: "Run", phases: ["Draft"], steps: [{ phase: "Draft", title: "Write the outline", executor: "Human", instruction: "Start with the promise." }] },
+    { id: "broken", name: "Broken template" },
+  ])));
+  await page.goto(`${origin}/app/templates`);
+  await page.getByRole("heading", { name: "Publish a YouTube video", exact: true }).first().waitFor();
+  await page.getByRole("heading", { name: "Legacy podcast", exact: true }).first().waitFor();
+  assert.equal(await page.getByText("Overwritten built-in", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Broken template", { exact: true }).count(), 0);
+  const firstStored = await page.evaluate(() => JSON.parse(localStorage.getItem("slate:process-templates:owner")));
+  assert.equal(firstStored.length, 1);
+  assert.match(firstStored[0].steps[0].id, /^legacy-podcast-step-/);
+  const migratedStepId = firstStored[0].steps[0].id;
+  await page.reload();
+  const reloaded = await page.evaluate(() => JSON.parse(localStorage.getItem("slate:process-templates:owner")));
+  assert.equal(reloaded[0].steps[0].id, migratedStepId);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("uncertain parent and subtask responses are retry-safe", async t => {
+  const { page, state, origin, pageErrors } = await startApp(t);
+  await page.goto(`${origin}/app/templates`);
+
+  state.loseParentResponse = true;
+  await page.getByRole("button", { name: "Use template" }).click();
+  let dialog = page.getByRole("dialog", { name: "Start process" });
+  await dialog.getByLabel("Task name").fill("Lost parent response");
+  await dialog.getByRole("button", { name: "Create task" }).click();
+  await dialog.getByRole("alert").waitFor();
+  assert.equal(state.tasks.filter(task => task.title === "Publish: Lost parent response").length, 1);
+  const parentRequests = state.idempotencyRequests.filter(item => item.path === "/api/v1/lists/list-product/tasks");
+  await dialog.getByRole("button", { name: "Retry creation" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  const parent = state.tasks.find(task => task.title === "Publish: Lost parent response");
+  assert.equal(state.tasks.filter(task => task.title === parent.title).length, 1);
+  assert.equal(state.subtasks.filter(task => task.parentTaskId === parent.id).length, 17);
+  assert.equal(state.idempotencyRequests.filter(item => item.path === "/api/v1/lists/list-product/tasks")[1].key, parentRequests[0].key);
+
+  await page.goto(`${origin}/app/templates`);
+  state.loseSubtaskResponseFor = "Generate title options";
+  await page.getByRole("button", { name: "Use template" }).click();
+  dialog = page.getByRole("dialog", { name: "Start process" });
+  await dialog.getByLabel("Task name").fill("Lost subtask response");
+  await dialog.getByRole("button", { name: "Create task" }).click();
+  await dialog.getByRole("alert").waitFor();
+  const partialParent = state.tasks.find(task => task.title === "Publish: Lost subtask response");
+  assert.equal(state.subtasks.filter(task => task.parentTaskId === partialParent.id).length, 2);
+  const lostStepRequests = () => state.idempotencyRequests.filter(item => state.idempotency.get(item.key)?.title === "Generate title options" && state.idempotency.get(item.key)?.parentTaskId === partialParent.id);
+  const lostStepKey = lostStepRequests()[0].key;
+  await dialog.getByRole("button", { name: "Retry creation" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(state.tasks.filter(task => task.title === partialParent.title).length, 1);
+  assert.equal(state.subtasks.filter(task => task.parentTaskId === partialParent.id).length, 17);
+  assert.equal(lostStepRequests().length, 2);
+  assert.equal(lostStepRequests()[1].key, lostStepKey);
   assert.deepEqual(pageErrors, []);
 });
 
