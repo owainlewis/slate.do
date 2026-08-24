@@ -30,6 +30,7 @@ function fixture() {
     idempotencyRequests: [],
     loseParentResponse: false,
     loseSubtaskResponseFor: "",
+    deleteTaskError: "",
     taskCreateDelay: null,
   };
 }
@@ -107,6 +108,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       return json(response, task);
     }
     if (taskMatch && request.method === "DELETE") {
+      if (state.deleteTaskError) return json(response, { error: state.deleteTaskError }, 500);
       state.tasks = state.tasks.filter(item => item.id !== taskMatch[1]);
       state.subtasks = state.subtasks.filter(item => item.id !== taskMatch[1] && item.parentTaskId !== taskMatch[1]);
       return json(response, {});
@@ -227,7 +229,7 @@ test("table layout filters tasks and survives layout changes", async t => {
   await page.getByRole("button", { name: "Table", exact: true }).click();
   const table = page.getByRole("table");
   await table.waitFor();
-  for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned"]) await table.getByRole("columnheader", { name: heading }).waitFor();
+  for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned", "Actions"]) await table.getByRole("columnheader", { name: heading }).waitFor();
   await page.getByLabel("Search tasks").fill("boss");
   await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr").length === 1);
   await page.getByRole("button", { name: "Board", exact: true }).click();
@@ -387,6 +389,67 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await blockedCreate.getByRole("button", { name: "Create task" }).click();
   await blockedCreate.getByRole("alert").getByText("Slate could not save a safe retry key in this browser. No task was created.").waitFor();
   assert.equal(state.tasks.some(task => task.title === "Run: Cannot persist retry key"), false);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("task deletion uses one safe confirmation from board, table, and task detail", async t => {
+  const { page, state, pageErrors } = await startApp(t);
+  const title = "Publish task-first agents video";
+  const confirmationText = `Delete “${title}”? All of its subtasks will also be deleted.`;
+  const assertProcessUnchanged = (deleteRequests = 0) => {
+    assert.ok(state.tasks.some(task => task.id === "task-parent"));
+    assert.ok(state.subtasks.some(task => task.id === "task-child"));
+    assert.equal(state.requests.filter(request => request === "DELETE /api/v1/tasks/task-parent").length, deleteRequests);
+  };
+  const openConfirmation = async () => {
+    await page.getByRole("menuitem", { name: "Delete task" }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete task?" });
+    await dialog.waitFor();
+    assert.equal(await dialog.getByText(confirmationText, { exact: true }).count(), 1);
+    assert.deepEqual((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations, []);
+    return dialog;
+  };
+
+  const boardActions = page.getByRole("button", { name: `Actions for ${title}` });
+  await boardActions.click();
+  let dialog = await openConfirmation();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await boardActions.evaluate(element => new Promise(resolve => {
+    const check = () => document.activeElement === element ? resolve() : requestAnimationFrame(check);
+    check();
+  }));
+  assertProcessUnchanged();
+
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+  const tableActions = page.getByRole("button", { name: `Actions for ${title}` });
+  await tableActions.click();
+  dialog = await openConfirmation();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assertProcessUnchanged();
+
+  await page.getByRole("button", { name: `Open task: ${title}` }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  await page.getByRole("button", { name: "Task actions" }).click();
+  dialog = await openConfirmation();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await dialog.waitFor({ state: "detached" });
+  assertProcessUnchanged();
+
+  await page.getByRole("button", { name: "Task actions" }).click();
+  dialog = await openConfirmation();
+  state.deleteTaskError = "Could not delete this process.";
+  await dialog.getByRole("button", { name: "Delete task" }).click();
+  await dialog.getByRole("alert").getByText(state.deleteTaskError).waitFor();
+  assertProcessUnchanged(1);
+
+  state.deleteTaskError = "";
+  await dialog.getByRole("button", { name: "Delete task" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
+  assert.equal(state.tasks.some(task => task.id === "task-parent"), false);
+  assert.equal(state.subtasks.some(task => task.id === "task-child"), false);
+  assert.equal(state.requests.filter(request => request === "DELETE /api/v1/tasks/task-parent").length, 2);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -712,6 +775,17 @@ test("hosted control plane exposes search, runs, runners, and human review", asy
 
 test("mobile navigation and task detail fit a narrow viewport", async t => {
   const { page, state, origin, pageErrors } = await startApp(t, { width: 390, height: 844 });
+  const title = "Publish task-first agents video";
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+  const tableActions = page.getByRole("button", { name: `Actions for ${title}` });
+  assert.equal(await tableActions.isVisible(), true);
+  await tableActions.click();
+  await page.getByRole("menuitem", { name: "Delete task" }).click();
+  const deleteDialog = page.getByRole("dialog", { name: "Delete task?" });
+  await deleteDialog.getByText(`Delete “${title}”? All of its subtasks will also be deleted.`, { exact: true }).waitFor();
+  await deleteDialog.getByRole("button", { name: "Cancel" }).click();
+  assert.ok(state.tasks.some(task => task.id === "task-parent"));
+  assert.ok(state.subtasks.some(task => task.id === "task-child"));
   await page.getByRole("button", { name: "Open navigation" }).click();
   assert.equal(await page.locator("#primary-navigation").evaluate(element => element.classList.contains("open")), true);
   await page.getByRole("button", { name: "Close navigation" }).first().click();
