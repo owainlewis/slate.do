@@ -345,6 +345,8 @@ a.bg-primary { color: var(--primary-foreground); }
 .template-list-select { display: flex; min-width: 0; flex: 1; align-items: center; gap: .85rem; border: 0; background: transparent; padding: .2rem; color: inherit; text-align: left; cursor: pointer; }
 .template-list-select > div:last-child { min-width: 0; }
 .template-list-actions { display: flex; flex: none; align-items: center; gap: .25rem; }
+.template-name { display: flex; align-items: center; gap: .5rem; }
+.template-name > span { border: 1px solid var(--border); border-radius: 999px; background: var(--muted); padding: .12rem .42rem; color: var(--muted-foreground); font-size: .62rem; font-weight: 600; }
 .template-icon { display: grid; width: 2.25rem; height: 2.25rem; flex: none; place-items: center; border: 1px solid var(--border); border-radius: .6rem; background: var(--muted); color: var(--muted-foreground); }
 .template-icon svg { width: 1rem; height: 1rem; }
 .template-icon.small { width: 2.1rem; height: 2.1rem; border-radius: .55rem; }
