@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { NavLink, useLocation, useNavigate } from "react-router-dom"
-import { Bot, CalendarDays, ChevronDown, CircleDot, Inbox, ListTodo, LogOut, Menu, Plus, Play, Search, Settings, UserRound, Workflow, X } from "lucide-react"
+import { Bot, CalendarDays, ChevronDown, CircleDot, Inbox, LayoutTemplate, ListTodo, LogOut, Menu, Plus, Play, Search, Settings, UserRound, Workflow, X } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -89,6 +89,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const inbox = lists.find(list => list.isInbox)
   const openTaskDialog = React.useCallback((status: TaskStatus = "new") => {
+    if (createTask.isPending) return
     const match = location.pathname.match(/^\/app\/lists\/([^/]+)/)
     setTaskList(match ? decodeURIComponent(match[1]) : (inbox?.id || ""))
     setTaskStatus(status)
@@ -102,13 +103,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [openTaskDialog])
   React.useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== "k" || (!event.metaKey && !event.ctrlKey)) return
+      if (event.key.toLowerCase() !== "k" || (!event.metaKey && !event.ctrlKey) || createTask.isPending) return
       event.preventDefault()
       setSearchDialog(true)
     }
     window.addEventListener("keydown", shortcut)
     return () => window.removeEventListener("keydown", shortcut)
-  }, [])
+  }, [createTask.isPending])
   React.useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
@@ -133,6 +134,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="nav-label"><span>Work</span></div>
             <NavigationLink to="/app/inbox" icon={Inbox} count={inbox?.openCount}>Inbox</NavigationLink>
             <NavigationLink to="/app/tasks" icon={ListTodo}>All tasks</NavigationLink>
+            <NavigationLink to="/app/templates" icon={LayoutTemplate}>Templates</NavigationLink>
           </div>
           <div className="nav-group">
             <div className="nav-label"><span>Lists</span><button type="button" onClick={() => { setListError(""); setListDialog(true) }} aria-label="New list"><Plus className="size-3.5" /></button></div>
@@ -178,23 +180,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </form>
         </DialogContent>
       </Dialog>
-      <Dialog open={taskDialog} onOpenChange={setTaskDialog}>
+      <Dialog open={taskDialog} onOpenChange={open => { if (!createTask.isPending) setTaskDialog(open) }}>
         <DialogContent className="task-create-dialog" showClose={false} aria-describedby={undefined}>
           <DialogTitle className="sr-only">New task</DialogTitle>
-          <form className="task-create-form" onSubmit={event => { event.preventDefault(); if (taskTitle.trim()) createTask.mutate() }}>
-            <div className="task-create-head"><div><span>{me.displayName || me.email.split("@")[0]}</span><strong>New task</strong></div><button type="button" onClick={() => setTaskDialog(false)} aria-label="Close"><X /></button></div>
+          <form className="task-create-form" onSubmit={event => { event.preventDefault(); if (taskTitle.trim() && !createTask.isPending) createTask.mutate() }}>
+            <div className="task-create-head"><div><span>{me.displayName || me.email.split("@")[0]}</span><strong>New task</strong></div><div className="task-create-head-actions"><button type="button" className="task-template-link" onClick={() => { setTaskDialog(false); navigate("/app/templates") }} disabled={createTask.isPending}><LayoutTemplate />Use template</button><button type="button" onClick={() => setTaskDialog(false)} disabled={createTask.isPending} aria-label="Close"><X /></button></div></div>
             <div className="task-create-body">
-              <Input className="task-create-title" aria-label="Task title" value={taskTitle} onChange={event => setTaskTitle(event.target.value)} placeholder="What needs to happen?" autoFocus />
-              <Textarea className="task-create-description" aria-label="Task brief" value={taskDescription} onChange={event => setTaskDescription(event.target.value)} placeholder="Add context, an outcome, or a definition of done…" />
+              <Input className="task-create-title" aria-label="Task title" value={taskTitle} onChange={event => setTaskTitle(event.target.value)} placeholder="What needs to happen?" autoFocus disabled={createTask.isPending} />
+              <Textarea className="task-create-description" aria-label="Task brief" value={taskDescription} onChange={event => setTaskDescription(event.target.value)} placeholder="Add context, an outcome, or a definition of done…" disabled={createTask.isPending} />
               <div className="task-create-properties">
-                <label><span>List</span><Select aria-label="Task list" value={taskList} onChange={event => setTaskList(event.target.value)}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</Select></label>
-                <label><span>Agent</span><Select aria-label="Assigned agent" value={taskAgent} disabled={!agents.length} onChange={event => setTaskAgent(event.target.value)}><option value="">{agents.length ? "No agent" : "None connected"}</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></label>
-                <label><span>Plan for</span><span className="date-property"><CalendarDays /><Input aria-label="Plan for" type="date" value={taskDate} onChange={event => setTaskDate(event.target.value)} /></span></label>
-                <label><span>Priority</span><PriorityPicker value={taskPriority} onChange={setTaskPriority} allowNone={false} /></label>
+                <label><span>List</span><Select aria-label="Task list" value={taskList} onChange={event => setTaskList(event.target.value)} disabled={createTask.isPending}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</Select></label>
+                <label><span>Agent</span><Select aria-label="Assigned agent" value={taskAgent} disabled={!agents.length || createTask.isPending} onChange={event => setTaskAgent(event.target.value)}><option value="">{agents.length ? "No agent" : "None connected"}</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></label>
+                <label><span>Plan for</span><span className="date-property"><CalendarDays /><Input aria-label="Plan for" type="date" value={taskDate} onChange={event => setTaskDate(event.target.value)} disabled={createTask.isPending} /></span></label>
+                <label><span>Priority</span><PriorityPicker value={taskPriority} onChange={setTaskPriority} allowNone={false} disabled={createTask.isPending} /></label>
               </div>
             </div>
             {createTask.isError && <p className="status-message error mx-6 mb-2" role="alert">{createTask.error.message}</p>}
-            <div className="task-create-footer"><span>{taskAgent ? "Assigning an agent queues this task for a connected runner." : `This task will start in ${taskStatus === "working" ? "In Progress" : taskStatus === "needs_review" ? "Review" : taskStatus === "done" ? "Done" : "Todo"}.`}</span><div><Button type="button" variant="ghost" onClick={() => setTaskDialog(false)}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createTask.isPending}>{createTask.isPending ? "Creating…" : taskAgent ? "Create & queue" : "Create task"}</Button></div></div>
+            <div className="task-create-footer"><span>{taskAgent ? "Assigning an agent queues this task for a connected runner." : `This task will start in ${taskStatus === "working" ? "In Progress" : taskStatus === "needs_review" ? "Review" : taskStatus === "done" ? "Done" : "Todo"}.`}</span><div><Button type="button" variant="ghost" onClick={() => setTaskDialog(false)} disabled={createTask.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createTask.isPending}>{createTask.isPending ? "Creating…" : taskAgent ? "Create & queue" : "Create task"}</Button></div></div>
           </form>
         </DialogContent>
       </Dialog>

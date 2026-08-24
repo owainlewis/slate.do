@@ -25,11 +25,11 @@ export function PriorityBadge({ priority, compact = false }: { priority?: Priori
   return <span className={cn("priority-badge", `priority-${priority}`, compact && "compact")}><PriorityMark priority={priority} />{priorityLabel(priority)}</span>
 }
 
-export function PriorityPicker({ value, onChange, allowNone = true, className }: { value?: Priority; onChange: (priority: Priority) => void; allowNone?: boolean; className?: string }) {
+export function PriorityPicker({ value, onChange, allowNone = true, className, disabled = false }: { value?: Priority; onChange: (priority: Priority) => void; allowNone?: boolean; className?: string; disabled?: boolean }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" className={cn("property-button", className)} aria-label="Priority">
+        <button type="button" className={cn("property-button", className)} aria-label="Priority" disabled={disabled}>
           <PriorityMark priority={value || ""} /><span>{priorityLabel(value)}</span>
         </button>
       </DropdownMenuTrigger>

@@ -1,7 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import App from "./App"
+
+afterEach(() => {
+  cleanup()
+  document.documentElement.classList.remove("dark")
+  vi.unstubAllGlobals()
+})
 
 function renderApp(path = "/") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -21,4 +27,33 @@ test("the login form preserves protected destinations", async () => {
   expect(await screen.findByRole("heading", { name: "Welcome back." })).toBeInTheDocument()
   expect(screen.getByLabelText("Email")).toBeRequired()
   expect(screen.getByLabelText("Password")).toBeRequired()
+})
+
+test("the templates route starts new accounts without shared defaults", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://slate.test").pathname
+    if (path === "/api/v1/me") return new Response(JSON.stringify({ authenticated: true, user: { id: "user-1", email: "customer@example.com", displayName: "Customer", theme: "light" } }), { status: 200 })
+    if (path === "/api/v1/lists") return new Response(JSON.stringify({ lists: [{ id: "list-1", name: "Product", isInbox: false }] }), { status: 200 })
+    if (path === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }), { status: 200 })
+    return new Response(JSON.stringify({}), { status: 200 })
+  }))
+  const { container } = renderApp("/app/templates")
+  expect(await screen.findByRole("heading", { name: "Templates" })).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "No templates yet" })).toBeInTheDocument()
+  expect(container.querySelectorAll(".template-list-row")).toHaveLength(0)
+})
+
+test.each([
+  ["/", /stay on top of everything/i],
+  ["/login", "Welcome back."],
+  ["/forgot-password", "Reset your password."],
+  ["/reset-password", "Choose a new password."],
+  ["/early-access", "Join Slate."],
+  ["/missing", "Not found."],
+])("the public route %s always uses the light theme", async (path, heading) => {
+  document.documentElement.classList.add("dark")
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ authenticated: false }), { status: 200 })))
+  renderApp(path)
+  expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument()
+  expect(document.documentElement).not.toHaveClass("dark")
 })
