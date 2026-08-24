@@ -138,6 +138,17 @@ type TaskPage struct {
 	NextCursor string `json:"nextCursor,omitempty"`
 }
 
+// WorkspaceSummary describes account-wide work shown above the task board.
+// Task counts use top-level action tasks, matching the board itself. The
+// windowed counts use transition times so unrelated edits cannot refresh them.
+type WorkspaceSummary struct {
+	ActiveTasks int `json:"activeTasks"`
+	InProgress  int `json:"inProgress"`
+	InReview    int `json:"inReview"`
+	Completed   int `json:"completed24h"`
+	Runs        int `json:"runs24h"`
+}
+
 // InboxMessage is an agent-authored card entry read across the whole account.
 // The inbox is one directional: agents post, people read. A person's own
 // comments already live on the task, so echoing them back would be noise.

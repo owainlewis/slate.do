@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input, Label, Select, Textarea } from "@/components/ui/field"
 import { useApp } from "@/app-context"
 import { api } from "@/lib/api"
-import type { Task } from "@/lib/types"
+import { workspaceSummaryQueryKey, type Task } from "@/lib/types"
 
 type Executor = "Human" | "Agent-ready" | "Automation"
 
@@ -401,6 +401,7 @@ export function TemplatesPage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["tasks"] }),
         queryClient.invalidateQueries({ queryKey: ["subtasks", task.id] }),
+        queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey }),
         refreshLists(),
       ])
       setDialogOpen(false)
@@ -408,6 +409,7 @@ export function TemplatesPage() {
     },
     onError: error => {
       if (error instanceof TemplateCreationError && error.parentTask) setPartialTask(error.parentTask)
+      void queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey })
     },
   })
 

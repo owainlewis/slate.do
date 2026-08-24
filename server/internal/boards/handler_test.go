@@ -31,6 +31,18 @@ func TestListTasksRejectsMalformedLocationIDsBeforeStore(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSummaryRejectsAgentCredentialsBeforeStore(t *testing.T) {
+	handler := NewHandler(nil)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/stats/summary", nil)
+
+	handler.GetWorkspaceSummary(recorder, request, auth.User{AgentID: "agent-id"})
+
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "agent credentials") {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestChildAndConversationRoutesRejectMalformedCardIDsBeforeStore(t *testing.T) {
 	handler := NewHandler(nil)
 	tests := []struct {

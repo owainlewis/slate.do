@@ -567,6 +567,11 @@ a.bg-primary { color: var(--primary-foreground); }
 .stat-card { padding: 1rem; }
 .stat-card span { color: var(--muted-foreground); font-size: .65rem; text-transform: uppercase; letter-spacing: .1em; }
 .stat-card strong { display: block; margin-top: .35rem; font-family: var(--serif); font-size: 1.65rem; font-weight: 400; }
+.workspace-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: .8rem; overflow: hidden; }
+.workspace-summary-item { min-width: 0; border-right: 1px solid var(--border); padding: .65rem .85rem; }
+.workspace-summary-item:last-child { border-right: 0; }
+.workspace-summary-item strong { display: block; font-family: var(--serif); font-size: 1.3rem; font-weight: 400; line-height: 1; }
+.workspace-summary-item span { display: block; margin-top: .3rem; overflow: hidden; color: var(--muted-foreground); font-size: .6rem; letter-spacing: .06em; line-height: 1.25; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 
 .inbox-stack { display: grid; gap: 1.7rem; }
 .section-title-row { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin: 0 0 .65rem; }
@@ -646,6 +651,9 @@ a.bg-primary { color: var(--primary-foreground); }
   .workspace-table th:last-child, .workspace-table td:last-child { display: table-cell; }
   .settings-row { grid-template-columns: 1fr; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .workspace-summary-item { padding: .6rem .45rem; text-align: center; }
+  .workspace-summary-item strong { font-size: 1.15rem; }
+  .workspace-summary-item span { font-size: .52rem; letter-spacing: .035em; white-space: normal; }
   .hero h1 { font-size: clamp(2.85rem, 14vw, 3.7rem); }
   .landing-nav, .hero, .landing-section { padding-right: 1.25rem; padding-left: 1.25rem; }
   .hero { padding-top: 3.2rem; }

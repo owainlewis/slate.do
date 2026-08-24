@@ -1992,6 +1992,24 @@ func taskSearchPattern(query string) string {
 	return "%" + escaped + "%"
 }
 
+func (s *Store) WorkspaceSummary(ctx context.Context, userID string) (WorkspaceSummary, error) {
+	var summary WorkspaceSummary
+	err := s.db.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE kind = 'action' AND parent_task_id IS NULL AND status <> 'done')::int,
+			COUNT(*) FILTER (WHERE kind = 'action' AND parent_task_id IS NULL AND status = 'working')::int,
+			COUNT(*) FILTER (WHERE kind = 'action' AND parent_task_id IS NULL AND status = 'needs_review')::int,
+			COUNT(*) FILTER (WHERE kind = 'action' AND parent_task_id IS NULL AND status = 'done' AND completed_at >= now() - interval '24 hours')::int,
+			(SELECT COUNT(*)::int FROM task_run_starts WHERE owner_user_id = $1 AND started_at >= now() - interval '24 hours')
+		FROM tasks
+		WHERE owner_user_id = $1
+	`, userID).Scan(&summary.ActiveTasks, &summary.InProgress, &summary.InReview, &summary.Completed, &summary.Runs)
+	if err != nil {
+		return WorkspaceSummary{}, err
+	}
+	return summary, nil
+}
+
 func (s *Store) getBucket(ctx context.Context, userID string, id string) (Bucket, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT b.id::text, b.name, b.goal, b.is_inbox, b.limit_count, b.sort_order,

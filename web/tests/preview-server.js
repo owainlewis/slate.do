@@ -39,6 +39,7 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname === "/api/v1/me" && request.method === "GET") return send(response, { authenticated: true, user: { id: "owner", email: "owain@slate.do", displayName: "Owain Lewis", theme: "light", entitlement: { plan: "pro", limits: { lists: 45, agents: 5, apiTokens: 10 } } } });
   if (url.pathname === "/api/v1/lists" && request.method === "GET") return send(response, { lists });
   if (url.pathname === "/api/v1/agents" && request.method === "GET") return send(response, { agents, maxAgents: 5 });
+  if (url.pathname === "/api/v1/stats/summary" && request.method === "GET") return send(response, { activeTasks: 7, inProgress: 2, inReview: 2, completed24h: 2, runs24h: 2 });
   if (url.pathname === "/api/v1/inbox") return send(response, { messages: [{ id: "message", taskId: "react", taskTitle: "Ship the React workspace", kind: "output", body: "The interface is ready for your final review.", authorName: "Research agent" }] });
   if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
     let result = [...tasks];

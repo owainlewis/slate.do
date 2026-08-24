@@ -10,7 +10,7 @@ import { PriorityMark, PriorityPicker, type Priority } from "@/components/priori
 import { TaskDeleteDialog } from "@/components/task-delete-dialog"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
-import type { Entry, Task, TaskStatus } from "@/lib/types"
+import { workspaceSummaryQueryKey, type Entry, type Task, type TaskStatus } from "@/lib/types"
 
 const statuses: Array<{ value: TaskStatus; label: string }> = [
   { value: "new", label: "Todo" },
@@ -60,6 +60,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
       queryClient.invalidateQueries({ queryKey: ["inbox-review"] }),
       queryClient.invalidateQueries({ queryKey: ["runs-overview"] }),
       queryClient.invalidateQueries({ queryKey: ["global-task-search"] }),
+      queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey }),
     ])
   }
 
@@ -115,13 +116,13 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
 
   const createSubtask = useMutation({
     mutationFn: () => api.post<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/subtasks`, { title: subtaskTitle.trim(), kind: "action", priority: task.priority || "p1" }, { "Idempotency-Key": crypto.randomUUID() }),
-    onSuccess: async () => { setSubtaskTitle(""); setShowSubtaskComposer(false); await queryClient.invalidateQueries({ queryKey: ["subtasks", taskId] }); await queryClient.invalidateQueries({ queryKey: ["tasks"] }) },
+    onSuccess: async () => { setSubtaskTitle(""); setShowSubtaskComposer(false); await Promise.all([queryClient.invalidateQueries({ queryKey: ["subtasks", taskId] }), queryClient.invalidateQueries({ queryKey: ["tasks"] }), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey })]) },
     onError: value => setError(value instanceof Error ? value.message : "Could not add subtask"),
   })
 
   const toggleSubtask = useMutation({
     mutationFn: ({ id, status }: { id: string; status: TaskStatus }) => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(id)}/status`, { status }),
-    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["subtasks", taskId] }); await queryClient.invalidateQueries({ queryKey: ["tasks"] }) },
+    onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["subtasks", taskId] }), queryClient.invalidateQueries({ queryKey: ["tasks"] }), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey })]) },
     onError: value => setError(value instanceof Error ? value.message : "Could not update subtask"),
   })
 
