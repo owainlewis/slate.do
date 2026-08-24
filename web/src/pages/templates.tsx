@@ -18,6 +18,7 @@ const MAX_TASK_TITLE_RUNES = 300
 const MAX_TASK_DESCRIPTION_BYTES = 16 * 1024
 // Server idempotency keys are retained for seven days. Expire browser retries first.
 const MAX_PROCESS_ATTEMPT_AGE_MS = 6 * 24 * 60 * 60 * 1000
+const REMOVED_DEFAULT_TEMPLATE_ID = "youtube-weekly"
 
 interface TemplateStep {
   id: string
@@ -39,37 +40,6 @@ interface ProcessTemplate {
   taskPrefix: string
   phases: TemplatePhase[]
   steps: TemplateStep[]
-}
-
-const youtubeSteps: TemplateStep[] = [
-  { id: "youtube-capture-idea", phaseId: "define", title: "Capture the idea", executor: "Human", instruction: "Write down the audience, problem, promise and reason this video should exist." },
-  { id: "youtube-generate-titles", phaseId: "define", title: "Generate title options", executor: "Agent-ready", instruction: "Generate strong title options from the idea, audience and core promise." },
-  { id: "youtube-approve-title", phaseId: "define", title: "Approve the title", executor: "Human", instruction: "Choose the title that makes the clearest promise without overstating the video." },
-  { id: "youtube-write-outline", phaseId: "define", title: "Write the outline", executor: "Human", instruction: "Map the argument, examples and teaching sequence before writing the full script." },
-  { id: "youtube-write-intro", phaseId: "define", title: "Handwrite the introduction", executor: "Human", instruction: "Write the opening hook in your own words and make the payoff clear." },
-  { id: "youtube-write-script", phaseId: "define", title: "Write the script", executor: "Agent-ready", instruction: "Turn the approved outline and introduction into a complete recording script." },
-  { id: "youtube-record", phaseId: "produce", title: "Record the video", executor: "Human", instruction: "Record the approved script and store the raw footage in the content folder." },
-  { id: "youtube-edit", phaseId: "produce", title: "Edit the video", executor: "Human", instruction: "Edit the recording into the finished YouTube cut." },
-  { id: "youtube-export", phaseId: "produce", title: "Export the final MP4", executor: "Human", instruction: "Export the approved master and add the canonical file location as an output." },
-  { id: "youtube-transcript", phaseId: "publish", title: "Generate the transcript", executor: "Automation", instruction: "Transcribe the final MP4 and save the transcript in the content workspace." },
-  { id: "youtube-description", phaseId: "publish", title: "Write the YouTube description", executor: "Agent-ready", instruction: "Create the description from the approved title, transcript, CTA and resource links." },
-  { id: "youtube-publishing-check", phaseId: "publish", title: "Complete the publishing check", executor: "Human", instruction: "Verify the video, title, description and required publishing assets before release." },
-  { id: "youtube-kit-email", phaseId: "repurpose", title: "Write the Kit promotional email", executor: "Agent-ready", instruction: "Turn the transcript into a concise email that earns the click to the video." },
-  { id: "youtube-substack-newsletter", phaseId: "repurpose", title: "Write the Substack newsletter", executor: "Agent-ready", instruction: "Adapt the transcript into a useful standalone newsletter issue." },
-  { id: "youtube-substack-post", phaseId: "repurpose", title: "Write the Substack promotional post", executor: "Agent-ready", instruction: "Create a short native post that promotes the newsletter or video." },
-  { id: "youtube-linkedin-newsletter", phaseId: "repurpose", title: "Write the LinkedIn newsletter", executor: "Agent-ready", instruction: "Adapt the transcript into a clear LinkedIn newsletter in your voice." },
-  { id: "youtube-linkedin-asset", phaseId: "repurpose", title: "Create the LinkedIn post or carousel", executor: "Agent-ready", instruction: "Choose the strongest LinkedIn format and turn one useful idea into a native asset." },
-]
-
-const phases: TemplatePhase[] = [{ id: "define", name: "Define" }, { id: "produce", name: "Produce" }, { id: "publish", name: "Publish" }, { id: "repurpose", name: "Repurpose" }]
-
-const youtubeTemplate: ProcessTemplate = {
-  id: "youtube-weekly",
-  name: "Publish a YouTube video",
-  summary: "Plan, produce, publish and repurpose one weekly video.",
-  taskPrefix: "Publish",
-  phases,
-  steps: youtubeSteps,
 }
 
 function cloneTemplate(template: ProcessTemplate): ProcessTemplate {
@@ -118,10 +88,6 @@ function creationLimitError(template: ProcessTemplate, taskTitle: string, brief:
   return templateLimitError(template)
 }
 
-function isBuiltInTemplate(template: ProcessTemplate) {
-  return template.id === youtubeTemplate.id
-}
-
 function migrateTemplate(value: unknown): ProcessTemplate | null {
   if (!value || typeof value !== "object") return null
   const template = value as Record<string, unknown>
@@ -152,34 +118,23 @@ function migrateTemplate(value: unknown): ProcessTemplate | null {
 function loadTemplates(key: string): ProcessTemplate[] {
   try {
     const value = JSON.parse(localStorage.getItem(key) || "null")
-    if (!Array.isArray(value)) return [cloneTemplate(youtubeTemplate)]
-    const seen = new Set([youtubeTemplate.id])
+    if (!Array.isArray(value)) return []
+    const seen = new Set([REMOVED_DEFAULT_TEMPLATE_ID])
     const customTemplates = value.flatMap(item => {
       const template = migrateTemplate(item)
       if (!template || seen.has(template.id)) return []
       seen.add(template.id)
       return [template]
     })
-    return [cloneTemplate(youtubeTemplate), ...customTemplates]
+    return customTemplates
   } catch {
-    return [cloneTemplate(youtubeTemplate)]
+    return []
   }
 }
 
 function blankTemplate(): ProcessTemplate {
   const phase = { id: crypto.randomUUID(), name: "Phase 1" }
   return { id: crypto.randomUUID(), name: "", summary: "", taskPrefix: "Run", phases: [phase], steps: [{ id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "Human", instruction: "" }] }
-}
-
-function duplicateTemplate(template: ProcessTemplate): ProcessTemplate {
-  const phaseIds = new Map(template.phases.map(phase => [phase.id, crypto.randomUUID()]))
-  return {
-    ...cloneTemplate(template),
-    id: crypto.randomUUID(),
-    name: `${template.name} copy`,
-    phases: template.phases.map(phase => ({ ...phase, id: phaseIds.get(phase.id)! })),
-    steps: template.steps.map(step => ({ ...step, id: crypto.randomUUID(), phaseId: phaseIds.get(step.phaseId)! })),
-  }
 }
 
 function moved<T>(items: T[], index: number, direction: -1 | 1) {
@@ -254,7 +209,7 @@ function loadCreationAttempts(prefix: string) {
   return attempts.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
 }
 
-type EditorMode = "new" | "edit" | "duplicate"
+type EditorMode = "new" | "edit"
 
 export function TemplatesPage() {
   const { me, lists, refreshLists } = useApp()
@@ -266,7 +221,7 @@ export function TemplatesPage() {
   const activeStorageKey = React.useRef(storageKey)
   const activeAttemptStoragePrefix = React.useRef(attemptStoragePrefix)
   const [templates, setTemplates] = React.useState<ProcessTemplate[]>(() => loadTemplates(storageKey))
-  const [selectedTemplateId, setSelectedTemplateId] = React.useState(() => templates[0].id)
+  const [selectedTemplateId, setSelectedTemplateId] = React.useState(() => templates[0]?.id || "")
   const [editorOpen, setEditorOpen] = React.useState(false)
   const [editorDraft, setEditorDraft] = React.useState<ProcessTemplate | null>(null)
   const [editorMode, setEditorMode] = React.useState<EditorMode>("new")
@@ -288,8 +243,8 @@ export function TemplatesPage() {
 
   const selectedTemplate = templates.find(template => template.id === selectedTemplateId) || templates[0]
   const activeTemplate = creationAttempt?.template || selectedTemplate
-  const selectedSteps = orderedTemplateSteps(selectedTemplate)
-  const activeSteps = orderedTemplateSteps(activeTemplate)
+  const selectedSteps = selectedTemplate ? orderedTemplateSteps(selectedTemplate) : []
+  const activeSteps = activeTemplate ? orderedTemplateSteps(activeTemplate) : []
   const defaultList = lists.find(list => list.name.toLowerCase() === "content") || lists.find(list => !list.isInbox) || lists[0]
 
   React.useEffect(() => {
@@ -297,11 +252,11 @@ export function TemplatesPage() {
       activeStorageKey.current = storageKey
       const nextTemplates = loadTemplates(storageKey)
       setTemplates(nextTemplates)
-      setSelectedTemplateId(nextTemplates[0].id)
+      setSelectedTemplateId(nextTemplates[0]?.id || "")
       return
     }
     try {
-      localStorage.setItem(storageKey, JSON.stringify(templates.filter(template => !isBuiltInTemplate(template))))
+      localStorage.setItem(storageKey, JSON.stringify(templates))
       setStorageError(false)
     } catch {
       setStorageError(true)
@@ -348,15 +303,9 @@ export function TemplatesPage() {
     setEditorOpen(true)
   }
 
-  const openDuplicate = (template: ProcessTemplate) => {
-    setEditorMode("duplicate")
-    setEditorDraft(duplicateTemplate(template))
-    setEditorOpen(true)
-  }
-
   const editorLimitError = editorDraft ? templateLimitError(editorDraft) : ""
   const editorValid = Boolean(editorDraft?.name.trim() && editorDraft.phases.length && new Set(editorDraft.phases.map(phase => phase.name.trim().toLowerCase())).size === editorDraft.phases.length && editorDraft.phases.every(phase => phase.name.trim() && editorDraft.steps.some(step => step.phaseId === phase.id && step.title.trim())) && !editorLimitError)
-  const createLimitError = creationAttempt ? "" : creationLimitError(activeTemplate, taskTitle, brief)
+  const createLimitError = !activeTemplate || creationAttempt ? "" : creationLimitError(activeTemplate, taskTitle, brief)
 
   const saveEditor = () => {
     if (!editorDraft || !editorValid) return
@@ -368,12 +317,12 @@ export function TemplatesPage() {
   }
 
   const confirmDelete = () => {
-    if (!deleteTarget || isBuiltInTemplate(deleteTarget)) return
+    if (!deleteTarget) return
     const index = templates.findIndex(template => template.id === deleteTarget.id)
     if (index < 0) return
     const neighbour = templates[index + 1] || templates[index - 1]
-    if (selectedTemplateId === deleteTarget.id && neighbour) setSelectedTemplateId(neighbour.id)
-    focusAfterDeleteId.current = neighbour?.id || ""
+    if (selectedTemplateId === deleteTarget.id) setSelectedTemplateId(neighbour?.id || "")
+    focusAfterDeleteId.current = neighbour?.id || "__new__"
     setTemplates(templates.filter(template => template.id !== deleteTarget.id))
     setDeleteTarget(null)
   }
@@ -437,6 +386,7 @@ export function TemplatesPage() {
   })
 
   const startOrRetryCreation = () => {
+    if (!activeTemplate) return
     if (!creationAttempt && creationLimitError(activeTemplate, taskTitle, brief)) return
     const attempt = creationAttempt || {
       id: crypto.randomUUID(),
@@ -500,19 +450,19 @@ export function TemplatesPage() {
       </header>
       {storageError && <div className="status-message error" role="alert"><strong>Templates could not be saved in this browser.</strong><span>Your changes will remain available until you leave this page.</span></div>}
 
-      <section className="template-library" aria-label="Available templates">
+      {templates.length ? <section className="template-library" aria-label="Available templates">
         {templates.map(template => <article className={`template-list-row surface-card ${template.id === selectedTemplate.id ? "is-selected" : ""}`} key={template.id}>
           <button type="button" className="template-list-select" ref={element => { if (element) templateSelectRefs.current.set(template.id, element); else templateSelectRefs.current.delete(template.id) }} onClick={() => setSelectedTemplateId(template.id)} aria-pressed={template.id === selectedTemplate.id}>
             <div className="template-icon"><Clapperboard aria-hidden="true" /></div>
-            <div><div className="template-name"><h2>{template.name}</h2>{isBuiltInTemplate(template) && <span>Built-in</span>}</div><p>{template.summary || "A reusable process in Slate."}</p><div className="template-meta"><span>{orderedTemplateSteps(template).length} subtasks</span><span>{template.phases.length} phases</span><span>Creates one parent task</span></div></div>
+            <div><h2>{template.name}</h2><p>{template.summary || "A reusable process in Slate."}</p><div className="template-meta"><span>{orderedTemplateSteps(template).length} subtasks</span><span>{template.phases.length} phases</span><span>Creates one parent task</span></div></div>
           </button>
-          <div className="template-list-actions">{isBuiltInTemplate(template) ? <Button variant="ghost" size="sm" onClick={() => openDuplicate(template)}><Plus className="size-3.5" />Duplicate</Button> : <><Button variant="ghost" size="sm" onClick={() => openEditor(template)}><Pencil className="size-3.5" />Edit</Button><Button variant="ghost" size="sm" onClick={event => { deleteTriggerRef.current = event.currentTarget; setDeleteTarget(template) }}><Trash2 className="size-3.5" />Delete</Button></>}<Button variant="secondary" size="sm" className="template-use-button" onClick={() => openTemplate(template)}><Play className="size-3.5" />Use template</Button></div>
+          <div className="template-list-actions"><Button variant="ghost" size="sm" onClick={() => openEditor(template)}><Pencil className="size-3.5" />Edit</Button><Button variant="ghost" size="sm" onClick={event => { deleteTriggerRef.current = event.currentTarget; setDeleteTarget(template) }}><Trash2 className="size-3.5" />Delete</Button><Button variant="secondary" size="sm" className="template-use-button" onClick={() => openTemplate(template)}><Play className="size-3.5" />Use template</Button></div>
         </article>)}
-      </section>
+      </section> : <section className="template-empty surface-card"><div><Workflow aria-hidden="true" /><h2>No templates yet</h2><p>Create a reusable process for this account. Templates stay in this browser.</p><Button variant="secondary" onClick={() => openEditor()}><Plus className="size-3.5" />New template</Button></div></section>}
 
-      <div className="template-workflow-heading">
+      {selectedTemplate && <><div className="template-workflow-heading">
         <div><h2>{selectedTemplate.name}</h2><p>{selectedSteps.length} ordered subtasks across {selectedTemplate.phases.length} phases. Human and agent work stays explicit.</p></div>
-        {isBuiltInTemplate(selectedTemplate) ? <Button variant="ghost" size="sm" onClick={() => openDuplicate(selectedTemplate)}><Plus className="size-3.5" />Duplicate to customise</Button> : <Button variant="ghost" size="sm" onClick={() => openEditor(selectedTemplate)}><Pencil className="size-3.5" />Edit process</Button>}
+        <Button variant="ghost" size="sm" onClick={() => openEditor(selectedTemplate)}><Pencil className="size-3.5" />Edit process</Button>
       </div>
       <section className="template-workflow surface-card" aria-label={`${selectedTemplate.name} phases and subtasks`}>
         {selectedTemplate.phases.map((phase, phaseIndex) => {
@@ -522,12 +472,12 @@ export function TemplatesPage() {
             <ol>{steps.map(step => { const Icon = executorIcon(step.executor); return <li key={step.id}><span className="template-step-check"><Check aria-hidden="true" /></span><strong>{step.title}</strong><small><Icon aria-hidden="true" />{step.executor}</small></li> })}</ol>
           </div>
         })}
-      </section>
+      </section></>}
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent className="template-editor-dialog" showClose={false}>
           {editorDraft && <form onSubmit={event => { event.preventDefault(); saveEditor() }}>
-            <DialogHeader className="template-dialog-header"><div className="template-dialog-title"><div className="template-icon small"><Workflow aria-hidden="true" /></div><div><DialogTitle>{editorMode === "edit" ? "Edit template" : editorMode === "duplicate" ? "Duplicate template" : "New template"}</DialogTitle><DialogDescription>Define the phases and ordered subtasks in this process.</DialogDescription></div><button type="button" onClick={() => setEditorOpen(false)} aria-label="Close"><X aria-hidden="true" /></button></div></DialogHeader>
+            <DialogHeader className="template-dialog-header"><div className="template-dialog-title"><div className="template-icon small"><Workflow aria-hidden="true" /></div><div><DialogTitle>{editorMode === "edit" ? "Edit template" : "New template"}</DialogTitle><DialogDescription>Define the phases and ordered subtasks in this process.</DialogDescription></div><button type="button" onClick={() => setEditorOpen(false)} aria-label="Close"><X aria-hidden="true" /></button></div></DialogHeader>
             <div className="template-editor-body">
               <div className="template-editor-details">
                 <div><Label htmlFor="process-template-name">Template name</Label><Input id="process-template-name" value={editorDraft.name} onChange={event => setEditorDraft({ ...editorDraft, name: event.target.value })} placeholder="Publish a weekly newsletter" autoFocus required /></div>
@@ -567,7 +517,8 @@ export function TemplatesPage() {
           focusAfterDeleteId.current = ""
           deleteTriggerRef.current = null
           requestAnimationFrame(() => {
-            if (templateId) templateSelectRefs.current.get(templateId)?.focus()
+            if (templateId === "__new__") document.querySelector<HTMLButtonElement>(".template-page-header button")?.focus()
+            else if (templateId) templateSelectRefs.current.get(templateId)?.focus()
             else if (deleteTrigger?.isConnected) deleteTrigger.focus()
           })
         }}>
@@ -578,7 +529,7 @@ export function TemplatesPage() {
 
       <Dialog open={dialogOpen} onOpenChange={closeDialog}>
         <DialogContent className="template-create-dialog" showClose={false}>
-          <form onSubmit={event => { event.preventDefault(); if (taskTitle.trim() && !creationAttempt && !createLimitError) startOrRetryCreation() }}>
+          {activeTemplate && <form onSubmit={event => { event.preventDefault(); if (taskTitle.trim() && !creationAttempt && !createLimitError) startOrRetryCreation() }}>
             <DialogHeader className="template-dialog-header"><div className="template-dialog-title"><div className="template-icon small"><Clapperboard aria-hidden="true" /></div><div><DialogTitle>Start process</DialogTitle><DialogDescription>{activeTemplate.name} creates one parent task with {activeSteps.length} ordered subtasks.</DialogDescription></div><button type="button" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending} aria-label="Close"><X aria-hidden="true" /></button></div></DialogHeader>
             <div className="template-form-grid">
               <div className="template-form-wide"><Label htmlFor="template-task-title">Task name</Label><Input id="template-task-title" value={taskTitle} onChange={event => setTaskTitle(event.target.value)} placeholder="This week’s run" autoFocus required disabled={createFromTemplate.isPending || Boolean(creationAttempt)} /></div>
@@ -596,7 +547,7 @@ export function TemplatesPage() {
             <DialogFooter className="template-dialog-footer">
               {creationAttempt && !createFromTemplate.isPending ? <><Button type="button" variant="ghost" onClick={discardCreationAttempt}>Discard attempt</Button>{createFromTemplate.isError && partialTask && <Button type="button" variant="ghost" onClick={() => { setDialogOpen(false); navigate(taskUrl(partialTask)) }}>Open partial task</Button>}<Button type="button" variant="ghost" onClick={() => closeDialog(false)}>Keep for later</Button><Button type="button" onClick={startOrRetryCreation}>{createFromTemplate.isError ? "Retry creation" : "Resume creation"}</Button></> : <><Button type="button" variant="ghost" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createFromTemplate.isPending || Boolean(createLimitError)}>{createFromTemplate.isPending ? `Creating ${creatingStep || 1}/${activeSteps.length}` : "Create task"}</Button></>}
             </DialogFooter>
-          </form>
+          </form>}
         </DialogContent>
       </Dialog>
     </div>
