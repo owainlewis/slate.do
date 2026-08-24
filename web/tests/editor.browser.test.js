@@ -229,7 +229,7 @@ test("React workspace renders the full task board accessibly", async t => {
   assert.deepEqual(pageErrors, []);
 });
 
-test("workspace summary loads once and refreshes after task creation", async t => {
+test("workspace summary loads once and refreshes after task creation and stale focus", async t => {
   const { page, state, pageErrors } = await startApp(t, { width: 1440, height: 960 }, { summaryPending: true });
   const summary = page.getByRole("region", { name: "Workspace summary" });
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
@@ -246,6 +246,15 @@ test("workspace summary loads once and refreshes after task creation", async t =
   await dialog.getByRole("button", { name: "Create task" }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Workspace summary"] .workspace-summary-item strong')?.textContent === "3");
   assert.equal(state.summaryRequests, 2);
+
+  state.summary.runs24h = 2;
+  await page.evaluate(() => {
+    const now = Date.now();
+    Date.now = () => now + 31_000;
+    window.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Workspace summary"] .workspace-summary-item strong')].at(-1)?.textContent === "2");
+  assert.equal(state.summaryRequests, 3);
   assert.deepEqual(pageErrors, []);
 });
 

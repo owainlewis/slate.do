@@ -114,7 +114,8 @@ export function WorkspacePage() {
   const summaryQuery = useQuery({
     queryKey: workspaceSummaryQueryKeyFor(me.id),
     queryFn: () => api.get<WorkspaceSummary>("/api/v1/stats/summary"),
-    staleTime: Infinity,
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
     retry: false,
   })
 

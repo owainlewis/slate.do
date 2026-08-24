@@ -184,4 +184,20 @@ func TestTaskActivityTimestampsSupportLegacyWriters(t *testing.T) {
 	if recorded != 1 {
 		t.Fatalf("legacy managed run records = %d, want 1", recorded)
 	}
+
+	insertRunID := "20000000-0000-4000-8000-000000000002"
+	var insertedTaskID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO tasks (bucket_id, title, execution_run_id)
+		VALUES ($1, 'Task inserted with a run', $2)
+		RETURNING id::text
+	`, list.ID, insertRunID).Scan(&insertedTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM task_run_starts WHERE owner_user_id = $1 AND task_id = $2 AND run_id = $3", ownerID, insertedTaskID, insertRunID).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != 1 {
+		t.Fatalf("inserted task run records = %d, want 1", recorded)
+	}
 }

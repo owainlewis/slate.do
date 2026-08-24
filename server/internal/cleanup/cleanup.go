@@ -56,6 +56,7 @@ var rules = []rule{
 	newRule("api_rate_limit_state", "until expires_at", "api_rate_limit_state", "expires_at <= $1", "expires_at"),
 	newRule("api_rate_limit_metrics", "30 days", "api_rate_limit_metrics", "bucket_start <= $1::timestamptz - interval '30 days'", "bucket_start"),
 	newRule("task_idempotency_keys", "7 days", "task_idempotency_keys", "created_at <= $1::timestamptz - interval '7 days'", "created_at"),
+	newRule("task_run_starts", "7 days", "task_run_starts", "started_at <= $1::timestamptz - interval '7 days'", "started_at"),
 	newRule("agent_credential_rotations", "7 days", "agent_credential_rotations", "created_at <= $1::timestamptz - interval '7 days'", "created_at"),
 	newRule("api_tokens", "revoked for 30 days", "api_tokens", "revoked_at IS NOT NULL AND revoked_at <= $1::timestamptz - interval '30 days'", "revoked_at"),
 	newRule("agent_credentials", "revoked for 30 days", "agent_credentials", "revoked_at IS NOT NULL AND revoked_at <= $1::timestamptz - interval '30 days'", "revoked_at"),

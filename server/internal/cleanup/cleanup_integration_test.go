@@ -20,6 +20,7 @@ func TestCleanupRemovesOnlyExpiredOperationalDataAndIsIdempotent(t *testing.T) {
 		"password_reset_requests_stale_pending_idx", "signup_rate_limits_window_idx",
 		"password_reset_rate_limits_window_idx", "password_reset_confirmation_rate_limits_window_idx",
 		"api_rate_limit_state_expiry_idx", "api_rate_limit_metrics_pkey", "task_idempotency_keys_created_idx",
+		"task_run_starts_started_idx",
 		"agent_credential_rotations_created_idx", "api_tokens_revoked_idx", "agent_credentials_revoked_idx",
 	} {
 		var exists bool
@@ -78,6 +79,7 @@ func TestCleanupRemovesOnlyExpiredOperationalDataAndIsIdempotent(t *testing.T) {
 		{`INSERT INTO api_rate_limit_state (scope,key_hash,route_class,expires_at) VALUES ('ip',$1,'public_auth',$3::timestamptz - interval '1 minute'),('ip',$2,'public_auth',$3::timestamptz + interval '1 minute')`, []any{marker + "-state-old", marker + "-state-live", now}},
 		{`INSERT INTO api_rate_limit_metrics (bucket_start,route_class,outcome,shard,request_count) VALUES ($1::timestamptz - interval '31 days','public_auth','allowed',0,1),($1::timestamptz - interval '29 days','public_auth','allowed',0,1)`, []any{now}},
 		{`INSERT INTO task_idempotency_keys (user_id,key,request_hash,task_id,created_at) VALUES ($1,$2,'old',$4,$5::timestamptz - interval '8 days'),($1,$3,'live',$4,$5::timestamptz - interval '6 days')`, []any{userID, marker + "-task-old", marker + "-task-live", taskID, now}},
+		{`INSERT INTO task_run_starts (owner_user_id,run_id,task_id,started_at) VALUES ($1,gen_random_uuid(),$2,$3::timestamptz - interval '8 days'),($1,gen_random_uuid(),$2,$3::timestamptz - interval '6 days')`, []any{userID, taskID, now}},
 		{`INSERT INTO agent_credential_rotations (owner_user_id,idempotency_key,agent_id,credential_id,created_at) VALUES ($1,$2,$4,$5,$6::timestamptz - interval '8 days'),($1,$3,$4,$7,$6::timestamptz - interval '6 days')`, []any{userID, marker + "-rotation-old-0000", marker + "-rotation-live-000", agentID, oldCredentialID, now, liveCredentialID}},
 		{`INSERT INTO api_tokens (user_id,name,token_hash,revoked_at,created_at) VALUES ($1,'old',$2,$4::timestamptz - interval '31 days',$4::timestamptz - interval '40 days'),($1,'live',$3,$4::timestamptz - interval '29 days',$4::timestamptz - interval '35 days')`, []any{userID, marker + "-api-old", marker + "-api-live", now}},
 	}
@@ -113,6 +115,10 @@ func TestCleanupRemovesOnlyExpiredOperationalDataAndIsIdempotent(t *testing.T) {
 	}
 	assertMarkerCount(t, db, "task_idempotency_keys", "key", marker+"-task-old", 0)
 	assertMarkerCount(t, db, "task_idempotency_keys", "key", marker+"-task-live", 1)
+	var runStarts int
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM task_run_starts WHERE owner_user_id = $1 AND task_id = $2", userID, taskID).Scan(&runStarts); err != nil || runStarts != 1 {
+		t.Fatalf("retained task run starts=%d want=1 err=%v", runStarts, err)
+	}
 	assertMarkerCount(t, db, "agent_credential_rotations", "idempotency_key", marker+"-rotation-old-0000", 0)
 	assertMarkerCount(t, db, "agent_credential_rotations", "idempotency_key", marker+"-rotation-live-000", 1)
 	assertMarkerCount(t, db, "api_tokens", "token_hash", marker+"-api-old", 0)
