@@ -62,6 +62,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       const input = await requestJSON(request);
       const idempotencyKey = request.headers["idempotency-key"];
       state.idempotencyRequests.push({ path: url.pathname, key: idempotencyKey });
+      if (Buffer.byteLength(idempotencyKey || "") > 200) return json(response, { error: "Idempotency-Key must be 200 UTF-8 bytes or fewer." }, 400);
       const replay = idempotencyKey && state.idempotency.get(idempotencyKey);
       if (replay) return json(response, replay, 200);
       const bucketId = listTaskMatch ? listTaskMatch[1] : "list-inbox";
@@ -111,6 +112,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       const input = await requestJSON(request);
       const idempotencyKey = request.headers["idempotency-key"];
       state.idempotencyRequests.push({ path: url.pathname, key: idempotencyKey });
+      if (Buffer.byteLength(idempotencyKey || "") > 200) return json(response, { error: "Idempotency-Key must be 200 UTF-8 bytes or fewer." }, 400);
       const replay = idempotencyKey && state.idempotency.get(idempotencyKey);
       if (replay) return json(response, replay, 200);
       const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
@@ -340,10 +342,10 @@ test("template deletion confirms, selects a neighbour, and leaves generated task
 });
 
 test("valid legacy templates survive malformed siblings and migrate stable step IDs", async t => {
-  const { page, origin, pageErrors } = await startApp(t);
+  const { page, state, origin, pageErrors } = await startApp(t);
   await page.evaluate(() => localStorage.setItem("slate:process-templates:owner", JSON.stringify([
     { id: "youtube-weekly", name: "Overwritten built-in", summary: "Wrong", taskPrefix: "Wrong", phases: [{ id: "wrong", name: "Wrong" }], steps: [{ phaseId: "wrong", title: "Wrong", executor: "Human", instruction: "Wrong" }] },
-    { id: "legacy-podcast", name: "Legacy podcast", summary: "A valid old template", taskPrefix: "Run", phases: ["Draft"], steps: [{ phase: "Draft", title: "Write the outline", executor: "Human", instruction: "Start with the promise." }] },
+    { id: "legacy-podcast", name: "Legacy podcast", summary: "A valid old template", taskPrefix: "Run", phases: ["Draft"], steps: [{ phase: "Draft", title: "Write the outline", executor: "Human", instruction: "Start with the promise." }, { id: "x".repeat(500), phase: "Draft", title: "Record the episode", executor: "Human", instruction: "Keep it concise." }] },
     { id: "broken", name: "Broken template" },
   ])));
   await page.goto(`${origin}/app/templates`);
@@ -358,6 +360,17 @@ test("valid legacy templates survive malformed siblings and migrate stable step 
   await page.reload();
   const reloaded = await page.evaluate(() => JSON.parse(localStorage.getItem("slate:process-templates:owner")));
   assert.equal(reloaded[0].steps[0].id, migratedStepId);
+  assert.equal(reloaded[0].steps[1].id.length, 500);
+  const legacyRow = page.locator(".template-list-row").filter({ hasText: "Legacy podcast" });
+  await legacyRow.getByRole("button", { name: "Use template" }).click();
+  const create = page.getByRole("dialog", { name: "Start process" });
+  await create.getByLabel("Task name").fill("Episode with legacy IDs");
+  await create.getByRole("button", { name: "Create task" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  const parent = state.tasks.find(task => task.title === "Run: Episode with legacy IDs");
+  assert.equal(state.subtasks.filter(task => task.parentTaskId === parent.id).length, 2);
+  const keys = state.idempotencyRequests.filter(item => state.idempotency.get(item.key)?.parentTaskId === parent.id).map(item => item.key);
+  assert.equal(keys.every(key => Buffer.byteLength(key) <= 200), true);
   assert.deepEqual(pageErrors, []);
 });
 

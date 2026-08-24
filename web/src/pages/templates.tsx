@@ -167,6 +167,7 @@ class TemplateCreationError extends Error {
 interface ProcessCreationAttempt {
   id: string
   template: ProcessTemplate
+  stepIdempotencyKeys: Map<string, string>
   taskTitle: string
   plannedDate: string
   brief: string
@@ -303,7 +304,7 @@ export function TemplatesPage() {
             kind: "action",
             status: "new",
             priority: "p1",
-          }, { "Idempotency-Key": `${attempt.id}:step:${step.id}` })
+          }, { "Idempotency-Key": attempt.stepIdempotencyKeys.get(step.id)! })
         }
         return parent
       } catch (error) {
@@ -326,15 +327,21 @@ export function TemplatesPage() {
   })
 
   const startOrRetryCreation = () => {
-    const attempt = creationAttempt || {
-      id: crypto.randomUUID(),
-      template: cloneTemplate(selectedTemplate),
-      taskTitle: taskTitle.trim(),
-      plannedDate,
-      brief: brief.trim(),
-      listId: listId || defaultList?.id || "",
+    let attempt = creationAttempt
+    if (!attempt) {
+      const attemptId = crypto.randomUUID()
+      const template = cloneTemplate(selectedTemplate)
+      attempt = {
+        id: attemptId,
+        template,
+        stepIdempotencyKeys: new Map(orderedTemplateSteps(template).map(step => [step.id, `${attemptId}:step:${crypto.randomUUID()}`])),
+        taskTitle: taskTitle.trim(),
+        plannedDate,
+        brief: brief.trim(),
+        listId: listId || defaultList?.id || "",
+      }
+      setCreationAttempt(attempt)
     }
-    if (!creationAttempt) setCreationAttempt(attempt)
     createFromTemplate.mutate(attempt)
   }
 
