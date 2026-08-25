@@ -658,6 +658,41 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await page.getByRole("dialog", { name: "Edit template" }).getByRole("alert").getByText("Subtask instructions are too long to create a task.").waitFor();
   await page.getByRole("dialog", { name: "Edit template" }).getByRole("button", { name: "Cancel" }).click();
 
+  const storedPrefix = "Phase: Plan\nAssigned to: human\n\n";
+  const exactStoredLimit = { ...oversized, id: "exact-stored-limit", name: "Exact stored limit", steps: [{ id: "step", phaseId: "phase", title: "Draft", executor: "human", instruction: "x".repeat(16 * 1024 - Buffer.byteLength(storedPrefix)) }] };
+  await page.evaluate(template => localStorage.setItem("slate:process-templates:owner", JSON.stringify([template])), exactStoredLimit);
+  await page.reload();
+  const exactRow = page.locator(".template-list-row").filter({ hasText: "Exact stored limit" });
+  await exactRow.getByRole("button", { name: "Use template" }).click();
+  const exactDialog = page.getByRole("dialog", { name: "Start process" });
+  await exactDialog.getByRole("alert").getByText("Subtask instructions are too long to create a task.").waitFor();
+  assert.equal(await exactDialog.getByRole("button", { name: "Create task" }).isDisabled(), true);
+  assert.equal(state.tasks.some(task => task.title.includes("Exact stored limit")), false);
+  await exactDialog.getByRole("button", { name: "Cancel" }).click();
+
+  const renderedAgentPrefix = "Phase: Plan\nAssigned to: @research_agent\n\n";
+  const validRestoredAttempt = {
+    id: "short-agent-handle",
+    createdAt: Date.now(),
+    parentTaskId: "",
+    nextStepIndex: 0,
+    template: { ...oversized, id: "short-agent-handle", name: "Short agent handle", steps: [{ id: "step", phaseId: "phase", title: "Draft", executor: "agent:agent-research", instruction: "x".repeat(16 * 1024 - Buffer.byteLength(renderedAgentPrefix)) }] },
+    taskTitle: "Restored short handle",
+    plannedDate: "",
+    brief: "",
+    listId: "list-product",
+  };
+  await page.evaluate(attempt => localStorage.setItem("slate:process-attempt:owner:short-agent-handle", JSON.stringify(attempt)), validRestoredAttempt);
+  await page.reload();
+  const restoredDialog = page.getByRole("dialog", { name: "Start process" });
+  await restoredDialog.waitFor();
+  assert.equal(await restoredDialog.getByLabel("Task name").inputValue(), "Restored short handle");
+  assert.equal(await restoredDialog.getByText("Subtask instructions are too long to create a task.").count(), 0);
+  assert.equal(await restoredDialog.getByRole("button", { name: "Resume creation" }).isEnabled(), true);
+  page.once("dialog", confirmation => confirmation.accept());
+  await restoredDialog.getByRole("button", { name: "Discard attempt" }).click();
+  await restoredDialog.waitFor({ state: "detached" });
+
   const limitsRow = await createTemplate(page, "Limits process", ["Draft the release"]);
   await limitsRow.getByRole("button", { name: "Use template" }).click();
   const create = page.getByRole("dialog", { name: "Start process" });

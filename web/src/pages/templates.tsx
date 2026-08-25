@@ -85,20 +85,20 @@ function parentDescription(template: ProcessTemplate, brief: string) {
   ].filter(Boolean).join("\n")
 }
 
-function templateLimitError(template: ProcessTemplate) {
+function templateLimitError(template: ProcessTemplate, assignees?: AssigneeOption[]) {
   if (template.steps.length > MAX_TEMPLATE_STEPS) return `Templates can contain up to ${MAX_TEMPLATE_STEPS} subtasks.`
   if (template.steps.some(step => byteLength(step.id) > MAX_TEMPLATE_STEP_ID_BYTES)) return "This template contains invalid subtask identifiers."
   if (template.steps.some(step => runeLength(step.title.trim()) > MAX_TASK_TITLE_RUNES)) return `Subtask names can contain up to ${MAX_TASK_TITLE_RUNES} characters.`
-  if (template.steps.some(step => byteLength(stepDescription(template, step)) > MAX_TASK_DESCRIPTION_BYTES)) return "Subtask instructions are too long to create a task."
+  if (assignees && template.steps.some(step => byteLength(stepDescription(template, step, assignees)) > MAX_TASK_DESCRIPTION_BYTES)) return "Subtask instructions are too long to create a task."
   return ""
 }
 
-function creationLimitError(template: ProcessTemplate, taskTitle: string, brief: string) {
+function creationLimitError(template: ProcessTemplate, taskTitle: string, brief: string, assignees?: AssigneeOption[]) {
   if (template.steps.some(step => !step.title.trim())) return "Every subtask needs a name."
   const parentTitle = `${template.taskPrefix || template.name}: ${taskTitle.trim()}`
   if (runeLength(parentTitle) > MAX_TASK_TITLE_RUNES) return `The generated task name can contain up to ${MAX_TASK_TITLE_RUNES} characters.`
   if (byteLength(parentDescription(template, brief.trim())) > MAX_TASK_DESCRIPTION_BYTES) return "The generated task brief is too long."
-  return templateLimitError(template)
+  return templateLimitError(template, assignees)
 }
 
 function migrateTemplate(value: unknown): ProcessTemplate | null {
@@ -330,9 +330,9 @@ export function TemplatesPage() {
     setEditorOpen(true)
   }
 
-  const editorLimitError = editorDraft ? templateLimitError(editorDraft) || templateAssigneeError(editorDraft, assignees) : ""
+  const editorLimitError = editorDraft ? templateLimitError(editorDraft, assignees) || templateAssigneeError(editorDraft, assignees) : ""
   const editorValid = Boolean(editorDraft?.name.trim() && editorDraft.phases.length && new Set(editorDraft.phases.map(phase => phase.name.trim().toLowerCase())).size === editorDraft.phases.length && editorDraft.phases.every(phase => phase.name.trim() && editorDraft.steps.some(step => step.phaseId === phase.id && step.title.trim())) && !editorLimitError)
-  const createLimitError = !activeTemplate ? "" : templateAssigneeError(activeTemplate, assignees) || (creationAttempt ? "" : creationLimitError(activeTemplate, taskTitle, brief))
+  const createLimitError = !activeTemplate ? "" : templateAssigneeError(activeTemplate, assignees) || creationLimitError(activeTemplate, taskTitle, brief, assignees)
 
   const saveEditor = () => {
     if (!editorDraft || !editorValid) return
@@ -371,6 +371,8 @@ export function TemplatesPage() {
         const steps = orderedTemplateSteps(attempt.template)
         const unavailableAssignee = templateAssigneeError(attempt.template, assignees)
         if (unavailableAssignee) throw new TemplateCreationError(unavailableAssignee)
+        const limitError = creationLimitError(attempt.template, attempt.taskTitle, attempt.brief, assignees)
+        if (limitError) throw new TemplateCreationError(limitError)
         const context = parentDescription(attempt.template, attempt.brief)
         if (attempt.parentTaskId) {
           parent = await api.get<Task>(`/api/v1/tasks/${encodeURIComponent(attempt.parentTaskId)}`)
