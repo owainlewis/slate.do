@@ -99,6 +99,10 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   })
 
   const draftPayload = () => taskPayload(draft)
+  const dirtyPayload = () => {
+    const payload = draftPayload()
+    return Object.fromEntries(Object.entries(payload).filter(([key]) => dirtyFields.current.has(key as keyof Task)))
+  }
 
   // A review decision carries the edits the user made in the open panel, but
   // nothing else. Sending the whole snapshot would revert any field another
@@ -116,7 +120,12 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   }
 
   const save = useMutation({
-    mutationFn: () => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, draftPayload()),
+    mutationFn: () => {
+      const payload = dirtyPayload()
+      if (!Object.keys(payload).length) return Promise.resolve(taskQuery.data!)
+      const endpoint = Object.hasOwn(payload, "status") ? `/api/v1/tasks/${encodeURIComponent(taskId)}/status` : `/api/v1/tasks/${encodeURIComponent(taskId)}`
+      return api.patch<Task>(endpoint, payload)
+    },
     onSuccess: async task => { queryClient.setQueryData(["task", taskId], task); await invalidateTaskSurfaces(); onClose() },
     onError: value => setError(value instanceof Error ? value.message : "Could not save task"),
   })
