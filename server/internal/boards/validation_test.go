@@ -84,6 +84,17 @@ func TestValidPriority(t *testing.T) {
 	}
 }
 
+func TestValidListColor(t *testing.T) {
+	for _, color := range []string{ListColorSlate, ListColorRed, ListColorOrange, ListColorYellow, ListColorGreen, ListColorTeal, ListColorBlue, ListColorIndigo, ListColorPurple, ListColorPink} {
+		if !validListColor(color) {
+			t.Fatalf("%q should be valid", color)
+		}
+	}
+	if validListColor("") || validListColor("Blue") || validListColor("#ffffff") {
+		t.Fatal("unexpected valid list color")
+	}
+}
+
 func TestTaskFilterFromQueryIncludesPriority(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/tasks?priority=p0", nil)
 	filter, err := taskFilterFromQuery(req)

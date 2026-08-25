@@ -847,7 +847,7 @@ func TestBoardMaxTasksPerListIsLegacyMetadataOnly(t *testing.T) {
 	}
 }
 
-func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
+func TestUpdateListNameAndColorPersistAndPreserveOwnerIsolation(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -857,7 +857,7 @@ func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
 	})
 
-	list, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Ideas"})
+	list, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Ideas", Color: ListColorBlue})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -866,18 +866,22 @@ func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 	}
 
 	name := "  Growth plan  "
-	updated, err := store.UpdateBucket(ctx, ownerID, list.ID, UpdateBucketInput{Name: &name})
+	color := ListColorPink
+	updated, err := store.UpdateBucket(ctx, ownerID, list.ID, UpdateBucketInput{Name: &name, Color: &color})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.Name != "Growth plan" {
 		t.Fatalf("updated name = %q, want %q", updated.Name, "Growth plan")
 	}
+	if updated.Color != ListColorPink {
+		t.Fatalf("updated color = %q, want %q", updated.Color, ListColorPink)
+	}
 	loaded, err := store.GetBucket(ctx, ownerID, list.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Name != "Growth plan" || len(loaded.Tasks) != 1 || loaded.Tasks[0].Title != "Keep me" {
+	if loaded.Name != "Growth plan" || loaded.Color != ListColorPink || len(loaded.Tasks) != 1 || loaded.Tasks[0].Title != "Keep me" {
 		t.Fatalf("loaded list after rename = %#v", loaded)
 	}
 
@@ -891,12 +895,74 @@ func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 	if _, err := store.UpdateBucket(ctx, ownerID, "00000000-0000-0000-0000-000000000000", UpdateBucketInput{Name: &name}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing list rename error = %v, want ErrNotFound", err)
 	}
+	invalidColor := "chartreuse"
+	if _, err := store.UpdateBucket(ctx, ownerID, list.ID, UpdateBucketInput{Color: &invalidColor}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("invalid color error = %v, want ErrInvalidData", err)
+	}
 	unchanged, err := store.GetBucket(ctx, ownerID, list.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if unchanged.Name != "Growth plan" {
 		t.Fatalf("name after rejected renames = %q, want %q", unchanged.Name, "Growth plan")
+	}
+}
+
+func TestReorderBucketsPersistsCompleteAndPartialAccountOrders(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	otherID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", userID, otherID)
+	})
+
+	first, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Third"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateBucket(ctx, otherID, CreateBucketInput{Name: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ReorderBuckets(ctx, userID, []string{third.ID, first.ID, second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	lists, err := store.ListAllBuckets(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lists) != 3 || lists[0].ID != third.ID || lists[1].ID != first.ID || lists[2].ID != second.ID {
+		t.Fatalf("ordered lists = %#v", lists)
+	}
+	if err := store.ReorderBuckets(ctx, userID, []string{second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	lists, err = store.ListAllBuckets(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lists) != 3 || lists[0].ID != second.ID || lists[1].ID != third.ID || lists[2].ID != first.ID {
+		t.Fatalf("partially ordered lists = %#v", lists)
+	}
+
+	for name, ids := range map[string][]string{
+		"duplicate": {third.ID, first.ID, first.ID},
+		"foreign":   {third.ID, first.ID, other.ID},
+	} {
+		if err := store.ReorderBuckets(ctx, userID, ids); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("%s order error = %v, want ErrInvalidData", name, err)
+		}
 	}
 }
 

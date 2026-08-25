@@ -1,6 +1,4 @@
-import * as React from "react"
-import { Check, Flag, Minus } from "lucide-react"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Flag, Minus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Task } from "@/lib/types"
 
@@ -27,16 +25,9 @@ export function PriorityBadge({ priority, compact = false }: { priority?: Priori
 
 export function PriorityPicker({ value, onChange, allowNone = true, className, disabled = false }: { value?: Priority; onChange: (priority: Priority) => void; allowNone?: boolean; className?: string; disabled?: boolean }) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button type="button" className={cn("property-button", className)} aria-label="Priority" disabled={disabled}>
-          <PriorityMark priority={value || ""} /><span>{priorityLabel(value)}</span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="priority-menu">
-        {allowNone && <DropdownMenuItem onSelect={() => onChange("")}><PriorityMark /><span>No priority</span>{!value && <Check className="ml-auto size-4" />}</DropdownMenuItem>}
-        {priorities.map(priority => <DropdownMenuItem key={priority.value} onSelect={() => onChange(priority.value)}><span className={cn("priority-option", `priority-${priority.value}`)}><PriorityMark priority={priority.value} />{priority.label}</span>{value === priority.value && <Check className="ml-auto size-4" />}</DropdownMenuItem>)}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <div className={cn("priority-picker", className)} role="group" aria-label="Priority">
+      {allowNone && <button type="button" aria-label="No priority" aria-pressed={!value} title="No priority" disabled={disabled} onClick={() => onChange("")}><PriorityMark /></button>}
+      {priorities.map(priority => <button key={priority.value} type="button" className={`priority-${priority.value}`} aria-label={`${priority.label} priority`} aria-pressed={value === priority.value} title={priority.label} disabled={disabled} onClick={() => onChange(priority.value)}><PriorityMark priority={priority.value} /></button>)}
+    </div>
   )
 }

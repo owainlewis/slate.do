@@ -18,12 +18,24 @@ const (
 	PriorityP0   = "p0"
 	PriorityP1   = "p1"
 	PriorityP2   = "p2"
+
+	ListColorSlate  = "slate"
+	ListColorRed    = "red"
+	ListColorOrange = "orange"
+	ListColorYellow = "yellow"
+	ListColorGreen  = "green"
+	ListColorTeal   = "teal"
+	ListColorBlue   = "blue"
+	ListColorIndigo = "indigo"
+	ListColorPurple = "purple"
+	ListColorPink   = "pink"
 )
 
 type Bucket struct {
 	ID                  string    `json:"id"`
 	Name                string    `json:"name"`
 	Goal                string    `json:"goal"`
+	Color               string    `json:"color"`
 	IsInbox             bool      `json:"isInbox"`
 	LimitCount          int       `json:"limitCount"`
 	SortOrder           int       `json:"sortOrder"`
@@ -70,6 +82,7 @@ func (task Task) MarshalJSON() ([]byte, error) {
 type CreateBucketInput struct {
 	Name       string `json:"name"`
 	Goal       string `json:"goal"`
+	Color      string `json:"color"`
 	LimitCount int    `json:"limitCount"`
 	IsInbox    bool   `json:"isInbox"`
 }
@@ -77,6 +90,7 @@ type CreateBucketInput struct {
 type UpdateBucketInput struct {
 	Name       *string `json:"name"`
 	Goal       *string `json:"goal"`
+	Color      *string `json:"color"`
 	LimitCount *int    `json:"limitCount"`
 	IsInbox    *bool   `json:"isInbox"`
 	SortOrder  *int    `json:"sortOrder"`
