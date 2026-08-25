@@ -133,6 +133,7 @@ type TaskFilter struct {
 	Status          string
 	Done            *bool
 	Priority        string
+	Sort            string
 	Limit           int
 	Cursor          string
 	ActionsOnly     bool

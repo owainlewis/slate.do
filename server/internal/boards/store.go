@@ -51,6 +51,16 @@ type agentQueueCursor struct {
 	Scope        string    `json:"scope"`
 }
 
+type workspaceTaskCursor struct {
+	PriorityRank    int       `json:"priorityRank,omitempty"`
+	BucketSortOrder int       `json:"bucketSortOrder,omitempty"`
+	BucketCreatedAt time.Time `json:"bucketCreatedAt,omitempty"`
+	BucketID        string    `json:"bucketId,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	ID              string    `json:"id"`
+	Scope           string    `json:"scope"`
+}
+
 var (
 	defaultMaxLists        = entitlements.ProLimits.Lists
 	defaultMaxTasksPerList = entitlements.ProLimits.ActiveItemsPerList
@@ -1947,8 +1957,13 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	orderSQL := "t.created_at DESC, t.id DESC"
 	if filter.AgentQueue {
 		orderSQL = agentQueuePrioritySQL + ", t.created_at, t.id"
-	}
-	if completedHistory {
+	} else if filter.Sort == "priority" {
+		orderSQL = agentQueuePrioritySQL + ", t.created_at DESC, t.id DESC"
+	} else if filter.Sort == "list" {
+		orderSQL = "l.sort_order, l.created_at, l.id, t.created_at DESC, t.id DESC"
+	} else if filter.Sort == "list_priority" {
+		orderSQL = "l.sort_order, l.created_at, l.id, " + agentQueuePrioritySQL + ", t.created_at DESC, t.id DESC"
+	} else if completedHistory {
 		orderSQL = "t.updated_at DESC, t.id DESC"
 	}
 	if filter.Cursor != "" {
@@ -1962,6 +1977,34 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 				" AND (%s > $%d OR (%s = $%d AND (t.created_at > $%d OR (t.created_at = $%d AND t.id > $%d::uuid))))",
 				agentQueuePrioritySQL, len(args)-2, agentQueuePrioritySQL, len(args)-2, len(args)-1, len(args)-1, len(args),
 			)
+		} else if filter.Sort == "priority" {
+			cursor, err := decodeWorkspaceTaskCursor(filter.Cursor, taskCursorScope(userID, filter), filter.Sort)
+			if err != nil {
+				return TaskPage{}, err
+			}
+			args = append(args, cursor.PriorityRank, cursor.CreatedAt, cursor.ID)
+			whereSQL += fmt.Sprintf(
+				" AND (%s > $%d OR (%s = $%d AND (t.created_at < $%d OR (t.created_at = $%d AND t.id < $%d::uuid))))",
+				agentQueuePrioritySQL, len(args)-2, agentQueuePrioritySQL, len(args)-2, len(args)-1, len(args)-1, len(args),
+			)
+		} else if filter.Sort == "list" || filter.Sort == "list_priority" {
+			cursor, err := decodeWorkspaceTaskCursor(filter.Cursor, taskCursorScope(userID, filter), filter.Sort)
+			if err != nil {
+				return TaskPage{}, err
+			}
+			if filter.Sort == "list_priority" {
+				args = append(args, cursor.BucketSortOrder, cursor.BucketCreatedAt, cursor.BucketID, cursor.PriorityRank, cursor.CreatedAt, cursor.ID)
+				whereSQL += fmt.Sprintf(
+					" AND (l.sort_order > $%d OR (l.sort_order = $%d AND (l.created_at > $%d OR (l.created_at = $%d AND (l.id > $%d::uuid OR (l.id = $%d::uuid AND (%s > $%d OR (%s = $%d AND (t.created_at < $%d OR (t.created_at = $%d AND t.id < $%d::uuid))))))))))",
+					len(args)-5, len(args)-5, len(args)-4, len(args)-4, len(args)-3, len(args)-3, agentQueuePrioritySQL, len(args)-2, agentQueuePrioritySQL, len(args)-2, len(args)-1, len(args)-1, len(args),
+				)
+			} else {
+				args = append(args, cursor.BucketSortOrder, cursor.BucketCreatedAt, cursor.BucketID, cursor.CreatedAt, cursor.ID)
+				whereSQL += fmt.Sprintf(
+					" AND (l.sort_order > $%d OR (l.sort_order = $%d AND (l.created_at > $%d OR (l.created_at = $%d AND (l.id > $%d::uuid OR (l.id = $%d::uuid AND (t.created_at < $%d OR (t.created_at = $%d AND t.id < $%d::uuid))))))))",
+					len(args)-4, len(args)-4, len(args)-3, len(args)-3, len(args)-2, len(args)-2, len(args)-1, len(args)-1, len(args),
+				)
+			}
 		} else {
 			cursor, err := decodeCompletedTaskCursor(filter.Cursor, taskCursorScope(userID, filter))
 			if err != nil {
@@ -2017,6 +2060,8 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		cursorTask := page.Tasks[len(page.Tasks)-1]
 		if filter.AgentQueue {
 			page.NextCursor, err = encodeAgentQueueCursor(cursorTask, taskCursorScope(userID, filter))
+		} else if filter.Sort != "" {
+			page.NextCursor, err = s.encodeWorkspaceTaskCursor(ctx, userID, cursorTask, taskCursorScope(userID, filter), filter.Sort)
 			if err != nil {
 				return TaskPage{}, err
 			}
@@ -2269,6 +2314,9 @@ func taskCursorScope(userID string, filter TaskFilter) string {
 		fmt.Sprint(filter.InboxOnly),
 		fmt.Sprint(filter.AgentQueue),
 	}
+	if filter.Sort != "" {
+		parts = append(parts, "sort="+filter.Sort)
+	}
 	// done=true is the released spelling of status=done and must share its
 	// existing cursor scope. The open-only alias does not issue history cursors.
 	if filter.Done != nil && !(*filter.Done && filter.Status == StatusDone) {
@@ -2298,6 +2346,56 @@ func encodeAgentQueueCursor(task Task, scope string) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func (s *Store) encodeWorkspaceTaskCursor(ctx context.Context, userID string, task Task, scope string, sort string) (string, error) {
+	cursor := workspaceTaskCursor{CreatedAt: task.CreatedAt.UTC(), ID: task.ID, Scope: scope}
+	switch sort {
+	case "priority":
+		cursor.PriorityRank = agentQueuePriorityRank(task.Priority)
+	case "list", "list_priority":
+		cursor.BucketID = task.BucketID
+		if sort == "list_priority" {
+			cursor.PriorityRank = agentQueuePriorityRank(task.Priority)
+		}
+		if err := s.db.QueryRow(ctx, "SELECT sort_order, created_at FROM buckets WHERE user_id = $1 AND id = $2", userID, task.BucketID).Scan(&cursor.BucketSortOrder, &cursor.BucketCreatedAt); err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("%w: invalid task sort", ErrInvalidData)
+	}
+	encoded, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func decodeWorkspaceTaskCursor(raw string, scope string, sort string) (workspaceTaskCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+	}
+	var cursor workspaceTaskCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || !validUUIDText(cursor.ID) || cursor.Scope != scope {
+		return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+	}
+	switch sort {
+	case "priority":
+		if cursor.PriorityRank < 0 || cursor.PriorityRank > 3 {
+			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+		}
+	case "list", "list_priority":
+		if cursor.BucketSortOrder < 0 || cursor.BucketCreatedAt.IsZero() || !validUUIDText(cursor.BucketID) {
+			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+		}
+		if sort == "list_priority" && (cursor.PriorityRank < 0 || cursor.PriorityRank > 3) {
+			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+		}
+	default:
+		return workspaceTaskCursor{}, fmt.Errorf("%w: invalid task sort", ErrInvalidData)
+	}
+	return cursor, nil
 }
 
 func decodeAgentQueueCursor(raw string, scope string) (agentQueueCursor, error) {

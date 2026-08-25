@@ -100,8 +100,10 @@ export function WorkspacePage() {
       const value = searchParams.get(key)
       if (value) query.set(key, value)
     }
+    if (layout === "table" && groupByList) query.set("sort", sortByPriority ? "list_priority" : "list")
+    else if (layout === "table" && sortByPriority) query.set("sort", "priority")
     return query.toString()
-  }, [listId, searchParams])
+  }, [groupByList, layout, listId, searchParams, sortByPriority])
 
   const tasksQuery = useInfiniteQuery({
     queryKey: ["tasks", scope, listId, taskQueryString],
@@ -130,23 +132,13 @@ export function WorkspacePage() {
     setSearchParams(next, { replace: true })
   }, [searchParams, setSearchParams])
 
-  React.useEffect(() => {
-    if (layout === "table" && (sortByPriority || groupByList) && tasksQuery.hasNextPage && !tasksQuery.isFetchingNextPage && !tasksQuery.isFetchNextPageError) void tasksQuery.fetchNextPage()
-  }, [groupByList, layout, sortByPriority, tasksQuery.data, tasksQuery.fetchNextPage, tasksQuery.hasNextPage, tasksQuery.isFetchNextPageError, tasksQuery.isFetchingNextPage])
-
-  const orderedTasks = React.useMemo(() => {
-    if (!sortByPriority) return tasks
-    const rank = (priority?: string) => priority === "p0" ? 0 : priority === "p1" ? 1 : priority === "p2" ? 2 : 3
-    return [...tasks].sort((left, right) => rank(left.priority) - rank(right.priority) || String(right.createdAt || "").localeCompare(String(left.createdAt || "")) || left.title.localeCompare(right.title))
-  }, [sortByPriority, tasks])
-
   const taskGroups = React.useMemo(() => {
     if (!groupByList) return []
-    const groups = lists.map(list => ({ list, tasks: orderedTasks.filter(task => task.bucketId === list.id) })).filter(group => group.tasks.length)
+    const groups = lists.map(list => ({ list, tasks: tasks.filter(task => task.bucketId === list.id) })).filter(group => group.tasks.length)
     const knownIDs = new Set(lists.map(list => list.id))
-    const unknown = orderedTasks.filter(task => !knownIDs.has(task.bucketId))
+    const unknown = tasks.filter(task => !knownIDs.has(task.bucketId))
     return unknown.length ? [...groups, { list: undefined, tasks: unknown }] : groups
-  }, [groupByList, lists, orderedTasks])
+  }, [groupByList, lists, tasks])
 
   const refresh = async () => {
     await Promise.all([queryClient.invalidateQueries({ queryKey: ["tasks"] }), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey }), refreshLists()])
@@ -222,9 +214,10 @@ export function WorkspacePage() {
           </div>
         </div>
       ) : (
-        <div className="data-table-wrap">{tasksQuery.isFetchingNextPage && (sortByPriority || groupByList) && <div className="table-loading" role="status">Organising all tasks…</div>}{tasksQuery.isFetchNextPageError && (sortByPriority || groupByList) && <div className="table-loading table-loading-error" role="alert"><span>Could not load every task.</span><button type="button" onClick={() => tasksQuery.fetchNextPage()}>Retry</button></div>}<table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th><th>Actions</th></tr></thead><tbody>{groupByList ? taskGroups.map(group => <React.Fragment key={group.list?.id || "unknown"}><tr className="table-group-row"><th colSpan={7}><ListColorDot color={group.list?.color} />{group.list?.name || "Other"}<span>{group.tasks.length}</span></th></tr>{group.tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</React.Fragment>) : orderedTasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</tbody></table></div>
+        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th><th>Actions</th></tr></thead><tbody>{groupByList ? taskGroups.map(group => <React.Fragment key={group.list?.id || "unknown"}><tr className="table-group-row"><th colSpan={7}><ListColorDot color={group.list?.color} />{group.list?.name || "Other"}<span>{group.tasks.length}</span></th></tr>{group.tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</React.Fragment>) : tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</tbody></table></div>
       )}
-      {tasksQuery.hasNextPage && !(layout === "table" && (sortByPriority || groupByList)) && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
+      {tasksQuery.isFetchNextPageError && <div className="table-loading table-loading-error mt-4" role="alert"><span>Could not load more tasks.</span><button type="button" onClick={() => tasksQuery.fetchNextPage()}>Retry</button></div>}
+      {tasksQuery.hasNextPage && !tasksQuery.isFetchNextPageError && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
       <TaskDeleteDialog task={deleteTarget?.task || null} open={Boolean(deleteTarget)} pending={deleteTask.isPending} error={deleteTask.error instanceof Error ? deleteTask.error.message : deleteTask.error ? "Could not delete task" : ""} returnFocus={deleteTarget?.returnFocus} onCancel={() => setDeleteTarget(null)} onConfirm={() => { if (deleteTarget) { deleteTask.reset(); deleteTask.mutate(deleteTarget.task.id) } }} />
       {taskId && <TaskDetail taskId={taskId} backLabel={selectedList ? `Back to ${selectedList.name}` : "Back to all tasks"} onClose={() => navigate(`${listId ? `/app/lists/${encodeURIComponent(listId)}` : "/app/tasks"}${searchParams.toString() ? `?${searchParams}` : ""}`)} onOpenTask={openTask} />}
     </div>

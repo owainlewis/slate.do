@@ -400,6 +400,63 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	assertStorageUsage(t, ctx, db, userID, 0, 0)
 }
 
+func TestWorkspaceTaskSortingRemainsPaginated(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	firstList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstLow, err := store.CreateTask(ctx, userID, firstList.ID, CreateTaskInput{Title: "First low", Priority: PriorityP2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHigh, err := store.CreateTask(ctx, userID, firstList.ID, CreateTaskInput{Title: "First high", Priority: PriorityP0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHigh, err := store.CreateTask(ctx, userID, secondList.ID, CreateTaskInput{Title: "Second high", Priority: PriorityP0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	for id, createdAt := range map[string]time.Time{
+		firstHigh.ID:  base,
+		secondHigh.ID: base.Add(time.Minute),
+		firstLow.ID:   base.Add(2 * time.Minute),
+	} {
+		if _, err := db.Exec(ctx, "UPDATE tasks SET created_at = $1 WHERE id = $2", createdAt, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	priorityPage, err := store.ListTaskPage(ctx, userID, TaskFilter{Sort: "priority", Limit: 2, TopLevelOnly: true})
+	if err != nil || len(priorityPage.Tasks) != 2 || priorityPage.Tasks[0].ID != secondHigh.ID || priorityPage.Tasks[1].ID != firstHigh.ID || priorityPage.NextCursor == "" {
+		t.Fatalf("priority page = %#v, %v", priorityPage, err)
+	}
+	priorityNext, err := store.ListTaskPage(ctx, userID, TaskFilter{Sort: "priority", Limit: 2, TopLevelOnly: true, Cursor: priorityPage.NextCursor})
+	if err != nil || len(priorityNext.Tasks) != 1 || priorityNext.Tasks[0].ID != firstLow.ID {
+		t.Fatalf("priority continuation = %#v, %v", priorityNext, err)
+	}
+
+	listPage, err := store.ListTaskPage(ctx, userID, TaskFilter{Sort: "list_priority", Limit: 2, TopLevelOnly: true})
+	if err != nil || len(listPage.Tasks) != 2 || listPage.Tasks[0].ID != firstHigh.ID || listPage.Tasks[1].ID != firstLow.ID || listPage.NextCursor == "" {
+		t.Fatalf("list page = %#v, %v", listPage, err)
+	}
+	listNext, err := store.ListTaskPage(ctx, userID, TaskFilter{Sort: "list_priority", Limit: 2, TopLevelOnly: true, Cursor: listPage.NextCursor})
+	if err != nil || len(listNext.Tasks) != 1 || listNext.Tasks[0].ID != secondHigh.ID {
+		t.Fatalf("list continuation = %#v, %v", listNext, err)
+	}
+}
+
 func TestTaskSearchTreatsPatternCharactersAsLiteralText(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

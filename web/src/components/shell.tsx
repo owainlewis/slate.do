@@ -128,7 +128,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     onError: (_error, _ordered, context) => {
       if (context?.previous) queryClient.setQueryData(["lists"], context.previous)
     },
-    onSettled: refreshLists,
+    onSuccess: async () => {
+      await Promise.all([refreshLists(), queryClient.resetQueries({ queryKey: ["tasks"] })])
+    },
   })
 
   const moveList = (sourceID: string, targetID: string) => {

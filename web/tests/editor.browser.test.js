@@ -328,20 +328,25 @@ test("public routes stay light and the app restores the saved dark theme", async
 });
 
 test("table layout filters tasks and survives layout changes", async t => {
-  const { page } = await startApp(t);
+  const { page, state } = await startApp(t);
   await page.getByRole("button", { name: "Table", exact: true }).click();
   const table = page.getByRole("table");
   await table.waitFor();
   for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned", "Actions"]) await table.getByRole("columnheader", { name: heading }).waitFor();
   await page.getByRole("button", { name: "Priority order" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr[data-task]").length === 3);
   assert.deepEqual(await table.locator("tbody tr[data-task]").evaluateAll(rows => rows.map(row => row.dataset.task)), ["task-parent", "task-inbox", "task-writing"]);
   await page.getByRole("button", { name: "Group by list" }).click();
   await table.locator(".table-group-row").first().waitFor();
   assert.deepEqual(await table.locator(".table-group-row").allTextContents(), ["Inbox1", "Product1", "Writing1"]);
   await page.getByLabel("Search tasks").fill("boss");
   await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr[data-task]").length === 1);
+  const boardTasks = page.waitForResponse(value => value.request().method() === "GET" && value.url().includes("/api/v1/tasks?") && !new URL(value.url()).searchParams.has("sort"));
   await page.getByRole("button", { name: "Board", exact: true }).click();
+  await boardTasks;
   assert.equal(new URL(page.url()).searchParams.get("q"), "boss");
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for" }).waitFor();
+  assert.equal(state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).at(-1).includes("sort="), false);
 });
 
 test("workspace pagination loads and retains subsequent task pages", async t => {
@@ -354,12 +359,18 @@ test("workspace pagination loads and retains subsequent task pages", async t => 
   assert.equal(state.requests.some(request => request.includes("cursor=page-two")), true);
 });
 
-test("table organization loads every page and offers a bounded retry", async t => {
+test("table organization stays paginated and offers a bounded retry", async t => {
   const { page, state, origin } = await startApp(t);
   state.paginate = true;
   state.pageTwoFailure = true;
   await page.goto(`${origin}/app/tasks?view=table&sort=priority`);
-  await page.getByText("Could not load every task.").waitFor();
+  await page.getByRole("button", { name: "Load more tasks" }).waitFor();
+  assert.equal(state.requests.some(request => request.includes("sort=priority")), true);
+  assert.equal(state.requests.filter(request => request.includes("cursor=page-two")).length, 0);
+  assert.equal(await page.locator(".workspace-table tr[data-task]").count(), 1);
+  await page.getByRole("button", { name: "Load more tasks" }).click();
+  await page.getByText("Could not load more tasks.").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Load more tasks" }).count(), 0);
   assert.equal(state.requests.filter(request => request.includes("cursor=page-two")).length, 2);
   state.pageTwoFailure = false;
   await page.getByRole("button", { name: "Retry" }).click();
@@ -981,6 +992,7 @@ test("lists keep their chosen color and sidebar order", async t => {
   await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-list-id="list-product"] .list-color-dot')).backgroundColor === "rgb(199, 92, 145)");
   assert.equal(state.lists.find(list => list.id === "list-product").color, "pink");
 
+  const taskRequestsBeforeReorder = state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length;
   const productHandle = page.getByRole("button", { name: "Reorder Product" });
   await productHandle.focus();
   await productHandle.press("ArrowDown");
@@ -991,6 +1003,7 @@ test("lists keep their chosen color and sidebar order", async t => {
   await page.waitForFunction(() => Array.from(document.querySelectorAll("[data-list-id]")).map(element => element.dataset.listId).join(",") === "list-product,list-writing");
   assert.deepEqual(state.lists.map(list => list.id), ["list-inbox", "list-product", "list-writing"]);
   assert.equal(state.requests.filter(request => request === "POST /api/v1/lists/reorder").length, 2);
+  assert.ok(state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length > taskRequestsBeforeReorder);
 });
 
 test("hosted control plane exposes search, runs, runners, and human review", async t => {
