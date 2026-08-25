@@ -9,7 +9,7 @@ import { Input, Label, Select, Textarea } from "@/components/ui/field"
 import { PriorityPicker, type Priority } from "@/components/priority"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
-import type { List, Task, TaskStatus } from "@/lib/types"
+import { workspaceSummaryQueryKey, type List, type Task, type TaskStatus } from "@/lib/types"
 
 export function Brand({ onClick }: { onClick?: () => void }) {
   return <button type="button" className="brand-mark" onClick={onClick} aria-label="Slate home"><span className="brand-word">slate<span className="brand-suffix">.do</span></span></button>
@@ -55,7 +55,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       return api.post<Task>(endpoint, { title: taskTitle.trim(), description: taskDescription.trim(), kind: "action", status: taskAgent ? "queued" : taskStatus, priority: taskPriority, assigneeAgentId: taskAgent, scheduledDate: taskDate }, { "Idempotency-Key": crypto.randomUUID() })
     },
     onSuccess: async task => {
-      await queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["tasks"] }), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey })])
       setTaskDialog(false)
       setTaskTitle("")
       setTaskDescription("")

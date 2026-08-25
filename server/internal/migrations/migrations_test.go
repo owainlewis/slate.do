@@ -50,6 +50,34 @@ func TestManagedRunMigrationAddsFencingColumnsAndLookupIndex(t *testing.T) {
 	}
 }
 
+func TestTaskActivityMigrationIndexesRunEventsForTaskDeletion(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var indexDefinition string
+	if err := db.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = 'public' AND indexname = 'task_run_starts_task_idx'
+	`).Scan(&indexDefinition); err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{"task_id", "WHERE (task_id IS NOT NULL)"} {
+		if !strings.Contains(indexDefinition, fragment) {
+			t.Fatalf("task run deletion index missing %q: %s", fragment, indexDefinition)
+		}
+	}
+}
+
 func TestRemoveArchivedAgentsPreservesCardsAndConversationHistory(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

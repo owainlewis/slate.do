@@ -68,3 +68,14 @@ export interface Entry {
   authorKind?: string
   createdAt?: string
 }
+
+export interface WorkspaceSummary {
+  activeTasks: number
+  inProgress: number
+  inReview: number
+  completed24h: number
+  runs24h: number
+}
+
+export const workspaceSummaryQueryKey = ["workspace-summary"] as const
+export const workspaceSummaryQueryKeyFor = (accountID: ID) => [...workspaceSummaryQueryKey, accountID] as const

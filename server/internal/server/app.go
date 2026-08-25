@@ -88,6 +88,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/tasks/{id}/move", a.accountManage(a.boards.MoveTask))
 	mux.HandleFunc("PATCH /api/v1/tasks/{id}/status", a.session(a.boards.UpdateTaskStatus))
 	mux.HandleFunc("DELETE /api/v1/tasks/{id}", a.accountManage(a.boards.DeleteTask))
+	mux.HandleFunc("GET /api/v1/stats/summary", a.user(a.boards.GetWorkspaceSummary))
 	mux.HandleFunc("GET /api/v1/agent/tasks", a.user(a.boards.AgentTasks))
 	mux.HandleFunc("POST /api/v1/agent/tasks/{id}/claim", a.user(a.boards.AgentClaim))
 	mux.HandleFunc("PATCH /api/v1/agent/tasks/{id}/status", a.user(a.boards.AgentStatus))

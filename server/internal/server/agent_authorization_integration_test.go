@@ -121,6 +121,10 @@ func TestAgentCredentialsCannotCrossTaskOrAccountResourceBoundaries(t *testing.T
 	if listIndex.Code != http.StatusForbidden {
 		t.Fatalf("agent list index = %d %s, want 403", listIndex.Code, listIndex.Body.String())
 	}
+	workspaceSummary := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/stats/summary", "")
+	if workspaceSummary.Code != http.StatusForbidden {
+		t.Fatalf("agent workspace summary = %d %s, want 403", workspaceSummary.Code, workspaceSummary.Body.String())
+	}
 	listGet := agentRequest(t, app, agentAToken, http.MethodGet, "/api/v1/lists/"+bucket.ID, "")
 	if listGet.Code != http.StatusOK || !strings.Contains(listGet.Body.String(), bucket.ID) || !strings.Contains(listGet.Body.String(), `"openCount":1`) || strings.Contains(listGet.Body.String(), `"tasks"`) || strings.Contains(listGet.Body.String(), taskA.ID) || strings.Contains(listGet.Body.String(), taskB.Title) {
 		t.Fatalf("scoped list get = %d %s", listGet.Code, listGet.Body.String())

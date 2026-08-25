@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import App from "./App"
+import { workspaceSummaryQueryKeyFor } from "@/lib/types"
 
 afterEach(() => {
   cleanup()
@@ -13,6 +14,13 @@ function renderApp(path = "/") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><App /></MemoryRouter></QueryClientProvider>)
 }
+
+test("workspace summary cache entries are isolated by account", () => {
+  const client = new QueryClient()
+  client.setQueryData(workspaceSummaryQueryKeyFor("account-a"), { activeTasks: 4 })
+  expect(client.getQueryData(workspaceSummaryQueryKeyFor("account-a"))).toEqual({ activeTasks: 4 })
+  expect(client.getQueryData(workspaceSummaryQueryKeyFor("account-b"))).toBeUndefined()
+})
 
 test("the landing page leads with Slate's outcome", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ authenticated: false }), { status: 200 })))

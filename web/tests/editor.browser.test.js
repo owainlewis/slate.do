@@ -8,7 +8,9 @@ const { chromium } = require("playwright");
 
 const dist = path.resolve(__dirname, "../../server/internal/web/dist");
 
-function fixture() {
+function fixture(options = {}) {
+  let releaseSummary;
+  const summaryDelay = options.summaryPending ? new Promise(resolve => { releaseSummary = resolve; }) : null;
   return {
     user: { id: "owner", email: "owner@example.com", displayName: "Owain Lewis", theme: "dark", entitlement: { plan: "pro", limits: { lists: 45, agents: 5, apiTokens: 10 } } },
     lists: [
@@ -32,17 +34,30 @@ function fixture() {
     loseSubtaskResponseFor: "",
     deleteTaskError: "",
     taskCreateDelay: null,
+    summary: { activeTasks: 2, inProgress: 1, inReview: 0, completed24h: 0, runs24h: 0 },
+    summaryError: Boolean(options.summaryError),
+    summaryRequests: 0,
+    summaryDelay,
+    releaseSummary: () => releaseSummary?.(),
     taskCreateFailure: "",
   };
 }
 
-async function startApp(t, viewport = { width: 1440, height: 960 }) {
-  const state = fixture();
+async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}) {
+  const state = fixture(options);
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
     state.requests.push(`${request.method} ${url.pathname}${url.search}`);
     if (url.pathname === "/api/v1/me" && request.method === "GET") return json(response, { authenticated: true, user: state.user });
     if (url.pathname === "/api/v1/lists" && request.method === "GET") return json(response, { lists: state.lists });
+    if (url.pathname === "/api/v1/stats/summary" && request.method === "GET") {
+      state.summaryRequests += 1;
+      if (state.summaryDelay) {
+        await state.summaryDelay;
+        state.summaryDelay = null;
+      }
+      return state.summaryError ? json(response, { error: "summary unavailable" }, 503) : json(response, state.summary);
+    }
     if (url.pathname === "/api/v1/lists" && request.method === "POST") {
       const input = await requestJSON(request);
       const list = { id: `list-${state.lists.length}`, name: input.name, goal: "", isInbox: false, openCount: 0 };
@@ -80,6 +95,9 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       const list = state.lists.find(item => item.id === bucketId);
       const task = { id: `task-${state.tasks.length + 1}`, bucketId, bucketName: list.name, listName: list.name, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", ...input };
       state.tasks.push(task);
+      if (task.status !== "done") state.summary.activeTasks += 1;
+      if (task.status === "working") state.summary.inProgress += 1;
+      if (task.status === "needs_review") state.summary.inReview += 1;
       if (idempotencyKey) state.idempotency.set(idempotencyKey, task);
       if (state.loseParentResponse) {
         state.loseParentResponse = false;
@@ -214,6 +232,44 @@ test("React workspace renders the full task board accessibly", async t => {
   assert.deepEqual(await page.getByLabel("Filter by agent").locator("option").allTextContents(), ["Any agent", "Research agent"]);
   const results = await new AxeBuilder({ page }).analyze();
   assert.deepEqual(results.violations, []);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("workspace summary loads once and refreshes after task creation and stale focus", async t => {
+  const { page, state, pageErrors } = await startApp(t, { width: 1440, height: 960 }, { summaryPending: true });
+  const summary = page.getByRole("region", { name: "Workspace summary" });
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
+  assert.equal(await summary.count(), 0);
+  state.releaseSummary();
+  await summary.waitFor();
+  assert.deepEqual(await summary.locator(".workspace-summary-item").allTextContents(), ["2Active tasks", "1In progress", "0In review", "0Completed · 24h", "0Runs · 24h"]);
+  await page.waitForTimeout(500);
+  assert.equal(state.summaryRequests, 1);
+
+  await page.getByRole("button", { name: "Add task to Todo" }).click();
+  const dialog = page.getByRole("dialog", { name: "New task" });
+  await dialog.getByRole("textbox", { name: "Task title" }).fill("Refresh the workspace summary");
+  await dialog.getByRole("button", { name: "Create task" }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Workspace summary"] .workspace-summary-item strong')?.textContent === "3");
+  assert.equal(state.summaryRequests, 2);
+
+  state.summary.runs24h = 2;
+  await page.evaluate(() => {
+    const now = Date.now();
+    Date.now = () => now + 31_000;
+    window.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Workspace summary"] .workspace-summary-item strong')].at(-1)?.textContent === "2");
+  assert.equal(state.summaryRequests, 3);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("workspace summary failure leaves the task board usable", async t => {
+  const { page, state, pageErrors } = await startApp(t, { width: 390, height: 844 }, { summaryError: true });
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
+  assert.equal(await page.getByRole("region", { name: "Workspace summary" }).count(), 0);
+  assert.equal(await page.getByRole("alert").count(), 0);
+  assert.equal(state.summaryRequests, 1);
   assert.deepEqual(pageErrors, []);
 });
 

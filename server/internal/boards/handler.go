@@ -35,6 +35,19 @@ func (h *Handler) ListAllBuckets(w http.ResponseWriter, r *http.Request, user au
 	writeJSON(w, http.StatusOK, map[string]any{"lists": lists})
 }
 
+func (h *Handler) GetWorkspaceSummary(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if user.AgentID != "" {
+		writeError(w, http.StatusForbidden, "agent credentials cannot view the workspace summary")
+		return
+	}
+	summary, err := h.store.WorkspaceSummary(r.Context(), user.ID)
+	if err != nil {
+		writeInternalError(w, err, "workspace summary could not be loaded")
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
 func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input CreateBucketInput
 	if !decodeJSON(w, r, &input) {

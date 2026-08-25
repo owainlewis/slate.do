@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query"
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query"
 import { Columns3 as BoardIcon, CalendarDays, List as ListIcon, MoreHorizontal, Plus, Rows3, Search, Trash2 } from "lucide-react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
@@ -11,7 +11,7 @@ import { TaskDeleteDialog } from "@/components/task-delete-dialog"
 import { PriorityBadge, priorityLabel } from "@/components/priority"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
-import type { Task, TaskStatus } from "@/lib/types"
+import { workspaceSummaryQueryKey, workspaceSummaryQueryKeyFor, type Task, type TaskStatus, type WorkspaceSummary } from "@/lib/types"
 
 const columns: Array<{ value: TaskStatus; label: string; statuses: TaskStatus[]; className: string }> = [
   { value: "new", label: "Todo", statuses: ["new", "queued"], className: "" },
@@ -65,9 +65,20 @@ function TaskTableActions({ task, onDelete }: { task: Task; onDelete: (returnFoc
   )
 }
 
+function WorkspaceSummaryStrip({ summary }: { summary: WorkspaceSummary }) {
+  const items = [
+    ["Active tasks", summary.activeTasks],
+    ["In progress", summary.inProgress],
+    ["In review", summary.inReview],
+    ["Completed · 24h", summary.completed24h],
+    ["Runs · 24h", summary.runs24h],
+  ] as const
+  return <section className="workspace-summary surface-card" aria-label="Workspace summary">{items.map(([label, value]) => <div className="workspace-summary-item" key={label}><strong>{value}</strong><span>{label}</span></div>)}</section>
+}
+
 export function WorkspacePage() {
   const { listId = "", taskId = "" } = useParams()
-  const { lists, agents, refreshLists } = useApp()
+  const { me, lists, agents, refreshLists } = useApp()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -100,8 +111,16 @@ export function WorkspacePage() {
   })
   const tasks = tasksQuery.data?.pages.flatMap(page => page.tasks) || []
 
+  const summaryQuery = useQuery({
+    queryKey: workspaceSummaryQueryKeyFor(me.id),
+    queryFn: () => api.get<WorkspaceSummary>("/api/v1/stats/summary"),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  })
+
   const refresh = async () => {
-    await Promise.all([queryClient.invalidateQueries({ queryKey: ["tasks"] }), refreshLists()])
+    await Promise.all([queryClient.invalidateQueries({ queryKey: ["tasks"] }), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey }), refreshLists()])
   }
   const moveTask = useMutation({
     mutationFn: ({ id, status }: { id: string; status: TaskStatus }) => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(id)}/status`, { status }),
@@ -123,7 +142,7 @@ export function WorkspacePage() {
   })
   const removeList = useMutation({
     mutationFn: () => api.del(`/api/v1/lists/${encodeURIComponent(listId)}`),
-    onSuccess: async () => { await refreshLists(); navigate("/app/tasks") },
+    onSuccess: async () => { await Promise.all([refreshLists(), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey })]); navigate("/app/tasks") },
     onError: error => setPageError(error instanceof Error ? error.message : "Could not delete list"),
   })
 
@@ -145,6 +164,7 @@ export function WorkspacePage() {
         </div>
         <div className="page-actions">{selectedList && !selectedList.isInbox && <DropdownMenu><DropdownMenuTrigger asChild><Button id="workspace-list-actions" variant="ghost" size="icon" aria-label="List actions"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>List options</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem id="delete-workspace-list" className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={removeList.isPending} onSelect={() => { if (window.confirm(`Delete “${selectedList.name}” and every task in it?`)) removeList.mutate() }}><Trash2 className="size-4" />{removeList.isPending ? "Deleting…" : "Delete list"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}</div>
       </header>
+      {summaryQuery.data && <WorkspaceSummaryStrip summary={summaryQuery.data} />}
       <div className="toolbar">
         <div className="filters" role="search">
           <div className="search-box"><Search /><Input aria-label="Search tasks" placeholder="Search tasks…" value={searchParams.get("q") || ""} onChange={event => updateFilter("q", event.target.value)} /></div>
