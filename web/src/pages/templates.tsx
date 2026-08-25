@@ -3,13 +3,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ArrowDown, ArrowUp, Bot, CalendarDays, Check, Clapperboard, FileText, Pencil, Play, Plus, Trash2, UserRound, Workflow, X } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { AssigneePicker } from "@/components/assignee-picker"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input, Label, Select, Textarea } from "@/components/ui/field"
 import { useApp } from "@/app-context"
 import { api } from "@/lib/api"
+import { agentIDForAssignee, resolvedAssigneeKey, type AssigneeKey, type AssigneeOption } from "@/lib/assignees"
 import { workspaceSummaryQueryKey, type Task } from "@/lib/types"
-
-type Executor = "Human" | "Agent-ready" | "Automation"
 
 // A process must fit below the server's 60 authenticated writes per minute, including its parent and retry headroom.
 const MAX_TEMPLATE_STEPS = 50
@@ -24,7 +24,7 @@ interface TemplateStep {
   id: string
   phaseId: string
   title: string
-  executor: Executor
+  executor: AssigneeKey
   instruction: string
 }
 
@@ -58,9 +58,22 @@ function byteLength(value: string) {
   return new TextEncoder().encode(value).length
 }
 
-function stepDescription(template: ProcessTemplate, step: TemplateStep) {
+function assigneeMention(key: string, assignees: AssigneeOption[]) {
+  const resolved = resolvedAssigneeKey(key, assignees)
+  const assignee = assignees.find(item => item.key === resolved)
+  return assignee ? `@${assignee.handle}` : "@unavailable_agent"
+}
+
+function templateAssigneeError(template: ProcessTemplate, assignees: AssigneeOption[]) {
+  return template.steps.some(step => !resolvedAssigneeKey(step.executor, assignees))
+    ? "This template references an unavailable agent. Edit the template and reassign that step."
+    : ""
+}
+
+function stepDescription(template: ProcessTemplate, step: TemplateStep, assignees: AssigneeOption[] = []) {
   const phaseName = template.phases.find(phase => phase.id === step.phaseId)?.name || "Process"
-  return `Phase: ${phaseName}\nSuggested executor: ${step.executor}\n\n${step.instruction}`
+  const assignedTo = assignees.length ? assigneeMention(step.executor, assignees) : step.executor
+  return `Phase: ${phaseName}\nAssigned to: ${assignedTo}\n\n${step.instruction}`
 }
 
 function parentDescription(template: ProcessTemplate, brief: string) {
@@ -68,7 +81,7 @@ function parentDescription(template: ProcessTemplate, brief: string) {
     `Created from template: ${template.name}`,
     brief,
     "",
-    "Follow the ordered workflow below. Agent-ready subtasks stay unassigned until you choose to queue them.",
+    "Follow the ordered workflow below. Each subtask has a named owner.",
   ].filter(Boolean).join("\n")
 }
 
@@ -106,8 +119,10 @@ function migrateTemplate(value: unknown): ProcessTemplate | null {
     const phaseId = typeof step.phaseId === "string" ? step.phaseId : migratedPhases.find(phase => phase.name === step.phase)?.id
     const preferredId = typeof step.id === "string" && step.id.trim() ? step.id : `${template.id}-step-${index + 1}`
     const id = byteLength(preferredId) <= MAX_TEMPLATE_STEP_ID_BYTES ? preferredId : `step-${index + 1}`
-    if (!phaseId || !migratedPhases.some(phase => phase.id === phaseId) || typeof step.title !== "string" || !step.title.trim() || typeof step.instruction !== "string" || typeof step.executor !== "string" || !["Human", "Agent-ready", "Automation"].includes(step.executor)) return null
-    return { id, phaseId, title: step.title, instruction: step.instruction, executor: step.executor as Executor }
+    if (!phaseId || !migratedPhases.some(phase => phase.id === phaseId) || typeof step.title !== "string" || !step.title.trim() || typeof step.instruction !== "string" || typeof step.executor !== "string") return null
+    const executor = step.executor === "human" || step.executor.startsWith("agent:") ? step.executor as AssigneeKey : ["Human", "Agent-ready", "Automation"].includes(step.executor) ? "human" : null
+    if (!executor) return null
+    return { id, phaseId, title: step.title, instruction: step.instruction, executor }
   })
   if (migratedSteps.some(step => !step)) return null
   const stepIds = (migratedSteps as TemplateStep[]).map(step => step.id)
@@ -134,7 +149,7 @@ function loadTemplates(key: string): ProcessTemplate[] {
 
 function blankTemplate(): ProcessTemplate {
   const phase = { id: crypto.randomUUID(), name: "Phase 1" }
-  return { id: crypto.randomUUID(), name: "", summary: "", taskPrefix: "Run", phases: [phase], steps: [{ id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "Human", instruction: "" }] }
+  return { id: crypto.randomUUID(), name: "", summary: "", taskPrefix: "Run", phases: [phase], steps: [{ id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "human", instruction: "" }] }
 }
 
 function moved<T>(items: T[], index: number, direction: -1 | 1) {
@@ -151,10 +166,8 @@ function movePhaseStep(steps: TemplateStep[], phaseId: string, index: number, di
   return steps.map(step => step.phaseId === phaseId ? reordered[nextIndex++] : step)
 }
 
-function executorIcon(executor: Executor) {
-  if (executor === "Human") return UserRound
-  if (executor === "Automation") return Workflow
-  return Bot
+function executorIcon(executor: string) {
+  return executor.startsWith("agent:") ? Bot : UserRound
 }
 
 class TemplateCreationError extends Error {
@@ -212,7 +225,7 @@ function loadCreationAttempts(prefix: string) {
 type EditorMode = "new" | "edit"
 
 export function TemplatesPage() {
-  const { me, lists, refreshLists } = useApp()
+  const { me, lists, assignees, refreshLists } = useApp()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const storageKey = `slate:process-templates:${me.id}`
@@ -317,9 +330,9 @@ export function TemplatesPage() {
     setEditorOpen(true)
   }
 
-  const editorLimitError = editorDraft ? templateLimitError(editorDraft) : ""
+  const editorLimitError = editorDraft ? templateLimitError(editorDraft) || templateAssigneeError(editorDraft, assignees) : ""
   const editorValid = Boolean(editorDraft?.name.trim() && editorDraft.phases.length && new Set(editorDraft.phases.map(phase => phase.name.trim().toLowerCase())).size === editorDraft.phases.length && editorDraft.phases.every(phase => phase.name.trim() && editorDraft.steps.some(step => step.phaseId === phase.id && step.title.trim())) && !editorLimitError)
-  const createLimitError = !activeTemplate || creationAttempt ? "" : creationLimitError(activeTemplate, taskTitle, brief)
+  const createLimitError = !activeTemplate ? "" : templateAssigneeError(activeTemplate, assignees) || (creationAttempt ? "" : creationLimitError(activeTemplate, taskTitle, brief))
 
   const saveEditor = () => {
     if (!editorDraft || !editorValid) return
@@ -356,6 +369,8 @@ export function TemplatesPage() {
         const selectedList = attempt.listId
         const endpoint = selectedList ? `/api/v1/lists/${encodeURIComponent(selectedList)}/tasks` : "/api/v1/tasks"
         const steps = orderedTemplateSteps(attempt.template)
+        const unavailableAssignee = templateAssigneeError(attempt.template, assignees)
+        if (unavailableAssignee) throw new TemplateCreationError(unavailableAssignee)
         const context = parentDescription(attempt.template, attempt.brief)
         if (attempt.parentTaskId) {
           parent = await api.get<Task>(`/api/v1/tasks/${encodeURIComponent(attempt.parentTaskId)}`)
@@ -378,10 +393,11 @@ export function TemplatesPage() {
           setCreatingStep(index + 1)
           await api.post<Task>(`/api/v1/tasks/${encodeURIComponent(parent.id)}/subtasks`, {
             title: step.title,
-            description: stepDescription(attempt.template, step),
+            description: stepDescription(attempt.template, step, assignees),
             kind: "action",
             status: "new",
             priority: "p1",
+            assigneeAgentId: agentIDForAssignee(resolvedAssigneeKey(step.executor, assignees)!),
           }, { "Idempotency-Key": `${attempt.id}:step:${step.id}` })
           progress = { ...progress, nextStepIndex: index + 1 }
           localStorage.setItem(`${attemptStoragePrefix}${attempt.id}`, JSON.stringify(progress))
@@ -415,11 +431,11 @@ export function TemplatesPage() {
 
   const startOrRetryCreation = () => {
     if (!activeTemplate) return
+    if (createLimitError) return
     if (creationAttempt && Date.now() - creationAttempt.createdAt >= MAX_PROCESS_ATTEMPT_AGE_MS) {
       setAttemptExpiryReached(true)
       return
     }
-    if (!creationAttempt && creationLimitError(activeTemplate, taskTitle, brief)) return
     const attempt = creationAttempt || {
       id: crypto.randomUUID(),
       createdAt: Date.now(),
@@ -503,7 +519,7 @@ export function TemplatesPage() {
           const steps = selectedTemplate.steps.filter(step => step.phaseId === phase.id)
           return <div className="template-phase" key={phase.id}>
             <header><span>{String(phaseIndex + 1).padStart(2, "0")}</span><h3>{phase.name}</h3><small>{steps.length}</small></header>
-            <ol>{steps.map(step => { const Icon = executorIcon(step.executor); return <li key={step.id}><span className="template-step-check"><Check aria-hidden="true" /></span><strong>{step.title}</strong><small><Icon aria-hidden="true" />{step.executor}</small></li> })}</ol>
+            <ol>{steps.map(step => { const Icon = executorIcon(step.executor); return <li key={step.id}><span className="template-step-check"><Check aria-hidden="true" /></span><strong>{step.title}</strong><small><Icon aria-hidden="true" />{assigneeMention(step.executor, assignees)}</small></li> })}</ol>
           </div>
         })}
       </section></>}
@@ -517,7 +533,7 @@ export function TemplatesPage() {
                 <div><Label htmlFor="process-template-name">Template name</Label><Input id="process-template-name" value={editorDraft.name} onChange={event => setEditorDraft({ ...editorDraft, name: event.target.value })} placeholder="Publish a weekly newsletter" autoFocus required /></div>
                 <div><Label htmlFor="process-template-summary">Description</Label><Input id="process-template-summary" value={editorDraft.summary} onChange={event => setEditorDraft({ ...editorDraft, summary: event.target.value })} placeholder="What does this process achieve?" /></div>
               </div>
-              <div className="template-editor-section-head"><div><strong>Process</strong><span>{orderedTemplateSteps(editorDraft).length} ordered subtasks</span></div><Button type="button" variant="ghost" size="sm" disabled={editorDraft.steps.length >= MAX_TEMPLATE_STEPS} onClick={() => { const phase = { id: crypto.randomUUID(), name: `Phase ${editorDraft.phases.length + 1}` }; setEditorDraft({ ...editorDraft, phases: [...editorDraft.phases, phase], steps: [...editorDraft.steps, { id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "Human", instruction: "" }] }) }}><Plus className="size-3.5" />Add phase</Button></div>
+              <div className="template-editor-section-head"><div><strong>Process</strong><span>{orderedTemplateSteps(editorDraft).length} ordered subtasks</span></div><Button type="button" variant="ghost" size="sm" disabled={editorDraft.steps.length >= MAX_TEMPLATE_STEPS} onClick={() => { const phase = { id: crypto.randomUUID(), name: `Phase ${editorDraft.phases.length + 1}` }; setEditorDraft({ ...editorDraft, phases: [...editorDraft.phases, phase], steps: [...editorDraft.steps, { id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "human", instruction: "" }] }) }}><Plus className="size-3.5" />Add phase</Button></div>
               <div className="template-editor-phases">
                 {editorDraft.phases.map((phase, phaseIndex) => {
                   const phaseSteps = editorDraft.steps.filter(step => step.phaseId === phase.id)
@@ -527,10 +543,10 @@ export function TemplatesPage() {
                       {phaseSteps.map((step, stepIndex) => <div className="template-editor-step" key={step.id}>
                         <span className="template-step-number">{phaseIndex + 1}.{stepIndex + 1}</span>
                         <div className="template-step-fields"><Input aria-label={`${phase.name || `Phase ${phaseIndex + 1}`} subtask ${stepIndex + 1}`} value={step.title} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item.id === step.id ? { ...item, title: event.target.value } : item) })} placeholder="Subtask name" required /><Textarea aria-label={`${step.title || `Subtask ${stepIndex + 1}`} instructions`} value={step.instruction} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item.id === step.id ? { ...item, instruction: event.target.value } : item) })} placeholder="Instructions or definition of done" /></div>
-                        <Select aria-label={`${step.title || `Subtask ${stepIndex + 1}`} executor`} value={step.executor} onChange={event => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item.id === step.id ? { ...item, executor: event.target.value as Executor } : item) })}><option>Human</option><option>Agent-ready</option><option>Automation</option></Select>
+                        <AssigneePicker ariaLabel={`${step.title || `Subtask ${stepIndex + 1}`} assign to`} value={step.executor} assignees={assignees} onChange={value => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.map(item => item.id === step.id ? { ...item, executor: value } : item) })} />
                         <div className="template-order-actions"><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: movePhaseStep(editorDraft.steps, phase.id, stepIndex, -1) })} disabled={stepIndex === 0} aria-label={`Move ${step.title || `subtask ${stepIndex + 1}`} up`}><ArrowUp /></button><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: movePhaseStep(editorDraft.steps, phase.id, stepIndex, 1) })} disabled={stepIndex === phaseSteps.length - 1} aria-label={`Move ${step.title || `subtask ${stepIndex + 1}`} down`}><ArrowDown /></button><button type="button" onClick={() => setEditorDraft({ ...editorDraft, steps: editorDraft.steps.filter(item => item.id !== step.id) })} disabled={phaseSteps.length === 1} aria-label={`Remove ${step.title || `subtask ${stepIndex + 1}`}`}><Trash2 /></button></div>
                       </div>)}
-                      <Button type="button" variant="ghost" size="sm" className="template-add-step" disabled={editorDraft.steps.length >= MAX_TEMPLATE_STEPS} onClick={() => setEditorDraft({ ...editorDraft, steps: [...editorDraft.steps, { id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "Human", instruction: "" }] })}><Plus className="size-3.5" />Add subtask</Button>
+                      <Button type="button" variant="ghost" size="sm" className="template-add-step" disabled={editorDraft.steps.length >= MAX_TEMPLATE_STEPS} onClick={() => setEditorDraft({ ...editorDraft, steps: [...editorDraft.steps, { id: crypto.randomUUID(), phaseId: phase.id, title: "", executor: "human", instruction: "" }] })}><Plus className="size-3.5" />Add subtask</Button>
                     </div>
                   </section>
                 })}
@@ -579,7 +595,7 @@ export function TemplatesPage() {
             {attemptDiscardError && <div className="status-message error" role="alert">Slate could not discard this attempt from browser storage.</div>}
             {createLimitError && <div className="status-message error" role="alert">{createLimitError}</div>}
             <DialogFooter className="template-dialog-footer">
-              {creationAttempt && !createFromTemplate.isPending ? <><Button type="button" variant="ghost" onClick={discardCreationAttempt}>Discard attempt</Button>{(partialTask || creationAttempt.parentTaskId) && <Button type="button" variant="ghost" onClick={() => { setDialogOpen(false); navigate(partialTask ? taskUrl(partialTask) : `/app/tasks/${encodeURIComponent(creationAttempt.parentTaskId)}`) }}>Open partial task</Button>}<Button type="button" variant="ghost" onClick={() => closeDialog(false)}>Keep for later</Button>{!attemptExpired && <Button type="button" onClick={startOrRetryCreation}>{createFromTemplate.isError ? "Retry creation" : "Resume creation"}</Button>}</> : <><Button type="button" variant="ghost" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createFromTemplate.isPending || Boolean(createLimitError)}>{createFromTemplate.isPending ? `Creating ${creatingStep || 1}/${activeSteps.length}` : "Create task"}</Button></>}
+              {creationAttempt && !createFromTemplate.isPending ? <><Button type="button" variant="ghost" onClick={discardCreationAttempt}>Discard attempt</Button>{(partialTask || creationAttempt.parentTaskId) && <Button type="button" variant="ghost" onClick={() => { setDialogOpen(false); navigate(partialTask ? taskUrl(partialTask) : `/app/tasks/${encodeURIComponent(creationAttempt.parentTaskId)}`) }}>Open partial task</Button>}<Button type="button" variant="ghost" onClick={() => closeDialog(false)}>Keep for later</Button>{!attemptExpired && <Button type="button" onClick={startOrRetryCreation} disabled={Boolean(createLimitError)}>{createFromTemplate.isError ? "Retry creation" : "Resume creation"}</Button>}</> : <><Button type="button" variant="ghost" onClick={() => closeDialog(false)} disabled={createFromTemplate.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createFromTemplate.isPending || Boolean(createLimitError)}>{createFromTemplate.isPending ? `Creating ${creatingStep || 1}/${activeSteps.length}` : "Create task"}</Button></>}
             </DialogFooter>
           </form>}
         </DialogContent>

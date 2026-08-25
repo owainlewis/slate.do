@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input, Label, Select, Textarea } from "@/components/ui/field"
 import { PriorityPicker, type Priority } from "@/components/priority"
+import { AssigneePicker } from "@/components/assignee-picker"
 import { ListColorDot, ListColorPicker, type ListColor } from "@/components/list-color"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
+import { agentIDForAssignee, assigneeForTask, type AssigneeKey } from "@/lib/assignees"
 import { workspaceSummaryQueryKey, type List, type Task, type TaskStatus } from "@/lib/types"
 
 export function Brand({ onClick }: { onClick?: () => void }) {
@@ -56,7 +58,7 @@ function SidebarListLink({ list, previousID, nextID, disabled, onMove }: { list:
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { me, lists, agents, refreshLists } = useApp()
+  const { me, lists, assignees, refreshLists } = useApp()
   const navigate = useNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
@@ -69,7 +71,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [taskTitle, setTaskTitle] = React.useState("")
   const [taskDescription, setTaskDescription] = React.useState("")
   const [taskList, setTaskList] = React.useState("")
-  const [taskAgent, setTaskAgent] = React.useState("")
+  const [taskAssignee, setTaskAssignee] = React.useState<AssigneeKey>("human")
   const [taskPriority, setTaskPriority] = React.useState<Priority>("p1")
   const [taskDate, setTaskDate] = React.useState("")
   const [taskStatus, setTaskStatus] = React.useState<TaskStatus>("new")
@@ -83,6 +85,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   })
   const normalizedSearch = searchText.trim().toLocaleLowerCase()
   const searchResults = (searchQuery.data?.tasks || []).filter(task => !normalizedSearch || task.title.toLocaleLowerCase().includes(normalizedSearch)).slice(0, 10)
+  const taskAgent = agentIDForAssignee(taskAssignee)
 
   React.useEffect(() => setMobileOpen(false), [location.pathname])
 
@@ -96,7 +99,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setTaskDialog(false)
       setTaskTitle("")
       setTaskDescription("")
-      setTaskAgent("")
+      setTaskAssignee("human")
       setTaskPriority("p1")
       setTaskDate("")
       setTaskStatus("new")
@@ -257,13 +260,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Textarea className="task-create-description" aria-label="Task brief" value={taskDescription} onChange={event => setTaskDescription(event.target.value)} placeholder="Add context, an outcome, or a definition of done…" disabled={createTask.isPending} />
               <div className="task-create-properties">
                 <label className="task-create-property"><span>List</span><Select aria-label="Task list" value={taskList} onChange={event => setTaskList(event.target.value)} disabled={createTask.isPending}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</Select></label>
-                <label className="task-create-property"><span>Agent</span><Select aria-label="Assigned agent" value={taskAgent} disabled={!agents.length || createTask.isPending} onChange={event => setTaskAgent(event.target.value)}><option value="">{agents.length ? "No agent" : "None connected"}</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></label>
+                <div className="task-create-property"><span>Assign to</span><AssigneePicker value={taskAssignee} assignees={assignees} onChange={setTaskAssignee} disabled={createTask.isPending} /></div>
                 <label className="task-create-property"><span>Plan for</span><span className="date-property"><CalendarDays /><Input aria-label="Plan for" type="date" value={taskDate} onChange={event => setTaskDate(event.target.value)} disabled={createTask.isPending} /></span></label>
                 <div className="task-create-property"><span>Priority</span><PriorityPicker value={taskPriority} onChange={setTaskPriority} allowNone={false} disabled={createTask.isPending} /></div>
               </div>
             </div>
             {createTask.isError && <p className="status-message error mx-6 mb-2" role="alert">{createTask.error.message}</p>}
-            <div className="task-create-footer"><span>{taskAgent ? "Assigning an agent queues this task for a connected runner." : `This task will start in ${taskStatus === "working" ? "In Progress" : taskStatus === "needs_review" ? "Review" : taskStatus === "done" ? "Done" : "Todo"}.`}</span><div><Button type="button" variant="ghost" onClick={() => setTaskDialog(false)} disabled={createTask.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createTask.isPending}>{createTask.isPending ? "Creating…" : taskAgent ? "Create & queue" : "Create task"}</Button></div></div>
+            <div className="task-create-footer"><span>{taskAgent ? "Assigning an agent queues this task for a connected runner." : `Assigned to @${assignees[0].handle}. This task will start in ${taskStatus === "working" ? "In Progress" : taskStatus === "needs_review" ? "Review" : taskStatus === "done" ? "Done" : "Todo"}.`}</span><div><Button type="button" variant="ghost" onClick={() => setTaskDialog(false)} disabled={createTask.isPending}>Cancel</Button><Button type="submit" disabled={!taskTitle.trim() || createTask.isPending}>{createTask.isPending ? "Creating…" : taskAgent ? "Create & queue" : "Create task"}</Button></div></div>
           </form>
         </DialogContent>
       </Dialog>
@@ -271,7 +274,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <DialogContent className="task-search-dialog" showClose={false} aria-describedby={undefined}>
           <DialogTitle className="sr-only">Search tasks</DialogTitle>
           <div className="task-search-head"><Search /><Input aria-label="Search task titles" value={searchText} onChange={event => setSearchText(event.target.value)} placeholder="Search task titles…" autoFocus /><kbd>Esc</kbd></div>
-          <div className="task-search-results"><div className="task-search-label">{normalizedSearch ? `${searchResults.length} result${searchResults.length === 1 ? "" : "s"}` : "Recently updated"}</div>{searchQuery.isPending ? <div className="task-search-empty">Loading tasks…</div> : searchQuery.isError ? <div className="task-search-empty text-destructive">{searchQuery.error.message}</div> : searchResults.length ? searchResults.map(task => <button type="button" className="task-search-row" key={task.id} onClick={() => { setSearchDialog(false); setSearchText(""); navigate(`/app/tasks/${encodeURIComponent(task.id)}`) }}><span><strong>{task.title}</strong><small>{task.bucketName || task.listName || "Inbox"}{task.assigneeAgentName ? ` · ${task.assigneeAgentName}` : ""}</small></span><span className={`search-status status-${task.status}`}>{task.status === "needs_review" ? "Review" : task.status === "working" ? "In progress" : task.status === "queued" ? "Queued" : task.status === "done" ? "Done" : "Todo"}</span></button>) : <div className="task-search-empty">No task titles match “{searchText.trim()}”.</div>}</div>
+          <div className="task-search-results"><div className="task-search-label">{normalizedSearch ? `${searchResults.length} result${searchResults.length === 1 ? "" : "s"}` : "Recently updated"}</div>{searchQuery.isPending ? <div className="task-search-empty">Loading tasks…</div> : searchQuery.isError ? <div className="task-search-empty text-destructive">{searchQuery.error.message}</div> : searchResults.length ? searchResults.map(task => { const assignee = assigneeForTask(task, assignees); return <button type="button" className="task-search-row" key={task.id} onClick={() => { setSearchDialog(false); setSearchText(""); navigate(`/app/tasks/${encodeURIComponent(task.id)}`) }}><span><strong>{task.title}</strong><small>{task.bucketName || task.listName || "Inbox"} · @{assignee.handle}</small></span><span className={`search-status status-${task.status}`}>{task.status === "needs_review" ? "Review" : task.status === "working" ? "In progress" : task.status === "queued" ? "Queued" : task.status === "done" ? "Done" : "Todo"}</span></button> }) : <div className="task-search-empty">No task titles match “{searchText.trim()}”.</div>}</div>
         </DialogContent>
       </Dialog>
     </div>

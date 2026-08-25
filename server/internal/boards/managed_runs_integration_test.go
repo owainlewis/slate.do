@@ -194,6 +194,48 @@ func TestManagedAgentRunClaimFencingOutputAndReplay(t *testing.T) {
 	}
 }
 
+func TestHumanReassignmentClearsManagedRun(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	ownerID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", ownerID) })
+
+	var firstAgentID, nextAgentID string
+	if err := db.QueryRow(ctx, `INSERT INTO agents (owner_user_id, name) VALUES ($1, 'First Agent') RETURNING id::text`, ownerID).Scan(&firstAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `INSERT INTO agents (owner_user_id, name) VALUES ($1, 'Next Agent') RETURNING id::text`, ownerID).Scan(&nextAgentID); err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Managed work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, ownerID, bucket.ID, CreateTaskInput{Title: "Reassign reviewed work", AssigneeAgentID: firstAgentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "33333333-3333-4333-8333-333333333333"
+	if _, err := store.ClaimTaskForManagedRun(ctx, ownerID, firstAgentID, task.ID, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTaskEntry(ctx, ownerID, firstAgentID, "", task.ID, CreateTaskEntryInput{Kind: "output", Body: "Ready for review", IdempotencyKey: "reassign-output", RunID: runID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTaskForHuman(ctx, ownerID, task.ID, UpdateTaskInput{AssigneeAgentID: &nextAgentID}); err != nil {
+		t.Fatal(err)
+	}
+	var storedRunID *string
+	var storedStatus, storedAgentID string
+	if err := db.QueryRow(ctx, `SELECT execution_run_id::text, status, assignee_agent_id::text FROM tasks WHERE id = $1`, task.ID).Scan(&storedRunID, &storedStatus, &storedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if storedRunID != nil || storedStatus != StatusQueued || storedAgentID != nextAgentID {
+		t.Fatalf("reassigned task = run %#v, status %q, agent %q", storedRunID, storedStatus, storedAgentID)
+	}
+}
+
 func TestAgentQueueOrdersPriorityThenOldest(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

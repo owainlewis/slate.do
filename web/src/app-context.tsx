@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Navigate, useLocation } from "react-router-dom"
 import { api } from "@/lib/api"
+import { buildAssignees, type AssigneeOption } from "@/lib/assignees"
 import type { Agent, List, User } from "@/lib/types"
 
 interface MeResponse { authenticated: boolean; user?: User }
@@ -12,6 +13,7 @@ interface AppContextValue {
   me: User
   lists: List[]
   agents: Agent[]
+  assignees: AssigneeOption[]
   maxAgents: number
   refreshLists: () => Promise<unknown>
   refreshAgents: () => Promise<unknown>
@@ -57,12 +59,15 @@ export function Authenticated({ children }: { children: React.ReactNode }) {
     return <Navigate to={`/login${next === "/app" ? "" : `?next=${encodeURIComponent(next)}`}`} replace />
   }
   if (listsQuery.isPending || agentsQuery.isPending) return <div className="loading-page"><div className="spinner" aria-label="Loading workspace" /></div>
+  if (listsQuery.isError || agentsQuery.isError) return <div className="loading-page"><p className="status-message error" role="alert">Could not load the workspace. Refresh the page to try again.</p></div>
 
   const me = session.data!.user!
+  const agents = agentsQuery.data?.agents || []
   const value: AppContextValue = {
     me,
     lists: listsQuery.data?.lists || [],
-    agents: agentsQuery.data?.agents || [],
+    agents,
+    assignees: buildAssignees(me, agents),
     maxAgents: agentsQuery.data?.maxAgents || me.entitlement?.limits?.agents || 5,
     refreshLists: () => queryClient.invalidateQueries({ queryKey: ["lists"] }),
     refreshAgents: () => queryClient.invalidateQueries({ queryKey: ["agents"] }),
