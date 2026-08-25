@@ -14,13 +14,15 @@ function fixture(options = {}) {
   return {
     user: { id: "owner", email: "owner@example.com", displayName: "Owain Lewis", theme: "dark", entitlement: { plan: "pro", limits: { lists: 45, agents: 5, apiTokens: 10 } } },
     lists: [
-      { id: "list-inbox", name: "Inbox", goal: "Capture now", isInbox: true, openCount: 1 },
-      { id: "list-product", name: "Product", goal: "Ship focused improvements", isInbox: false, openCount: 2 },
+      { id: "list-inbox", name: "Inbox", goal: "Capture now", color: "slate", isInbox: true, openCount: 1, sortOrder: 0 },
+      { id: "list-product", name: "Product", goal: "Ship focused improvements", color: "blue", isInbox: false, openCount: 2, sortOrder: 1 },
+      { id: "list-writing", name: "Writing", goal: "Publish useful ideas", color: "purple", isInbox: false, openCount: 1, sortOrder: 2 },
     ],
     agents: [{ id: "agent-research", displayName: "Research agent", purpose: "Find and synthesize useful evidence", workCounts: { ready: 1, working: 1, review: 0, completed: 0 } }],
     tasks: [
       { id: "task-parent", bucketId: "list-product", bucketName: "Product", listName: "Product", title: "Publish task-first agents video", description: "Explain one control plane for people and agents.", scheduledDate: "2026-08-20", status: "working", priority: "p0", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
       { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", assigneeAgentId: "", assigneeAgentName: "" },
+      { id: "task-writing", bucketId: "list-writing", bucketName: "Writing", listName: "Writing", title: "Draft the weekly note", description: "Share one useful workflow.", scheduledDate: "", status: "new", priority: "p2", assigneeAgentId: "", assigneeAgentName: "" },
     ],
     subtasks: [{ id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", sortOrder: 0, createdAt: "2026-08-18T09:00:00Z", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" }],
     entries: { "task-parent": [{ id: "entry-one", kind: "comment", body: "The first research pass is ready.", authorKind: "agent", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }] },
@@ -28,6 +30,7 @@ function fixture(options = {}) {
     tokens: [],
     requests: [],
     paginate: false,
+    pageTwoFailure: false,
     idempotency: new Map(),
     idempotencyRequests: [],
     loseParentResponse: false,
@@ -40,6 +43,8 @@ function fixture(options = {}) {
     summaryDelay,
     releaseSummary: () => releaseSummary?.(),
     taskCreateFailure: "",
+    taskUpdateError: "",
+    taskUpdateDelay: null,
   };
 }
 
@@ -60,9 +65,16 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
     }
     if (url.pathname === "/api/v1/lists" && request.method === "POST") {
       const input = await requestJSON(request);
-      const list = { id: `list-${state.lists.length}`, name: input.name, goal: "", isInbox: false, openCount: 0 };
+      const list = { id: `list-${state.lists.length}`, name: input.name, goal: "", color: input.color || "slate", isInbox: false, openCount: 0, sortOrder: state.lists.length };
       state.lists.push(list);
       return json(response, list, 201);
+    }
+    if (url.pathname === "/api/v1/lists/reorder" && request.method === "POST") {
+      const { ids } = await requestJSON(request);
+      const requestedIDs = new Set(ids);
+      const ordered = [...ids.map(id => state.lists.find(item => item.id === id)), ...state.lists.filter(item => !requestedIDs.has(item.id))];
+      state.lists = ordered.map((list, sortOrder) => ({ ...list, sortOrder }));
+      return json(response, { ok: true });
     }
     const listMatch = url.pathname.match(/^\/api\/v1\/lists\/([^/]+)$/);
     if (listMatch && request.method === "PATCH") {
@@ -108,7 +120,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
     }
     if (url.pathname === "/api/v1/tasks" && request.method === "GET") {
       if (state.paginate) {
-        if (url.searchParams.get("cursor") === "page-two") return json(response, { tasks: [state.tasks[1]] });
+        if (url.searchParams.get("cursor") === "page-two") return state.pageTwoFailure ? json(response, { error: "Could not load the next page." }, 503) : json(response, { tasks: [state.tasks[1]] });
         return json(response, { tasks: [state.tasks[0]], nextCursor: "page-two" });
       }
       let tasks = [...state.tasks, ...state.subtasks];
@@ -127,6 +139,15 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       return task ? json(response, task) : json(response, { error: "not found" }, 404);
     }
     if (taskMatch && request.method === "PATCH") {
+      if (state.taskUpdateDelay) {
+        await state.taskUpdateDelay;
+        state.taskUpdateDelay = null;
+      }
+      if (state.taskUpdateError) {
+        const error = state.taskUpdateError;
+        state.taskUpdateError = "";
+        return json(response, { error }, 503);
+      }
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === taskMatch[1]);
       Object.assign(task, await requestJSON(request));
       return json(response, task);
@@ -205,7 +226,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
   page.on("pageerror", error => pageErrors.push(error.message));
   t.after(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)); });
   const origin = `http://127.0.0.1:${server.address().port}`;
-  await page.goto(`${origin}/app/tasks`);
+  await page.goto(`${origin}${options.initialPath || "/app/tasks"}`);
   await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
   return { page, state, origin, pageErrors };
 }
@@ -226,10 +247,30 @@ async function createTemplate(page, name, steps) {
 }
 
 test("React workspace renders the full task board accessibly", async t => {
-  const { page, pageErrors } = await startApp(t);
+  const { page, state, pageErrors } = await startApp(t, { width: 1440, height: 960 }, { initialPath: "/app/tasks?assigneeAgentId=agent-research" });
   for (const heading of ["Todo", "In Progress", "Review", "Done"]) await page.getByText(heading, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
-  assert.deepEqual(await page.getByLabel("Filter by agent").locator("option").allTextContents(), ["Any agent", "Research agent"]);
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for" }).waitFor();
+  await page.waitForFunction(() => !new URL(location.href).searchParams.has("assigneeAgentId"));
+  assert.equal(await page.getByLabel("Filter by agent").count(), 0);
+  assert.equal(state.requests.some(request => request.startsWith("GET /api/v1/tasks?") && request.includes("assigneeAgentId=")), false);
+  const priorityFilter = page.getByRole("group", { name: "Filter by priority" });
+  const urgentFilter = priorityFilter.getByRole("button", { name: "Urgent priority" });
+  assert.equal(await priorityFilter.getByRole("button", { name: "All priorities" }).getAttribute("aria-pressed"), "true");
+  assert.equal(await urgentFilter.getAttribute("title"), "Urgent");
+  await urgentFilter.press("Enter");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("priority") === "p0");
+  await page.waitForFunction(() => document.querySelector('[aria-label="Urgent priority"]')?.getAttribute("aria-pressed") === "true");
+  assert.equal(await urgentFilter.getAttribute("aria-pressed"), "true");
+  await priorityFilter.getByRole("button", { name: "All priorities" }).press("Enter");
+  await page.waitForFunction(() => !new URL(location.href).searchParams.has("priority"));
+  const columnStyles = await page.locator(".board-column").evaluateAll(columns => columns.map(column => ({
+    background: getComputedStyle(column).backgroundColor,
+    dot: getComputedStyle(column.querySelector(".column-dot")).backgroundColor,
+  })));
+  assert.equal(new Set(columnStyles.map(style => style.background)).size, 1);
+  assert.equal(new Set(columnStyles.map(style => style.dot)).size, 1);
+  assert.ok(parseFloat(await page.getByRole("region", { name: "Workspace summary" }).evaluate(element => getComputedStyle(element).marginTop)) >= 16);
   const results = await new AxeBuilder({ page }).analyze();
   assert.deepEqual(results.violations, []);
   assert.deepEqual(pageErrors, []);
@@ -274,28 +315,49 @@ test("workspace summary failure leaves the task board usable", async t => {
 });
 
 test("public routes stay light and the app restores the saved dark theme", async t => {
-  const { page } = await startApp(t);
+  const { page, pageErrors } = await startApp(t);
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), true);
   await page.getByRole("button", { name: "Slate home" }).click();
-  await page.getByRole("heading", { name: /Stay on top of everything/ }).waitFor();
+  await page.getByRole("heading", { name: /One shared task list for you and your agents/ }).waitFor();
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), false);
   assert.equal(await page.locator("html").evaluate(element => getComputedStyle(element).colorScheme), "light");
+  assert.equal(await page.locator('meta[name="description"]').getAttribute("content"), "Slate is a shared task list for people and AI agents. Keep tasks, handoffs and results in one place, and turn repeatable processes into reusable templates.");
+  assert.equal(await page.locator(".landing-nav .brand-word").evaluate(element => getComputedStyle(element).color), "rgb(255, 255, 255)");
   assert.match(await page.locator(".landing-nav .brand-mark").evaluate(element => getComputedStyle(element, "::before").backgroundImage), /^radial-gradient/);
+  assert.equal(await page.locator(".landing-preview-summary > div").count(), 5);
+  assert.equal(await page.locator(".landing-preview-priority").count(), 1);
+  assert.equal(await page.getByText("Any agent", { exact: false }).count(), 0);
+  assert.equal(new Set(await page.locator(".landing-preview-column").evaluateAll(columns => columns.map(column => getComputedStyle(column).backgroundColor))).size, 1);
+  assert.deepEqual((await new AxeBuilder({ page }).analyze()).violations, []);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+  assert.equal(await page.locator(".landing-preview-main").evaluate(element => element.scrollHeight <= element.clientHeight), true);
   await page.getByRole("link", { name: "Open Slate", exact: true }).click();
   await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
   assert.equal(await page.locator("html").evaluate(element => element.classList.contains("dark")), true);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("table layout filters tasks and survives layout changes", async t => {
-  const { page } = await startApp(t);
+  const { page, state } = await startApp(t);
   await page.getByRole("button", { name: "Table", exact: true }).click();
   const table = page.getByRole("table");
   await table.waitFor();
   for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned", "Actions"]) await table.getByRole("columnheader", { name: heading }).waitFor();
+  await page.getByRole("button", { name: "Priority order" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr[data-task]").length === 3);
+  assert.deepEqual(await table.locator("tbody tr[data-task]").evaluateAll(rows => rows.map(row => row.dataset.task)), ["task-parent", "task-inbox", "task-writing"]);
+  await page.getByRole("button", { name: "Group by list" }).click();
+  await table.locator(".table-group-row").first().waitFor();
+  assert.deepEqual(await table.locator(".table-group-row").allTextContents(), ["Inbox1", "Product1", "Writing1"]);
   await page.getByLabel("Search tasks").fill("boss");
-  await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr").length === 1);
+  await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr[data-task]").length === 1);
+  const boardTasks = page.waitForResponse(value => value.request().method() === "GET" && value.url().includes("/api/v1/tasks?") && !new URL(value.url()).searchParams.has("sort"));
   await page.getByRole("button", { name: "Board", exact: true }).click();
+  await boardTasks;
   assert.equal(new URL(page.url()).searchParams.get("q"), "boss");
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for" }).waitFor();
+  assert.equal(state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).at(-1).includes("sort="), false);
 });
 
 test("workspace pagination loads and retains subsequent task pages", async t => {
@@ -306,6 +368,25 @@ test("workspace pagination loads and retains subsequent task pages", async t => 
   await page.getByRole("button", { name: "Open task: Write the doc my boss asked for" }).waitFor();
   assert.equal(await page.locator("[data-task]").count(), 2);
   assert.equal(state.requests.some(request => request.includes("cursor=page-two")), true);
+});
+
+test("table organization stays paginated and offers a bounded retry", async t => {
+  const { page, state, origin } = await startApp(t);
+  state.paginate = true;
+  state.pageTwoFailure = true;
+  await page.goto(`${origin}/app/tasks?view=table&sort=priority`);
+  await page.getByRole("button", { name: "Load more tasks" }).waitFor();
+  assert.equal(state.requests.some(request => request.includes("sort=priority")), true);
+  assert.equal(state.requests.filter(request => request.includes("cursor=page-two")).length, 0);
+  assert.equal(await page.locator(".workspace-table tr[data-task]").count(), 1);
+  await page.getByRole("button", { name: "Load more tasks" }).click();
+  await page.getByText("Could not load more tasks.").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Load more tasks" }).count(), 0);
+  assert.equal(state.requests.filter(request => request.includes("cursor=page-two")).length, 2);
+  state.pageTwoFailure = false;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for" }).waitFor();
+  assert.equal(await page.locator(".workspace-table tr[data-task]").count(), 2);
 });
 
 test("task creation respects every column and queues every agent assignment", async t => {
@@ -325,10 +406,15 @@ test("task creation respects every column and queues every agent assignment", as
       const title = `${assigned ? "Assigned" : "Unassigned"} ${column.label}`;
       await dialog.getByRole("textbox", { name: "Task title" }).fill(title);
       await dialog.getByRole("textbox", { name: "Task brief" }).fill(`Created from ${column.label}.`);
+      if (!assigned && column.status === "new") {
+        const highPriority = dialog.getByRole("button", { name: "High priority" });
+        assert.equal(await highPriority.getAttribute("aria-pressed"), "true");
+        await dialog.getByText("Priority", { exact: true }).click();
+        assert.equal(await highPriority.getAttribute("aria-pressed"), "true");
+      }
       if (assigned) await dialog.getByLabel("Assigned agent").selectOption("agent-research");
       if (!assigned && column.status === "working") {
-        await dialog.getByRole("button", { name: "Priority" }).click();
-        await page.getByRole("menuitem", { name: "Normal" }).click();
+        await dialog.getByRole("button", { name: "Normal priority" }).click();
       }
       await dialog.getByRole("button", { name: assigned ? "Create & queue" : "Create task" }).click();
       await page.getByRole("dialog", { name: "Task detail" }).waitFor();
@@ -383,7 +469,7 @@ test("task creation keeps every exit and field disabled while pending", async t 
     dialog.getByLabel("Task list"),
     dialog.getByLabel("Assigned agent"),
     dialog.getByLabel("Plan for"),
-    dialog.getByRole("button", { name: "Priority" }),
+    dialog.getByRole("button", { name: "High priority" }),
   ]) assert.equal(await control.isDisabled(), true);
   await page.keyboard.press("c");
   await page.keyboard.press("Control+k");
@@ -793,6 +879,33 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   const { page, state } = await startApp(t);
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
+  await page.getByLabel("Title", { exact: true }).fill("Unsaved priority draft");
+  const priority = page.getByRole("group", { name: "Priority" });
+  const priorityError = "Could not update priority.";
+  state.taskUpdateError = priorityError;
+  await priority.getByRole("button", { name: "Normal priority" }).click();
+  await page.getByRole("alert").getByText(priorityError).waitFor();
+  assert.equal(await priority.getByRole("button", { name: "Urgent priority" }).getAttribute("aria-pressed"), "true");
+  assert.equal(state.tasks[0].priority, "p0");
+  await priority.getByRole("button", { name: "Normal priority" }).click();
+  await page.waitForFunction(() => {
+    const button = document.querySelector('[aria-label="Task properties"] [aria-label="Normal priority"]');
+    return button?.getAttribute("aria-pressed") === "true" && !button.disabled;
+  });
+  assert.equal(state.tasks[0].priority, "p2");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/tasks/task-parent").length, 2);
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved priority draft");
+  await page.getByRole("button", { name: "Close task" }).click();
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(await page.getByRole("group", { name: "Priority" }).getByRole("button", { name: "Normal priority" }).getAttribute("aria-pressed"), "true");
+  await page.getByRole("button", { name: "Close task" }).click();
+  state.tasks[0].description = "Fresh server brief";
+  const refreshedTask = page.waitForResponse(value => value.request().method() === "GET" && value.url().endsWith("/api/v1/tasks/task-parent"));
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await refreshedTask;
+  await page.getByLabel("Brief").waitFor();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Brief"]')?.value === "Fresh server brief");
   assert.equal(await page.getByRole("menuitem", { name: "Delete task" }).count(), 0);
   await page.getByRole("button", { name: "Task actions" }).click();
   await page.getByRole("menuitem", { name: "Delete task" }).waitFor();
@@ -817,6 +930,26 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
   assert.equal(state.tasks[0].title, "Publish the React migration story");
   assert.equal(state.subtasks.find(task => task.title === "Record the final walkthrough").status, "done");
+});
+
+test("a delayed priority update stays with its original task", async t => {
+  const { page, state, pageErrors } = await startApp(t);
+  let releaseTaskUpdate;
+  state.taskUpdateDelay = new Promise(resolve => { releaseTaskUpdate = resolve; });
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  const response = page.waitForResponse(value => value.request().method() === "PATCH" && value.url().endsWith("/api/v1/tasks/task-parent"));
+  await page.getByRole("group", { name: "Priority" }).getByRole("button", { name: "High priority" }).click();
+  await page.locator('[data-open-task="task-child"]').click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Title"]')?.value === "Research examples");
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
+  releaseTaskUpdate();
+  await response;
+  await page.waitForFunction(() => document.querySelector('[aria-label="Task properties"] [aria-label="Normal priority"]')?.getAttribute("aria-pressed") === "true");
+  assert.equal(state.tasks[0].priority, "p1");
+  assert.equal(state.subtasks[0].priority, "p2");
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
+  assert.deepEqual(pageErrors, []);
 });
 
 test("dragging a task moves it through the workflow", async t => {
@@ -849,6 +982,39 @@ test("lists, inbox, agents, and settings are complete React routes", async t => 
   await page.getByPlaceholder("For example, laptop CLI").fill("Laptop CLI");
   await page.getByRole("button", { name: "Create token" }).click();
   await page.getByText("slate_personal_one_time_secret").waitFor();
+});
+
+test("lists keep their chosen color and sidebar order", async t => {
+  const { page, state, origin } = await startApp(t);
+  await page.goto(`${origin}/app/lists/list-product`);
+  await page.getByRole("button", { name: "List actions" }).focus();
+  await page.keyboard.press("Enter");
+  const blueColor = page.getByRole("menuitemradio", { name: "Blue" });
+  const pinkColor = page.getByRole("menuitemradio", { name: "Pink" });
+  assert.equal(await blueColor.getAttribute("aria-checked"), "true");
+  assert.equal(await pinkColor.getAttribute("aria-checked"), "false");
+  await page.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitemradio");
+  for (const color of ["Red", "Orange", "Yellow", "Green", "Teal", "Blue", "Indigo", "Purple", "Pink"]) {
+    await page.keyboard.press("ArrowDown");
+    await page.waitForFunction(expected => document.activeElement?.textContent === expected, color);
+  }
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Pink");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-list-id="list-product"] .list-color-dot')).backgroundColor === "rgb(199, 92, 145)");
+  assert.equal(state.lists.find(list => list.id === "list-product").color, "pink");
+
+  const taskRequestsBeforeReorder = state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length;
+  const productHandle = page.getByRole("button", { name: "Reorder Product" });
+  await productHandle.focus();
+  await productHandle.press("ArrowDown");
+  await page.waitForFunction(() => Array.from(document.querySelectorAll("[data-list-id]")).map(element => element.dataset.listId).join(",") === "list-writing,list-product");
+  assert.deepEqual(state.lists.map(list => list.id), ["list-inbox", "list-writing", "list-product"]);
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Reorder Product"]').disabled);
+  await productHandle.dragTo(page.locator('[data-list-id="list-writing"]'));
+  await page.waitForFunction(() => Array.from(document.querySelectorAll("[data-list-id]")).map(element => element.dataset.listId).join(",") === "list-product,list-writing");
+  assert.deepEqual(state.lists.map(list => list.id), ["list-inbox", "list-product", "list-writing"]);
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/lists/reorder").length, 2);
+  assert.ok(state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length > taskRequestsBeforeReorder);
 });
 
 test("hosted control plane exposes search, runs, runners, and human review", async t => {
@@ -892,7 +1058,12 @@ test("mobile navigation and task detail fit a narrow viewport", async t => {
   assert.ok(state.subtasks.some(task => task.id === "task-child"));
   await page.getByRole("button", { name: "Open navigation" }).click();
   assert.equal(await page.locator("#primary-navigation").evaluate(element => element.classList.contains("open")), true);
-  await page.getByRole("button", { name: "Close navigation" }).first().click();
+  assert.equal(await page.getByRole("button", { name: "Move Product up" }).isEnabled(), false);
+  await page.getByRole("button", { name: "Move Product down" }).click();
+  await page.waitForFunction(() => Array.from(document.querySelectorAll("[data-list-id]")).map(element => element.dataset.listId).join(",") === "list-writing,list-product");
+  assert.deepEqual(state.lists.map(list => list.id), ["list-inbox", "list-writing", "list-product"]);
+  assert.equal(await page.getByRole("button", { name: "Move Product down" }).isEnabled(), false);
+  await page.locator("#primary-navigation").getByRole("button", { name: "Close navigation" }).click();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   const bounds = await page.getByRole("region", { name: "Task detail" }).boundingBox();
   assert.ok(bounds.width <= 390);

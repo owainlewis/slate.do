@@ -12,8 +12,10 @@ export interface List {
   id: ID
   name: string
   goal?: string
+  color?: "slate" | "red" | "orange" | "yellow" | "green" | "teal" | "blue" | "indigo" | "purple" | "pink"
   isInbox?: boolean
   openCount?: number
+  sortOrder?: number
 }
 
 export interface Agent {

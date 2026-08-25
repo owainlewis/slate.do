@@ -38,6 +38,11 @@ const (
 
 const inboxCaptureFingerprintTarget = "account-inbox"
 
+const (
+	minPostgresInteger = -1 << 31
+	maxPostgresInteger = 1<<31 - 1
+)
+
 type completedTaskCursor struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	ID        string    `json:"id"`
@@ -49,6 +54,16 @@ type agentQueueCursor struct {
 	CreatedAt    time.Time `json:"createdAt"`
 	ID           string    `json:"id"`
 	Scope        string    `json:"scope"`
+}
+
+type workspaceTaskCursor struct {
+	PriorityRank    int       `json:"priorityRank,omitempty"`
+	BucketSortOrder int       `json:"bucketSortOrder,omitempty"`
+	BucketCreatedAt time.Time `json:"bucketCreatedAt,omitempty"`
+	BucketID        string    `json:"bucketId,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	ID              string    `json:"id"`
+	Scope           string    `json:"scope"`
 }
 
 var (
@@ -92,14 +107,14 @@ func defaultBuckets() []CreateBucketInput {
 
 func (s *Store) ListAllBuckets(ctx context.Context, userID string) ([]Bucket, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT l.id::text, l.name, l.goal, l.is_inbox, l.limit_count, l.sort_order,
+		SELECT l.id::text, l.name, l.goal, l.color, l.is_inbox, l.limit_count, l.sort_order,
 			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done' AND t.parent_task_id IS NULL)::int AS open_count,
 			l.created_at, l.updated_at
 		FROM buckets l
 		LEFT JOIN tasks t ON t.bucket_id = l.id
 		WHERE l.user_id = $1
 		GROUP BY l.id
-		ORDER BY l.sort_order, l.created_at
+		ORDER BY l.sort_order, l.created_at, l.id
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -109,7 +124,7 @@ func (s *Store) ListAllBuckets(ctx context.Context, userID string) ([]Bucket, er
 	for rows.Next() {
 		var list Bucket
 		if err := rows.Scan(
-			&list.ID, &list.Name, &list.Goal, &list.IsInbox, &list.LimitCount,
+			&list.ID, &list.Name, &list.Goal, &list.Color, &list.IsInbox, &list.LimitCount,
 			&list.SortOrder, &list.OpenCount, &list.CreatedAt, &list.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -221,7 +236,7 @@ func (s *Store) GetBucket(ctx context.Context, userID string, id string) (Bucket
 
 func (s *Store) GetBucketForAgent(ctx context.Context, userID string, agentID string, id string) (Bucket, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT b.id::text, b.name, b.goal, b.is_inbox, b.limit_count, b.sort_order,
+		SELECT b.id::text, b.name, b.goal, b.color, b.is_inbox, b.limit_count, b.sort_order,
 			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done' AND t.parent_task_id IS NULL)::int AS open_count,
 			b.created_at, b.updated_at
 		FROM buckets b
@@ -247,6 +262,13 @@ func (s *Store) CreateBucket(ctx context.Context, userID string, input CreateBuc
 	}
 	if limit < 1 {
 		return Bucket{}, fmt.Errorf("%w: bucket limit must be positive", ErrInvalidData)
+	}
+	color := clean(input.Color)
+	if color == "" {
+		color = ListColorSlate
+	}
+	if !validListColor(color) {
+		return Bucket{}, fmt.Errorf("%w: invalid list color", ErrInvalidData)
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -282,14 +304,14 @@ func (s *Store) CreateBucket(ctx context.Context, userID string, input CreateBuc
 	}
 	var bucket Bucket
 	err = tx.QueryRow(ctx, `
-		INSERT INTO buckets (user_id, name, goal, is_inbox, limit_count, sort_order)
+		INSERT INTO buckets (user_id, name, goal, color, is_inbox, limit_count, sort_order)
 		VALUES (
-			$1, $2, $3, $4, $5,
+			$1, $2, $3, $4, $5, $6,
 			COALESCE((SELECT max(sort_order) + 1 FROM buckets WHERE user_id = $1), 0)
 		)
-		RETURNING id::text, name, goal, is_inbox, limit_count, sort_order, created_at, updated_at
-	`, userID, name, input.Goal, input.IsInbox, limit).Scan(
-		&bucket.ID, &bucket.Name, &bucket.Goal, &bucket.IsInbox, &bucket.LimitCount,
+		RETURNING id::text, name, goal, color, is_inbox, limit_count, sort_order, created_at, updated_at
+	`, userID, name, input.Goal, color, input.IsInbox, limit).Scan(
+		&bucket.ID, &bucket.Name, &bucket.Goal, &bucket.Color, &bucket.IsInbox, &bucket.LimitCount,
 		&bucket.SortOrder, &bucket.CreatedAt, &bucket.UpdatedAt,
 	)
 	if err != nil {
@@ -321,6 +343,9 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	if input.Goal != nil {
 		current.Goal = clean(*input.Goal)
 	}
+	if input.Color != nil {
+		current.Color = clean(*input.Color)
+	}
 	if input.LimitCount != nil {
 		current.LimitCount = *input.LimitCount
 	}
@@ -336,6 +361,9 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	if current.LimitCount < 1 {
 		return Bucket{}, fmt.Errorf("%w: bucket limit must be positive", ErrInvalidData)
 	}
+	if !validListColor(current.Color) {
+		return Bucket{}, fmt.Errorf("%w: invalid list color", ErrInvalidData)
+	}
 	if wasInbox && !current.IsInbox {
 		if err := ensureInboxSurvives(ctx, tx, userID, current.ID); err != nil {
 			return Bucket{}, err
@@ -349,11 +377,11 @@ func (s *Store) UpdateBucket(ctx context.Context, userID string, id string, inpu
 	var bucket Bucket
 	err = tx.QueryRow(ctx, `
 		UPDATE buckets b
-		SET name = $3, goal = $4, limit_count = $5, is_inbox = $6, sort_order = $7, updated_at = now()
+		SET name = $3, goal = $4, color = $5, limit_count = $6, is_inbox = $7, sort_order = $8, updated_at = now()
 		WHERE b.user_id = $1 AND b.id = $2
-		RETURNING b.id::text, b.name, b.goal, b.is_inbox, b.limit_count, b.sort_order, b.created_at, b.updated_at
-	`, userID, id, current.Name, current.Goal, current.LimitCount, current.IsInbox, current.SortOrder).Scan(
-		&bucket.ID, &bucket.Name, &bucket.Goal, &bucket.IsInbox, &bucket.LimitCount,
+		RETURNING b.id::text, b.name, b.goal, b.color, b.is_inbox, b.limit_count, b.sort_order, b.created_at, b.updated_at
+	`, userID, id, current.Name, current.Goal, current.Color, current.LimitCount, current.IsInbox, current.SortOrder).Scan(
+		&bucket.ID, &bucket.Name, &bucket.Goal, &bucket.Color, &bucket.IsInbox, &bucket.LimitCount,
 		&bucket.SortOrder, &bucket.CreatedAt, &bucket.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -451,13 +479,46 @@ func (s *Store) ReorderBuckets(ctx context.Context, userID string, ids []string)
 		return err
 	}
 	defer tx.Rollback(ctx)
-	for i, id := range ids {
-		tag, err := tx.Exec(ctx, "UPDATE buckets SET sort_order = $1, updated_at = now() WHERE user_id = $2 AND id = $3", i, userID, id)
-		if err != nil {
+	if _, err := accountLimitsForUpdate(ctx, tx, userID); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, "SELECT id::text FROM buckets WHERE user_id = $1 ORDER BY sort_order, created_at, id FOR UPDATE", userID)
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]bool, len(ids))
+	var existingOrder []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
+		existing[id] = true
+		existingOrder = append(existingOrder, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !existing[id] || seen[id] {
+			return fmt.Errorf("%w: list order contains an unknown or duplicate list", ErrInvalidData)
+		}
+		seen[id] = true
+	}
+	ordered := append([]string(nil), ids...)
+	for _, id := range existingOrder {
+		if !seen[id] {
+			ordered = append(ordered, id)
+		}
+	}
+	for i, id := range ordered {
+		_, err := tx.Exec(ctx, "UPDATE buckets SET sort_order = $1, updated_at = now() WHERE user_id = $2 AND id = $3", i, userID, id)
+		if err != nil {
+			return err
 		}
 	}
 	return tx.Commit(ctx)
@@ -1901,8 +1962,13 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	orderSQL := "t.created_at DESC, t.id DESC"
 	if filter.AgentQueue {
 		orderSQL = agentQueuePrioritySQL + ", t.created_at, t.id"
-	}
-	if completedHistory {
+	} else if filter.Sort == "priority" {
+		orderSQL = agentQueuePrioritySQL + ", t.created_at DESC, t.id DESC"
+	} else if filter.Sort == "list" {
+		orderSQL = "l.sort_order, l.created_at, l.id, t.created_at DESC, t.id DESC"
+	} else if filter.Sort == "list_priority" {
+		orderSQL = "l.sort_order, l.created_at, l.id, " + agentQueuePrioritySQL + ", t.created_at DESC, t.id DESC"
+	} else if completedHistory {
 		orderSQL = "t.updated_at DESC, t.id DESC"
 	}
 	if filter.Cursor != "" {
@@ -1916,6 +1982,34 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 				" AND (%s > $%d OR (%s = $%d AND (t.created_at > $%d OR (t.created_at = $%d AND t.id > $%d::uuid))))",
 				agentQueuePrioritySQL, len(args)-2, agentQueuePrioritySQL, len(args)-2, len(args)-1, len(args)-1, len(args),
 			)
+		} else if filter.Sort == "priority" {
+			cursor, err := decodeWorkspaceTaskCursor(filter.Cursor, taskCursorScope(userID, filter), filter.Sort)
+			if err != nil {
+				return TaskPage{}, err
+			}
+			args = append(args, cursor.PriorityRank, cursor.CreatedAt, cursor.ID)
+			whereSQL += fmt.Sprintf(
+				" AND (%s > $%d OR (%s = $%d AND (t.created_at < $%d OR (t.created_at = $%d AND t.id < $%d::uuid))))",
+				agentQueuePrioritySQL, len(args)-2, agentQueuePrioritySQL, len(args)-2, len(args)-1, len(args)-1, len(args),
+			)
+		} else if filter.Sort == "list" || filter.Sort == "list_priority" {
+			cursor, err := decodeWorkspaceTaskCursor(filter.Cursor, taskCursorScope(userID, filter), filter.Sort)
+			if err != nil {
+				return TaskPage{}, err
+			}
+			if filter.Sort == "list_priority" {
+				args = append(args, cursor.BucketSortOrder, cursor.BucketCreatedAt, cursor.BucketID, cursor.PriorityRank, cursor.CreatedAt, cursor.ID)
+				whereSQL += fmt.Sprintf(
+					" AND (l.sort_order > $%d OR (l.sort_order = $%d AND (l.created_at > $%d OR (l.created_at = $%d AND (l.id > $%d::uuid OR (l.id = $%d::uuid AND (%s > $%d OR (%s = $%d AND (t.created_at < $%d OR (t.created_at = $%d AND t.id < $%d::uuid))))))))))",
+					len(args)-5, len(args)-5, len(args)-4, len(args)-4, len(args)-3, len(args)-3, agentQueuePrioritySQL, len(args)-2, agentQueuePrioritySQL, len(args)-2, len(args)-1, len(args)-1, len(args),
+				)
+			} else {
+				args = append(args, cursor.BucketSortOrder, cursor.BucketCreatedAt, cursor.BucketID, cursor.CreatedAt, cursor.ID)
+				whereSQL += fmt.Sprintf(
+					" AND (l.sort_order > $%d OR (l.sort_order = $%d AND (l.created_at > $%d OR (l.created_at = $%d AND (l.id > $%d::uuid OR (l.id = $%d::uuid AND (t.created_at < $%d OR (t.created_at = $%d AND t.id < $%d::uuid))))))))",
+					len(args)-4, len(args)-4, len(args)-3, len(args)-3, len(args)-2, len(args)-2, len(args)-1, len(args)-1, len(args),
+				)
+			}
 		} else {
 			cursor, err := decodeCompletedTaskCursor(filter.Cursor, taskCursorScope(userID, filter))
 			if err != nil {
@@ -1971,6 +2065,8 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		cursorTask := page.Tasks[len(page.Tasks)-1]
 		if filter.AgentQueue {
 			page.NextCursor, err = encodeAgentQueueCursor(cursorTask, taskCursorScope(userID, filter))
+		} else if filter.Sort != "" {
+			page.NextCursor, err = s.encodeWorkspaceTaskCursor(ctx, userID, cursorTask, taskCursorScope(userID, filter), filter.Sort)
 			if err != nil {
 				return TaskPage{}, err
 			}
@@ -2012,7 +2108,7 @@ func (s *Store) WorkspaceSummary(ctx context.Context, userID string) (WorkspaceS
 
 func (s *Store) getBucket(ctx context.Context, userID string, id string) (Bucket, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT b.id::text, b.name, b.goal, b.is_inbox, b.limit_count, b.sort_order,
+		SELECT b.id::text, b.name, b.goal, b.color, b.is_inbox, b.limit_count, b.sort_order,
 			COUNT(t.id) FILTER (WHERE t.kind = 'action' AND t.status <> 'done' AND t.parent_task_id IS NULL)::int AS open_count,
 			b.created_at, b.updated_at
 		FROM buckets b
@@ -2030,13 +2126,13 @@ func (s *Store) getBucket(ctx context.Context, userID string, id string) (Bucket
 func lockedBucket(ctx context.Context, tx pgx.Tx, userID string, id string) (Bucket, error) {
 	var bucket Bucket
 	err := tx.QueryRow(ctx, `
-		SELECT b.id::text, b.name, b.goal, b.is_inbox,
+		SELECT b.id::text, b.name, b.goal, b.color, b.is_inbox,
 			b.limit_count, b.sort_order, b.created_at, b.updated_at
 		FROM buckets b
 		WHERE b.user_id = $1 AND b.id = $2
 		FOR UPDATE OF b
 	`, userID, id).Scan(
-		&bucket.ID, &bucket.Name, &bucket.Goal, &bucket.IsInbox,
+		&bucket.ID, &bucket.Name, &bucket.Goal, &bucket.Color, &bucket.IsInbox,
 		&bucket.LimitCount, &bucket.SortOrder, &bucket.CreatedAt, &bucket.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -2171,7 +2267,7 @@ type rowScanner interface {
 func scanBucket(row rowScanner) (Bucket, error) {
 	var bucket Bucket
 	err := row.Scan(
-		&bucket.ID, &bucket.Name, &bucket.Goal, &bucket.IsInbox, &bucket.LimitCount,
+		&bucket.ID, &bucket.Name, &bucket.Goal, &bucket.Color, &bucket.IsInbox, &bucket.LimitCount,
 		&bucket.SortOrder, &bucket.OpenCount, &bucket.CreatedAt, &bucket.UpdatedAt,
 	)
 	return bucket, err
@@ -2223,6 +2319,9 @@ func taskCursorScope(userID string, filter TaskFilter) string {
 		fmt.Sprint(filter.InboxOnly),
 		fmt.Sprint(filter.AgentQueue),
 	}
+	if filter.Sort != "" {
+		parts = append(parts, "sort="+filter.Sort)
+	}
 	// done=true is the released spelling of status=done and must share its
 	// existing cursor scope. The open-only alias does not issue history cursors.
 	if filter.Done != nil && !(*filter.Done && filter.Status == StatusDone) {
@@ -2252,6 +2351,56 @@ func encodeAgentQueueCursor(task Task, scope string) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func (s *Store) encodeWorkspaceTaskCursor(ctx context.Context, userID string, task Task, scope string, sort string) (string, error) {
+	cursor := workspaceTaskCursor{CreatedAt: task.CreatedAt.UTC(), ID: task.ID, Scope: scope}
+	switch sort {
+	case "priority":
+		cursor.PriorityRank = agentQueuePriorityRank(task.Priority)
+	case "list", "list_priority":
+		cursor.BucketID = task.BucketID
+		if sort == "list_priority" {
+			cursor.PriorityRank = agentQueuePriorityRank(task.Priority)
+		}
+		if err := s.db.QueryRow(ctx, "SELECT sort_order, created_at FROM buckets WHERE user_id = $1 AND id = $2", userID, task.BucketID).Scan(&cursor.BucketSortOrder, &cursor.BucketCreatedAt); err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("%w: invalid task sort", ErrInvalidData)
+	}
+	encoded, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func decodeWorkspaceTaskCursor(raw string, scope string, sort string) (workspaceTaskCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+	}
+	var cursor workspaceTaskCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || !validUUIDText(cursor.ID) || cursor.Scope != scope {
+		return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+	}
+	switch sort {
+	case "priority":
+		if cursor.PriorityRank < 0 || cursor.PriorityRank > 3 {
+			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+		}
+	case "list", "list_priority":
+		if cursor.BucketSortOrder < minPostgresInteger || cursor.BucketSortOrder > maxPostgresInteger || cursor.BucketCreatedAt.IsZero() || !validUUIDText(cursor.BucketID) {
+			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+		}
+		if sort == "list_priority" && (cursor.PriorityRank < 0 || cursor.PriorityRank > 3) {
+			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+		}
+	default:
+		return workspaceTaskCursor{}, fmt.Errorf("%w: invalid task sort", ErrInvalidData)
+	}
+	return cursor, nil
 }
 
 func decodeAgentQueueCursor(raw string, scope string) (agentQueueCursor, error) {
@@ -2377,4 +2526,14 @@ func validPriority(priority string) bool {
 		return true
 	}
 	return false
+}
+
+func validListColor(color string) bool {
+	switch color {
+	case ListColorSlate, ListColorRed, ListColorOrange, ListColorYellow, ListColorGreen,
+		ListColorTeal, ListColorBlue, ListColorIndigo, ListColorPurple, ListColorPink:
+		return true
+	default:
+		return false
+	}
 }

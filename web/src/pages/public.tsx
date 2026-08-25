@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowRight, CheckCircle2 } from "lucide-react"
+import { ArrowRight, CheckCircle2, Flag, ListFilter } from "lucide-react"
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom"
 import { Brand } from "@/components/shell"
 import { Button } from "@/components/ui/button"
@@ -12,7 +12,6 @@ import type { User } from "@/lib/types"
 const landingPreviewColumns = [
   {
     title: "Todo",
-    tone: "todo",
     tasks: [
       { priority: "High", list: "Product", title: "Tighten first-run onboarding", description: "Help a new operator understand lists, agents and flow.", date: "Aug 21" },
       { priority: "Urgent", list: "Company", title: "Plan September launch", description: "Turn the product story into a focused launch plan.", date: "Aug 24", agent: "Research" },
@@ -20,7 +19,6 @@ const landingPreviewColumns = [
   },
   {
     title: "In progress",
-    tone: "progress",
     tasks: [
       { priority: "Urgent", list: "Product", title: "Ship the React workspace", description: "Replace the global renderer with a calm interface.", date: "Aug 18", agent: "Research" },
       { priority: "High", list: "Product", title: "Audit agent handoff states", description: "Make every transition between people and agents explicit.", date: "Aug 22", agent: "Research" },
@@ -28,7 +26,6 @@ const landingPreviewColumns = [
   },
   {
     title: "Review",
-    tone: "review",
     tasks: [
       { priority: "High", list: "Writing", title: "Edit the agent-speed essay", description: "Make the core argument tighter and more concrete.", date: "Aug 19", agent: "Editorial" },
       { priority: "Normal", list: "Company", title: "Review the launch brief", description: "Resolve the final positioning questions before design starts.", date: "Aug 23" },
@@ -36,7 +33,6 @@ const landingPreviewColumns = [
   },
   {
     title: "Done",
-    tone: "done",
     tasks: [
       { priority: "Normal", list: "Company", title: "Review weekly product signals", description: "Decide what changed and what deserves attention next.", date: "Aug 17" },
       { priority: "High", list: "Writing", title: "Publish the operator guide", description: "Turn the approved draft into final documentation.", date: "Aug 18", agent: "Editorial" },
@@ -56,9 +52,9 @@ function LandingProductPreview() {
         </div>
         <p>Lists <b>＋</b></p>
         <div className="landing-preview-nav muted">
-          <span>○ <b>Product</b><small>5</small></span>
-          <span>○ <b>Company</b><small>3</small></span>
-          <span>○ <b>Writing</b><small>4</small></span>
+          <span><i className="landing-preview-list-dot product" /><b>Product</b><small>5</small></span>
+          <span><i className="landing-preview-list-dot company" /><b>Company</b><small>3</small></span>
+          <span><i className="landing-preview-list-dot writing" /><b>Writing</b><small>4</small></span>
         </div>
         <p>Agents</p>
         <div className="landing-preview-nav muted">
@@ -72,15 +68,21 @@ function LandingProductPreview() {
         <header>
           <h3>All tasks</h3>
         </header>
+        <div className="landing-preview-summary">
+          <div><strong>6</strong><span>Active tasks</span></div>
+          <div><strong>2</strong><span>In progress</span></div>
+          <div><strong>2</strong><span>In review</span></div>
+          <div><strong>2</strong><span>Completed · 24h</span></div>
+          <div><strong>3</strong><span>Runs · 24h</span></div>
+        </div>
         <div className="landing-preview-toolbar">
           <div className="landing-preview-search">⌕ <span>Search tasks…</span></div>
-          <div className="landing-preview-filter">Any agent⌄</div>
-          <div className="landing-preview-filter">Any priority⌄</div>
+          <div className="landing-preview-priority"><span className="active"><ListFilter /></span><span className="urgent"><Flag /></span><span className="high"><Flag /></span><span className="normal"><Flag /></span></div>
           <div className="landing-preview-views"><b>▥ Board</b><span>▤ Table</span></div>
         </div>
         <div className="landing-preview-board">
           {landingPreviewColumns.map(column => (
-            <section className={`landing-preview-column ${column.tone}`} key={column.title}>
+            <section className="landing-preview-column" key={column.title}>
               <header><strong><i />{column.title}</strong><span>{column.tasks.length}</span><b>＋</b></header>
               <div>
                 {column.tasks.map(task => (
@@ -112,27 +114,27 @@ export function LandingPage() {
         </nav>
         <section className="hero">
           <div className="hero-copy">
-            <p className="landing-kicker">A control plane for human + agent work</p>
-            <h1>Stay on top of everything. <em>Operate at agent speed.</em></h1>
-            <p>Slate turns your emails, projects, commitments and loose ends into one clear operating plan. Agents help organise the noise, surface what needs your attention and execute the work.</p>
+            <p className="landing-kicker">Task management for people and AI agents</p>
+            <h1>One shared task list <em>for you and your agents.</em></h1>
+            <p>Slate keeps every task, brief, conversation and result in one place. You decide what matters, agents move the work forward, and nothing gets lost between you.</p>
             <div className="hero-actions"><Button asChild size="lg" className="landing-primary-cta"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open Slate" : "Log in to Slate"}<ArrowRight className="size-4" /></Link></Button><Button asChild size="lg" variant="ghost" className="landing-secondary-cta"><a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a></Button></div>
-            <div className="hero-proof" aria-label="Slate principles"><span>Human judgement</span><span>Agent execution</span><span>One shared state</span></div>
+            <div className="hero-proof" aria-label="Slate principles"><span>Shared tasks</span><span>Clear ownership</span><span>People + agents</span></div>
           </div>
           <figure className="hero-product">
-            <div className="hero-product-bar" aria-hidden="true"><i /><i /><i /><span>slate.do / focus</span></div>
+            <div className="hero-product-bar" aria-hidden="true"><i /><i /><i /><span>slate.do / all tasks</span></div>
             <LandingProductPreview />
-            <figcaption>Slate showing tasks moving from todo through progress and review to done.</figcaption>
+            <figcaption>Slate showing shared tasks, priorities and progress for people and agents.</figcaption>
           </figure>
         </section>
       </header>
       <main>
         <section className="landing-section">
-          <p className="landing-kicker">Less, on purpose</p>
-          <h2>One calm place for people and agents to decide what happens next.</h2>
+          <p className="landing-kicker">Templates</p>
+          <h2>Save a process once. Run it whenever the work comes up.</h2>
           <div className="principles">
-            <article className="principle"><span>01</span><h3>Lists for clear thinking</h3><p>Shape work around projects, goals and areas without turning your system into a maze.</p></article>
-            <article className="principle"><span>02</span><h3>One shared state</h3><p>Every task carries its brief, conversation, output and status. Everyone reads the same truth.</p></article>
-            <article className="principle"><span>03</span><h3>You think, they execute</h3><p>Keep the judgement. Give agents the ground to cover. Review the work that genuinely needs you.</p></article>
+            <article className="principle"><span>01</span><h3>Organise the work</h3><p>Use lists and priorities to keep projects, commitments and next steps clear.</p></article>
+            <article className="principle"><span>02</span><h3>Save reusable templates</h3><p>Capture a repeatable process as phases, ordered tasks and the instructions needed to do the work.</p></article>
+            <article className="principle"><span>03</span><h3>Run with people and agents</h3><p>Start a template and Slate creates the work. Each step has a clear owner, status and place for the result.</p></article>
           </div>
         </section>
       </main>

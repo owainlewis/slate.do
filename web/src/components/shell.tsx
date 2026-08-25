@@ -1,12 +1,13 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { NavLink, useLocation, useNavigate } from "react-router-dom"
-import { Bot, CalendarDays, ChevronDown, CircleDot, Inbox, LayoutTemplate, ListTodo, LogOut, Menu, Plus, Play, Search, Settings, UserRound, Workflow, X } from "lucide-react"
+import { Bot, CalendarDays, ChevronDown, ChevronUp, GripVertical, Inbox, LayoutTemplate, ListTodo, LogOut, Menu, Plus, Play, Search, Settings, UserRound, Workflow, X } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input, Label, Select, Textarea } from "@/components/ui/field"
 import { PriorityPicker, type Priority } from "@/components/priority"
+import { ListColorDot, ListColorPicker, type ListColor } from "@/components/list-color"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
 import { workspaceSummaryQueryKey, type List, type Task, type TaskStatus } from "@/lib/types"
@@ -19,6 +20,41 @@ function NavigationLink({ to, icon: Icon, children, count, id }: { to: string; i
   return <NavLink id={id} to={to} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}><Icon /><span>{children}</span>{typeof count === "number" && count > 0 && <span className="count">{count}</span>}</NavLink>
 }
 
+function SidebarListLink({ list, previousID, nextID, disabled, onMove }: { list: List; previousID?: string; nextID?: string; disabled: boolean; onMove: (sourceID: string, targetID: string) => void }) {
+  return (
+    <div
+      className="sidebar-list-item"
+      data-list-id={list.id}
+      onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move" }}
+      onDrop={event => { event.preventDefault(); const sourceID = event.dataTransfer.getData("text/list-id"); if (sourceID) onMove(sourceID, list.id) }}
+    >
+      <NavLink to={`/app/lists/${encodeURIComponent(list.id)}`} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
+        <ListColorDot color={list.color} />
+        <span>{list.name}</span>
+        {typeof list.openCount === "number" && list.openCount > 0 && <span className="count">{list.openCount}</span>}
+      </NavLink>
+      <button
+        type="button"
+        className="list-drag-handle"
+        draggable={!disabled}
+        aria-label={`Reorder ${list.name}`}
+        title="Drag to reorder. Use arrow keys for keyboard reordering."
+        disabled={disabled}
+        onDragStart={event => { event.dataTransfer.setData("text/list-id", list.id); event.dataTransfer.effectAllowed = "move" }}
+        onKeyDown={event => {
+          const sibling = event.key === "ArrowUp" ? event.currentTarget.parentElement?.previousElementSibling : event.key === "ArrowDown" ? event.currentTarget.parentElement?.nextElementSibling : null
+          const targetID = sibling instanceof HTMLElement ? sibling.dataset.listId : ""
+          if (targetID) { event.preventDefault(); onMove(list.id, targetID) }
+        }}
+      ><GripVertical aria-hidden="true" /></button>
+      <div className="list-touch-controls">
+        <button type="button" aria-label={`Move ${list.name} up`} disabled={disabled || !previousID} onClick={() => { if (previousID) onMove(list.id, previousID) }}><ChevronUp aria-hidden="true" /></button>
+        <button type="button" aria-label={`Move ${list.name} down`} disabled={disabled || !nextID} onClick={() => { if (nextID) onMove(list.id, nextID) }}><ChevronDown aria-hidden="true" /></button>
+      </div>
+    </div>
+  )
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { me, lists, agents, refreshLists } = useApp()
   const navigate = useNavigate()
@@ -27,6 +63,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = React.useState(false)
   const [listDialog, setListDialog] = React.useState(false)
   const [listName, setListName] = React.useState("")
+  const [listColor, setListColor] = React.useState<ListColor>("blue")
   const [listError, setListError] = React.useState("")
   const [taskDialog, setTaskDialog] = React.useState(false)
   const [taskTitle, setTaskTitle] = React.useState("")
@@ -69,15 +106,43 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   })
 
   const createList = useMutation({
-    mutationFn: () => api.post<List>("/api/v1/lists", { name: listName.trim() }),
+    mutationFn: () => api.post<List>("/api/v1/lists", { name: listName.trim(), color: listColor }),
     onSuccess: async list => {
       await refreshLists()
       setListDialog(false)
       setListName("")
+      setListColor("blue")
       navigate(`/app/lists/${encodeURIComponent(list.id)}`)
     },
     onError: error => setListError(error instanceof Error ? error.message : "Could not create list"),
   })
+
+  const reorderLists = useMutation({
+    mutationFn: (ordered: List[]) => api.post("/api/v1/lists/reorder", { ids: ordered.map(list => list.id) }),
+    onMutate: async ordered => {
+      await queryClient.cancelQueries({ queryKey: ["lists"] })
+      const previous = queryClient.getQueryData<{ lists: List[] }>(["lists"])
+      queryClient.setQueryData(["lists"], { lists: ordered })
+      return { previous }
+    },
+    onError: (_error, _ordered, context) => {
+      if (context?.previous) queryClient.setQueryData(["lists"], context.previous)
+    },
+    onSuccess: async () => {
+      await Promise.all([refreshLists(), queryClient.resetQueries({ queryKey: ["tasks"] })])
+    },
+  })
+
+  const moveList = (sourceID: string, targetID: string) => {
+    const customLists = lists.filter(list => !list.isInbox)
+    const sourceIndex = customLists.findIndex(list => list.id === sourceID)
+    const targetIndex = customLists.findIndex(list => list.id === targetID)
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return
+    const orderedCustomLists = [...customLists]
+    const [source] = orderedCustomLists.splice(sourceIndex, 1)
+    orderedCustomLists.splice(targetIndex, 0, source)
+    reorderLists.mutate([...lists.filter(list => list.isInbox), ...orderedCustomLists])
+  }
 
   const logout = useMutation({
     mutationFn: () => api.post("/api/v1/auth/logout"),
@@ -138,7 +203,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="nav-group">
             <div className="nav-label"><span>Lists</span><button type="button" onClick={() => { setListError(""); setListDialog(true) }} aria-label="New list"><Plus className="size-3.5" /></button></div>
-            {lists.filter(list => !list.isInbox).map(list => <NavigationLink key={list.id} to={`/app/lists/${encodeURIComponent(list.id)}`} icon={CircleDot} count={list.openCount}>{list.name}</NavigationLink>)}
+            {lists.filter(list => !list.isInbox).map((list, index, customLists) => <SidebarListLink key={list.id} list={list} previousID={customLists[index - 1]?.id} nextID={customLists[index + 1]?.id} disabled={reorderLists.isPending} onMove={moveList} />)}
           </div>
           <div className="nav-group">
             <div className="nav-label"><span>Activity</span></div>
@@ -175,6 +240,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <DialogHeader><DialogTitle>New list</DialogTitle><DialogDescription>Create a clear context for a project, goal or area of work.</DialogDescription></DialogHeader>
             <Label htmlFor="workspace-list-name">Name</Label>
             <Input id="workspace-list-name" value={listName} onChange={event => setListName(event.target.value)} autoFocus maxLength={120} />
+            <Label className="mt-4">Color</Label>
+            <ListColorPicker value={listColor} onChange={setListColor} disabled={createList.isPending} />
             {listError && <p className="status-message error mt-3" role="alert">{listError}</p>}
             <DialogFooter><Button type="button" variant="ghost" onClick={() => setListDialog(false)}>Cancel</Button><Button id="confirm-workspace-list-dialog" type="submit" disabled={createList.isPending}>{createList.isPending ? "Creating…" : "Create list"}</Button></DialogFooter>
           </form>
@@ -189,10 +256,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Input className="task-create-title" aria-label="Task title" value={taskTitle} onChange={event => setTaskTitle(event.target.value)} placeholder="What needs to happen?" autoFocus disabled={createTask.isPending} />
               <Textarea className="task-create-description" aria-label="Task brief" value={taskDescription} onChange={event => setTaskDescription(event.target.value)} placeholder="Add context, an outcome, or a definition of done…" disabled={createTask.isPending} />
               <div className="task-create-properties">
-                <label><span>List</span><Select aria-label="Task list" value={taskList} onChange={event => setTaskList(event.target.value)} disabled={createTask.isPending}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</Select></label>
-                <label><span>Agent</span><Select aria-label="Assigned agent" value={taskAgent} disabled={!agents.length || createTask.isPending} onChange={event => setTaskAgent(event.target.value)}><option value="">{agents.length ? "No agent" : "None connected"}</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></label>
-                <label><span>Plan for</span><span className="date-property"><CalendarDays /><Input aria-label="Plan for" type="date" value={taskDate} onChange={event => setTaskDate(event.target.value)} disabled={createTask.isPending} /></span></label>
-                <label><span>Priority</span><PriorityPicker value={taskPriority} onChange={setTaskPriority} allowNone={false} disabled={createTask.isPending} /></label>
+                <label className="task-create-property"><span>List</span><Select aria-label="Task list" value={taskList} onChange={event => setTaskList(event.target.value)} disabled={createTask.isPending}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</Select></label>
+                <label className="task-create-property"><span>Agent</span><Select aria-label="Assigned agent" value={taskAgent} disabled={!agents.length || createTask.isPending} onChange={event => setTaskAgent(event.target.value)}><option value="">{agents.length ? "No agent" : "None connected"}</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></label>
+                <label className="task-create-property"><span>Plan for</span><span className="date-property"><CalendarDays /><Input aria-label="Plan for" type="date" value={taskDate} onChange={event => setTaskDate(event.target.value)} disabled={createTask.isPending} /></span></label>
+                <div className="task-create-property"><span>Priority</span><PriorityPicker value={taskPriority} onChange={setTaskPriority} allowNone={false} disabled={createTask.isPending} /></div>
               </div>
             </div>
             {createTask.isError && <p className="status-message error mx-6 mb-2" role="alert">{createTask.error.message}</p>}

@@ -22,10 +22,12 @@ test("workspace summary cache entries are isolated by account", () => {
   expect(client.getQueryData(workspaceSummaryQueryKeyFor("account-b"))).toBeUndefined()
 })
 
-test("the landing page leads with Slate's outcome", async () => {
+test("the landing page explains Slate as a shared task list", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ authenticated: false }), { status: 200 })))
   renderApp()
-  expect(await screen.findByRole("heading", { name: /stay on top of everything/i })).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: /one shared task list for you and your agents/i })).toBeInTheDocument()
+  expect(screen.getByText(/slate keeps every task, brief, conversation and result in one place/i)).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "Save reusable templates" })).toBeInTheDocument()
   expect(screen.getAllByRole("link", { name: /log in/i })[0]).toHaveAttribute("href", "/login")
 })
 
@@ -52,7 +54,7 @@ test("the templates route starts new accounts without shared defaults", async ()
 })
 
 test.each([
-  ["/", /stay on top of everything/i],
+  ["/", /one shared task list for you and your agents/i],
   ["/login", "Welcome back."],
   ["/forgot-password", "Reset your password."],
   ["/reset-password", "Choose a new password."],

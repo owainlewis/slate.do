@@ -10,6 +10,11 @@ export function DropdownMenuContent({ className, sideOffset = 6, ...props }: Rea
 export function DropdownMenuItem({ className, ...props }: React.ComponentProps<typeof Primitive.Item>) {
   return <Primitive.Item className={cn("flex min-h-9 cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none transition-colors focus:bg-muted focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-45", className)} {...props} />
 }
+export const DropdownMenuRadioGroup = Primitive.RadioGroup
+export function DropdownMenuRadioItem({ className, ...props }: React.ComponentProps<typeof Primitive.RadioItem>) {
+  return <Primitive.RadioItem className={cn("flex min-h-9 cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none transition-colors focus:bg-muted focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-45", className)} {...props} />
+}
+export const DropdownMenuItemIndicator = Primitive.ItemIndicator
 export function DropdownMenuLabel({ className, ...props }: React.ComponentProps<typeof Primitive.Label>) {
   return <Primitive.Label className={cn("px-2.5 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground", className)} {...props} />
 }

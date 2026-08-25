@@ -400,6 +400,66 @@ func TestWorkspaceListsInboxFiltersAndOneLevelSubtasks(t *testing.T) {
 	assertStorageUsage(t, ctx, db, userID, 0, 0)
 }
 
+func TestWorkspaceTaskSortingRemainsPaginated(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	firstList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE buckets SET sort_order = -5 WHERE id = $1", firstList.ID); err != nil {
+		t.Fatal(err)
+	}
+	firstLow, err := store.CreateTask(ctx, userID, firstList.ID, CreateTaskInput{Title: "First low", Priority: PriorityP2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHigh, err := store.CreateTask(ctx, userID, firstList.ID, CreateTaskInput{Title: "First high", Priority: PriorityP0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHigh, err := store.CreateTask(ctx, userID, secondList.ID, CreateTaskInput{Title: "Second high", Priority: PriorityP0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	for id, createdAt := range map[string]time.Time{
+		firstHigh.ID:  base,
+		secondHigh.ID: base.Add(time.Minute),
+		firstLow.ID:   base.Add(2 * time.Minute),
+	} {
+		if _, err := db.Exec(ctx, "UPDATE tasks SET created_at = $1 WHERE id = $2", createdAt, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	priorityPage, err := store.ListTaskPage(ctx, userID, TaskFilter{Sort: "priority", Limit: 2, TopLevelOnly: true})
+	if err != nil || len(priorityPage.Tasks) != 2 || priorityPage.Tasks[0].ID != secondHigh.ID || priorityPage.Tasks[1].ID != firstHigh.ID || priorityPage.NextCursor == "" {
+		t.Fatalf("priority page = %#v, %v", priorityPage, err)
+	}
+	priorityNext, err := store.ListTaskPage(ctx, userID, TaskFilter{Sort: "priority", Limit: 2, TopLevelOnly: true, Cursor: priorityPage.NextCursor})
+	if err != nil || len(priorityNext.Tasks) != 1 || priorityNext.Tasks[0].ID != firstLow.ID {
+		t.Fatalf("priority continuation = %#v, %v", priorityNext, err)
+	}
+
+	listPage, err := store.ListTaskPage(ctx, userID, TaskFilter{Sort: "list_priority", Limit: 2, TopLevelOnly: true})
+	if err != nil || len(listPage.Tasks) != 2 || listPage.Tasks[0].ID != firstHigh.ID || listPage.Tasks[1].ID != firstLow.ID || listPage.NextCursor == "" {
+		t.Fatalf("list page = %#v, %v", listPage, err)
+	}
+	listNext, err := store.ListTaskPage(ctx, userID, TaskFilter{Sort: "list_priority", Limit: 2, TopLevelOnly: true, Cursor: listPage.NextCursor})
+	if err != nil || len(listNext.Tasks) != 1 || listNext.Tasks[0].ID != secondHigh.ID {
+		t.Fatalf("list continuation = %#v, %v", listNext, err)
+	}
+}
+
 func TestTaskSearchTreatsPatternCharactersAsLiteralText(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -847,7 +907,7 @@ func TestBoardMaxTasksPerListIsLegacyMetadataOnly(t *testing.T) {
 	}
 }
 
-func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
+func TestUpdateListNameAndColorPersistAndPreserveOwnerIsolation(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	store := NewStore(db)
@@ -857,7 +917,7 @@ func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", ownerID, otherID)
 	})
 
-	list, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Ideas"})
+	list, err := store.CreateBucket(ctx, ownerID, CreateBucketInput{Name: "Ideas", Color: ListColorBlue})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -866,18 +926,22 @@ func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 	}
 
 	name := "  Growth plan  "
-	updated, err := store.UpdateBucket(ctx, ownerID, list.ID, UpdateBucketInput{Name: &name})
+	color := ListColorPink
+	updated, err := store.UpdateBucket(ctx, ownerID, list.ID, UpdateBucketInput{Name: &name, Color: &color})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.Name != "Growth plan" {
 		t.Fatalf("updated name = %q, want %q", updated.Name, "Growth plan")
 	}
+	if updated.Color != ListColorPink {
+		t.Fatalf("updated color = %q, want %q", updated.Color, ListColorPink)
+	}
 	loaded, err := store.GetBucket(ctx, ownerID, list.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Name != "Growth plan" || len(loaded.Tasks) != 1 || loaded.Tasks[0].Title != "Keep me" {
+	if loaded.Name != "Growth plan" || loaded.Color != ListColorPink || len(loaded.Tasks) != 1 || loaded.Tasks[0].Title != "Keep me" {
 		t.Fatalf("loaded list after rename = %#v", loaded)
 	}
 
@@ -891,12 +955,74 @@ func TestUpdateListNameTrimsPersistsAndPreservesOwnerIsolation(t *testing.T) {
 	if _, err := store.UpdateBucket(ctx, ownerID, "00000000-0000-0000-0000-000000000000", UpdateBucketInput{Name: &name}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing list rename error = %v, want ErrNotFound", err)
 	}
+	invalidColor := "chartreuse"
+	if _, err := store.UpdateBucket(ctx, ownerID, list.ID, UpdateBucketInput{Color: &invalidColor}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("invalid color error = %v, want ErrInvalidData", err)
+	}
 	unchanged, err := store.GetBucket(ctx, ownerID, list.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if unchanged.Name != "Growth plan" {
 		t.Fatalf("name after rejected renames = %q, want %q", unchanged.Name, "Growth plan")
+	}
+}
+
+func TestReorderBucketsPersistsCompleteAndPartialAccountOrders(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	otherID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id IN ($1, $2)", userID, otherID)
+	})
+
+	first, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Third"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateBucket(ctx, otherID, CreateBucketInput{Name: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ReorderBuckets(ctx, userID, []string{third.ID, first.ID, second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	lists, err := store.ListAllBuckets(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lists) != 3 || lists[0].ID != third.ID || lists[1].ID != first.ID || lists[2].ID != second.ID {
+		t.Fatalf("ordered lists = %#v", lists)
+	}
+	if err := store.ReorderBuckets(ctx, userID, []string{second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	lists, err = store.ListAllBuckets(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lists) != 3 || lists[0].ID != second.ID || lists[1].ID != third.ID || lists[2].ID != first.ID {
+		t.Fatalf("partially ordered lists = %#v", lists)
+	}
+
+	for name, ids := range map[string][]string{
+		"duplicate": {third.ID, first.ID, first.ID},
+		"foreign":   {third.ID, first.ID, other.ID},
+	} {
+		if err := store.ReorderBuckets(ctx, userID, ids); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("%s order error = %v, want ErrInvalidData", name, err)
+		}
 	}
 }
 

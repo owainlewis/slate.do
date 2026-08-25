@@ -1,14 +1,15 @@
 import * as React from "react"
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query"
-import { Columns3 as BoardIcon, CalendarDays, List as ListIcon, MoreHorizontal, Plus, Rows3, Search, Trash2 } from "lucide-react"
+import { ArrowDownWideNarrow, Check, Columns3 as BoardIcon, CalendarDays, Layers3, List as ListIcon, MoreHorizontal, Plus, Rows3, Search, Trash2 } from "lucide-react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Input, Select } from "@/components/ui/field"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuItemIndicator, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/field"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TaskDetail } from "@/components/task-detail"
 import { TaskDeleteDialog } from "@/components/task-delete-dialog"
-import { PriorityBadge, priorityLabel } from "@/components/priority"
+import { PriorityBadge, PriorityFilter, priorityLabel } from "@/components/priority"
+import { listColors, ListColorDot, type ListColor } from "@/components/list-color"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
 import { workspaceSummaryQueryKey, workspaceSummaryQueryKeyFor, type Task, type TaskStatus, type WorkspaceSummary } from "@/lib/types"
@@ -78,26 +79,31 @@ function WorkspaceSummaryStrip({ summary }: { summary: WorkspaceSummary }) {
 
 export function WorkspacePage() {
   const { listId = "", taskId = "" } = useParams()
-  const { me, lists, agents, refreshLists } = useApp()
+  const { me, lists, refreshLists } = useApp()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [dragOver, setDragOver] = React.useState<TaskStatus | "">("")
   const [pageError, setPageError] = React.useState("")
   const [deleteTarget, setDeleteTarget] = React.useState<DeleteTarget | null>(null)
+  const [listActionsOpen, setListActionsOpen] = React.useState(false)
   const selectedList = lists.find(list => list.id === listId)
   const scope = listId ? "list" : "all"
   const layout = searchParams.get("view") === "table" ? "table" : "board"
+  const sortByPriority = searchParams.get("sort") === "priority"
+  const groupByList = scope === "all" && searchParams.get("group") === "list"
 
   const taskQueryString = React.useMemo(() => {
     const query = new URLSearchParams({ limit: "200", topLevel: "true" })
     if (listId) query.set("bucketId", listId)
-    for (const key of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
+    for (const key of ["q", "status", "priority", "plannedFrom", "plannedTo"]) {
       const value = searchParams.get(key)
       if (value) query.set(key, value)
     }
+    if (layout === "table" && groupByList) query.set("sort", sortByPriority ? "list_priority" : "list")
+    else if (layout === "table" && sortByPriority) query.set("sort", "priority")
     return query.toString()
-  }, [listId, searchParams])
+  }, [groupByList, layout, listId, searchParams, sortByPriority])
 
   const tasksQuery = useInfiniteQuery({
     queryKey: ["tasks", scope, listId, taskQueryString],
@@ -118,6 +124,21 @@ export function WorkspacePage() {
     refetchOnWindowFocus: true,
     retry: false,
   })
+
+  React.useEffect(() => {
+    if (!searchParams.has("assigneeAgentId")) return
+    const next = new URLSearchParams(searchParams)
+    next.delete("assigneeAgentId")
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const taskGroups = React.useMemo(() => {
+    if (!groupByList) return []
+    const groups = lists.map(list => ({ list, tasks: tasks.filter(task => task.bucketId === list.id) })).filter(group => group.tasks.length)
+    const knownIDs = new Set(lists.map(list => list.id))
+    const unknown = tasks.filter(task => !knownIDs.has(task.bucketId))
+    return unknown.length ? [...groups, { list: undefined, tasks: unknown }] : groups
+  }, [groupByList, lists, tasks])
 
   const refresh = async () => {
     await Promise.all([queryClient.invalidateQueries({ queryKey: ["tasks"] }), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey }), refreshLists()])
@@ -140,6 +161,11 @@ export function WorkspacePage() {
     onSuccess: refreshLists,
     onError: error => setPageError(error instanceof Error ? error.message : "Could not rename list"),
   })
+  const recolorList = useMutation({
+    mutationFn: (color: ListColor) => api.patch(`/api/v1/lists/${encodeURIComponent(listId)}`, { color }),
+    onSuccess: refreshLists,
+    onError: error => setPageError(error instanceof Error ? error.message : "Could not update list color"),
+  })
   const removeList = useMutation({
     mutationFn: () => api.del(`/api/v1/lists/${encodeURIComponent(listId)}`),
     onSuccess: async () => { await Promise.all([refreshLists(), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey })]); navigate("/app/tasks") },
@@ -160,19 +186,22 @@ export function WorkspacePage() {
     <div className="page-wrap task-shell">
       <header className="page-header">
         <div className="page-heading">
-          {selectedList && !selectedList.isInbox ? <input key={selectedList.id} className="page-title-input max-w-xl" aria-label="List name" data-bucket-name={selectedList.id} defaultValue={selectedList.name} onBlur={event => { if (event.target.value.trim() && event.target.value.trim() !== selectedList.name) renameList.mutate(event.target.value) }} /> : <h1>{selectedList?.name || "All tasks"}</h1>}
+          {selectedList && !selectedList.isInbox ? <div className="list-page-title"><ListColorDot color={selectedList.color} /><input key={selectedList.id} className="page-title-input max-w-xl" aria-label="List name" data-bucket-name={selectedList.id} defaultValue={selectedList.name} onBlur={event => { if (event.target.value.trim() && event.target.value.trim() !== selectedList.name) renameList.mutate(event.target.value) }} /></div> : <h1>{selectedList?.name || "All tasks"}</h1>}
         </div>
-        <div className="page-actions">{selectedList && !selectedList.isInbox && <DropdownMenu><DropdownMenuTrigger asChild><Button id="workspace-list-actions" variant="ghost" size="icon" aria-label="List actions"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>List options</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem id="delete-workspace-list" className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={removeList.isPending} onSelect={() => { if (window.confirm(`Delete “${selectedList.name}” and every task in it?`)) removeList.mutate() }}><Trash2 className="size-4" />{removeList.isPending ? "Deleting…" : "Delete list"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}</div>
+        <div className="page-actions">{selectedList && !selectedList.isInbox && <DropdownMenu open={listActionsOpen} onOpenChange={setListActionsOpen}><DropdownMenuTrigger asChild><Button id="workspace-list-actions" variant="ghost" size="icon" aria-label="List actions"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="list-actions-menu"><DropdownMenuLabel>List color</DropdownMenuLabel><DropdownMenuRadioGroup value={selectedList.color || "slate"} onValueChange={value => recolorList.mutate(value as ListColor)}>{listColors.map(color => <DropdownMenuRadioItem key={color.value} value={color.value} disabled={recolorList.isPending}><ListColorDot color={color.value} /><span>{color.label}</span><DropdownMenuItemIndicator className="ml-auto"><Check className="size-4" aria-hidden="true" /></DropdownMenuItemIndicator></DropdownMenuRadioItem>)}</DropdownMenuRadioGroup><DropdownMenuSeparator /><DropdownMenuItem id="delete-workspace-list" className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={removeList.isPending} onSelect={() => { if (window.confirm(`Delete “${selectedList.name}” and every task in it?`)) removeList.mutate() }}><Trash2 className="size-4" />{removeList.isPending ? "Deleting…" : "Delete list"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}</div>
       </header>
       {summaryQuery.data && <WorkspaceSummaryStrip summary={summaryQuery.data} />}
       <div className="toolbar">
         <div className="filters" role="search">
           <div className="search-box"><Search /><Input aria-label="Search tasks" placeholder="Search tasks…" value={searchParams.get("q") || ""} onChange={event => updateFilter("q", event.target.value)} /></div>
-          {agents.length > 0 && <Select className="compact-select" aria-label="Filter by agent" value={searchParams.get("assigneeAgentId") || ""} onChange={event => updateFilter("assigneeAgentId", event.target.value)}><option value="">Any agent</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select>}
-          <Select className="compact-select" aria-label="Filter by priority" value={searchParams.get("priority") || ""} onChange={event => updateFilter("priority", event.target.value)}><option value="">Any priority</option><option value="p0">Urgent</option><option value="p1">High</option><option value="p2">Normal</option></Select>
-          {["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"].some(key => searchParams.has(key)) && <Button variant="ghost" size="sm" onClick={() => { const view = searchParams.get("view"); setSearchParams(view ? { view } : {}, { replace: true }) }}>Clear</Button>}
+          <PriorityFilter value={searchParams.get("priority") || ""} onChange={value => updateFilter("priority", value)} />
+          {["q", "status", "priority", "plannedFrom", "plannedTo"].some(key => searchParams.has(key)) && <Button variant="ghost" size="sm" onClick={() => { const preserved = Object.fromEntries(["view", "sort", "group"].map(key => [key, searchParams.get(key)]).filter((entry): entry is [string, string] => Boolean(entry[1]))); setSearchParams(preserved, { replace: true }) }}>Clear</Button>}
         </div>
-        <div className="view-toggle" role="group" aria-label="Task layout"><button type="button" className={layout === "board" ? "active" : ""} aria-label="Board" aria-pressed={layout === "board"} onClick={() => switchLayout("board")}><BoardIcon className="size-3.5" /><span>Board</span></button><button type="button" className={layout === "table" ? "active" : ""} aria-label="Table" aria-pressed={layout === "table"} onClick={() => switchLayout("table")}><Rows3 className="size-3.5" /><span>Table</span></button></div>
+        <div className="table-toolbar-actions">
+          {layout === "table" && <button type="button" className={`table-option ${sortByPriority ? "active" : ""}`} aria-pressed={sortByPriority} onClick={() => updateFilter("sort", sortByPriority ? "" : "priority")}><ArrowDownWideNarrow aria-hidden="true" />Priority order</button>}
+          {layout === "table" && scope === "all" && <button type="button" className={`table-option ${groupByList ? "active" : ""}`} aria-pressed={groupByList} onClick={() => updateFilter("group", groupByList ? "" : "list")}><Layers3 aria-hidden="true" />Group by list</button>}
+          <div className="view-toggle" role="group" aria-label="Task layout"><button type="button" className={layout === "board" ? "active" : ""} aria-label="Board" aria-pressed={layout === "board"} onClick={() => switchLayout("board")}><BoardIcon className="size-3.5" /><span>Board</span></button><button type="button" className={layout === "table" ? "active" : ""} aria-label="Table" aria-pressed={layout === "table"} onClick={() => switchLayout("table")}><Rows3 className="size-3.5" /><span>Table</span></button></div>
+        </div>
       </div>
       {(pageError || tasksQuery.isError) && <p className="status-message error mb-3" role="alert">{pageError || tasksQuery.error?.message}</p>}
       {tasksQuery.isPending ? <div className="loading-page"><div className="spinner" /></div> : layout === "board" ? (
@@ -185,11 +214,16 @@ export function WorkspacePage() {
           </div>
         </div>
       ) : (
-        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th><th>Actions</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id} data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={() => openTask(task.id)}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "—"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td><td><TaskTableActions task={task} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} /></td></tr>)}</tbody></table></div>
+        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th><th>Actions</th></tr></thead><tbody>{groupByList ? taskGroups.map(group => <React.Fragment key={group.list?.id || "unknown"}><tr className="table-group-row"><th colSpan={7}><ListColorDot color={group.list?.color} />{group.list?.name || "Other"}<span>{group.tasks.length}</span></th></tr>{group.tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</React.Fragment>) : tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</tbody></table></div>
       )}
-      {tasksQuery.hasNextPage && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
+      {tasksQuery.isFetchNextPageError && <div className="table-loading table-loading-error mt-4" role="alert"><span>Could not load more tasks.</span><button type="button" onClick={() => tasksQuery.fetchNextPage()}>Retry</button></div>}
+      {tasksQuery.hasNextPage && !tasksQuery.isFetchNextPageError && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
       <TaskDeleteDialog task={deleteTarget?.task || null} open={Boolean(deleteTarget)} pending={deleteTask.isPending} error={deleteTask.error instanceof Error ? deleteTask.error.message : deleteTask.error ? "Could not delete task" : ""} returnFocus={deleteTarget?.returnFocus} onCancel={() => setDeleteTarget(null)} onConfirm={() => { if (deleteTarget) { deleteTask.reset(); deleteTask.mutate(deleteTarget.task.id) } }} />
       {taskId && <TaskDetail taskId={taskId} backLabel={selectedList ? `Back to ${selectedList.name}` : "Back to all tasks"} onClose={() => navigate(`${listId ? `/app/lists/${encodeURIComponent(listId)}` : "/app/tasks"}${searchParams.toString() ? `?${searchParams}` : ""}`)} onOpenTask={openTask} />}
     </div>
   )
+}
+
+function TaskTableRow({ task, lists, onOpen, onDelete }: { task: Task; lists: ReturnType<typeof useApp>["lists"]; onOpen: () => void; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
+  return <tr data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={onOpen}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "—"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td><td><TaskTableActions task={task} onDelete={onDelete} /></td></tr>
 }

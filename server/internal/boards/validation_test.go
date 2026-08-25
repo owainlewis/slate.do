@@ -1,9 +1,12 @@
 package boards
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestValidStatus(t *testing.T) {
@@ -84,14 +87,25 @@ func TestValidPriority(t *testing.T) {
 	}
 }
 
+func TestValidListColor(t *testing.T) {
+	for _, color := range []string{ListColorSlate, ListColorRed, ListColorOrange, ListColorYellow, ListColorGreen, ListColorTeal, ListColorBlue, ListColorIndigo, ListColorPurple, ListColorPink} {
+		if !validListColor(color) {
+			t.Fatalf("%q should be valid", color)
+		}
+	}
+	if validListColor("") || validListColor("Blue") || validListColor("#ffffff") {
+		t.Fatal("unexpected valid list color")
+	}
+}
+
 func TestTaskFilterFromQueryIncludesPriority(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/tasks?priority=p0", nil)
+	req := httptest.NewRequest("GET", "/api/v1/tasks?priority=p0&sort=list_priority", nil)
 	filter, err := taskFilterFromQuery(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filter.Priority != PriorityP0 {
-		t.Fatalf("filter.Priority = %q", filter.Priority)
+	if filter.Priority != PriorityP0 || filter.Sort != "list_priority" {
+		t.Fatalf("filter = %#v", filter)
 	}
 }
 
@@ -161,7 +175,7 @@ func TestTaskFilterFromQueryIncludesWorkspaceFilters(t *testing.T) {
 }
 
 func TestTaskFilterRejectsInvalidWorkspaceFilters(t *testing.T) {
-	for _, query := range []string{"bucketId=not-an-id", "assigneeAgentId=not-an-id", "parentTaskId=not-an-id", "plannedFrom=tomorrow", "plannedTo=2026-13-01", "topLevel=maybe", "inbox=maybe"} {
+	for _, query := range []string{"bucketId=not-an-id", "assigneeAgentId=not-an-id", "parentTaskId=not-an-id", "plannedFrom=tomorrow", "plannedTo=2026-13-01", "topLevel=maybe", "inbox=maybe", "sort=title"} {
 		req := httptest.NewRequest("GET", "/api/v1/tasks?"+query, nil)
 		if _, err := taskFilterFromQuery(req); err == nil {
 			t.Fatalf("query %q was accepted", query)
@@ -183,6 +197,27 @@ func TestTaskFilterRejectsInvalidLimit(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/v1/tasks?limit="+raw, nil)
 		if _, err := taskFilterFromQuery(req); err == nil {
 			t.Fatalf("limit %q was accepted", raw)
+		}
+	}
+}
+
+func TestWorkspaceTaskCursorRejectsSortOrderOutsidePostgresIntegerRange(t *testing.T) {
+	const scope = "workspace-sort"
+	for _, sortOrder := range []int{minPostgresInteger - 1, maxPostgresInteger + 1} {
+		raw, err := json.Marshal(workspaceTaskCursor{
+			BucketSortOrder: sortOrder,
+			BucketCreatedAt: time.Now().UTC(),
+			BucketID:        "11111111-1111-4111-8111-111111111111",
+			CreatedAt:       time.Now().UTC(),
+			ID:              "22222222-2222-4222-8222-222222222222",
+			Scope:           scope,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor := base64.RawURLEncoding.EncodeToString(raw)
+		if _, err := decodeWorkspaceTaskCursor(cursor, scope, "list"); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("sort order %d error = %v, want ErrInvalidData", sortOrder, err)
 		}
 	}
 }

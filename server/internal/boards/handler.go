@@ -440,11 +440,15 @@ func taskFilterFromQuery(r *http.Request) (TaskFilter, error) {
 		BucketID:      strings.TrimSpace(q.Get("bucketId")),
 		Status:        strings.TrimSpace(q.Get("status")),
 		Priority:      strings.TrimSpace(q.Get("priority")),
+		Sort:          strings.TrimSpace(q.Get("sort")),
 		Cursor:        strings.TrimSpace(q.Get("cursor")),
 		Query:         strings.TrimSpace(q.Get("q")),
 		ScheduledFrom: strings.TrimSpace(q.Get("plannedFrom")),
 		ScheduledTo:   strings.TrimSpace(q.Get("plannedTo")),
 		ParentTaskID:  strings.TrimSpace(q.Get("parentTaskId")),
+	}
+	if filter.Sort != "" && filter.Sort != "priority" && filter.Sort != "list" && filter.Sort != "list_priority" {
+		return TaskFilter{}, errors.New("sort must be priority, list, or list_priority")
 	}
 	if raw := strings.TrimSpace(q.Get("done")); raw != "" {
 		done, err := parseQueryBool("done", raw)
