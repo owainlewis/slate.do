@@ -39,21 +39,39 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   const [error, setError] = React.useState("")
   const [deleteOpen, setDeleteOpen] = React.useState(false)
   const actionsTrigger = React.useRef<HTMLButtonElement>(null)
+  const activeTaskID = React.useRef(taskId)
+  const dirtyFields = React.useRef(new Set<keyof Task>())
+  activeTaskID.current = taskId
 
-  const taskQuery = useQuery({ queryKey: ["task", taskId], queryFn: () => api.get<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}`) })
+  const taskQuery = useQuery({ queryKey: ["task", taskId], queryFn: () => api.get<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}`), staleTime: 0 })
   const subtasksQuery = useQuery({
     queryKey: ["subtasks", taskId],
     queryFn: () => api.get<{ tasks: Task[] }>(`/api/v1/tasks?parentTaskId=${encodeURIComponent(taskId)}&limit=200`),
   })
   const entriesQuery = useQuery({ queryKey: ["entries", taskId], queryFn: () => api.get<{ entries: Entry[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/entries`) })
 
-  React.useEffect(() => { if (taskQuery.data) setDraft({ ...taskQuery.data, priority: taskQuery.data.priority || "p1" }) }, [taskQuery.data])
-  React.useEffect(() => { setError(""); setEntryText(""); setSubtaskTitle(""); setShowSubtaskComposer(false); setDeleteOpen(false) }, [taskId])
+  React.useEffect(() => {
+    dirtyFields.current.clear()
+    setDraft({})
+    setError("")
+    setEntryText("")
+    setSubtaskTitle("")
+    setShowSubtaskComposer(false)
+    setDeleteOpen(false)
+  }, [taskId])
+  React.useEffect(() => {
+    if (!taskQuery.data) return
+    setDraft(current => {
+      const next: Partial<Task> = { ...taskQuery.data, priority: taskQuery.data.priority || "p1" }
+      for (const key of dirtyFields.current) (next as Record<keyof Task, unknown>)[key] = current[key]
+      return next
+    })
+  }, [taskId, taskQuery.data])
 
-  const invalidateTaskSurfaces = async () => {
+  const invalidateTaskSurfaces = async (targetTaskID = activeTaskID.current) => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["tasks"] }),
-      queryClient.invalidateQueries({ queryKey: ["task", taskId] }),
+      queryClient.invalidateQueries({ queryKey: ["task", targetTaskID] }),
       queryClient.invalidateQueries({ queryKey: ["agent"] }),
       queryClient.invalidateQueries({ queryKey: ["lists"] }),
       queryClient.invalidateQueries({ queryKey: ["inbox"] }),
@@ -97,6 +115,32 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
     onError: value => setError(value instanceof Error ? value.message : "Could not save task"),
   })
 
+  const updatePriority = useMutation({
+    mutationFn: ({ targetTaskID, priority }: { targetTaskID: string; priority: Priority }) => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(targetTaskID)}`, { priority }),
+    onMutate: ({ targetTaskID, priority }) => {
+      setError("")
+      const previous = (draft.priority || taskQuery.data?.priority || "p1") as Priority
+      dirtyFields.current.add("priority")
+      setDraft(current => ({ ...current, priority }))
+      return { previous, targetTaskID }
+    },
+    onSuccess: async (updated, { targetTaskID }) => {
+      queryClient.setQueryData(["task", targetTaskID], updated)
+      if (targetTaskID === activeTaskID.current) {
+        dirtyFields.current.delete("priority")
+        setDraft(current => ({ ...current, priority: updated.priority || "p1" }))
+      }
+      await invalidateTaskSurfaces(targetTaskID)
+    },
+    onError: (value, { targetTaskID }, context) => {
+      if (targetTaskID === activeTaskID.current) {
+        dirtyFields.current.delete("priority")
+        if (context) setDraft(current => ({ ...current, priority: context.previous }))
+        setError(value instanceof Error ? value.message : "Could not update priority")
+      }
+    },
+  })
+
   const remove = useMutation({
     mutationFn: () => api.del(`/api/v1/tasks/${encodeURIComponent(taskId)}`),
     onSuccess: async () => { queryClient.removeQueries({ queryKey: ["task", taskId] }); await invalidateTaskSurfaces(); onClose() },
@@ -137,7 +181,10 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   })
 
   const task = { ...(taskQuery.data || {}), ...draft } as Task
-  const set = <K extends keyof Task>(key: K, value: Task[K]) => setDraft(current => ({ ...current, [key]: value }))
+  const set = <K extends keyof Task>(key: K, value: Task[K]) => {
+    dirtyFields.current.add(key)
+    setDraft(current => ({ ...current, [key]: value }))
+  }
   const list = lists.find(item => item.id === task.bucketId)
   const backLabel = task.parentTaskId ? "Back to parent task" : returnLabel
   const subtasks = [...(subtasksQuery.data?.tasks || [])].sort((left, right) => {
@@ -177,7 +224,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
                   <div className="property-row"><Label htmlFor="workspace-detail-status">Status</Label><Select id="workspace-detail-status" name="status" value={task.status || "new"} onChange={event => set("status", event.target.value as TaskStatus)}>{statuses.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></div>
                   <div className="property-row"><Label htmlFor="workspace-detail-owner">Agent</Label><Select id="workspace-detail-owner" name="assigneeAgentId" aria-label="Assigned agent" value={task.assigneeAgentId || ""} disabled={!agents.length} onChange={event => set("assigneeAgentId", event.target.value)}><option value="">{agents.length ? "No agent" : "None connected"}</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></div>
                   <div className="property-row"><Label htmlFor="workspace-detail-list">List</Label><Select id="workspace-detail-list" name="bucketId" value={task.bucketId || ""} disabled={Boolean(task.parentTaskId)} onChange={event => set("bucketId", event.target.value)}>{lists.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></div>
-                  <div className="property-row"><Label>Priority</Label><PriorityPicker value={(task.priority || "p1") as Priority} onChange={value => set("priority", value)} allowNone={false} /></div>
+                  <div className="property-row"><Label>Priority</Label><PriorityPicker value={(task.priority || "p1") as Priority} onChange={priority => updatePriority.mutate({ targetTaskID: taskId, priority })} allowNone={false} disabled={updatePriority.isPending} /></div>
                   <div className="property-row"><Label htmlFor="workspace-detail-date">Plan for</Label><Input id="workspace-detail-date" name="scheduledDate" type="date" value={task.scheduledDate || ""} onChange={event => set("scheduledDate", event.target.value)} /></div>
                   <div className="properties-note"><strong>{task.status === "needs_review" ? "Human approval" : "Task details"}</strong><p>{task.status === "needs_review" ? "Agent work is paused in Review. Approve the result or send it back for another pass." : task.assigneeAgentId ? "Assigned work is queued for a connected runner. Agent outputs return here for review." : "Assign an agent when this task is ready to run."}</p></div>
                 </aside>

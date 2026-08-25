@@ -43,6 +43,8 @@ function fixture(options = {}) {
     summaryDelay,
     releaseSummary: () => releaseSummary?.(),
     taskCreateFailure: "",
+    taskUpdateError: "",
+    taskUpdateDelay: null,
   };
 }
 
@@ -137,6 +139,15 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       return task ? json(response, task) : json(response, { error: "not found" }, 404);
     }
     if (taskMatch && request.method === "PATCH") {
+      if (state.taskUpdateDelay) {
+        await state.taskUpdateDelay;
+        state.taskUpdateDelay = null;
+      }
+      if (state.taskUpdateError) {
+        const error = state.taskUpdateError;
+        state.taskUpdateError = "";
+        return json(response, { error }, 503);
+      }
       const task = [...state.tasks, ...state.subtasks].find(item => item.id === taskMatch[1]);
       Object.assign(task, await requestJSON(request));
       return json(response, task);
@@ -846,6 +857,33 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   const { page, state } = await startApp(t);
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
+  await page.getByLabel("Title", { exact: true }).fill("Unsaved priority draft");
+  const priority = page.getByRole("group", { name: "Priority" });
+  const priorityError = "Could not update priority.";
+  state.taskUpdateError = priorityError;
+  await priority.getByRole("button", { name: "Normal priority" }).click();
+  await page.getByRole("alert").getByText(priorityError).waitFor();
+  assert.equal(await priority.getByRole("button", { name: "Urgent priority" }).getAttribute("aria-pressed"), "true");
+  assert.equal(state.tasks[0].priority, "p0");
+  await priority.getByRole("button", { name: "Normal priority" }).click();
+  await page.waitForFunction(() => {
+    const button = document.querySelector('[aria-label="Task properties"] [aria-label="Normal priority"]');
+    return button?.getAttribute("aria-pressed") === "true" && !button.disabled;
+  });
+  assert.equal(state.tasks[0].priority, "p2");
+  assert.equal(state.requests.filter(request => request === "PATCH /api/v1/tasks/task-parent").length, 2);
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Unsaved priority draft");
+  await page.getByRole("button", { name: "Close task" }).click();
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(await page.getByRole("group", { name: "Priority" }).getByRole("button", { name: "Normal priority" }).getAttribute("aria-pressed"), "true");
+  await page.getByRole("button", { name: "Close task" }).click();
+  state.tasks[0].description = "Fresh server brief";
+  const refreshedTask = page.waitForResponse(value => value.request().method() === "GET" && value.url().endsWith("/api/v1/tasks/task-parent"));
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await refreshedTask;
+  await page.getByLabel("Brief").waitFor();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Brief"]')?.value === "Fresh server brief");
   assert.equal(await page.getByRole("menuitem", { name: "Delete task" }).count(), 0);
   await page.getByRole("button", { name: "Task actions" }).click();
   await page.getByRole("menuitem", { name: "Delete task" }).waitFor();
@@ -870,6 +908,26 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
   assert.equal(state.tasks[0].title, "Publish the React migration story");
   assert.equal(state.subtasks.find(task => task.title === "Record the final walkthrough").status, "done");
+});
+
+test("a delayed priority update stays with its original task", async t => {
+  const { page, state, pageErrors } = await startApp(t);
+  let releaseTaskUpdate;
+  state.taskUpdateDelay = new Promise(resolve => { releaseTaskUpdate = resolve; });
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  const response = page.waitForResponse(value => value.request().method() === "PATCH" && value.url().endsWith("/api/v1/tasks/task-parent"));
+  await page.getByRole("group", { name: "Priority" }).getByRole("button", { name: "High priority" }).click();
+  await page.locator('[data-open-task="task-child"]').click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Title"]')?.value === "Research examples");
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
+  releaseTaskUpdate();
+  await response;
+  await page.waitForFunction(() => document.querySelector('[aria-label="Task properties"] [aria-label="Normal priority"]')?.getAttribute("aria-pressed") === "true");
+  assert.equal(state.tasks[0].priority, "p1");
+  assert.equal(state.subtasks[0].priority, "p2");
+  assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
+  assert.deepEqual(pageErrors, []);
 });
 
 test("dragging a task moves it through the workflow", async t => {
