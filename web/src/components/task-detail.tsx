@@ -41,7 +41,10 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   const actionsTrigger = React.useRef<HTMLButtonElement>(null)
   const activeTaskID = React.useRef(taskId)
   const dirtyFields = React.useRef(new Set<keyof Task>())
-  activeTaskID.current = taskId
+
+  React.useLayoutEffect(() => {
+    activeTaskID.current = taskId
+  }, [taskId])
 
   const taskQuery = useQuery({ queryKey: ["task", taskId], queryFn: () => api.get<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}`), staleTime: 0 })
   const subtasksQuery = useQuery({
