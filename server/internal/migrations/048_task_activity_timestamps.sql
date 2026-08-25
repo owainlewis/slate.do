@@ -22,6 +22,10 @@ ON task_run_starts (owner_user_id, started_at DESC);
 CREATE INDEX task_run_starts_started_idx
 ON task_run_starts (started_at);
 
+CREATE INDEX task_run_starts_task_idx
+ON task_run_starts (task_id)
+WHERE task_id IS NOT NULL;
+
 INSERT INTO task_run_starts (owner_user_id, run_id, task_id, started_at)
 SELECT owner_user_id, execution_run_id, id, updated_at
 FROM tasks

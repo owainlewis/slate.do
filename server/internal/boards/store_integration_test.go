@@ -1061,6 +1061,74 @@ func TestTaskCreationPersistsStatusAndPriorityAtomically(t *testing.T) {
 	}
 }
 
+func TestTaskCreationStatusMatchesAssignmentIntent(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	bucket, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Workflow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agentID string
+	if err := db.QueryRow(ctx, `
+		INSERT INTO agents (owner_user_id, name)
+		VALUES ($1, 'Queue worker')
+		RETURNING id::text
+	`, userID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, requestedStatus := range []string{StatusNew, StatusWorking, StatusNeedsReview, StatusDone} {
+		t.Run(requestedStatus, func(t *testing.T) {
+			unassignedInput := CreateTaskInput{
+				Title:          "Unassigned " + requestedStatus,
+				Status:         requestedStatus,
+				IdempotencyKey: "unassigned-" + requestedStatus,
+			}
+			unassigned, err := store.CreateTask(ctx, userID, bucket.ID, unassignedInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unassigned.Status != requestedStatus {
+				t.Fatalf("unassigned status = %q, want %q", unassigned.Status, requestedStatus)
+			}
+			unassignedReplay, err := store.CreateTask(ctx, userID, bucket.ID, unassignedInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unassignedReplay.ID != unassigned.ID || unassignedReplay.Status != requestedStatus {
+				t.Fatalf("unassigned replay = %#v, want original task %#v", unassignedReplay, unassigned)
+			}
+
+			assignedInput := CreateTaskInput{
+				Title:           "Assigned " + requestedStatus,
+				Status:          requestedStatus,
+				AssigneeAgentID: agentID,
+				IdempotencyKey:  "assigned-" + requestedStatus,
+			}
+			assigned, err := store.CreateTask(ctx, userID, bucket.ID, assignedInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if assigned.Status != StatusQueued {
+				t.Fatalf("assigned status = %q, want %q for requested status %q", assigned.Status, StatusQueued, requestedStatus)
+			}
+			assignedReplay, err := store.CreateTask(ctx, userID, bucket.ID, assignedInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if assignedReplay.ID != assigned.ID || assignedReplay.Status != StatusQueued {
+				t.Fatalf("assigned replay = %#v, want original queued task %#v", assignedReplay, assigned)
+			}
+		})
+	}
+}
+
 func TestInboxCaptureIdempotencySurvivesInboxReplacement(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
