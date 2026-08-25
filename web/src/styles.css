@@ -172,14 +172,7 @@ a.bg-primary { color: var(--primary-foreground); }
 
 .board-scroll { min-height: 0; flex: 1; overflow-x: auto; padding-bottom: .75rem; }
 .board { display: grid; width: 100%; min-width: 900px; min-height: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; align-items: stretch; }
-.board-column { display: flex; min-height: 100%; flex-direction: column; border: 1px solid color-mix(in srgb, var(--border) 66%, transparent); border-radius: 1rem; background: color-mix(in srgb, #64748b 2.2%, var(--background)); padding: .75rem; transition: .15s ease; }
-.board-column.column-working { background: color-mix(in srgb, #6366f1 2.6%, var(--background)); }
-.board-column.column-review { background: color-mix(in srgb, #d97706 2.6%, var(--background)); }
-.board-column.column-done { background: color-mix(in srgb, #059669 2.4%, var(--background)); }
-.dark .board-column { border-color: color-mix(in srgb, var(--border) 72%, transparent); background: color-mix(in srgb, #94a3b8 2%, var(--background)); }
-.dark .board-column.column-working { background: color-mix(in srgb, #818cf8 2.7%, var(--background)); }
-.dark .board-column.column-review { background: color-mix(in srgb, #f59e0b 2.7%, var(--background)); }
-.dark .board-column.column-done { background: color-mix(in srgb, #34d399 2.4%, var(--background)); }
+.board-column { display: flex; min-height: 100%; flex-direction: column; border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 1rem; background: color-mix(in srgb, var(--card) 44%, var(--background)); padding: .75rem; transition: .15s ease; }
 .board-column.drag-over { border-color: var(--primary); background: color-mix(in srgb, var(--accent) 72%, transparent); }
 .column-head { display: flex; min-height: 2.5rem; align-items: center; justify-content: space-between; padding: .05rem .15rem .55rem; }
 .column-title { display: flex; align-items: center; gap: .5rem; font-size: .84rem; font-weight: 650; }
@@ -189,10 +182,7 @@ a.bg-primary { color: var(--primary-foreground); }
 .column-action:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .column-action svg { width: 1rem; height: 1rem; stroke-width: 1.8; transition: transform .15s ease; }
 .column-action:hover svg { transform: scale(1.08); }
-.column-dot { width: .48rem; height: .48rem; border-radius: 50%; background: #92939a; }
-.column-dot.working { background: #6366d8; }
-.column-dot.review { background: #d68a2e; }
-.column-dot.done { background: #3a9a70; }
+.column-dot { width: .48rem; height: .48rem; border-radius: 50%; background: color-mix(in srgb, var(--muted-foreground) 78%, transparent); }
 .column-count { color: var(--muted-foreground); font-size: .74rem; font-weight: 500; font-variant-numeric: tabular-nums; }
 .task-stack { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: .65rem; }
 .task-card { position: relative; width: 100%; border: 1px solid color-mix(in srgb, var(--border) 88%, transparent); border-radius: .78rem; background: color-mix(in srgb, var(--card) 96%, transparent); padding: .8rem; text-align: left; box-shadow: 0 1px 2px rgb(15 23 42 / .05), 0 1px 1px rgb(15 23 42 / .02); transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; cursor: pointer; }
@@ -612,7 +602,7 @@ a.bg-primary { color: var(--primary-foreground); }
 .stat-card { padding: 1rem; }
 .stat-card span { color: var(--muted-foreground); font-size: .65rem; text-transform: uppercase; letter-spacing: .1em; }
 .stat-card strong { display: block; margin-top: .35rem; font-family: var(--serif); font-size: 1.65rem; font-weight: 400; }
-.workspace-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: .8rem; overflow: hidden; }
+.workspace-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 1rem 0 .8rem; overflow: hidden; }
 .workspace-summary-item { min-width: 0; border-right: 1px solid var(--border); padding: .65rem .85rem; }
 .workspace-summary-item:last-child { border-right: 0; }
 .workspace-summary-item strong { display: block; font-family: var(--serif); font-size: 1.3rem; font-weight: 400; line-height: 1; }

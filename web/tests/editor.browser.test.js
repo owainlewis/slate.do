@@ -238,6 +238,13 @@ test("React workspace renders the full task board accessibly", async t => {
   for (const heading of ["Todo", "In Progress", "Review", "Done"]) await page.getByText(heading, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
   assert.deepEqual(await page.getByLabel("Filter by agent").locator("option").allTextContents(), ["Any agent", "Research agent"]);
+  const columnStyles = await page.locator(".board-column").evaluateAll(columns => columns.map(column => ({
+    background: getComputedStyle(column).backgroundColor,
+    dot: getComputedStyle(column.querySelector(".column-dot")).backgroundColor,
+  })));
+  assert.equal(new Set(columnStyles.map(style => style.background)).size, 1);
+  assert.equal(new Set(columnStyles.map(style => style.dot)).size, 1);
+  assert.ok(parseFloat(await page.getByRole("region", { name: "Workspace summary" }).evaluate(element => getComputedStyle(element).marginTop)) >= 16);
   const results = await new AxeBuilder({ page }).analyze();
   assert.deepEqual(results.violations, []);
   assert.deepEqual(pageErrors, []);
