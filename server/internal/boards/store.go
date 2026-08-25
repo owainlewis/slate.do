@@ -809,7 +809,7 @@ func insertTask(ctx context.Context, db queryRower, bucket Bucket, title string,
 	if status == "" {
 		status = StatusNew
 	}
-	if assigneeAgentID != "" && status == StatusNew {
+	if assigneeAgentID != "" {
 		status = StatusQueued
 	}
 	row := db.QueryRow(ctx, `
