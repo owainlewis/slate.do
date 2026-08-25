@@ -157,7 +157,7 @@ a.bg-primary { color: var(--primary-foreground); }
 .filters .search-box { position: relative; width: min(280px, 32vw); }
 .filters .search-box svg { position: absolute; top: 50%; left: .7rem; width: .9rem; transform: translateY(-50%); color: var(--muted-foreground); }
 .filters .search-box input { padding-left: 2.1rem; }
-.compact-select { width: auto; min-width: 120px; }
+.compact-select { width: auto; min-width: 120px; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238b8d98' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .7rem center; background-size: .8rem; padding-right: 2rem; }
 .view-toggle { display: flex; border: 1px solid var(--border); border-radius: .65rem; background: color-mix(in srgb, var(--muted) 36%, var(--card)); padding: .2rem; }
 .view-toggle button { display: flex; height: 1.9rem; align-items: center; gap: .35rem; border: 0; border-radius: .5rem; background: transparent; padding: 0 .6rem; color: var(--muted-foreground); font-size: .72rem; cursor: pointer; }
 .view-toggle button:hover { color: var(--foreground); }
@@ -315,6 +315,14 @@ a.bg-primary { color: var(--primary-foreground); }
 .priority-picker button:disabled { opacity: .45; cursor: default; }
 .priority-picker .priority-mark { width: 1rem; height: 1rem; }
 .priority-picker .priority-mark svg { width: .9rem; height: .9rem; }
+.priority-filter { display: inline-flex; height: 2.25rem; align-items: center; gap: .12rem; border: 1px solid var(--input); border-radius: .6rem; background: var(--background); padding: .2rem; }
+.priority-filter button { display: grid; width: 1.75rem; height: 1.65rem; place-items: center; border: 0; border-radius: .4rem; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.priority-filter button:hover { background: var(--muted); }
+.priority-filter button[aria-pressed="true"] { background: var(--card); box-shadow: 0 1px 3px rgb(15 23 42 / .12); }
+.priority-filter button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.priority-filter button > svg { width: .85rem; height: .85rem; }
+.priority-filter .priority-mark { width: 1rem; height: 1rem; }
+.priority-filter .priority-mark svg { width: .9rem; height: .9rem; }
 .list-actions-menu { width: 238px; }
 .list-color-picker { display: grid; grid-template-columns: repeat(5, 1fr); gap: .3rem; padding: .35rem .5rem .6rem; }
 .list-color-choice { position: relative; display: grid; width: 2rem; height: 2rem; place-items: center; border: 1px solid transparent; border-radius: .55rem; background: transparent; cursor: pointer; }

@@ -238,6 +238,19 @@ test("React workspace renders the full task board accessibly", async t => {
   for (const heading of ["Todo", "In Progress", "Review", "Done"]) await page.getByText(heading, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
   assert.deepEqual(await page.getByLabel("Filter by agent").locator("option").allTextContents(), ["Any agent", "Research agent"]);
+  const priorityFilter = page.getByRole("group", { name: "Filter by priority" });
+  const urgentFilter = priorityFilter.getByRole("button", { name: "Urgent priority" });
+  assert.equal(await priorityFilter.getByRole("button", { name: "All priorities" }).getAttribute("aria-pressed"), "true");
+  assert.equal(await urgentFilter.getAttribute("title"), "Urgent");
+  await urgentFilter.press("Enter");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("priority") === "p0");
+  assert.equal(await urgentFilter.getAttribute("aria-pressed"), "true");
+  await priorityFilter.getByRole("button", { name: "All priorities" }).press("Enter");
+  await page.waitForFunction(() => !new URL(location.href).searchParams.has("priority"));
+  const agentSelectStyle = await page.getByLabel("Filter by agent").evaluate(element => ({ appearance: getComputedStyle(element).appearance, backgroundImage: getComputedStyle(element).backgroundImage, paddingRight: getComputedStyle(element).paddingRight }));
+  assert.equal(agentSelectStyle.appearance, "none");
+  assert.match(agentSelectStyle.backgroundImage, /svg/);
+  assert.ok(parseFloat(agentSelectStyle.paddingRight) >= 32);
   const columnStyles = await page.locator(".board-column").evaluateAll(columns => columns.map(column => ({
     background: getComputedStyle(column).backgroundColor,
     dot: getComputedStyle(column.querySelector(".column-dot")).backgroundColor,

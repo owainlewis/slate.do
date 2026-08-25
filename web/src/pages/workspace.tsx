@@ -8,7 +8,7 @@ import { Input, Select } from "@/components/ui/field"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TaskDetail } from "@/components/task-detail"
 import { TaskDeleteDialog } from "@/components/task-delete-dialog"
-import { PriorityBadge, priorityLabel } from "@/components/priority"
+import { PriorityBadge, PriorityFilter, priorityLabel } from "@/components/priority"
 import { listColors, ListColorDot, type ListColor } from "@/components/list-color"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
@@ -196,7 +196,7 @@ export function WorkspacePage() {
         <div className="filters" role="search">
           <div className="search-box"><Search /><Input aria-label="Search tasks" placeholder="Search tasks…" value={searchParams.get("q") || ""} onChange={event => updateFilter("q", event.target.value)} /></div>
           {agents.length > 0 && <Select className="compact-select" aria-label="Filter by agent" value={searchParams.get("assigneeAgentId") || ""} onChange={event => updateFilter("assigneeAgentId", event.target.value)}><option value="">Any agent</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select>}
-          <Select className="compact-select" aria-label="Filter by priority" value={searchParams.get("priority") || ""} onChange={event => updateFilter("priority", event.target.value)}><option value="">Any priority</option><option value="p0">Urgent</option><option value="p1">High</option><option value="p2">Normal</option></Select>
+          <PriorityFilter value={searchParams.get("priority") || ""} onChange={value => updateFilter("priority", value)} />
           {["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"].some(key => searchParams.has(key)) && <Button variant="ghost" size="sm" onClick={() => { const preserved = Object.fromEntries(["view", "sort", "group"].map(key => [key, searchParams.get(key)]).filter((entry): entry is [string, string] => Boolean(entry[1]))); setSearchParams(preserved, { replace: true }) }}>Clear</Button>}
         </div>
         <div className="table-toolbar-actions">

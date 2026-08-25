@@ -1,4 +1,4 @@
-import { Flag, Minus } from "lucide-react"
+import { Flag, ListFilter, Minus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Task } from "@/lib/types"
 
@@ -28,6 +28,15 @@ export function PriorityPicker({ value, onChange, allowNone = true, className, d
     <div className={cn("priority-picker", className)} role="group" aria-label="Priority">
       {allowNone && <button type="button" aria-label="No priority" aria-pressed={!value} title="No priority" disabled={disabled} onClick={() => onChange("")}><PriorityMark /></button>}
       {priorities.map(priority => <button key={priority.value} type="button" className={`priority-${priority.value}`} aria-label={`${priority.label} priority`} aria-pressed={value === priority.value} title={priority.label} disabled={disabled} onClick={() => onChange(priority.value)}><PriorityMark priority={priority.value} /></button>)}
+    </div>
+  )
+}
+
+export function PriorityFilter({ value, onChange }: { value?: string; onChange: (priority: Priority) => void }) {
+  return (
+    <div className="priority-filter" role="group" aria-label="Filter by priority">
+      <button type="button" aria-label="All priorities" aria-pressed={!value} title="All priorities" onClick={() => onChange("")}><ListFilter aria-hidden="true" /></button>
+      {priorities.map(priority => <button key={priority.value} type="button" className={`priority-${priority.value}`} aria-label={`${priority.label} priority`} aria-pressed={value === priority.value} title={priority.label} onClick={() => onChange(priority.value)}><PriorityMark priority={priority.value} /></button>)}
     </div>
   )
 }
