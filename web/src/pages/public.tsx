@@ -112,11 +112,11 @@ export function LandingPage() {
         </nav>
         <section className="hero">
           <div className="hero-copy">
-            <p className="landing-kicker">A control plane for human + agent work</p>
-            <h1>Stay on top of everything. <em>Operate at agent speed.</em></h1>
-            <p>Slate turns your emails, projects, commitments and loose ends into one clear operating plan. Agents help organise the noise, surface what needs your attention and execute the work.</p>
+            <p className="landing-kicker">Task management for people and AI agents</p>
+            <h1>Turn repeatable work into <em>executable SOPs.</em></h1>
+            <p>Slate is a shared task system for you and your AI agents. Templates turn recurring processes into executable SOPs, keeping every task, handoff and result in one place.</p>
             <div className="hero-actions"><Button asChild size="lg" className="landing-primary-cta"><Link to={signedIn ? "/app/tasks" : "/login"}>{signedIn ? "Open Slate" : "Log in to Slate"}<ArrowRight className="size-4" /></Link></Button><Button asChild size="lg" variant="ghost" className="landing-secondary-cta"><a href="mailto:owain@gradientwork.com?subject=Slate access">Request access</a></Button></div>
-            <div className="hero-proof" aria-label="Slate principles"><span>Human judgement</span><span>Agent execution</span><span>One shared state</span></div>
+            <div className="hero-proof" aria-label="Slate principles"><span>Reusable templates</span><span>Human + agent tasks</span><span>One shared record</span></div>
           </div>
           <figure className="hero-product">
             <div className="hero-product-bar" aria-hidden="true"><i /><i /><i /><span>slate.do / focus</span></div>
@@ -127,12 +127,12 @@ export function LandingPage() {
       </header>
       <main>
         <section className="landing-section">
-          <p className="landing-kicker">Less, on purpose</p>
-          <h2>One calm place for people and agents to decide what happens next.</h2>
+          <p className="landing-kicker">From process to progress</p>
+          <h2>Build the process once. Run it whenever the work comes up.</h2>
           <div className="principles">
-            <article className="principle"><span>01</span><h3>Lists for clear thinking</h3><p>Shape work around projects, goals and areas without turning your system into a maze.</p></article>
-            <article className="principle"><span>02</span><h3>One shared state</h3><p>Every task carries its brief, conversation, output and status. Everyone reads the same truth.</p></article>
-            <article className="principle"><span>03</span><h3>You think, they execute</h3><p>Keep the judgement. Give agents the ground to cover. Review the work that genuinely needs you.</p></article>
+            <article className="principle"><span>01</span><h3>Organise the work</h3><p>Use lists and priorities to keep projects, commitments and next steps clear.</p></article>
+            <article className="principle"><span>02</span><h3>Create executable SOPs</h3><p>Turn a repeatable process into a template with phases, ordered tasks and the context needed to do the work.</p></article>
+            <article className="principle"><span>03</span><h3>Run with people and agents</h3><p>Start a template to create the work. Slate keeps each handoff, status and output visible from start to finish.</p></article>
           </div>
         </section>
       </main>

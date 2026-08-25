@@ -508,6 +508,7 @@ a.bg-primary { color: var(--primary-foreground); }
 .landing-hero-shell { position: relative; isolation: isolate; color: #fff; background: #3f70ad; }
 .landing-hero-shell::before { position: absolute; z-index: 0; top: 0; right: 0; left: 0; height: clamp(720px, 72vw, 980px); content: ""; background: linear-gradient(180deg, rgb(24 50 88 / .48) 0%, rgb(34 67 112 / .54) 48%, #3f70ad 100%), linear-gradient(90deg, rgb(18 43 78 / .2), transparent 28%, transparent 72%, rgb(18 43 78 / .18)), url("/landing-cinematic.jpg") center top / cover no-repeat; }
 .landing-nav { position: relative; z-index: 1; display: flex; max-width: 1240px; margin: 0 auto; align-items: center; justify-content: space-between; padding: 1.45rem 2rem; }
+.landing-nav .brand-mark { color: #fff; }
 .landing-nav .brand-mark::before { background: radial-gradient(ellipse at 48% 48%, #29476f 0 34%, transparent 36%), #fff; box-shadow: inset -3px -2px 0 rgb(20 45 85 / .2); }
 .landing-nav .brand-mark .brand-suffix { color: inherit; }
 .landing-nav-links { display: flex; align-items: center; gap: 1.2rem; font-size: .78rem; font-weight: 500; }
