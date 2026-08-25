@@ -1,9 +1,12 @@
 package boards
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestValidStatus(t *testing.T) {
@@ -194,6 +197,27 @@ func TestTaskFilterRejectsInvalidLimit(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/v1/tasks?limit="+raw, nil)
 		if _, err := taskFilterFromQuery(req); err == nil {
 			t.Fatalf("limit %q was accepted", raw)
+		}
+	}
+}
+
+func TestWorkspaceTaskCursorRejectsSortOrderOutsidePostgresIntegerRange(t *testing.T) {
+	const scope = "workspace-sort"
+	for _, sortOrder := range []int{minPostgresInteger - 1, maxPostgresInteger + 1} {
+		raw, err := json.Marshal(workspaceTaskCursor{
+			BucketSortOrder: sortOrder,
+			BucketCreatedAt: time.Now().UTC(),
+			BucketID:        "11111111-1111-4111-8111-111111111111",
+			CreatedAt:       time.Now().UTC(),
+			ID:              "22222222-2222-4222-8222-222222222222",
+			Scope:           scope,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor := base64.RawURLEncoding.EncodeToString(raw)
+		if _, err := decodeWorkspaceTaskCursor(cursor, scope, "list"); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("sort order %d error = %v, want ErrInvalidData", sortOrder, err)
 		}
 	}
 }

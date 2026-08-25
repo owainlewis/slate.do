@@ -38,6 +38,11 @@ const (
 
 const inboxCaptureFingerprintTarget = "account-inbox"
 
+const (
+	minPostgresInteger = -1 << 31
+	maxPostgresInteger = 1<<31 - 1
+)
+
 type completedTaskCursor struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	ID        string    `json:"id"`
@@ -2386,7 +2391,7 @@ func decodeWorkspaceTaskCursor(raw string, scope string, sort string) (workspace
 			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
 		}
 	case "list", "list_priority":
-		if cursor.BucketSortOrder < 0 || cursor.BucketCreatedAt.IsZero() || !validUUIDText(cursor.BucketID) {
+		if cursor.BucketSortOrder < minPostgresInteger || cursor.BucketSortOrder > maxPostgresInteger || cursor.BucketCreatedAt.IsZero() || !validUUIDText(cursor.BucketID) {
 			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
 		}
 		if sort == "list_priority" && (cursor.PriorityRank < 0 || cursor.PriorityRank > 3) {

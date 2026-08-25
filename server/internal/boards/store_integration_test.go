@@ -415,6 +415,9 @@ func TestWorkspaceTaskSortingRemainsPaginated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(ctx, "UPDATE buckets SET sort_order = -5 WHERE id = $1", firstList.ID); err != nil {
+		t.Fatal(err)
+	}
 	firstLow, err := store.CreateTask(ctx, userID, firstList.ID, CreateTaskInput{Title: "First low", Priority: PriorityP2})
 	if err != nil {
 		t.Fatal(err)
