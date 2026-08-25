@@ -7,6 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Input, Label, Select, Textarea } from "@/components/ui/field"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { PriorityMark, PriorityPicker, type Priority } from "@/components/priority"
+import { TaskDeleteDialog } from "@/components/task-delete-dialog"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
 import type { Entry, Task, TaskStatus } from "@/lib/types"
@@ -36,6 +37,8 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   const [entryKind, setEntryKind] = React.useState<"comment" | "output">("comment")
   const [entryText, setEntryText] = React.useState("")
   const [error, setError] = React.useState("")
+  const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const actionsTrigger = React.useRef<HTMLButtonElement>(null)
 
   const taskQuery = useQuery({ queryKey: ["task", taskId], queryFn: () => api.get<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}`) })
   const subtasksQuery = useQuery({
@@ -45,7 +48,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   const entriesQuery = useQuery({ queryKey: ["entries", taskId], queryFn: () => api.get<{ entries: Entry[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/entries`) })
 
   React.useEffect(() => { if (taskQuery.data) setDraft({ ...taskQuery.data, priority: taskQuery.data.priority || "p1" }) }, [taskQuery.data])
-  React.useEffect(() => { setError(""); setEntryText(""); setSubtaskTitle(""); setShowSubtaskComposer(false) }, [taskId])
+  React.useEffect(() => { setError(""); setEntryText(""); setSubtaskTitle(""); setShowSubtaskComposer(false); setDeleteOpen(false) }, [taskId])
 
   const invalidateTaskSurfaces = async () => {
     await Promise.all([
@@ -154,7 +157,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
         <section aria-label="Task detail" data-detail-surface tabIndex={-1}>
           <header className="detail-head">
             <div className="detail-breadcrumb"><Button variant="ghost" size="sm" type="button" data-close-detail onClick={() => task.parentTaskId && onOpenTask ? onOpenTask(task.parentTaskId) : onClose()}><ArrowLeft className="size-4" />{backLabel}</Button><span>{list?.name || task.bucketName || "Inbox"}</span><span aria-hidden="true">/</span><strong>{task.parentTaskId ? "Subtask" : "Task"}</strong></div>
-            <div className="detail-head-actions"><DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" type="button" aria-label="Task actions"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>Task options</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem id="delete-task" className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={remove.isPending} onSelect={() => { if (window.confirm("Delete this task and its subtasks?")) remove.mutate() }}><Trash2 className="size-4" />{remove.isPending ? "Deleting…" : "Delete task"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu><Button variant="ghost" size="icon" type="button" onClick={onClose} aria-label="Close task"><span className="text-xl leading-none">×</span></Button></div>
+            <div className="detail-head-actions"><DropdownMenu><DropdownMenuTrigger asChild><Button ref={actionsTrigger} variant="ghost" size="icon" type="button" aria-label="Task actions"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>Task options</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem id="delete-task" className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={remove.isPending || !taskQuery.data} onSelect={() => { if (taskQuery.data) { remove.reset(); setError(""); setDeleteOpen(true) } }}><Trash2 className="size-4" />Delete task</DropdownMenuItem></DropdownMenuContent></DropdownMenu><Button variant="ghost" size="icon" type="button" onClick={onClose} aria-label="Close task"><span className="text-xl leading-none">×</span></Button></div>
           </header>
           {taskQuery.isPending ? <div className="loading-page"><div className="spinner" /></div> : taskQuery.isError ? <div className="detail-main"><p className="status-message error" role="alert">{taskQuery.error.message}</p></div> : (
             <form className="detail-form" id="workspace-detail-form" onSubmit={event => { event.preventDefault(); if (!String(draft.title || "").trim()) return setError("Title is required."); save.mutate() }}>
@@ -182,6 +185,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
             </form>
           )}
         </section>
+        <TaskDeleteDialog task={taskQuery.data || null} open={deleteOpen} pending={remove.isPending} error={remove.error instanceof Error ? remove.error.message : remove.error ? "Could not delete task" : ""} returnFocus={actionsTrigger.current} onCancel={() => setDeleteOpen(false)} onConfirm={() => { remove.reset(); remove.mutate() }} />
       </DialogContent>
     </Dialog>
   )

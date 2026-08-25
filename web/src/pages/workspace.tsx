@@ -7,6 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Input, Select } from "@/components/ui/field"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TaskDetail } from "@/components/task-detail"
+import { TaskDeleteDialog } from "@/components/task-delete-dialog"
 import { PriorityBadge, priorityLabel } from "@/components/priority"
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
@@ -22,7 +23,10 @@ const columns: Array<{ value: TaskStatus; label: string; statuses: TaskStatus[];
 const statusName = (value: string) => columns.find(column => column.statuses.includes(value as TaskStatus))?.label || value
 type TasksPage = { tasks: Task[]; nextCursor?: string }
 
-function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () => void; onMove: (status: TaskStatus) => void; onDelete: () => void }) {
+type DeleteTarget = { task: Task; returnFocus: HTMLButtonElement | null }
+
+function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () => void; onMove: (status: TaskStatus) => void; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
+  const actionsTrigger = React.useRef<HTMLButtonElement>(null)
   return (
     <div className="task-card group" draggable data-task={task.id} onDragStart={event => { event.dataTransfer.setData("text/task-id", task.id); event.dataTransfer.effectAllowed = "move" }} onDoubleClick={onOpen}>
       <button type="button" className="w-full text-left" data-open-task={task.id} aria-label={`Open task: ${task.title}`} onClick={onOpen}>
@@ -35,15 +39,29 @@ function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () =
         </span>
       </button>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild><button type="button" className="absolute right-1.5 top-1.5 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100 focus:opacity-100" aria-label={`Actions for ${task.title}`}><MoreHorizontal className="size-3.5" /></button></DropdownMenuTrigger>
+        <DropdownMenuTrigger asChild><button ref={actionsTrigger} type="button" className="absolute right-1.5 top-1.5 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100 focus:opacity-100" aria-label={`Actions for ${task.title}`}><MoreHorizontal className="size-3.5" /></button></DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuLabel>Move to</DropdownMenuLabel>
           {columns.map(column => <DropdownMenuItem key={column.value} onSelect={() => onMove(column.value)}>{column.label}</DropdownMenuItem>)}
           <DropdownMenuSeparator />
-          <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" onSelect={onDelete}><Trash2 className="size-4" />Delete task</DropdownMenuItem>
+          <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" onSelect={() => onDelete(actionsTrigger.current)}><Trash2 className="size-4" />Delete task</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+  )
+}
+
+function TaskTableActions({ task, onDelete }: { task: Task; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
+  const actionsTrigger = React.useRef<HTMLButtonElement>(null)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button ref={actionsTrigger} type="button" variant="ghost" size="icon" aria-label={`Actions for ${task.title}`}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>Task options</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" onSelect={() => onDelete(actionsTrigger.current)}><Trash2 className="size-4" />Delete task</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -55,6 +73,7 @@ export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [dragOver, setDragOver] = React.useState<TaskStatus | "">("")
   const [pageError, setPageError] = React.useState("")
+  const [deleteTarget, setDeleteTarget] = React.useState<DeleteTarget | null>(null)
   const selectedList = lists.find(list => list.id === listId)
   const scope = listId ? "list" : "all"
   const layout = searchParams.get("view") === "table" ? "table" : "board"
@@ -94,7 +113,7 @@ export function WorkspacePage() {
   })
   const deleteTask = useMutation({
     mutationFn: (id: string) => api.del(`/api/v1/tasks/${encodeURIComponent(id)}`),
-    onSuccess: refresh,
+    onSuccess: async () => { await refresh(); setPageError(""); setDeleteTarget(null) },
     onError: error => setPageError(error instanceof Error ? error.message : "Could not delete task"),
   })
   const renameList = useMutation({
@@ -133,7 +152,7 @@ export function WorkspacePage() {
           <Select className="compact-select" aria-label="Filter by priority" value={searchParams.get("priority") || ""} onChange={event => updateFilter("priority", event.target.value)}><option value="">Any priority</option><option value="p0">Urgent</option><option value="p1">High</option><option value="p2">Normal</option></Select>
           {["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"].some(key => searchParams.has(key)) && <Button variant="ghost" size="sm" onClick={() => { const view = searchParams.get("view"); setSearchParams(view ? { view } : {}, { replace: true }) }}>Clear</Button>}
         </div>
-        <div className="view-toggle" role="group" aria-label="Task layout"><button type="button" className={layout === "board" ? "active" : ""} aria-pressed={layout === "board"} onClick={() => switchLayout("board")}><BoardIcon className="size-3.5" /><span>Board</span></button><button type="button" className={layout === "table" ? "active" : ""} aria-pressed={layout === "table"} onClick={() => switchLayout("table")}><Rows3 className="size-3.5" /><span>Table</span></button></div>
+        <div className="view-toggle" role="group" aria-label="Task layout"><button type="button" className={layout === "board" ? "active" : ""} aria-label="Board" aria-pressed={layout === "board"} onClick={() => switchLayout("board")}><BoardIcon className="size-3.5" /><span>Board</span></button><button type="button" className={layout === "table" ? "active" : ""} aria-label="Table" aria-pressed={layout === "table"} onClick={() => switchLayout("table")}><Rows3 className="size-3.5" /><span>Table</span></button></div>
       </div>
       {(pageError || tasksQuery.isError) && <p className="status-message error mb-3" role="alert">{pageError || tasksQuery.error?.message}</p>}
       {tasksQuery.isPending ? <div className="loading-page"><div className="spinner" /></div> : layout === "board" ? (
@@ -141,14 +160,15 @@ export function WorkspacePage() {
           <div className="board workspace-flow">
             {columns.map(column => {
               const items = tasks.filter(task => column.statuses.includes(task.status))
-              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => { event.preventDefault(); setDragOver(""); const id = event.dataTransfer.getData("text/task-id"); if (id) moveTask.mutate({ id, status: column.value }) }}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add task</TooltipContent></Tooltip></header><div className="task-stack">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={() => { if (window.confirm(`Delete “${task.title}”?`)) deleteTask.mutate(task.id) }} />)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
+              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => { event.preventDefault(); setDragOver(""); const id = event.dataTransfer.getData("text/task-id"); if (id) moveTask.mutate({ id, status: column.value }) }}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add task</TooltipContent></Tooltip></header><div className="task-stack">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
             })}
           </div>
         </div>
       ) : (
-        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id} data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={() => openTask(task.id)}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "—"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td></tr>)}</tbody></table></div>
+        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th><th>Actions</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id} data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={() => openTask(task.id)}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "—"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td><td><TaskTableActions task={task} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} /></td></tr>)}</tbody></table></div>
       )}
       {tasksQuery.hasNextPage && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
+      <TaskDeleteDialog task={deleteTarget?.task || null} open={Boolean(deleteTarget)} pending={deleteTask.isPending} error={deleteTask.error instanceof Error ? deleteTask.error.message : deleteTask.error ? "Could not delete task" : ""} returnFocus={deleteTarget?.returnFocus} onCancel={() => setDeleteTarget(null)} onConfirm={() => { if (deleteTarget) { deleteTask.reset(); deleteTask.mutate(deleteTarget.task.id) } }} />
       {taskId && <TaskDetail taskId={taskId} backLabel={selectedList ? `Back to ${selectedList.name}` : "Back to all tasks"} onClose={() => navigate(`${listId ? `/app/lists/${encodeURIComponent(listId)}` : "/app/tasks"}${searchParams.toString() ? `?${searchParams}` : ""}`)} onOpenTask={openTask} />}
     </div>
   )

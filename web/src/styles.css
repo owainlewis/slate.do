@@ -643,6 +643,7 @@ a.bg-primary { color: var(--primary-foreground); }
   .compact-select { min-width: 108px; max-width: 145px; }
   .view-toggle span { display: none; }
   .data-table th:nth-child(n+3), .data-table td:nth-child(n+3) { display: none; }
+  .workspace-table th:last-child, .workspace-table td:last-child { display: table-cell; }
   .settings-row { grid-template-columns: 1fr; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .hero h1 { font-size: clamp(2.85rem, 14vw, 3.7rem); }
