@@ -213,7 +213,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
   page.on("pageerror", error => pageErrors.push(error.message));
   t.after(async () => { await browser.close(); await new Promise(resolve => server.close(resolve)); });
   const origin = `http://127.0.0.1:${server.address().port}`;
-  await page.goto(`${origin}/app/tasks`);
+  await page.goto(`${origin}${options.initialPath || "/app/tasks"}`);
   await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
   return { page, state, origin, pageErrors };
 }
@@ -234,10 +234,13 @@ async function createTemplate(page, name, steps) {
 }
 
 test("React workspace renders the full task board accessibly", async t => {
-  const { page, pageErrors } = await startApp(t);
+  const { page, state, pageErrors } = await startApp(t, { width: 1440, height: 960 }, { initialPath: "/app/tasks?assigneeAgentId=agent-research" });
   for (const heading of ["Todo", "In Progress", "Review", "Done"]) await page.getByText(heading, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
-  assert.deepEqual(await page.getByLabel("Filter by agent").locator("option").allTextContents(), ["Any agent", "Research agent"]);
+  await page.getByRole("button", { name: "Open task: Write the doc my boss asked for" }).waitFor();
+  await page.waitForFunction(() => !new URL(location.href).searchParams.has("assigneeAgentId"));
+  assert.equal(await page.getByLabel("Filter by agent").count(), 0);
+  assert.equal(state.requests.some(request => request.startsWith("GET /api/v1/tasks?") && request.includes("assigneeAgentId=")), false);
   const priorityFilter = page.getByRole("group", { name: "Filter by priority" });
   const urgentFilter = priorityFilter.getByRole("button", { name: "Urgent priority" });
   assert.equal(await priorityFilter.getByRole("button", { name: "All priorities" }).getAttribute("aria-pressed"), "true");
@@ -248,10 +251,6 @@ test("React workspace renders the full task board accessibly", async t => {
   assert.equal(await urgentFilter.getAttribute("aria-pressed"), "true");
   await priorityFilter.getByRole("button", { name: "All priorities" }).press("Enter");
   await page.waitForFunction(() => !new URL(location.href).searchParams.has("priority"));
-  const agentSelectStyle = await page.getByLabel("Filter by agent").evaluate(element => ({ appearance: getComputedStyle(element).appearance, backgroundImage: getComputedStyle(element).backgroundImage, paddingRight: getComputedStyle(element).paddingRight }));
-  assert.equal(agentSelectStyle.appearance, "none");
-  assert.match(agentSelectStyle.backgroundImage, /svg/);
-  assert.ok(parseFloat(agentSelectStyle.paddingRight) >= 32);
   const columnStyles = await page.locator(".board-column").evaluateAll(columns => columns.map(column => ({
     background: getComputedStyle(column).backgroundColor,
     dot: getComputedStyle(column.querySelector(".column-dot")).backgroundColor,

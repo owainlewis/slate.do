@@ -4,7 +4,7 @@ import { ArrowDownWideNarrow, Check, Columns3 as BoardIcon, CalendarDays, Layers
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuItemIndicator, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Input, Select } from "@/components/ui/field"
+import { Input } from "@/components/ui/field"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TaskDetail } from "@/components/task-detail"
 import { TaskDeleteDialog } from "@/components/task-delete-dialog"
@@ -79,7 +79,7 @@ function WorkspaceSummaryStrip({ summary }: { summary: WorkspaceSummary }) {
 
 export function WorkspacePage() {
   const { listId = "", taskId = "" } = useParams()
-  const { me, lists, agents, refreshLists } = useApp()
+  const { me, lists, refreshLists } = useApp()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -96,7 +96,7 @@ export function WorkspacePage() {
   const taskQueryString = React.useMemo(() => {
     const query = new URLSearchParams({ limit: "200", topLevel: "true" })
     if (listId) query.set("bucketId", listId)
-    for (const key of ["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"]) {
+    for (const key of ["q", "status", "priority", "plannedFrom", "plannedTo"]) {
       const value = searchParams.get(key)
       if (value) query.set(key, value)
     }
@@ -122,6 +122,13 @@ export function WorkspacePage() {
     refetchOnWindowFocus: true,
     retry: false,
   })
+
+  React.useEffect(() => {
+    if (!searchParams.has("assigneeAgentId")) return
+    const next = new URLSearchParams(searchParams)
+    next.delete("assigneeAgentId")
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
 
   React.useEffect(() => {
     if (layout === "table" && (sortByPriority || groupByList) && tasksQuery.hasNextPage && !tasksQuery.isFetchingNextPage && !tasksQuery.isFetchNextPageError) void tasksQuery.fetchNextPage()
@@ -195,9 +202,8 @@ export function WorkspacePage() {
       <div className="toolbar">
         <div className="filters" role="search">
           <div className="search-box"><Search /><Input aria-label="Search tasks" placeholder="Search tasks…" value={searchParams.get("q") || ""} onChange={event => updateFilter("q", event.target.value)} /></div>
-          {agents.length > 0 && <Select className="compact-select" aria-label="Filter by agent" value={searchParams.get("assigneeAgentId") || ""} onChange={event => updateFilter("assigneeAgentId", event.target.value)}><option value="">Any agent</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select>}
           <PriorityFilter value={searchParams.get("priority") || ""} onChange={value => updateFilter("priority", value)} />
-          {["q", "status", "priority", "assigneeAgentId", "plannedFrom", "plannedTo"].some(key => searchParams.has(key)) && <Button variant="ghost" size="sm" onClick={() => { const preserved = Object.fromEntries(["view", "sort", "group"].map(key => [key, searchParams.get(key)]).filter((entry): entry is [string, string] => Boolean(entry[1]))); setSearchParams(preserved, { replace: true }) }}>Clear</Button>}
+          {["q", "status", "priority", "plannedFrom", "plannedTo"].some(key => searchParams.has(key)) && <Button variant="ghost" size="sm" onClick={() => { const preserved = Object.fromEntries(["view", "sort", "group"].map(key => [key, searchParams.get(key)]).filter((entry): entry is [string, string] => Boolean(entry[1]))); setSearchParams(preserved, { replace: true }) }}>Clear</Button>}
         </div>
         <div className="table-toolbar-actions">
           {layout === "table" && <button type="button" className={`table-option ${sortByPriority ? "active" : ""}`} aria-pressed={sortByPriority} onClick={() => updateFilter("sort", sortByPriority ? "" : "priority")}><ArrowDownWideNarrow aria-hidden="true" />Priority order</button>}
