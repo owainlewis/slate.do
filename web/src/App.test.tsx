@@ -22,12 +22,12 @@ test("workspace summary cache entries are isolated by account", () => {
   expect(client.getQueryData(workspaceSummaryQueryKeyFor("account-b"))).toBeUndefined()
 })
 
-test("the landing page explains Slate and executable SOPs", async () => {
+test("the landing page explains Slate as a shared task list", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ authenticated: false }), { status: 200 })))
   renderApp()
-  expect(await screen.findByRole("heading", { name: /turn repeatable work into executable sops/i })).toBeInTheDocument()
-  expect(screen.getByText(/slate is a shared task system for you and your ai agents/i)).toBeInTheDocument()
-  expect(screen.getByRole("heading", { name: "Create executable SOPs" })).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: /one shared task list for you and your agents/i })).toBeInTheDocument()
+  expect(screen.getByText(/slate keeps every task, brief, conversation and result in one place/i)).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "Save reusable templates" })).toBeInTheDocument()
   expect(screen.getAllByRole("link", { name: /log in/i })[0]).toHaveAttribute("href", "/login")
 })
 
@@ -54,7 +54,7 @@ test("the templates route starts new accounts without shared defaults", async ()
 })
 
 test.each([
-  ["/", /turn repeatable work into executable sops/i],
+  ["/", /one shared task list for you and your agents/i],
   ["/login", "Welcome back."],
   ["/forgot-password", "Reset your password."],
   ["/reset-password", "Choose a new password."],
