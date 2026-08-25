@@ -244,6 +244,7 @@ test("React workspace renders the full task board accessibly", async t => {
   assert.equal(await urgentFilter.getAttribute("title"), "Urgent");
   await urgentFilter.press("Enter");
   await page.waitForFunction(() => new URL(location.href).searchParams.get("priority") === "p0");
+  await page.waitForFunction(() => document.querySelector('[aria-label="Urgent priority"]')?.getAttribute("aria-pressed") === "true");
   assert.equal(await urgentFilter.getAttribute("aria-pressed"), "true");
   await priorityFilter.getByRole("button", { name: "All priorities" }).press("Enter");
   await page.waitForFunction(() => !new URL(location.href).searchParams.has("priority"));
