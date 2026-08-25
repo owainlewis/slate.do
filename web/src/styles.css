@@ -130,6 +130,12 @@ a.bg-primary { color: var(--primary-foreground); }
 .list-drag-handle:active { cursor: grabbing; }
 .list-drag-handle:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .list-drag-handle svg { width: .85rem; height: .85rem; }
+.list-touch-controls { display: none; }
+.list-touch-controls button { display: grid; width: 1.9rem; height: 2rem; place-items: center; border: 0; border-radius: .4rem; background: transparent; color: var(--muted-foreground); }
+.list-touch-controls button:disabled { opacity: .28; }
+.list-touch-controls button:not(:disabled):active { background: var(--muted); color: var(--foreground); }
+.list-touch-controls button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.list-touch-controls svg { width: .82rem; height: .82rem; }
 .list-color-dot { display: inline-block; width: .62rem; height: .62rem; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .08); }
 .sidebar-user { display: flex; align-items: center; gap: .65rem; border-top: 1px solid var(--sidebar-border); padding: .75rem .35rem 0; }
 .avatar { display: grid; width: 2rem; height: 2rem; flex: none; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-foreground); font-size: .72rem; font-weight: 700; }
@@ -683,6 +689,12 @@ a.bg-primary { color: var(--primary-foreground); }
   .template-workflow { grid-template-columns: 1fr; }
   .template-phase:nth-child(even) { border-left: 0; }
   .template-phase:nth-child(n + 2) { border-top: 1px solid var(--border); }
+}
+
+@media (max-width: 900px), (hover: none), (pointer: coarse) {
+  .sidebar-list-item .nav-link { padding-right: 4.25rem; }
+  .list-drag-handle { display: none; }
+  .list-touch-controls { position: absolute; right: .12rem; display: flex; }
 }
 
 @media (max-width: 620px) {

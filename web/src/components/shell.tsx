@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { NavLink, useLocation, useNavigate } from "react-router-dom"
-import { Bot, CalendarDays, ChevronDown, GripVertical, Inbox, LayoutTemplate, ListTodo, LogOut, Menu, Plus, Play, Search, Settings, UserRound, Workflow, X } from "lucide-react"
+import { Bot, CalendarDays, ChevronDown, ChevronUp, GripVertical, Inbox, LayoutTemplate, ListTodo, LogOut, Menu, Plus, Play, Search, Settings, UserRound, Workflow, X } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -20,7 +20,7 @@ function NavigationLink({ to, icon: Icon, children, count, id }: { to: string; i
   return <NavLink id={id} to={to} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}><Icon /><span>{children}</span>{typeof count === "number" && count > 0 && <span className="count">{count}</span>}</NavLink>
 }
 
-function SidebarListLink({ list, disabled, onMove }: { list: List; disabled: boolean; onMove: (sourceID: string, targetID: string) => void }) {
+function SidebarListLink({ list, previousID, nextID, disabled, onMove }: { list: List; previousID?: string; nextID?: string; disabled: boolean; onMove: (sourceID: string, targetID: string) => void }) {
   return (
     <div
       className="sidebar-list-item"
@@ -47,6 +47,10 @@ function SidebarListLink({ list, disabled, onMove }: { list: List; disabled: boo
           if (targetID) { event.preventDefault(); onMove(list.id, targetID) }
         }}
       ><GripVertical aria-hidden="true" /></button>
+      <div className="list-touch-controls">
+        <button type="button" aria-label={`Move ${list.name} up`} disabled={disabled || !previousID} onClick={() => { if (previousID) onMove(list.id, previousID) }}><ChevronUp aria-hidden="true" /></button>
+        <button type="button" aria-label={`Move ${list.name} down`} disabled={disabled || !nextID} onClick={() => { if (nextID) onMove(list.id, nextID) }}><ChevronDown aria-hidden="true" /></button>
+      </div>
     </div>
   )
 }
@@ -197,7 +201,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="nav-group">
             <div className="nav-label"><span>Lists</span><button type="button" onClick={() => { setListError(""); setListDialog(true) }} aria-label="New list"><Plus className="size-3.5" /></button></div>
-            {lists.filter(list => !list.isInbox).map(list => <SidebarListLink key={list.id} list={list} disabled={reorderLists.isPending} onMove={moveList} />)}
+            {lists.filter(list => !list.isInbox).map((list, index, customLists) => <SidebarListLink key={list.id} list={list} previousID={customLists[index - 1]?.id} nextID={customLists[index + 1]?.id} disabled={reorderLists.isPending} onMove={moveList} />)}
           </div>
           <div className="nav-group">
             <div className="nav-label"><span>Activity</span></div>

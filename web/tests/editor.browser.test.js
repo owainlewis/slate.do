@@ -69,7 +69,9 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
     }
     if (url.pathname === "/api/v1/lists/reorder" && request.method === "POST") {
       const { ids } = await requestJSON(request);
-      state.lists = ids.map((id, sortOrder) => ({ ...state.lists.find(item => item.id === id), sortOrder }));
+      const requestedIDs = new Set(ids);
+      const ordered = [...ids.map(id => state.lists.find(item => item.id === id)), ...state.lists.filter(item => !requestedIDs.has(item.id))];
+      state.lists = ordered.map((list, sortOrder) => ({ ...list, sortOrder }));
       return json(response, { ok: true });
     }
     const listMatch = url.pathname.match(/^\/api\/v1\/lists\/([^/]+)$/);
@@ -974,7 +976,12 @@ test("mobile navigation and task detail fit a narrow viewport", async t => {
   assert.ok(state.subtasks.some(task => task.id === "task-child"));
   await page.getByRole("button", { name: "Open navigation" }).click();
   assert.equal(await page.locator("#primary-navigation").evaluate(element => element.classList.contains("open")), true);
-  await page.getByRole("button", { name: "Close navigation" }).first().click();
+  assert.equal(await page.getByRole("button", { name: "Move Product up" }).isEnabled(), false);
+  await page.getByRole("button", { name: "Move Product down" }).click();
+  await page.waitForFunction(() => Array.from(document.querySelectorAll("[data-list-id]")).map(element => element.dataset.listId).join(",") === "list-writing,list-product");
+  assert.deepEqual(state.lists.map(list => list.id), ["list-inbox", "list-writing", "list-product"]);
+  assert.equal(await page.getByRole("button", { name: "Move Product down" }).isEnabled(), false);
+  await page.locator("#primary-navigation").getByRole("button", { name: "Close navigation" }).click();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   const bounds = await page.getByRole("region", { name: "Task detail" }).boundingBox();
   assert.ok(bounds.width <= 390);
