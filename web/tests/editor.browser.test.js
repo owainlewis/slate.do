@@ -31,6 +31,7 @@ function fixture() {
     loseParentResponse: false,
     loseSubtaskResponseFor: "",
     taskCreateDelay: null,
+    taskCreateFailure: "",
   };
 }
 
@@ -67,6 +68,11 @@ async function startApp(t, viewport = { width: 1440, height: 960 }) {
       }
       const idempotencyKey = request.headers["idempotency-key"];
       state.idempotencyRequests.push({ path: url.pathname, key: idempotencyKey });
+      if (state.taskCreateFailure) {
+        const error = state.taskCreateFailure;
+        state.taskCreateFailure = "";
+        return json(response, { error }, 503);
+      }
       const replay = idempotencyKey && state.idempotency.get(idempotencyKey);
       if (replay) return json(response, replay, 200);
       const bucketId = listTaskMatch ? listTaskMatch[1] : "list-inbox";
@@ -244,20 +250,61 @@ test("workspace pagination loads and retains subsequent task pages", async t => 
   assert.equal(state.requests.some(request => request.includes("cursor=page-two")), true);
 });
 
-test("new tasks persist a priority and start in the selected column", async t => {
+test("task creation respects every column and queues every agent assignment", async t => {
+  const { page, state, origin } = await startApp(t);
+  const columns = [
+    { label: "Todo", status: "new" },
+    { label: "In Progress", status: "working" },
+    { label: "Review", status: "needs_review" },
+    { label: "Done", status: "done" },
+  ];
+
+  for (const assigned of [false, true]) {
+    for (const column of columns) {
+      await page.goto(`${origin}/app/tasks`);
+      await page.getByRole("button", { name: `Add task to ${column.label}` }).click();
+      const dialog = page.getByRole("dialog", { name: "New task" });
+      const title = `${assigned ? "Assigned" : "Unassigned"} ${column.label}`;
+      await dialog.getByRole("textbox", { name: "Task title" }).fill(title);
+      await dialog.getByRole("textbox", { name: "Task brief" }).fill(`Created from ${column.label}.`);
+      if (assigned) await dialog.getByLabel("Assigned agent").selectOption("agent-research");
+      if (!assigned && column.status === "working") {
+        await dialog.getByRole("button", { name: "Priority" }).click();
+        await page.getByRole("menuitem", { name: "Normal" }).click();
+      }
+      await dialog.getByRole("button", { name: assigned ? "Create & queue" : "Create task" }).click();
+      await page.getByRole("dialog", { name: "Task detail" }).waitFor();
+
+      const created = state.tasks.find(task => task.title === title);
+      assert.ok(created);
+      assert.equal(created.status, assigned ? "queued" : column.status);
+      assert.equal(created.assigneeAgentId, assigned ? "agent-research" : "");
+      if (!assigned && column.status === "working") assert.equal(created.priority, "p2");
+      assert.equal(state.requests.some(request => request.startsWith(`PATCH /api/v1/tasks/${created.id}`)), false);
+    }
+  }
+});
+
+test("task creation failure keeps the form and can be retried", async t => {
   const { page, state } = await startApp(t);
-  await page.getByRole("button", { name: "Add task to In Progress" }).click();
+  state.taskCreateFailure = "Task creation is temporarily unavailable.";
+  await page.getByRole("button", { name: "Add task to Review" }).click();
   const dialog = page.getByRole("dialog", { name: "New task" });
-  await dialog.getByRole("textbox", { name: "Task title" }).fill("Prepare the launch review");
-  await dialog.getByRole("textbox", { name: "Task brief" }).fill("Bring the decision and supporting evidence together.");
-  await dialog.getByRole("button", { name: "Priority" }).click();
-  await page.getByRole("menuitem", { name: "Normal" }).click();
+  await dialog.getByRole("textbox", { name: "Task title" }).fill("Keep this review task");
+  await dialog.getByRole("textbox", { name: "Task brief" }).fill("Do not lose this brief.");
+  await dialog.getByRole("button", { name: "Create task" }).click();
+
+  await dialog.getByRole("alert").getByText("Task creation is temporarily unavailable.").waitFor();
+  assert.equal(await dialog.isVisible(), true);
+  assert.equal(await dialog.getByRole("textbox", { name: "Task title" }).inputValue(), "Keep this review task");
+  assert.equal(await dialog.getByRole("textbox", { name: "Task brief" }).inputValue(), "Do not lose this brief.");
+  assert.equal(await dialog.getByRole("button", { name: "Create task" }).isEnabled(), true);
+
   await dialog.getByRole("button", { name: "Create task" }).click();
   await page.getByRole("dialog", { name: "Task detail" }).waitFor();
-  const created = state.tasks.find(task => task.title === "Prepare the launch review");
-  assert.equal(created.priority, "p2");
-  assert.equal(created.status, "working");
-  assert.equal(state.requests.some(request => request.startsWith(`PATCH /api/v1/tasks/${created.id}`)), false);
+  const created = state.tasks.find(task => task.title === "Keep this review task");
+  assert.ok(created);
+  assert.equal(created.status, "needs_review");
 });
 
 test("task creation keeps every exit and field disabled while pending", async t => {
