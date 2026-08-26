@@ -44,7 +44,7 @@ export interface Task {
   title: string
   description?: string
   status: TaskStatus
-  priority?: "p0" | "p1" | "p2" | ""
+  priority?: "p0" | "p1" | "p2" | "p3" | ""
   bucketId: ID
   bucketName?: string
   listName?: string

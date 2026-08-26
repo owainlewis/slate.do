@@ -9,6 +9,33 @@ import (
 	"github.com/owainlewis/slate.do/server/internal/database"
 )
 
+func TestTaskPriorityMigrationAllowsP3(t *testing.T) {
+	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set SLATE_TEST_DATABASE_URL to run migration integration tests")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := Apply(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var definition string
+	if err := db.QueryRow(ctx, `
+		SELECT pg_get_constraintdef(oid)
+		FROM pg_constraint
+		WHERE conrelid = 'tasks'::regclass AND conname = 'tasks_priority_check'
+	`).Scan(&definition); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(definition, "'p3'::text") {
+		t.Fatalf("priority constraint = %q, want p3", definition)
+	}
+}
+
 func TestManagedRunMigrationAddsFencingColumnsAndLookupIndex(t *testing.T) {
 	databaseURL := os.Getenv("SLATE_TEST_DATABASE_URL")
 	if databaseURL == "" {

@@ -13,29 +13,29 @@ const landingPreviewColumns = [
   {
     title: "Todo",
     tasks: [
-      { priority: "High", list: "Product", title: "Tighten first-run onboarding", description: "Help a new operator understand lists, agents and flow.", date: "Aug 21" },
-      { priority: "Urgent", list: "Company", title: "Plan September launch", description: "Turn the product story into a focused launch plan.", date: "Aug 24", agent: "Research" },
+      { priority: "P1", list: "Product", title: "Tighten first-run onboarding", description: "Help a new operator understand lists, agents and flow.", date: "Aug 21" },
+      { priority: "P0", list: "Company", title: "Plan September launch", description: "Turn the product story into a focused launch plan.", date: "Aug 24", agent: "Research" },
     ],
   },
   {
     title: "In progress",
     tasks: [
-      { priority: "Urgent", list: "Product", title: "Ship the React workspace", description: "Replace the global renderer with a calm interface.", date: "Aug 18", agent: "Research" },
-      { priority: "High", list: "Product", title: "Audit agent handoff states", description: "Make every transition between people and agents explicit.", date: "Aug 22", agent: "Research" },
+      { priority: "P0", list: "Product", title: "Ship the React workspace", description: "Replace the global renderer with a calm interface.", date: "Aug 18", agent: "Research" },
+      { priority: "P1", list: "Product", title: "Audit agent handoff states", description: "Make every transition between people and agents explicit.", date: "Aug 22", agent: "Research" },
     ],
   },
   {
     title: "Review",
     tasks: [
-      { priority: "High", list: "Writing", title: "Edit the agent-speed essay", description: "Make the core argument tighter and more concrete.", date: "Aug 19", agent: "Editorial" },
-      { priority: "Normal", list: "Company", title: "Review the launch brief", description: "Resolve the final positioning questions before design starts.", date: "Aug 23" },
+      { priority: "P1", list: "Writing", title: "Edit the agent-speed essay", description: "Make the core argument tighter and more concrete.", date: "Aug 19", agent: "Editorial" },
+      { priority: "P2", list: "Company", title: "Review the launch brief", description: "Resolve the final positioning questions before design starts.", date: "Aug 23" },
     ],
   },
   {
     title: "Done",
     tasks: [
-      { priority: "Normal", list: "Company", title: "Review weekly product signals", description: "Decide what changed and what deserves attention next.", date: "Aug 17" },
-      { priority: "High", list: "Writing", title: "Publish the operator guide", description: "Turn the approved draft into final documentation.", date: "Aug 18", agent: "Editorial" },
+      { priority: "P3", list: "Company", title: "Review weekly product signals", description: "Decide what changed and what deserves attention next.", date: "Aug 17" },
+      { priority: "P1", list: "Writing", title: "Publish the operator guide", description: "Turn the approved draft into final documentation.", date: "Aug 18", agent: "Editorial" },
     ],
   },
 ]
@@ -77,7 +77,7 @@ function LandingProductPreview() {
         </div>
         <div className="landing-preview-toolbar">
           <div className="landing-preview-search">⌕ <span>Search tasks…</span></div>
-          <div className="landing-preview-priority"><span className="active"><ListFilter /></span><span className="urgent"><Flag /></span><span className="high"><Flag /></span><span className="normal"><Flag /></span></div>
+          <div className="landing-preview-priority"><span className="active"><ListFilter /></span><span className="p0"><Flag /></span><span className="p1"><Flag /></span><span className="p2"><Flag /></span><span className="p3"><Flag /></span></div>
           <div className="landing-preview-views"><b>▥ Board</b><span>▤ Table</span></div>
         </div>
         <div className="landing-preview-board">

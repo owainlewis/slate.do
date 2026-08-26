@@ -1333,12 +1333,12 @@ func TestTaskCreationPersistsStatusAndPriorityAtomically(t *testing.T) {
 		t.Fatalf("tasks after rejected retry = %#v, want only original task", tasks)
 	}
 
-	child, err := store.CreateSubtask(ctx, userID, created.ID, CreateTaskInput{Title: "Collect evidence", Priority: PriorityP1})
+	child, err := store.CreateSubtask(ctx, userID, created.ID, CreateTaskInput{Title: "Collect evidence", Priority: PriorityP3})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if child.Priority != PriorityP1 {
-		t.Fatalf("subtask priority = %q, want %q", child.Priority, PriorityP1)
+	if child.Priority != PriorityP3 {
+		t.Fatalf("subtask priority = %q, want %q", child.Priority, PriorityP3)
 	}
 }
 

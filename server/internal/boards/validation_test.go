@@ -1,10 +1,14 @@
 package boards
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -77,12 +81,12 @@ func TestPrepareTaskCreateRejectsMalformedParentID(t *testing.T) {
 }
 
 func TestValidPriority(t *testing.T) {
-	for _, priority := range []string{PriorityNone, PriorityP0, PriorityP1, PriorityP2} {
+	for _, priority := range []string{PriorityNone, PriorityP0, PriorityP1, PriorityP2, PriorityP3} {
 		if !validPriority(priority) {
 			t.Fatalf("%q should be valid", priority)
 		}
 	}
-	if validPriority("p3") || validPriority("P0") || validPriority("urgent") {
+	if validPriority("p4") || validPriority("P0") || validPriority("urgent") {
 		t.Fatal("unexpected valid priority")
 	}
 }
@@ -220,4 +224,62 @@ func TestWorkspaceTaskCursorRejectsSortOrderOutsidePostgresIntegerRange(t *testi
 			t.Fatalf("sort order %d error = %v, want ErrInvalidData", sortOrder, err)
 		}
 	}
+}
+
+func TestPriorityCursorsRejectPreP3Scopes(t *testing.T) {
+	const userID = "user-one"
+	const taskID = "22222222-2222-4222-8222-222222222222"
+	const bucketID = "11111111-1111-4111-8111-111111111111"
+	createdAt := time.Now().UTC()
+
+	agentFilter := TaskFilter{AgentQueue: true}
+	legacyAgentScope := legacyTaskCursorScope(userID, agentFilter)
+	currentAgentScope := taskCursorScope(userID, agentFilter)
+	if legacyAgentScope == currentAgentScope {
+		t.Fatal("agent queue still accepts the pre-P3 cursor scope")
+	}
+	agentRaw, err := json.Marshal(agentQueueCursor{PriorityRank: 3, CreatedAt: createdAt, ID: taskID, Scope: legacyAgentScope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeAgentQueueCursor(base64.RawURLEncoding.EncodeToString(agentRaw), currentAgentScope); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("pre-P3 agent cursor error = %v, want ErrInvalidData", err)
+	}
+
+	for _, sort := range []string{"priority", "list_priority"} {
+		filter := TaskFilter{Sort: sort}
+		legacyScope := legacyTaskCursorScope(userID, filter)
+		currentScope := taskCursorScope(userID, filter)
+		if legacyScope == currentScope {
+			t.Fatalf("%s sort still accepts the pre-P3 cursor scope", sort)
+		}
+		cursor := workspaceTaskCursor{PriorityRank: 3, CreatedAt: createdAt, ID: taskID, Scope: legacyScope}
+		if sort == "list_priority" {
+			cursor.BucketCreatedAt = createdAt
+			cursor.BucketID = bucketID
+		}
+		raw, err := json.Marshal(cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeWorkspaceTaskCursor(base64.RawURLEncoding.EncodeToString(raw), currentScope, sort); !errors.Is(err, ErrInvalidData) {
+			t.Fatalf("pre-P3 %s cursor error = %v, want ErrInvalidData", sort, err)
+		}
+	}
+}
+
+func legacyTaskCursorScope(userID string, filter TaskFilter) string {
+	parts := []string{
+		userID, filter.BucketID, filter.Status, filter.Priority,
+		fmt.Sprint(filter.ActionsOnly), filter.AssigneeAgentID, fmt.Sprint(filter.Unassigned),
+		filter.Query, filter.ScheduledFrom, filter.ScheduledTo, filter.ParentTaskID, fmt.Sprint(filter.TopLevelOnly),
+		fmt.Sprint(filter.InboxOnly),
+		fmt.Sprint(filter.AgentQueue),
+	}
+	if filter.Sort != "" {
+		parts = append(parts, "sort="+filter.Sort)
+	}
+	value := strings.Join(parts, "\x00")
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
