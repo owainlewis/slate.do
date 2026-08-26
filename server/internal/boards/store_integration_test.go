@@ -142,8 +142,38 @@ func TestBoardOrderingPersistsAcrossListsStatusesAndFailedMoves(t *testing.T) {
 	for _, task := range page.Tasks {
 		positions[task.ID] = task.BoardSortOrder
 	}
-	if !(positions[workingFirst.ID] < positions[workingHidden.ID] && positions[workingHidden.ID] < positions[first.ID] && positions[first.ID] < positions[workingLast.ID]) {
+	if positions[workingFirst.ID] >= positions[workingHidden.ID] || positions[workingHidden.ID] >= positions[first.ID] || positions[first.ID] >= positions[workingLast.ID] {
 		t.Fatalf("workspace board positions = %#v", positions)
+	}
+
+	var pagedIDs []string
+	boardFilter := TaskFilter{TopLevelOnly: true, Sort: "board", Limit: 2}
+	for {
+		boardPage, err := store.ListTaskPage(ctx, userID, boardFilter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, task := range boardPage.Tasks {
+			pagedIDs = append(pagedIDs, task.ID)
+		}
+		if boardPage.NextCursor == "" {
+			break
+		}
+		boardFilter.Cursor = boardPage.NextCursor
+	}
+	todoOrder := boardOrder("todo")
+	workingOrder := boardOrder(StatusWorking)
+	var wantPagedIDs []string
+	for position := 0; position < len(workingOrder) || position < len(todoOrder); position++ {
+		if position < len(todoOrder) {
+			wantPagedIDs = append(wantPagedIDs, todoOrder[position])
+		}
+		if position < len(workingOrder) {
+			wantPagedIDs = append(wantPagedIDs, workingOrder[position])
+		}
+	}
+	if got, want := fmt.Sprint(pagedIDs), fmt.Sprint(wantPagedIDs); got != want {
+		t.Fatalf("paginated board order = %s, want %s", got, want)
 	}
 
 	const missingID = "10000000-0000-4000-8000-000000000099"

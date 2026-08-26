@@ -36,7 +36,7 @@ Inside the repository, `server/cmd/slate` builds the web service and operator co
 1. **Account ownership is enforced in PostgreSQL queries.** Resource IDs are not sufficient authority. List, task, agent, and token operations also match the authenticated account ID.
 2. **Agent authority is narrower than account authority.** An agent credential can operate only on work assigned to its immutable agent ID. It cannot manage account-level resources or another agent's tasks.
 3. **Authentication secrets are not recoverable.** Session tokens, personal API tokens, agent credentials, and password-reset tokens are stored as hashes. Plaintext API and agent tokens are returned only when created.
-4. **Plans and limits are server owned.** A missing entitlement resolves to Free. An explicit `pro` entitlement can come from invite, Stripe, manual, or admin sources. The server and database enforce limits regardless of browser state.
+4. **Plans and limits are server-owned.** A missing entitlement resolves to Free. An explicit `pro` entitlement can come from invite, Stripe, manual, or admin sources. The server and database enforce limits regardless of browser state.
 5. **Task workflow states are fixed.** A task is `new`, `queued`, `working`, `needs_review`, or `done`. The board groups `new` and `queued` into Todo. Claim and status transitions use database transactions so concurrent agents cannot both claim the same task.
 6. **Task storage accounting changes with task data.** Every task has one account owner and generated text-byte usage. Application transactions and a database trigger keep per-account task and byte counters aligned with stored rows.
 7. **Schema changes finish before a release serves traffic.** Migrations run under a PostgreSQL advisory lock. Cloud Build runs a commit-specific migration job before deploying the web revision.
@@ -95,7 +95,7 @@ Dependency direction is from delivery and interface code toward domain packages 
 
 ### Kanban reorder
 
-1. The browser sorts loaded top-level tasks by `boardSortOrder` inside the four fixed status columns.
+1. The server ranks top-level tasks by `boardSortOrder` within each status column, then pages those ranks round-robin in Todo, In Progress, Review, and Done order. The browser preserves each column's rank.
 2. Dragging exposes an exact insertion point. The card menu exposes keyboard-operable Move up and Move down actions.
 3. The browser sends the destination status and the ordered IDs visible in that destination to `PATCH /api/v1/tasks/{id}/board-position`. The route requires account-manage authority, so an agent credential cannot call it.
 4. The store serializes account board rewrites with an advisory lock, takes the account storage lock before task locks, and validates ownership, top-level placement, assignment, and status transitions.

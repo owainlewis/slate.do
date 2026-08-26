@@ -61,6 +61,7 @@ type workspaceTaskCursor struct {
 	BucketSortOrder int       `json:"bucketSortOrder,omitempty"`
 	BucketCreatedAt time.Time `json:"bucketCreatedAt,omitempty"`
 	BucketID        string    `json:"bucketId,omitempty"`
+	BoardOffset     int       `json:"boardOffset,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
 	ID              string    `json:"id"`
 	Scope           string    `json:"scope"`
@@ -2306,9 +2307,14 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		limit = 100
 	}
 	const agentQueuePrioritySQL = "CASE t.priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 ELSE 4 END"
+	const boardColumnSQL = "CASE WHEN t.status IN ('new', 'queued') THEN 'todo' ELSE t.status END"
+	const boardColumnRankSQL = "CASE WHEN t.status IN ('new', 'queued') THEN 0 WHEN t.status = 'working' THEN 1 WHEN t.status = 'needs_review' THEN 2 ELSE 3 END"
 	orderSQL := "t.created_at DESC, t.id DESC"
+	boardOffset := 0
 	if filter.AgentQueue {
 		orderSQL = agentQueuePrioritySQL + ", t.created_at, t.id"
+	} else if filter.Sort == "board" {
+		orderSQL = "row_number() OVER (PARTITION BY " + boardColumnSQL + " ORDER BY t.board_sort_order, t.created_at DESC, t.id DESC), " + boardColumnRankSQL
 	} else if filter.Sort == "priority" {
 		orderSQL = agentQueuePrioritySQL + ", t.created_at DESC, t.id DESC"
 	} else if filter.Sort == "list" {
@@ -2329,6 +2335,12 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 				" AND (%s > $%d OR (%s = $%d AND (t.created_at > $%d OR (t.created_at = $%d AND t.id > $%d::uuid))))",
 				agentQueuePrioritySQL, len(args)-2, agentQueuePrioritySQL, len(args)-2, len(args)-1, len(args)-1, len(args),
 			)
+		} else if filter.Sort == "board" {
+			cursor, err := decodeWorkspaceTaskCursor(filter.Cursor, taskCursorScope(userID, filter), filter.Sort)
+			if err != nil {
+				return TaskPage{}, err
+			}
+			boardOffset = cursor.BoardOffset
 		} else if filter.Sort == "priority" {
 			cursor, err := decodeWorkspaceTaskCursor(filter.Cursor, taskCursorScope(userID, filter), filter.Sort)
 			if err != nil {
@@ -2372,6 +2384,11 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	}
 	fetchLimit := limit + 1
 	args = append(args, fetchLimit)
+	pageSQL := "LIMIT $" + fmt.Sprint(len(args))
+	if filter.Sort == "board" {
+		args = append(args, boardOffset)
+		pageSQL += " OFFSET $" + fmt.Sprint(len(args))
+	}
 	query := `
 		SELECT t.id::text, t.bucket_id::text, t.title, '',
 			COALESCE(t.scheduled_date::text, ''), t.kind,
@@ -2385,7 +2402,7 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 			AND parent.bucket_id = t.bucket_id
 		WHERE t.owner_user_id = $1` + whereSQL + `
 		ORDER BY ` + orderSQL + `
-		LIMIT $` + fmt.Sprint(len(args))
+		` + pageSQL
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return TaskPage{}, err
@@ -2413,7 +2430,7 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 		if filter.AgentQueue {
 			page.NextCursor, err = encodeAgentQueueCursor(cursorTask, taskCursorScope(userID, filter))
 		} else if filter.Sort != "" {
-			page.NextCursor, err = s.encodeWorkspaceTaskCursor(ctx, userID, cursorTask, taskCursorScope(userID, filter), filter.Sort)
+			page.NextCursor, err = s.encodeWorkspaceTaskCursor(ctx, userID, cursorTask, taskCursorScope(userID, filter), filter.Sort, boardOffset+limit)
 			if err != nil {
 				return TaskPage{}, err
 			}
@@ -2705,9 +2722,11 @@ func encodeAgentQueueCursor(task Task, scope string) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(encoded), nil
 }
 
-func (s *Store) encodeWorkspaceTaskCursor(ctx context.Context, userID string, task Task, scope string, sort string) (string, error) {
+func (s *Store) encodeWorkspaceTaskCursor(ctx context.Context, userID string, task Task, scope string, sort string, boardOffset int) (string, error) {
 	cursor := workspaceTaskCursor{CreatedAt: task.CreatedAt.UTC(), ID: task.ID, Scope: scope}
 	switch sort {
+	case "board":
+		cursor.BoardOffset = boardOffset
 	case "priority":
 		cursor.PriorityRank = agentQueuePriorityRank(task.Priority)
 	case "list", "list_priority":
@@ -2738,6 +2757,10 @@ func decodeWorkspaceTaskCursor(raw string, scope string, sort string) (workspace
 		return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
 	}
 	switch sort {
+	case "board":
+		if cursor.BoardOffset <= 0 {
+			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
+		}
 	case "priority":
 		if cursor.PriorityRank < 0 || cursor.PriorityRank > 4 {
 			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)

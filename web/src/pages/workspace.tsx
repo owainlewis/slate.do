@@ -148,7 +148,8 @@ export function WorkspacePage() {
       const value = searchParams.get(key)
       if (value) query.set(key, value)
     }
-    if (layout === "table" && groupByList) query.set("sort", sortByPriority ? "list_priority" : "list")
+    if (layout === "board") query.set("sort", "board")
+    else if (groupByList) query.set("sort", sortByPriority ? "list_priority" : "list")
     else if (layout === "table" && sortByPriority) query.set("sort", "priority")
     return query.toString()
   }, [groupByList, layout, listId, searchParams, sortByPriority])
