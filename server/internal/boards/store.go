@@ -1641,20 +1641,22 @@ func (s *Store) ReorderSubtasks(ctx context.Context, userID string, parentTaskID
 			return err
 		}
 	}
-	children := make(map[string]struct{}, len(currentIDs))
-	for _, id := range currentIDs {
-		children[id] = struct{}{}
-		if childBuckets[id] != parent.BucketID {
-			bucketOrders[parent.BucketID] = append(bucketOrders[parent.BucketID], id)
+	destinationOrder := removeTaskIDs(bucketOrders[parent.BucketID], currentIDs)
+	insertAt := -1
+	for index, id := range destinationOrder {
+		if id == parent.ID {
+			insertAt = index + 1
+			break
 		}
 	}
-	nextChild := 0
-	for index, id := range bucketOrders[parent.BucketID] {
-		if _, ok := children[id]; ok {
-			bucketOrders[parent.BucketID][index] = ids[nextChild]
-			nextChild++
-		}
+	if insertAt < 0 {
+		return ErrNotFound
 	}
+	repairedOrder := make([]string, 0, len(destinationOrder)+len(ids))
+	repairedOrder = append(repairedOrder, destinationOrder[:insertAt]...)
+	repairedOrder = append(repairedOrder, ids...)
+	repairedOrder = append(repairedOrder, destinationOrder[insertAt:]...)
+	bucketOrders[parent.BucketID] = repairedOrder
 	if _, err := tx.Exec(ctx, `
 		UPDATE tasks
 		SET bucket_id = $1, updated_at = now()

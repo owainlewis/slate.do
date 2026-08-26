@@ -407,7 +407,6 @@ func TestWorkspaceTaskSortingRemainsPaginated(t *testing.T) {
 	userID := createIntegrationUser(t, ctx, db)
 	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
 
-<<<<<<< HEAD
 	firstList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First"})
 	if err != nil {
 		t.Fatal(err)
@@ -531,11 +530,15 @@ func TestSubtasksDefaultToCreationOrderAndCanBeReordered(t *testing.T) {
 	if _, err := db.Exec(ctx, "UPDATE tasks SET bucket_id = $2 WHERE id = $1", first.ID, legacyBucket.ID); err != nil {
 		t.Fatal(err)
 	}
+	laterTask, err := store.CreateTask(ctx, userID, bucket.ID, CreateTaskInput{Title: "Created after the remaining children"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.ReorderSubtasks(ctx, userID, parent.ID, []string{first.ID, second.ID, third.ID}); err != nil {
 		t.Fatal(err)
 	}
 	assertSubtaskOrder(t, store, ctx, userID, parent.ID, []string{first.ID, second.ID, third.ID})
-	assertTaskOrder(t, store, ctx, userID, bucket.ID, []string{before.ID, parent.ID, first.ID, second.ID, third.ID})
+	assertTaskOrder(t, store, ctx, userID, bucket.ID, []string{before.ID, parent.ID, first.ID, second.ID, third.ID, laterTask.ID})
 	assertTaskOrder(t, store, ctx, userID, legacyBucket.ID, []string{legacyNeighbor.ID})
 	repaired, err := store.GetTask(ctx, userID, first.ID)
 	if err != nil || repaired.BucketID != parent.BucketID {

@@ -32,6 +32,7 @@ function fixture(options = {}) {
     inbox: [{ id: "message-one", taskId: "task-parent", taskTitle: "Publish task-first agents video", kind: "comment", body: "I have drafted the spec. Can you take a look?", authorName: "Research agent", createdAt: "2026-08-18T10:00:00Z" }],
     tokens: [],
     requests: [],
+    reorderSubtasksDelay: null,
     paginate: false,
     pageTwoFailure: false,
     idempotency: new Map(),
@@ -194,9 +195,13 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
     const reorderSubtasksMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/reorder-subtasks$/);
     if (reorderSubtasksMatch && request.method === "POST") {
       const input = await requestJSON(request);
+      if (state.reorderSubtasksDelay) {
+        await state.reorderSubtasksDelay;
+        state.reorderSubtasksDelay = null;
+      }
       const siblings = state.subtasks.filter(item => item.parentTaskId === reorderSubtasksMatch[1]);
       const tasksByID = new Map(siblings.map(item => [item.id, item]));
-      const ordered = input.ids.map(id => tasksByID.get(id));
+      const ordered = input.ids.map((id, sortOrder) => ({ ...tasksByID.get(id), sortOrder }));
       state.subtasks = [...state.subtasks.filter(item => item.parentTaskId !== reorderSubtasksMatch[1]), ...ordered];
       return json(response, { ok: true });
     }
@@ -1048,8 +1053,13 @@ test("subtasks start in creation order and mouse or keyboard reordering persists
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Research examples", "Draft outline"]);
 
+  let releaseReorder;
+  state.reorderSubtasksDelay = new Promise(resolve => { releaseReorder = resolve; });
   await page.getByRole("button", { name: "Reorder Draft outline" }).press("ArrowUp");
   await page.waitForFunction(() => document.querySelector(".subtask-title")?.textContent === "Draft outline");
+  assert.deepEqual(state.subtasks.map(task => task.title), ["Research examples", "Draft outline"]);
+  releaseReorder();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Reorder Draft outline"]')?.disabled === false);
   assert.deepEqual(state.subtasks.map(task => task.title), ["Draft outline", "Research examples"]);
   assert.equal(state.requests.includes("POST /api/v1/tasks/task-parent/reorder-subtasks"), true);
 

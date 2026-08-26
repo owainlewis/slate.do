@@ -181,7 +181,12 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
       await queryClient.cancelQueries({ queryKey: ["subtasks", taskId] })
       const previous = queryClient.getQueryData<{ tasks: Task[] }>(["subtasks", taskId])
       const tasksByID = new Map((previous?.tasks || []).map(subtask => [subtask.id, subtask]))
-      queryClient.setQueryData(["subtasks", taskId], { tasks: ids.map(id => tasksByID.get(id)).filter((subtask): subtask is Task => Boolean(subtask)) })
+      queryClient.setQueryData(["subtasks", taskId], {
+        tasks: ids.flatMap((id, sortOrder) => {
+          const subtask = tasksByID.get(id)
+          return subtask ? [{ ...subtask, sortOrder }] : []
+        }),
+      })
       return { previous }
     },
     onError: (value, _ids, context) => {
