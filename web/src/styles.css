@@ -790,7 +790,7 @@ a.bg-primary { color: var(--primary-foreground); }
   .template-editor-step > .assignee-picker-trigger { grid-column: 2; }
   .template-editor-step > .template-order-actions { grid-row: 1; grid-column: 3; }
   .template-create-dialog { width: 100vw !important; height: 100dvh; border: 0 !important; border-radius: 0 !important; }
-  .template-create-dialog form { height: 100%; max-height: none; }
+  .template-create-content { height: 100%; max-height: none; }
   .section-title-row > p { display: none; }
   .operation-row { display: grid; gap: .65rem; }
   .operation-tail, .runner-tail { min-width: 0; justify-content: flex-start; padding-left: 2.8rem; }

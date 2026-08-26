@@ -616,6 +616,8 @@ test("a custom template creates one parent task with an ordered workflow", async
   assert.equal(await dialog.getByLabel("Plan for").count(), 0);
   assert.equal(await dialog.getByLabel("List").count(), 0);
   assert.equal(await dialog.getByLabel("Brief").count(), 0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await dialog.locator(".template-create-content").evaluate(element => element.getBoundingClientRect().height), await dialog.evaluate(element => element.getBoundingClientRect().height));
   releaseTaskCreate();
 
   await page.getByRole("region", { name: "Task detail" }).waitFor();
