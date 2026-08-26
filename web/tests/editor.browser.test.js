@@ -276,10 +276,12 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
   return { page, state, origin, pageErrors };
 }
 
-async function createTemplate(page, name, steps) {
+async function createTemplate(page, name, steps, { taskTitle = name, listId = "list-product" } = {}) {
   await page.locator(".template-page-header").getByRole("button", { name: "New template" }).click();
   const editor = page.getByRole("dialog", { name: "New template" });
   await editor.getByLabel("Template name").fill(name);
+  await editor.getByLabel("Default task title").fill(taskTitle);
+  await editor.getByLabel("List").selectOption(listId);
   await editor.getByLabel("Phase 1 subtask 1").fill(steps[0]);
   for (let index = 1; index < steps.length; index += 1) {
     await editor.getByRole("button", { name: "Add subtask" }).click();
@@ -575,7 +577,7 @@ test("task creation keeps every exit and field disabled while pending", async t 
   await dialog.getByRole("button", { name: "Create task" }).click();
   await dialog.getByRole("button", { name: "Creating…" }).waitFor();
   for (const control of [
-    dialog.getByRole("button", { name: "Use template" }),
+    dialog.getByRole("button", { name: "Create From Template" }),
     dialog.getByRole("button", { name: "Close" }),
     dialog.getByRole("button", { name: "Cancel" }),
     dialog.getByRole("textbox", { name: "Task title" }),
@@ -600,30 +602,64 @@ test("a custom template creates one parent task with an ordered workflow", async
   const { page, state, origin, pageErrors } = await startApp(t);
   await page.goto(`${origin}/app/templates`);
   await page.getByRole("heading", { name: "Templates", exact: true }).waitFor();
-  const template = await createTemplate(page, "Product launch", ["Write the launch brief", "Publish the release"]);
+  const template = await createTemplate(page, "Product launch", ["Write the launch brief", "Publish the release"], { taskTitle: "Autumn release" });
   assert.equal(await page.getByRole("listitem").count(), 2);
   const accessibility = await new AxeBuilder({ page }).analyze();
   assert.deepEqual(accessibility.violations, []);
 
-  await template.getByRole("button", { name: "Use template" }).click();
+  let releaseTaskCreate;
+  state.taskCreateDelay = new Promise(resolve => { releaseTaskCreate = resolve; });
+  await template.getByRole("button", { name: "Create From Template" }).click();
   const dialog = page.getByRole("dialog", { name: "Start process" });
   assert.deepEqual((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations, []);
-  await dialog.getByLabel("Task name").fill("Autumn release");
-  await dialog.getByLabel("Plan for").fill("2026-08-29");
-  await dialog.getByLabel("List").selectOption("list-product");
-  await dialog.getByLabel("Brief").fill("Prepare the customer-facing release.");
-  await dialog.getByRole("button", { name: "Create task" }).click();
+  assert.equal(await dialog.getByLabel("Task name").count(), 0);
+  assert.equal(await dialog.getByLabel("Plan for").count(), 0);
+  assert.equal(await dialog.getByLabel("List").count(), 0);
+  assert.equal(await dialog.getByLabel("Brief").count(), 0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await dialog.locator(".template-create-content").evaluate(element => element.getBoundingClientRect().height), await dialog.evaluate(element => element.getBoundingClientRect().height));
+  releaseTaskCreate();
 
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   await page.getByText("0/2", { exact: true }).waitFor();
-  const parent = state.tasks.find(task => task.title === "Run: Autumn release");
+  const parent = state.tasks.find(task => task.title === "Autumn release");
   assert.ok(parent);
   assert.equal(parent.bucketId, "list-product");
-  assert.equal(parent.scheduledDate, "2026-08-29");
-  assert.match(parent.description, /Prepare the customer-facing release/);
+  assert.equal(parent.scheduledDate, "");
+  assert.match(parent.description, /Created from template: Product launch/);
   const generated = state.subtasks.filter(task => task.parentTaskId === parent.id);
   assert.deepEqual(generated.map(task => task.title), ["Write the launch brief", "Publish the release"]);
   assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Write the launch brief", "Publish the release"]);
+  assert.deepEqual(pageErrors, []);
+});
+
+test("rapid template activations create only one workflow", async t => {
+  const { page, state, origin, pageErrors } = await startApp(t);
+  await page.goto(`${origin}/app/templates`);
+  const template = await createTemplate(page, "Single launch", ["Draft the release"], { taskTitle: "One release" });
+  let releaseTaskCreate;
+  state.taskCreateDelay = new Promise(resolve => { releaseTaskCreate = resolve; });
+  const createButton = template.getByRole("button", { name: "Create From Template" });
+  const createButtonElement = await createButton.elementHandle();
+  assert.ok(createButtonElement);
+  const parentRequest = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/api/v1/lists/list-product/tasks"));
+  await createButtonElement.evaluate(button => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await parentRequest;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/lists/list-product/tasks").length, 1);
+  const gates = { lists: requestGate() };
+  state.accountGates = gates;
+  releaseTaskCreate();
+  await waitForRequest(gates.lists);
+  await createButtonElement.evaluate(button => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/lists/list-product/tasks").length, 1);
+  gates.lists.release();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(state.tasks.filter(task => task.title === "One release").length, 1);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -650,6 +686,8 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await page.evaluate(template => localStorage.setItem("slate:process-templates:owner", JSON.stringify([template])), oversized);
   await page.goto(`${origin}/app/templates`);
   const oversizedRow = page.locator(".template-list-row").filter({ hasText: "Oversized process" });
+  await oversizedRow.getByText("Templates can contain up to 50 subtasks.").waitFor();
+  assert.equal(await oversizedRow.getByRole("button", { name: "Create From Template" }).isDisabled(), true);
   await oversizedRow.getByRole("button", { name: "Edit" }).click();
   const editor = page.getByRole("dialog", { name: "Edit template" });
   await editor.getByRole("alert").getByText("Templates can contain up to 50 subtasks.").waitFor();
@@ -660,6 +698,8 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await page.evaluate(template => localStorage.setItem("slate:process-templates:owner", JSON.stringify([template])), longInstructions);
   await page.reload();
   const longRow = page.locator(".template-list-row").filter({ hasText: "Long instructions" });
+  await longRow.getByText("Subtask instructions are too long to create a task.").waitFor();
+  assert.equal(await longRow.getByRole("button", { name: "Create From Template" }).isDisabled(), true);
   await longRow.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("dialog", { name: "Edit template" }).getByRole("alert").getByText("Subtask instructions are too long to create a task.").waitFor();
   await page.getByRole("dialog", { name: "Edit template" }).getByRole("button", { name: "Cancel" }).click();
@@ -669,12 +709,9 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await page.evaluate(template => localStorage.setItem("slate:process-templates:owner", JSON.stringify([template])), exactStoredLimit);
   await page.reload();
   const exactRow = page.locator(".template-list-row").filter({ hasText: "Exact stored limit" });
-  await exactRow.getByRole("button", { name: "Use template" }).click();
-  const exactDialog = page.getByRole("dialog", { name: "Start process" });
-  await exactDialog.getByRole("alert").getByText("Subtask instructions are too long to create a task.").waitFor();
-  assert.equal(await exactDialog.getByRole("button", { name: "Create task" }).isDisabled(), true);
+  await exactRow.getByText("Subtask instructions are too long to create a task.").waitFor();
+  assert.equal(await exactRow.getByRole("button", { name: "Create From Template" }).isDisabled(), true);
   assert.equal(state.tasks.some(task => task.title.includes("Exact stored limit")), false);
-  await exactDialog.getByRole("button", { name: "Cancel" }).click();
 
   const renderedAgentPrefix = "Phase: Plan\nAssigned to: @research_agent\n\n";
   const validRestoredAttempt = {
@@ -692,7 +729,8 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await page.reload();
   const restoredDialog = page.getByRole("dialog", { name: "Start process" });
   await restoredDialog.waitFor();
-  assert.equal(await restoredDialog.getByLabel("Task name").inputValue(), "Restored short handle");
+  await restoredDialog.getByText("Run: Restored short handle", { exact: true }).waitFor();
+  assert.equal(await restoredDialog.getByLabel("Task name").count(), 0);
   assert.equal(await restoredDialog.getByText("Subtask instructions are too long to create a task.").count(), 0);
   assert.equal(await restoredDialog.getByRole("button", { name: "Resume creation" }).isEnabled(), true);
   page.once("dialog", confirmation => confirmation.accept());
@@ -700,12 +738,12 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await restoredDialog.waitFor({ state: "detached" });
 
   const limitsRow = await createTemplate(page, "Limits process", ["Draft the release"]);
-  await limitsRow.getByRole("button", { name: "Use template" }).click();
-  const create = page.getByRole("dialog", { name: "Start process" });
-  await create.getByLabel("Task name").fill("x".repeat(296));
-  await create.getByRole("alert").getByText("The generated task name can contain up to 300 characters.").waitFor();
-  assert.equal(await create.getByRole("button", { name: "Create task" }).isDisabled(), true);
-  await create.getByRole("button", { name: "Cancel" }).click();
+  await limitsRow.getByRole("button", { name: "Edit" }).click();
+  const limitsEditor = page.getByRole("dialog", { name: "Edit template" });
+  await limitsEditor.getByLabel("Default task title").fill("x".repeat(301));
+  await limitsEditor.getByRole("alert").getByText("Default task titles can contain up to 300 characters.").waitFor();
+  assert.equal(await limitsEditor.getByRole("button", { name: "Save template" }).isDisabled(), true);
+  await limitsEditor.getByRole("button", { name: "Cancel" }).click();
 
   await page.evaluate(() => {
     const setItem = Storage.prototype.setItem;
@@ -717,16 +755,16 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await page.getByRole("button", { name: "New template" }).click();
   const freshEditor = page.getByRole("dialog", { name: "New template" });
   await freshEditor.getByLabel("Template name").fill("In-memory process");
+  await freshEditor.getByLabel("Default task title").fill("Cannot persist retry key");
+  await freshEditor.getByLabel("List").selectOption("list-product");
   await freshEditor.getByLabel("Phase 1 subtask 1").fill("Draft it");
   await freshEditor.getByRole("button", { name: "Save template" }).click();
   await page.getByRole("alert").getByText("Templates could not be saved in this browser.").waitFor();
   await page.locator(".template-list-row").filter({ hasText: "In-memory process" }).waitFor();
-  await page.locator(".template-list-row").filter({ hasText: "In-memory process" }).getByRole("button", { name: "Use template" }).click();
+  await page.locator(".template-list-row").filter({ hasText: "In-memory process" }).getByRole("button", { name: "Create From Template" }).click();
   const blockedCreate = page.getByRole("dialog", { name: "Start process" });
-  await blockedCreate.getByLabel("Task name").fill("Cannot persist retry key");
-  await blockedCreate.getByRole("button", { name: "Create task" }).click();
   await blockedCreate.getByRole("alert").getByText("Slate could not save a safe retry key in this browser. No task was created.").waitFor();
-  assert.equal(state.tasks.some(task => task.title === "Run: Cannot persist retry key"), false);
+  assert.equal(state.tasks.some(task => task.title === "Cannot persist retry key"), false);
   assert.deepEqual(pageErrors, []);
 });
 
@@ -811,13 +849,10 @@ test("template deletion confirms, selects a neighbour, and leaves generated task
   const { page, state, origin, pageErrors } = await startApp(t);
   await page.goto(`${origin}/app/templates`);
   const neighbourRow = await createTemplate(page, "Neighbour process", ["Keep this step"]);
-  const row = await createTemplate(page, "Temporary launch process", ["Prepare the launch"]);
-  await row.getByRole("button", { name: "Use template" }).click();
-  const create = page.getByRole("dialog", { name: "Start process" });
-  await create.getByLabel("Task name").fill("Autumn launch");
-  await create.getByRole("button", { name: "Create task" }).click();
+  const row = await createTemplate(page, "Temporary launch process", ["Prepare the launch"], { taskTitle: "Autumn launch" });
+  await row.getByRole("button", { name: "Create From Template" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
-  const generatedParent = state.tasks.find(task => task.title === "Run: Autumn launch");
+  const generatedParent = state.tasks.find(task => task.title === "Autumn launch");
   const generatedSubtasks = state.subtasks.filter(task => task.parentTaskId === generatedParent.id).map(task => task.id);
 
   await page.goto(`${origin}/app/templates`);
@@ -863,7 +898,7 @@ test("template deletion confirms, selects a neighbour, and leaves generated task
 });
 
 test("valid legacy templates survive malformed siblings and migrate stable step IDs", async t => {
-  const { page, origin, pageErrors } = await startApp(t);
+  const { page, state, origin, pageErrors } = await startApp(t);
   await page.evaluate(() => localStorage.setItem("slate:process-templates:owner", JSON.stringify([
     { id: "youtube-weekly", name: "Overwritten built-in", summary: "Wrong", taskPrefix: "Wrong", phases: [{ id: "wrong", name: "Wrong" }], steps: [{ phaseId: "wrong", title: "Wrong", executor: "Human", instruction: "Wrong" }] },
     { id: "legacy-podcast", name: "Legacy podcast", summary: "A valid old template", taskPrefix: "Run", phases: ["Draft"], steps: [{ phase: "Draft", title: "Write the outline", executor: "Human", instruction: "Start with the promise." }] },
@@ -881,27 +916,30 @@ test("valid legacy templates survive malformed siblings and migrate stable step 
   assert.equal(firstStored.length, 2);
   const migratedStepId = firstStored.find(template => template.id === "legacy-podcast").steps[0].id;
   assert.match(migratedStepId, /^legacy-podcast-step-/);
+  assert.equal(firstStored.find(template => template.id === "legacy-podcast").version, 2);
+  assert.equal(firstStored.find(template => template.id === "legacy-podcast").taskPrefix, "Legacy podcast");
   assert.equal(firstStored.find(template => template.id === "long-step-id").steps[0].id, "step-1");
   await page.reload();
   const reloaded = await page.evaluate(() => JSON.parse(localStorage.getItem("slate:process-templates:owner")));
   assert.equal(reloaded.find(template => template.id === "legacy-podcast").steps[0].id, migratedStepId);
   assert.equal(reloaded.find(template => template.id === "long-step-id").steps[0].id, "step-1");
+  await page.locator(".template-list-row").filter({ hasText: "Legacy podcast" }).getByRole("button", { name: "Create From Template" }).click();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.ok(state.tasks.some(task => task.title === "Legacy podcast"));
   assert.deepEqual(pageErrors, []);
 });
 
 test("uncertain parent and subtask responses are retry-safe", async t => {
   const { page, state, origin, pageErrors } = await startApp(t);
   await page.goto(`${origin}/app/templates`);
-  const retryRow = await createTemplate(page, "Retry process", ["Capture input", "Generate output"]);
+  const retryRow = await createTemplate(page, "Retry process", ["Capture input", "Generate output"], { taskTitle: "Lost parent response" });
 
   state.loseParentResponse = true;
-  await retryRow.getByRole("button", { name: "Use template" }).click();
+  await retryRow.getByRole("button", { name: "Create From Template" }).click();
   let dialog = page.getByRole("dialog", { name: "Start process" });
-  await dialog.getByLabel("Task name").fill("Lost parent response");
-  await dialog.getByRole("button", { name: "Create task" }).click();
   await dialog.getByRole("alert").waitFor();
-  assert.equal(state.tasks.filter(task => task.title === "Run: Lost parent response").length, 1);
-  const lostParent = state.tasks.find(task => task.title === "Run: Lost parent response");
+  assert.equal(state.tasks.filter(task => task.title === "Lost parent response").length, 1);
+  const lostParent = state.tasks.find(task => task.title === "Lost parent response");
   const parentRequests = state.idempotencyRequests.filter(item => item.path === "/api/v1/lists/list-product/tasks");
   const [firstAttemptKey] = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("slate:process-attempt:owner:")));
   assert.ok(firstAttemptKey);
@@ -911,26 +949,26 @@ test("uncertain parent and subtask responses are retry-safe", async t => {
     const otherAttempt = JSON.parse(localStorage.getItem(firstAttemptKey));
     otherAttempt.id = "other-tab";
     otherAttempt.createdAt += 1;
-    otherAttempt.taskTitle = "Other tab attempt";
+    otherAttempt.parentTitle = "Other tab attempt";
     localStorage.setItem(secondAttemptKey, JSON.stringify(otherAttempt));
-    const expiredAttempt = { ...otherAttempt, id: "expired", createdAt: Date.now() - 7 * 24 * 60 * 60 * 1000, parentTaskId: lostParentId, taskTitle: "Expired attempt" };
+    const expiredAttempt = { ...otherAttempt, id: "expired", createdAt: Date.now() - 7 * 24 * 60 * 60 * 1000, parentTaskId: lostParentId, parentTitle: "Expired attempt" };
     localStorage.setItem(expiredAttemptKey, JSON.stringify(expiredAttempt));
   }, { firstAttemptKey, secondAttemptKey, expiredAttemptKey, lostParentId: lostParent.id });
   await page.reload();
   dialog = page.getByRole("dialog", { name: "Start process" });
   await dialog.getByText("This saved process attempt is too old to retry safely.").waitFor();
-  assert.equal(await dialog.getByLabel("Task name").inputValue(), "Expired attempt");
+  await dialog.getByText("Expired attempt", { exact: true }).waitFor();
   assert.equal(await dialog.getByRole("button", { name: "Resume creation" }).count(), 0);
   await dialog.getByRole("button", { name: "Open partial task" }).waitFor();
   assert.ok(await page.evaluate(key => localStorage.getItem(key), expiredAttemptKey));
   page.once("dialog", confirmation => confirmation.accept());
   await dialog.getByRole("button", { name: "Discard attempt" }).click();
   await dialog.getByText("A previous process attempt may be incomplete.").waitFor();
-  assert.equal(await dialog.getByLabel("Task name").inputValue(), "Lost parent response");
+  await dialog.getByText("Lost parent response", { exact: true }).waitFor();
   assert.equal(await page.evaluate(key => localStorage.getItem(key), expiredAttemptKey), null);
   await dialog.getByRole("button", { name: "Resume creation" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
-  const parent = state.tasks.find(task => task.title === "Run: Lost parent response");
+  const parent = state.tasks.find(task => task.title === "Lost parent response");
   assert.equal(state.tasks.filter(task => task.title === parent.title).length, 1);
   assert.equal(state.subtasks.filter(task => task.parentTaskId === parent.id).length, 2);
   assert.equal(state.idempotencyRequests.filter(item => item.path === "/api/v1/lists/list-product/tasks")[1].key, parentRequests[0].key);
@@ -939,19 +977,21 @@ test("uncertain parent and subtask responses are retry-safe", async t => {
   await page.goto(`${origin}/app/templates`);
   dialog = page.getByRole("dialog", { name: "Start process" });
   await dialog.waitFor();
-  assert.equal(await dialog.getByLabel("Task name").inputValue(), "Other tab attempt");
+  await dialog.getByText("Other tab attempt", { exact: true }).waitFor();
   page.once("dialog", confirmation => confirmation.accept());
   await dialog.getByRole("button", { name: "Discard attempt" }).click();
   await dialog.waitFor({ state: "detached" });
   assert.deepEqual(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("slate:process-attempt:owner:"))), []);
 
+  await retryRow.getByRole("button", { name: "Edit" }).click();
+  const retryEditor = page.getByRole("dialog", { name: "Edit template" });
+  await retryEditor.getByLabel("Default task title").fill("Lost subtask response");
+  await retryEditor.getByRole("button", { name: "Save template" }).click();
   state.loseSubtaskResponseFor = "Generate output";
-  await retryRow.getByRole("button", { name: "Use template" }).click();
+  await retryRow.getByRole("button", { name: "Create From Template" }).click();
   dialog = page.getByRole("dialog", { name: "Start process" });
-  await dialog.getByLabel("Task name").fill("Lost subtask response");
-  await dialog.getByRole("button", { name: "Create task" }).click();
   await dialog.getByRole("alert").waitFor();
-  const partialParent = state.tasks.find(task => task.title === "Run: Lost subtask response");
+  const partialParent = state.tasks.find(task => task.title === "Lost subtask response");
   assert.equal(state.subtasks.filter(task => task.parentTaskId === partialParent.id).length, 2);
   const savedProgress = await page.evaluate(() => {
     const key = Object.keys(localStorage).find(item => item.startsWith("slate:process-attempt:owner:"));
@@ -982,6 +1022,8 @@ test("templates can be created and edited without leaking across accounts", asyn
   assert.deepEqual((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations, []);
   await editor.getByLabel("Template name").fill("Publish a podcast");
   await editor.getByLabel("Description").fill("Turn one recording into a published episode.");
+  await editor.getByLabel("Default task title").fill("Episode 12");
+  await editor.getByLabel("List").selectOption("list-product");
   await editor.getByLabel("Phase 1 subtask 1").fill("Record the episode");
   await editor.getByRole("button", { name: "Add subtask" }).click();
   await editor.getByLabel("Phase 1 subtask 2").fill("Edit the episode");
@@ -998,14 +1040,10 @@ test("templates can be created and edited without leaking across accounts", asyn
 
   await page.getByRole("heading", { name: "Publish a podcast", exact: true }).first().waitFor();
   const podcastRow = page.locator(".template-list-row").filter({ hasText: "Publish a podcast" });
-  await podcastRow.getByRole("button", { name: "Use template" }).click();
-  const runDialog = page.getByRole("dialog", { name: "Start process" });
-  await runDialog.getByLabel("Task name").fill("Episode 12");
-  await runDialog.getByLabel("List").selectOption("list-product");
-  await runDialog.getByRole("button", { name: "Create task" }).click();
+  await podcastRow.getByRole("button", { name: "Create From Template" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   await page.waitForFunction(() => document.querySelectorAll(".subtask-title").length === 3);
-  const parent = state.tasks.find(task => task.title === "Run: Episode 12");
+  const parent = state.tasks.find(task => task.title === "Episode 12");
   assert.ok(parent);
   const generated = state.subtasks.filter(task => task.parentTaskId === parent.id);
   assert.deepEqual(generated.map(task => task.title), ["Write the show notes", "Record the episode", "Edit the episode"]);
@@ -1025,11 +1063,8 @@ test("templates can be created and edited without leaking across accounts", asyn
   await page.reload();
   await page.getByText("@unavailable_agent", { exact: true }).waitFor();
   const unavailableRow = page.locator(".template-list-row").filter({ hasText: "Publish a podcast episode" });
-  await unavailableRow.getByRole("button", { name: "Use template" }).click();
-  const unavailableDialog = page.getByRole("dialog", { name: "Start process" });
-  await unavailableDialog.getByText("This template references an unavailable agent. Edit the template and reassign that step.").waitFor();
-  assert.equal(await unavailableDialog.getByRole("button", { name: "Create task" }).isDisabled(), true);
-  await unavailableDialog.getByRole("button", { name: "Cancel" }).click();
+  await unavailableRow.getByText("This template references an unavailable agent. Edit the template and reassign that step.").waitFor();
+  assert.equal(await unavailableRow.getByRole("button", { name: "Create From Template" }).isDisabled(), true);
 
   state.user = { ...state.user, id: "another-owner", email: "another@example.com" };
   await page.reload();
@@ -1121,11 +1156,12 @@ test("saving an unrelated task edit preserves a newer agent assignment", async t
   await page.getByLabel("Title", { exact: true }).fill("Keep the newer assignment");
   state.tasks[0].assigneeAgentId = "agent-editor";
   state.tasks[0].assigneeAgentName = "Editor";
+  const updateResponse = page.waitForResponse(value => value.request().method() === "PATCH" && value.url().endsWith("/api/v1/tasks/task-parent"));
   await page.getByRole("button", { name: "Save changes" }).click();
+  await updateResponse;
   assert.equal(state.tasks[0].title, "Keep the newer assignment");
   assert.equal(state.tasks[0].assigneeAgentId, "agent-editor");
   assert.equal(state.tasks[0].status, "working");
-  assert.equal(state.requests.at(-1), "PATCH /api/v1/tasks/task-parent");
 });
 
 test("a delayed priority update stays with its original task", async t => {
@@ -1343,17 +1379,15 @@ test("mobile navigation and task detail fit a narrow viewport", async t => {
   assert.ok(bounds.width <= 390);
 
   await page.goto(`${origin}/app/templates`);
-  const mobileRow = await createTemplate(page, "Mobile process", ["Capture input", "Generate output"]);
+  const mobileRow = await createTemplate(page, "Mobile process", ["Capture input", "Generate output"], { taskTitle: "Mobile partial process" });
   await mobileRow.getByRole("button", { name: "Edit" }).click();
   const mobileEditor = page.getByRole("dialog", { name: "Edit template" });
   const assigneeBounds = await mobileEditor.getByRole("button", { name: "Capture input assign to" }).boundingBox();
   assert.ok(assigneeBounds.width > 150);
   await mobileEditor.getByRole("button", { name: "Cancel" }).click();
   state.loseSubtaskResponseFor = "Generate output";
-  await mobileRow.getByRole("button", { name: "Use template" }).click();
+  await mobileRow.getByRole("button", { name: "Create From Template" }).click();
   const processDialog = page.getByRole("dialog", { name: "Start process" });
-  await processDialog.getByLabel("Task name").fill("Mobile partial process");
-  await processDialog.getByRole("button", { name: "Create task" }).click();
   await processDialog.getByText("The parent task was created, but the workflow is incomplete.").waitFor();
   const dialogBounds = await processDialog.boundingBox();
   for (const name of ["Discard attempt", "Open partial task", "Keep for later", "Retry creation"]) {
