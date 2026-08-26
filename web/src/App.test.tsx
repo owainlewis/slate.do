@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
+import { Tooltip } from "radix-ui"
 import App from "./App"
 import { workspaceSummaryQueryKeyFor } from "@/lib/types"
 
@@ -12,7 +13,7 @@ afterEach(() => {
 
 function renderApp(path = "/") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><App /></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><Tooltip.Provider><MemoryRouter initialEntries={[path]}><App /></MemoryRouter></Tooltip.Provider></QueryClientProvider>)
 }
 
 test("workspace summary cache entries are isolated by account", () => {
@@ -85,6 +86,85 @@ test("the templates route starts new accounts without shared defaults", async ()
   expect(await screen.findByRole("heading", { name: "Templates" })).toBeInTheDocument()
   expect(screen.getByRole("heading", { name: "No templates yet" })).toBeInTheDocument()
   expect(container.querySelectorAll(".template-list-row")).toHaveLength(0)
+})
+
+test("Kanban drag and drop persists an exact position within a column", async () => {
+  let tasks = [
+    { id: "task-first", title: "First task", bucketId: "list-1", status: "new", boardSortOrder: 0, createdAt: "2026-08-26T10:00:00Z" },
+    { id: "task-second", title: "Second task", bucketId: "list-1", status: "queued", boardSortOrder: 1, createdAt: "2026-08-26T09:00:00Z" },
+  ]
+  const moves: Array<{ status: string; ids: string[] }> = []
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === "/api/v1/me") return new Response(JSON.stringify({ authenticated: true, user: { id: "user-1", email: "owner@example.com", displayName: "Owner", theme: "light" } }), { status: 200 })
+    if (path === "/api/v1/lists") return new Response(JSON.stringify({ lists: [{ id: "list-1", name: "Product", isInbox: false }] }), { status: 200 })
+    if (path === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }), { status: 200 })
+    if (path.startsWith("/api/v1/tasks?")) return new Response(JSON.stringify({ tasks }), { status: 200 })
+    if (path === "/api/v1/stats/summary") return new Response(JSON.stringify({ activeTasks: 2, inProgress: 0, inReview: 0, completed24h: 0, runs24h: 0 }), { status: 200 })
+    if (path === "/api/v1/tasks/task-second/board-position" && init?.method === "PATCH") {
+      const move = JSON.parse(String(init.body)) as { status: string; ids: string[] }
+      moves.push(move)
+      const positions = new Map(move.ids.map((id, index) => [id, index]))
+      tasks = tasks.map(task => ({ ...task, status: task.id === "task-second" ? move.status : task.status, boardSortOrder: positions.get(task.id) ?? task.boardSortOrder }))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    }
+    return new Response(JSON.stringify({}), { status: 200 })
+  }))
+
+  const { container } = renderApp("/app/tasks")
+  await screen.findByRole("heading", { name: "All tasks" })
+  await screen.findByText("Second task")
+  const todo = container.querySelector<HTMLElement>('section[data-status="new"]')!
+  const cards = () => Array.from(todo.querySelectorAll<HTMLElement>("[data-task]"))
+  const transferData = new Map<string, string>()
+  const dataTransfer = {
+    effectAllowed: "none",
+    setData: (type: string, value: string) => transferData.set(type, value),
+    getData: (type: string) => transferData.get(type) || "",
+  }
+  Object.defineProperty(cards()[0], "getBoundingClientRect", { value: () => ({ top: 0, height: 100, bottom: 100, left: 0, right: 100, width: 100, x: 0, y: 0, toJSON: () => ({}) }) })
+
+  fireEvent.dragStart(cards()[1], { dataTransfer })
+  fireEvent.dragOver(cards()[0], { dataTransfer, clientY: 10 })
+  expect(todo.querySelector(".board-drop-indicator")).toBeInTheDocument()
+  fireEvent.drop(todo.querySelector(".task-stack")!, { dataTransfer })
+
+  await waitFor(() => expect(moves).toEqual([{ status: "queued", ids: ["task-second", "task-first"] }]))
+  await waitFor(() => expect(cards().map(card => card.dataset.task)).toEqual(["task-second", "task-first"]))
+})
+
+test("keyboard reordering rolls the Kanban order back when persistence fails", async () => {
+  const tasks = [
+    { id: "task-first", title: "First task", bucketId: "list-1", status: "new", boardSortOrder: 0 },
+    { id: "task-second", title: "Second task", bucketId: "list-1", status: "new", boardSortOrder: 1 },
+  ]
+  let moveAttempts = 0
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === "/api/v1/me") return new Response(JSON.stringify({ authenticated: true, user: { id: "user-1", email: "owner@example.com", displayName: "Owner", theme: "light" } }), { status: 200 })
+    if (path === "/api/v1/lists") return new Response(JSON.stringify({ lists: [{ id: "list-1", name: "Product", isInbox: false }] }), { status: 200 })
+    if (path === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }), { status: 200 })
+    if (path.startsWith("/api/v1/tasks?")) return new Response(JSON.stringify({ tasks }), { status: 200 })
+    if (path === "/api/v1/stats/summary") return new Response(JSON.stringify({}), { status: 200 })
+    if (path === "/api/v1/tasks/task-second/board-position" && init?.method === "PATCH") {
+      moveAttempts++
+      return new Response(JSON.stringify({ error: "Could not save order" }), { status: 500 })
+    }
+    return new Response(JSON.stringify({}), { status: 200 })
+  }))
+
+  const { container } = renderApp("/app/tasks")
+  await screen.findByRole("heading", { name: "All tasks" })
+  await screen.findByText("Second task")
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Second task" }), { button: 0, ctrlKey: false })
+  fireEvent.click(await screen.findByText("Move up"))
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not save order")
+  expect(moveAttempts).toBe(1)
+  await waitFor(() => {
+    const todo = container.querySelector<HTMLElement>('section[data-status="new"]')!
+    expect(Array.from(todo.querySelectorAll<HTMLElement>("[data-task]")).map(card => card.dataset.task)).toEqual(["task-first", "task-second"])
+  })
 })
 
 test.each([

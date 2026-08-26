@@ -20,9 +20,9 @@ function fixture(options = {}) {
     ],
     agents: [{ id: "agent-research", displayName: "Research agent", purpose: "Find and synthesize useful evidence", workCounts: { ready: 1, working: 1, review: 0, completed: 0 } }],
     tasks: [
-      { id: "task-parent", bucketId: "list-product", bucketName: "Product", listName: "Product", title: "Publish task-first agents video", description: "Explain one control plane for people and agents.", scheduledDate: "2026-08-20", status: "working", priority: "p0", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
-      { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", assigneeAgentId: "", assigneeAgentName: "" },
-      { id: "task-writing", bucketId: "list-writing", bucketName: "Writing", listName: "Writing", title: "Draft the weekly note", description: "Share one useful workflow.", scheduledDate: "", status: "new", priority: "p2", assigneeAgentId: "", assigneeAgentName: "" },
+      { id: "task-parent", bucketId: "list-product", bucketName: "Product", listName: "Product", title: "Publish task-first agents video", description: "Explain one control plane for people and agents.", scheduledDate: "2026-08-20", status: "working", priority: "p0", boardSortOrder: 0, assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
+      { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", boardSortOrder: 0, assigneeAgentId: "", assigneeAgentName: "" },
+      { id: "task-writing", bucketId: "list-writing", bucketName: "Writing", listName: "Writing", title: "Draft the weekly note", description: "Share one useful workflow.", scheduledDate: "", status: "new", priority: "p2", boardSortOrder: 1, assigneeAgentId: "", assigneeAgentName: "" },
     ],
     subtasks: [
       { id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", sortOrder: 0, createdAt: "2026-08-18T09:00:00Z", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
@@ -117,7 +117,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       if (replay) return json(response, replay, 200);
       const bucketId = listTaskMatch ? listTaskMatch[1] : "list-inbox";
       const list = state.lists.find(item => item.id === bucketId);
-      const task = { id: `task-${state.tasks.length + 1}`, bucketId, bucketName: list.name, listName: list.name, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", ...input };
+      const task = { id: `task-${state.tasks.length + 1}`, bucketId, bucketName: list.name, listName: list.name, status: "new", priority: "", scheduledDate: "", boardSortOrder: state.tasks.length, assigneeAgentId: "", ...input };
       state.tasks.push(task);
       if (task.status !== "done") state.summary.activeTasks += 1;
       if (task.status === "working") state.summary.inProgress += 1;
@@ -148,6 +148,18 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       if (url.searchParams.get("priority")) tasks = tasks.filter(item => item.priority === url.searchParams.get("priority"));
       if (url.searchParams.get("assigneeAgentId")) tasks = tasks.filter(item => url.searchParams.get("assigneeAgentId") === "unassigned" ? !item.assigneeAgentId : item.assigneeAgentId === url.searchParams.get("assigneeAgentId"));
       return json(response, { tasks });
+    }
+    const boardPositionMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/board-position$/);
+    if (boardPositionMatch && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      const task = state.tasks.find(item => item.id === boardPositionMatch[1]);
+      const positions = new Map(input.ids.map((id, boardSortOrder) => [id, boardSortOrder]));
+      state.tasks = state.tasks.map(item => ({
+        ...item,
+        status: item.id === task.id ? input.status === "new" && item.assigneeAgentId ? "queued" : input.status : item.status,
+        boardSortOrder: positions.has(item.id) ? positions.get(item.id) : item.boardSortOrder,
+      }));
+      return json(response, { ok: true });
     }
     const taskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)(?:\/status)?$/);
     if (taskMatch && request.method === "GET") {
@@ -1229,9 +1241,32 @@ test("subtasks start in creation order and mouse or keyboard reordering persists
 test("dragging a task moves it through the workflow", async t => {
   const { page, state } = await startApp(t);
   const card = page.locator('[data-task="task-inbox"]');
-  await card.dragTo(page.locator('[data-status="working"]'));
+  await card.dragTo(page.locator('[data-status="working"] .task-stack'));
   await page.waitForFunction(() => document.querySelector('[data-status="working"] [data-task="task-inbox"]'));
   assert.equal(state.tasks.find(task => task.id === "task-inbox").status, "working");
+  assert.equal(state.requests.includes("PATCH /api/v1/tasks/task-inbox/board-position"), true);
+});
+
+test("Kanban cards persist exact drag order and support keyboard reordering", async t => {
+  const { page, state, pageErrors } = await startApp(t);
+  const todo = page.locator('[data-status="new"]');
+  const visibleOrder = () => todo.locator("[data-task]").evaluateAll(cards => cards.map(card => card.dataset.task));
+  assert.deepEqual(await visibleOrder(), ["task-inbox", "task-writing"]);
+
+  await todo.locator('[data-task="task-writing"]').dragTo(todo.locator('[data-task="task-inbox"]'), { targetPosition: { x: 20, y: 5 } });
+  await page.waitForFunction(() => document.querySelector('[data-status="new"] [data-task]')?.dataset.task === "task-writing");
+  assert.deepEqual(await visibleOrder(), ["task-writing", "task-inbox"]);
+  assert.equal(state.requests.includes("PATCH /api/v1/tasks/task-writing/board-position"), true);
+
+  await page.reload();
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  assert.deepEqual(await visibleOrder(), ["task-writing", "task-inbox"]);
+
+  await page.getByRole("button", { name: "Actions for Write the doc my boss asked for" }).press("Enter");
+  await page.getByRole("menuitem", { name: "Move up" }).press("Enter");
+  await page.waitForFunction(() => document.querySelector('[data-status="new"] [data-task]')?.dataset.task === "task-inbox");
+  assert.deepEqual(await visibleOrder(), ["task-inbox", "task-writing"]);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("lists, inbox, agents, and settings are complete React routes", async t => {

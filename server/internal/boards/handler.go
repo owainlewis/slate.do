@@ -296,6 +296,20 @@ func (h *Handler) MoveTask(w http.ResponseWriter, r *http.Request, user auth.Use
 	writeJSON(w, http.StatusOK, task)
 }
 
+func (h *Handler) MoveTaskOnBoard(w http.ResponseWriter, r *http.Request, user auth.User) {
+	if !validatePathID(w, "task", r.PathValue("id")) {
+		return
+	}
+	var input MoveTaskOnBoardInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if err := h.store.MoveTaskOnBoard(r.Context(), user.ID, r.PathValue("id"), input); handleStoreError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (h *Handler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request, user auth.User) {
 	var input struct {
 		Title           *string `json:"title"`

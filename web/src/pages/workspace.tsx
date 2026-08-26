@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query"
-import { ArrowDownWideNarrow, Check, Columns3 as BoardIcon, CalendarDays, Layers3, List as ListIcon, MoreHorizontal, Plus, Rows3, Search, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowDownWideNarrow, ArrowUp, Check, Columns3 as BoardIcon, CalendarDays, Layers3, List as ListIcon, MoreHorizontal, Plus, Rows3, Search, Trash2 } from "lucide-react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuItemIndicator, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -25,15 +25,54 @@ const columns: Array<{ value: TaskStatus; label: string; statuses: TaskStatus[];
 
 const statusName = (value: string) => columns.find(column => column.statuses.includes(value as TaskStatus))?.label || value
 type TasksPage = { tasks: Task[]; nextCursor?: string }
+type BoardMove = { id: string; status: TaskStatus; ids: string[] }
 
 type DeleteTarget = { task: Task; returnFocus: HTMLButtonElement | null }
 
-function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () => void; onMove: (status: TaskStatus) => void; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
+function orderedBoardTasks(tasks: Task[]) {
+  return [...tasks].sort((left, right) => {
+    const order = (left.boardSortOrder ?? Number.MAX_SAFE_INTEGER) - (right.boardSortOrder ?? Number.MAX_SAFE_INTEGER)
+    return order || String(right.createdAt || "").localeCompare(String(left.createdAt || "")) || right.id.localeCompare(left.id)
+  })
+}
+
+function optimisticBoardMove(data: InfiniteData<TasksPage, string> | undefined, move: BoardMove) {
+  if (!data) return data
+  const positions = new Map(move.ids.map((id, index) => [id, index]))
+  return {
+    ...data,
+    pages: data.pages.map(page => ({
+      ...page,
+      tasks: page.tasks.map(task => {
+        const boardSortOrder = positions.get(task.id)
+        if (task.id === move.id) {
+          const status = move.status === "new" && task.assigneeAgentId ? "queued" : move.status
+          return { ...task, status, ...(boardSortOrder === undefined ? {} : { boardSortOrder }) }
+        }
+        return boardSortOrder === undefined ? task : { ...task, boardSortOrder }
+      }),
+    })),
+  }
+}
+
+function TaskCard({ task, dragging, canMoveUp, canMoveDown, onOpen, onMove, onReorder, onDelete, onDragStart, onDragEnd, onDragOver }: {
+  task: Task
+  dragging: boolean
+  canMoveUp: boolean
+  canMoveDown: boolean
+  onOpen: () => void
+  onMove: (status: TaskStatus) => void
+  onReorder: (direction: -1 | 1) => void
+  onDelete: (returnFocus: HTMLButtonElement | null) => void
+  onDragStart: (event: React.DragEvent<HTMLDivElement>) => void
+  onDragEnd: () => void
+  onDragOver: (event: React.DragEvent<HTMLDivElement>) => void
+}) {
   const { assignees, lists } = useApp()
   const assignee = assigneeForTask(task, assignees)
   const actionsTrigger = React.useRef<HTMLButtonElement>(null)
   return (
-    <div className="task-card group" draggable data-task={task.id} onDragStart={event => { event.dataTransfer.setData("text/task-id", task.id); event.dataTransfer.effectAllowed = "move" }} onDoubleClick={onOpen}>
+    <div className={`task-card group ${dragging ? "is-dragging" : ""}`} draggable data-task={task.id} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={onDragOver} onDoubleClick={onOpen}>
       <button type="button" className="w-full text-left" data-open-task={task.id} aria-label={`Open task: ${task.title}`} onClick={onOpen}>
         <span className="task-card-kicker"><PriorityBadge priority={task.priority} compact /><span>{taskListName(task, lists)}</span></span>
         <span className="task-title">{task.title}</span>
@@ -46,8 +85,12 @@ function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () =
       <DropdownMenu>
         <DropdownMenuTrigger asChild><button ref={actionsTrigger} type="button" className="absolute right-1.5 top-1.5 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100 focus:opacity-100" aria-label={`Actions for ${task.title}`}><MoreHorizontal className="size-3.5" /></button></DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <DropdownMenuLabel>Reorder</DropdownMenuLabel>
+          <DropdownMenuItem disabled={!canMoveUp} onSelect={() => onReorder(-1)}><ArrowUp className="size-4" />Move up</DropdownMenuItem>
+          <DropdownMenuItem disabled={!canMoveDown} onSelect={() => onReorder(1)}><ArrowDown className="size-4" />Move down</DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuLabel>Move to</DropdownMenuLabel>
-          {columns.map(column => <DropdownMenuItem key={column.value} onSelect={() => onMove(column.value)}>{column.label}</DropdownMenuItem>)}
+          {columns.map(column => <DropdownMenuItem key={column.value} disabled={column.statuses.includes(task.status)} onSelect={() => onMove(column.value)}>{column.label}</DropdownMenuItem>)}
           <DropdownMenuSeparator />
           <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" onSelect={() => onDelete(actionsTrigger.current)}><Trash2 className="size-4" />Delete task</DropdownMenuItem>
         </DropdownMenuContent>
@@ -87,7 +130,8 @@ export function WorkspacePage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [dragOver, setDragOver] = React.useState<TaskStatus | "">("")
+  const [draggedTaskID, setDraggedTaskID] = React.useState("")
+  const [dropTarget, setDropTarget] = React.useState<{ status: TaskStatus; index: number } | null>(null)
   const [pageError, setPageError] = React.useState("")
   const [deleteTarget, setDeleteTarget] = React.useState<DeleteTarget | null>(null)
   const [listActionsOpen, setListActionsOpen] = React.useState(false)
@@ -108,9 +152,10 @@ export function WorkspacePage() {
     else if (layout === "table" && sortByPriority) query.set("sort", "priority")
     return query.toString()
   }, [groupByList, layout, listId, searchParams, sortByPriority])
+  const tasksQueryKey = ["tasks", scope, listId, taskQueryString] as const
 
   const tasksQuery = useInfiniteQuery({
-    queryKey: ["tasks", scope, listId, taskQueryString],
+    queryKey: tasksQueryKey,
     queryFn: ({ pageParam }) => {
       const query = new URLSearchParams(taskQueryString)
       if (pageParam) query.set("cursor", pageParam)
@@ -147,13 +192,21 @@ export function WorkspacePage() {
   const refresh = async () => {
     await Promise.all([queryClient.invalidateQueries({ queryKey: ["tasks"] }), queryClient.invalidateQueries({ queryKey: workspaceSummaryQueryKey }), refreshLists()])
   }
-  const moveTask = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: TaskStatus }) => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(id)}/status`, { status }),
-    onMutate: ({ id, status }) => {
-      queryClient.setQueriesData<InfiniteData<TasksPage, string>>({ queryKey: ["tasks"] }, old => old ? { ...old, pages: old.pages.map(page => ({ ...page, tasks: page.tasks.map(task => task.id === id ? { ...task, status } : task) })) } : old)
+  const moveTaskOnBoard = useMutation({
+    mutationFn: ({ id, status, ids }: BoardMove) => api.patch(`/api/v1/tasks/${encodeURIComponent(id)}/board-position`, { status, ids }),
+    onMutate: async (move: BoardMove) => {
+      await queryClient.cancelQueries({ queryKey: tasksQueryKey })
+      const previous = queryClient.getQueryData<InfiniteData<TasksPage, string>>(tasksQueryKey)
+      queryClient.setQueryData<InfiniteData<TasksPage, string>>(tasksQueryKey, old => optimisticBoardMove(old, move))
+      setPageError("")
+      return { previous }
     },
     onSuccess: refresh,
-    onError: error => { setPageError(error instanceof Error ? error.message : "Could not update task"); void refresh() },
+    onError: (error, _move, context) => {
+      if (context?.previous) queryClient.setQueryData(tasksQueryKey, context.previous)
+      setPageError(error instanceof Error ? error.message : "Could not reorder task")
+      void refresh()
+    },
   })
   const deleteTask = useMutation({
     mutationFn: (id: string) => api.del(`/api/v1/tasks/${encodeURIComponent(id)}`),
@@ -183,6 +236,49 @@ export function WorkspacePage() {
   }
   const switchLayout = (value: "board" | "table") => updateFilter("view", value === "table" ? "table" : "")
   const openTask = (id: string) => navigate(`${listId ? `/app/lists/${encodeURIComponent(listId)}` : "/app"}/tasks/${encodeURIComponent(id)}${searchParams.toString() ? `?${searchParams}` : ""}`)
+  const tasksInColumn = (column: (typeof columns)[number]) => orderedBoardTasks(tasks.filter(task => column.statuses.includes(task.status)))
+  const moveTaskToColumn = (task: Task, status: TaskStatus) => {
+    const destination = columns.find(column => column.value === status)
+    if (!destination) return
+    const ids = tasksInColumn(destination).filter(item => item.id !== task.id).map(item => item.id)
+    moveTaskOnBoard.mutate({ id: task.id, status, ids: [...ids, task.id] })
+  }
+  const reorderTask = (task: Task, direction: -1 | 1) => {
+    const column = columns.find(item => item.statuses.includes(task.status))
+    if (!column) return
+    const items = tasksInColumn(column)
+    const index = items.findIndex(item => item.id === task.id)
+    const destination = index + direction
+    if (index < 0 || destination < 0 || destination >= items.length) return
+    const ids = items.map(item => item.id)
+    const movedID = ids[index]
+    ids[index] = ids[destination]
+    ids[destination] = movedID
+    moveTaskOnBoard.mutate({ id: task.id, status: task.status, ids })
+  }
+  const finishDrag = () => {
+    setDraggedTaskID("")
+    setDropTarget(null)
+  }
+  const dropTask = (event: React.DragEvent<HTMLDivElement>, column: (typeof columns)[number], items: Task[]) => {
+    event.preventDefault()
+    const id = event.dataTransfer.getData("text/task-id") || draggedTaskID
+    if (!id) return
+    const currentIndex = items.findIndex(task => task.id === id)
+    let destinationIndex = dropTarget?.status === column.value ? dropTarget.index : items.length
+    if (currentIndex >= 0 && currentIndex < destinationIndex) destinationIndex--
+    const destination = items.filter(task => task.id !== id)
+    destinationIndex = Math.max(0, Math.min(destinationIndex, destination.length))
+    const draggedTask = tasks.find(task => task.id === id)
+    if (!draggedTask) {
+      finishDrag()
+      return
+    }
+    destination.splice(destinationIndex, 0, draggedTask)
+    const status = column.statuses.includes(draggedTask.status) ? draggedTask.status : column.value
+    moveTaskOnBoard.mutate({ id, status, ids: destination.map(task => task.id) })
+    finishDrag()
+  }
 
   if (listId && !selectedList && !tasksQuery.isPending) return <div className="page-wrap"><div className="empty-state"><div><ListIcon /><h1 className="font-sans text-3xl font-semibold text-foreground">List not found</h1><p>This list is no longer available.</p><Button className="mt-4" onClick={() => navigate("/app/tasks")}>Open all tasks</Button></div></div></div>
 
@@ -212,8 +308,31 @@ export function WorkspacePage() {
         <div className="board-scroll" id="workspace-task-panel">
           <div className="board workspace-flow">
             {columns.map(column => {
-              const items = tasks.filter(task => column.statuses.includes(task.status))
-              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => { event.preventDefault(); setDragOver(""); const id = event.dataTransfer.getData("text/task-id"); if (id) moveTask.mutate({ id, status: column.value }) }}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add task</TooltipContent></Tooltip></header><div className="task-stack">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
+              const items = tasksInColumn(column)
+              const activeDropTarget = dropTarget?.status === column.value ? dropTarget : null
+              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${activeDropTarget ? "drag-over" : ""}`} data-status={column.value}>
+                <header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add task</TooltipContent></Tooltip></header>
+                <div className="task-stack" onDragOver={event => { event.preventDefault(); if (!(event.target as HTMLElement).closest(".task-card")) setDropTarget({ status: column.value, index: items.length }) }} onDrop={event => dropTask(event, column, items)}>
+                  {items.map((task, index) => <React.Fragment key={task.id}>
+                    {activeDropTarget?.index === index && <div className="board-drop-indicator" aria-hidden="true" />}
+                    <TaskCard
+                      task={task}
+                      dragging={draggedTaskID === task.id}
+                      canMoveUp={index > 0}
+                      canMoveDown={index < items.length - 1}
+                      onOpen={() => openTask(task.id)}
+                      onMove={status => moveTaskToColumn(task, status)}
+                      onReorder={direction => reorderTask(task, direction)}
+                      onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }}
+                      onDragStart={event => { event.dataTransfer.setData("text/task-id", task.id); event.dataTransfer.effectAllowed = "move"; setDraggedTaskID(task.id); setDropTarget({ status: column.value, index }) }}
+                      onDragEnd={finishDrag}
+                      onDragOver={event => { event.preventDefault(); event.stopPropagation(); const bounds = event.currentTarget.getBoundingClientRect(); const after = event.clientY >= bounds.top + bounds.height / 2; setDropTarget({ status: column.value, index: index + (after ? 1 : 0) }) }}
+                    />
+                  </React.Fragment>)}
+                  {activeDropTarget?.index === items.length && <div className="board-drop-indicator" aria-hidden="true" />}
+                  {!items.length && <div className="empty-column">No tasks here</div>}
+                </div>
+              </section>
             })}
           </div>
         </div>

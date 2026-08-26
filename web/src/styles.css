@@ -201,6 +201,9 @@ a.bg-primary { color: var(--primary-foreground); }
 .column-count { color: var(--muted-foreground); font-size: .74rem; font-weight: 500; font-variant-numeric: tabular-nums; }
 .task-stack { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: .65rem; }
 .task-card { position: relative; width: 100%; border: 1px solid color-mix(in srgb, var(--border) 88%, transparent); border-radius: .78rem; background: color-mix(in srgb, var(--card) 96%, transparent); padding: .8rem; text-align: left; box-shadow: 0 1px 2px rgb(15 23 42 / .05), 0 1px 1px rgb(15 23 42 / .02); transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; cursor: pointer; }
+.task-card[draggable="true"] { cursor: grab; }
+.task-card.is-dragging { opacity: .42; cursor: grabbing; transform: scale(.985); }
+.board-drop-indicator { height: 3px; flex: none; border-radius: 999px; background: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent); }
 .task-card:hover { border-color: color-mix(in srgb, var(--foreground) 16%, var(--border)); box-shadow: 0 8px 24px rgb(15 23 42 / .07); transform: translateY(-2px); }
 .task-card > button:focus-visible { border-radius: .45rem; outline: 2px solid var(--ring); outline-offset: 2px; }
 .task-card-kicker { display: flex; align-items: center; gap: .45rem; min-height: 1.4rem; margin-bottom: .55rem; color: var(--muted-foreground); font-size: .68rem; }

@@ -56,6 +56,7 @@ export interface Task {
   reviewReason?: string
   executionRunId?: string
   sortOrder?: number
+  boardSortOrder?: number
   createdAt?: string
   updatedAt?: string
   [key: string]: unknown

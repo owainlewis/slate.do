@@ -63,6 +63,7 @@ type Task struct {
 	ParentTaskTitle   string    `json:"parentTaskTitle,omitempty"`
 	BucketName        string    `json:"listName,omitempty"`
 	SortOrder         int       `json:"sortOrder"`
+	BoardSortOrder    int64     `json:"boardSortOrder"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 }
@@ -127,6 +128,11 @@ type UpdateTaskInput struct {
 type MoveTaskInput struct {
 	BucketID string `json:"bucketId"`
 	Position *int   `json:"position"`
+}
+
+type MoveTaskOnBoardInput struct {
+	Status string   `json:"status"`
+	IDs    []string `json:"ids"`
 }
 
 type TaskFilter struct {
