@@ -47,6 +47,169 @@ func TestConcurrentProResourceCreationCannotExceedLimits(t *testing.T) {
 	}
 }
 
+func TestBoardOrderingPersistsAcrossListsStatusesAndFailedMoves(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	firstList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(listID string, title string) Task {
+		t.Helper()
+		task, err := store.CreateTask(ctx, userID, listID, CreateTaskInput{Title: title})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task
+	}
+	setStatus := func(task Task, status string) Task {
+		t.Helper()
+		updated, err := store.UpdateTaskForHuman(ctx, userID, task.ID, UpdateTaskInput{Status: &status})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return updated
+	}
+	boardOrder := func(column string) []string {
+		t.Helper()
+		rows, err := db.Query(ctx, `
+			SELECT id::text
+			FROM tasks
+			WHERE owner_user_id = $1
+				AND parent_task_id IS NULL
+				AND CASE WHEN status IN ('new', 'queued') THEN 'todo' ELSE status END = $2
+			ORDER BY board_sort_order, created_at DESC, id DESC
+		`, userID, column)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return ids
+	}
+
+	first := create(firstList.ID, "First visible Todo")
+	hidden := create(secondList.ID, "Hidden Todo")
+	last := create(firstList.ID, "Last visible Todo")
+
+	if err := store.MoveTaskOnBoard(ctx, userID, last.ID, MoveTaskOnBoardInput{
+		Status: StatusNew,
+		IDs:    []string{last.ID, first.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(boardOrder("todo")), fmt.Sprint([]string{last.ID, hidden.ID, first.ID}); got != want {
+		t.Fatalf("filtered Todo reorder = %s, want %s", got, want)
+	}
+
+	workingFirst := setStatus(create(firstList.ID, "First visible working"), StatusWorking)
+	workingHidden := setStatus(create(secondList.ID, "Hidden working"), StatusWorking)
+	workingLast := setStatus(create(firstList.ID, "Last visible working"), StatusWorking)
+	if err := store.MoveTaskOnBoard(ctx, userID, first.ID, MoveTaskOnBoardInput{
+		Status: StatusWorking,
+		IDs:    []string{workingFirst.ID, first.ID, workingLast.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantWorking := []string{workingFirst.ID, workingHidden.ID, first.ID, workingLast.ID}
+	if got, want := fmt.Sprint(boardOrder(StatusWorking)), fmt.Sprint(wantWorking); got != want {
+		t.Fatalf("cross-column order = %s, want %s", got, want)
+	}
+
+	page, err := store.ListTaskPage(ctx, userID, TaskFilter{TopLevelOnly: true, Limit: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := make(map[string]int64)
+	for _, task := range page.Tasks {
+		positions[task.ID] = task.BoardSortOrder
+	}
+	if positions[workingFirst.ID] >= positions[workingHidden.ID] || positions[workingHidden.ID] >= positions[first.ID] || positions[first.ID] >= positions[workingLast.ID] {
+		t.Fatalf("workspace board positions = %#v", positions)
+	}
+
+	var pagedIDs []string
+	boardFilter := TaskFilter{TopLevelOnly: true, Sort: "board", Limit: 2}
+	for {
+		boardPage, err := store.ListTaskPage(ctx, userID, boardFilter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, task := range boardPage.Tasks {
+			pagedIDs = append(pagedIDs, task.ID)
+		}
+		if boardPage.NextCursor == "" {
+			break
+		}
+		boardFilter.Cursor = boardPage.NextCursor
+	}
+	todoOrder := boardOrder("todo")
+	workingOrder := boardOrder(StatusWorking)
+	var wantPagedIDs []string
+	for position := 0; position < len(workingOrder) || position < len(todoOrder); position++ {
+		if position < len(todoOrder) {
+			wantPagedIDs = append(wantPagedIDs, todoOrder[position])
+		}
+		if position < len(workingOrder) {
+			wantPagedIDs = append(wantPagedIDs, workingOrder[position])
+		}
+	}
+	if got, want := fmt.Sprint(pagedIDs), fmt.Sprint(wantPagedIDs); got != want {
+		t.Fatalf("paginated board order = %s, want %s", got, want)
+	}
+
+	const missingID = "10000000-0000-4000-8000-000000000099"
+	if err := store.MoveTaskOnBoard(ctx, userID, first.ID, MoveTaskOnBoardInput{
+		Status: StatusDone,
+		IDs:    []string{first.ID, missingID},
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("failed board move error = %v, want ErrNotFound", err)
+	}
+	persisted, err := store.GetTask(ctx, userID, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != StatusWorking {
+		t.Fatalf("status after failed board move = %q, want %q", persisted.Status, StatusWorking)
+	}
+	if got, want := fmt.Sprint(boardOrder(StatusWorking)), fmt.Sprint(wantWorking); got != want {
+		t.Fatalf("order after failed board move = %s, want %s", got, want)
+	}
+}
+
+func TestMergePartialBoardOrderPreservesHiddenTaskSlots(t *testing.T) {
+	current := []string{"visible-a", "hidden-a", "visible-b", "hidden-b", "visible-c"}
+	merged, err := mergePartialBoardOrder(current, []string{"visible-c", "visible-a", "visible-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"visible-c", "hidden-a", "visible-a", "hidden-b", "visible-b"}
+	if fmt.Sprint(merged) != fmt.Sprint(want) {
+		t.Fatalf("merged order = %v, want %v", merged, want)
+	}
+	if _, err := mergePartialBoardOrder(current, []string{"visible-a", "missing"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing task error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCardConversationKeepsHumanAndAssignedAgentOnOneRecord(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

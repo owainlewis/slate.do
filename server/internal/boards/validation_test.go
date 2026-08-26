@@ -178,6 +178,17 @@ func TestTaskFilterFromQueryIncludesWorkspaceFilters(t *testing.T) {
 	}
 }
 
+func TestTaskFilterFromQueryIncludesBoardSort(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/v1/tasks?sort=board", nil)
+	filter, err := taskFilterFromQuery(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filter.Sort != "board" {
+		t.Fatalf("sort = %q, want board", filter.Sort)
+	}
+}
+
 func TestTaskFilterRejectsInvalidWorkspaceFilters(t *testing.T) {
 	for _, query := range []string{"bucketId=not-an-id", "assigneeAgentId=not-an-id", "parentTaskId=not-an-id", "plannedFrom=tomorrow", "plannedTo=2026-13-01", "topLevel=maybe", "inbox=maybe", "sort=title"} {
 		req := httptest.NewRequest("GET", "/api/v1/tasks?"+query, nil)

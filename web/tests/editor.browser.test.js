@@ -8,6 +8,10 @@ const { chromium } = require("playwright");
 
 const dist = path.resolve(__dirname, "../../server/internal/web/dist");
 
+function taskBoardColumn(status) {
+  return ["new", "queued"].includes(status) ? "todo" : status;
+}
+
 function fixture(options = {}) {
   let releaseSummary;
   const summaryDelay = options.summaryPending ? new Promise(resolve => { releaseSummary = resolve; }) : null;
@@ -20,9 +24,9 @@ function fixture(options = {}) {
     ],
     agents: [{ id: "agent-research", displayName: "Research agent", purpose: "Find and synthesize useful evidence", workCounts: { ready: 1, working: 1, review: 0, completed: 0 } }],
     tasks: [
-      { id: "task-parent", bucketId: "list-product", bucketName: "Product", listName: "Product", title: "Publish task-first agents video", description: "Explain one control plane for people and agents.", scheduledDate: "2026-08-20", status: "working", priority: "p0", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
-      { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", assigneeAgentId: "", assigneeAgentName: "" },
-      { id: "task-writing", bucketId: "list-writing", bucketName: "Writing", listName: "Writing", title: "Draft the weekly note", description: "Share one useful workflow.", scheduledDate: "", status: "new", priority: "p2", assigneeAgentId: "", assigneeAgentName: "" },
+      { id: "task-parent", bucketId: "list-product", bucketName: "Product", listName: "Product", title: "Publish task-first agents video", description: "Explain one control plane for people and agents.", scheduledDate: "2026-08-20", status: "working", priority: "p0", boardSortOrder: 0, assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
+      { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", boardSortOrder: 0, assigneeAgentId: "", assigneeAgentName: "" },
+      { id: "task-writing", bucketId: "list-writing", bucketName: "Writing", listName: "Writing", title: "Draft the weekly note", description: "Share one useful workflow.", scheduledDate: "", status: "new", priority: "p2", boardSortOrder: 1, assigneeAgentId: "", assigneeAgentName: "" },
     ],
     subtasks: [
       { id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", sortOrder: 0, createdAt: "2026-08-18T09:00:00Z", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
@@ -117,7 +121,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       if (replay) return json(response, replay, 200);
       const bucketId = listTaskMatch ? listTaskMatch[1] : "list-inbox";
       const list = state.lists.find(item => item.id === bucketId);
-      const task = { id: `task-${state.tasks.length + 1}`, bucketId, bucketName: list.name, listName: list.name, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", ...input };
+      const task = { id: `task-${state.tasks.length + 1}`, bucketId, bucketName: list.name, listName: list.name, status: "new", priority: "", scheduledDate: "", boardSortOrder: state.tasks.length, assigneeAgentId: "", ...input };
       state.tasks.push(task);
       if (task.status !== "done") state.summary.activeTasks += 1;
       if (task.status === "working") state.summary.inProgress += 1;
@@ -147,7 +151,31 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       if (url.searchParams.get("q")) tasks = tasks.filter(item => `${item.title} ${item.description}`.toLowerCase().includes(url.searchParams.get("q").toLowerCase()));
       if (url.searchParams.get("priority")) tasks = tasks.filter(item => item.priority === url.searchParams.get("priority"));
       if (url.searchParams.get("assigneeAgentId")) tasks = tasks.filter(item => url.searchParams.get("assigneeAgentId") === "unassigned" ? !item.assigneeAgentId : item.assigneeAgentId === url.searchParams.get("assigneeAgentId"));
+      if (url.searchParams.get("sort") === "board") tasks.sort((left, right) => taskBoardColumn(left.status).localeCompare(taskBoardColumn(right.status)) || left.boardSortOrder - right.boardSortOrder);
       return json(response, { tasks });
+    }
+    const boardPositionMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/board-position$/);
+    if (boardPositionMatch && request.method === "PATCH") {
+      const input = await requestJSON(request);
+      const task = state.tasks.find(item => item.id === boardPositionMatch[1]);
+      const nextStatus = input.status === "new" && task.assigneeAgentId ? "queued" : input.status;
+      const changedColumn = taskBoardColumn(task.status) !== taskBoardColumn(nextStatus);
+      const appendRank = Math.max(-1, ...state.tasks.filter(item => item.id !== task.id && taskBoardColumn(item.status) === taskBoardColumn(nextStatus)).map(item => item.boardSortOrder)) + 1;
+      state.tasks = state.tasks.map(item => ({
+        ...item,
+        status: item.id === task.id ? nextStatus : item.status,
+        boardSortOrder: item.id === task.id && changedColumn ? appendRank : item.boardSortOrder,
+      }));
+      const destination = state.tasks
+        .filter(item => !item.parentTaskId && taskBoardColumn(item.status) === taskBoardColumn(input.status))
+        .sort((left, right) => left.boardSortOrder - right.boardSortOrder);
+      const requested = new Set(input.ids);
+      const slots = destination.flatMap((item, index) => requested.has(item.id) ? [index] : []);
+      const merged = destination.map(item => item.id);
+      slots.forEach((slot, index) => { merged[slot] = input.ids[index]; });
+      const positions = new Map(merged.map((id, boardSortOrder) => [id, boardSortOrder]));
+      state.tasks = state.tasks.map(item => positions.has(item.id) ? { ...item, boardSortOrder: positions.get(item.id) } : item);
+      return json(response, { ok: true });
     }
     const taskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)(?:\/status)?$/);
     if (taskMatch && request.method === "GET") {
@@ -463,12 +491,12 @@ test("table layout filters tasks and survives layout changes", async t => {
   assert.deepEqual(await table.locator(".table-group-row").allTextContents(), ["Inbox1", "Product1", "Writing1"]);
   await page.getByLabel("Search tasks").fill("boss");
   await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr[data-task]").length === 1);
-  const boardTasks = page.waitForResponse(value => value.request().method() === "GET" && value.url().includes("/api/v1/tasks?") && !new URL(value.url()).searchParams.has("sort"));
+  const boardTasks = page.waitForResponse(value => value.request().method() === "GET" && new URL(value.url()).searchParams.get("sort") === "board");
   await page.getByRole("button", { name: "Board", exact: true }).click();
   await boardTasks;
   assert.equal(new URL(page.url()).searchParams.get("q"), "boss");
   await page.getByRole("button", { name: "Open task: Write the doc my boss asked for" }).waitFor();
-  assert.equal(state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).at(-1).includes("sort="), false);
+  assert.equal(new URL(state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).at(-1), "http://slate.test").searchParams.get("sort"), "board");
 });
 
 test("workspace pagination loads and retains subsequent task pages", async t => {
@@ -1227,11 +1255,43 @@ test("subtasks start in creation order and mouse or keyboard reordering persists
 });
 
 test("dragging a task moves it through the workflow", async t => {
-  const { page, state } = await startApp(t);
+  const { page, state, origin } = await startApp(t);
+  await page.goto(`${origin}/app/lists/list-inbox`);
+  await page.getByRole("heading", { name: "Inbox", exact: true }).waitFor();
   const card = page.locator('[data-task="task-inbox"]');
-  await card.dragTo(page.locator('[data-status="working"]'));
+  const moved = page.waitForResponse(value => value.request().method() === "PATCH" && value.url().endsWith("/api/v1/tasks/task-inbox/board-position") && value.ok());
+  await card.dragTo(page.locator('[data-status="working"] .task-stack'));
+  await moved;
   await page.waitForFunction(() => document.querySelector('[data-status="working"] [data-task="task-inbox"]'));
   assert.equal(state.tasks.find(task => task.id === "task-inbox").status, "working");
+  assert.ok(state.tasks.find(task => task.id === "task-parent").boardSortOrder < state.tasks.find(task => task.id === "task-inbox").boardSortOrder);
+  assert.equal(state.requests.includes("PATCH /api/v1/tasks/task-inbox/board-position"), true);
+});
+
+test("Kanban cards persist exact drag order and support keyboard reordering", async t => {
+  const { page, state, pageErrors } = await startApp(t);
+  const todo = page.locator('[data-status="new"]');
+  const visibleOrder = () => todo.locator("[data-task]").evaluateAll(cards => cards.map(card => card.dataset.task));
+  assert.deepEqual(await visibleOrder(), ["task-inbox", "task-writing"]);
+
+  const dragged = page.waitForResponse(value => value.request().method() === "PATCH" && value.url().endsWith("/api/v1/tasks/task-writing/board-position") && value.ok());
+  await todo.locator('[data-task="task-writing"]').dragTo(todo.locator('[data-task="task-inbox"]'), { targetPosition: { x: 20, y: 5 } });
+  await dragged;
+  await page.waitForFunction(() => document.querySelector('[data-status="new"] [data-task]')?.dataset.task === "task-writing");
+  assert.deepEqual(await visibleOrder(), ["task-writing", "task-inbox"]);
+  assert.equal(state.requests.includes("PATCH /api/v1/tasks/task-writing/board-position"), true);
+
+  await page.reload();
+  await page.getByRole("heading", { name: "All tasks", exact: true }).waitFor();
+  assert.deepEqual(await visibleOrder(), ["task-writing", "task-inbox"]);
+
+  await page.getByRole("button", { name: "Actions for Write the doc my boss asked for" }).press("Enter");
+  const keyboardMove = page.waitForResponse(value => value.request().method() === "PATCH" && value.url().endsWith("/api/v1/tasks/task-inbox/board-position") && value.ok());
+  await page.getByRole("menuitem", { name: "Move up" }).press("Enter");
+  await keyboardMove;
+  await page.waitForFunction(() => document.querySelector('[data-status="new"] [data-task]')?.dataset.task === "task-inbox");
+  assert.deepEqual(await visibleOrder(), ["task-inbox", "task-writing"]);
+  assert.deepEqual(pageErrors, []);
 });
 
 test("lists, inbox, agents, and settings are complete React routes", async t => {

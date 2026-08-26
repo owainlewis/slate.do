@@ -43,7 +43,7 @@ func TestWorkspaceSummaryRejectsAgentCredentialsBeforeStore(t *testing.T) {
 	}
 }
 
-func TestChildAndConversationRoutesRejectMalformedCardIDsBeforeStore(t *testing.T) {
+func TestTaskRoutesRejectMalformedTaskIDsBeforeStore(t *testing.T) {
 	handler := NewHandler(nil)
 	tests := []struct {
 		name string
@@ -52,6 +52,7 @@ func TestChildAndConversationRoutesRejectMalformedCardIDsBeforeStore(t *testing.
 		{name: "create child", call: handler.CreateSubtask},
 		{name: "list conversation", call: handler.ListTaskEntries},
 		{name: "create conversation entry", call: handler.CreateTaskEntry},
+		{name: "move on board", call: handler.MoveTaskOnBoard},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
