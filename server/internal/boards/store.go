@@ -1107,6 +1107,29 @@ func orderedTaskIDs(ctx context.Context, tx pgx.Tx, bucketID string, exceptID st
 	return ids, rows.Err()
 }
 
+func orderedAllTaskIDs(ctx context.Context, tx pgx.Tx, bucketID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id::text
+		FROM tasks
+		WHERE bucket_id = $1
+		ORDER BY sort_order, created_at, id
+		FOR UPDATE
+	`, bucketID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func orderedChildTaskIDs(ctx context.Context, tx pgx.Tx, parentTaskID string) ([]string, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id::text
@@ -1501,6 +1524,152 @@ func (s *Store) ReorderTasks(ctx context.Context, userID string, bucketID string
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) ListSubtasks(ctx context.Context, userID string, parentTaskID string) ([]Task, error) {
+	parent, err := s.GetTask(ctx, userID, parentTaskID)
+	if err != nil {
+		return nil, err
+	}
+	if parent.ParentTaskID != "" {
+		return nil, fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT t.id::text, t.bucket_id::text, t.title, '',
+			COALESCE(t.scheduled_date::text, ''), t.kind,
+			t.status, t.priority, t.sort_order, t.created_at, t.updated_at,
+			COALESCE(t.assignee_agent_id::text, ''), COALESCE(t.parent_task_id::text, ''),
+			l.name, COALESCE(a.name, ''), parent.title
+		FROM tasks t
+		JOIN buckets l ON l.id = t.bucket_id
+		LEFT JOIN agents a ON a.id = t.assignee_agent_id
+		JOIN tasks parent ON parent.id = t.parent_task_id
+		WHERE t.owner_user_id = $1 AND t.parent_task_id = $2
+		ORDER BY t.sort_order, t.created_at, t.id
+	`, userID, parent.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks := []Task{}
+	for rows.Next() {
+		task, err := scanTaskSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, rows.Err()
+}
+
+func (s *Store) ReorderSubtasks(ctx context.Context, userID string, parentTaskID string, ids []string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", userID+":task-move"); err != nil {
+		return err
+	}
+	if _, err := lockStorageQuota(ctx, tx, userID); err != nil {
+		return err
+	}
+	parent, err := lockedTask(ctx, tx, userID, parentTaskID)
+	if err != nil {
+		return err
+	}
+	if parent.ParentTaskID != "" {
+		return fmt.Errorf("%w: subtasks cannot contain subtasks", ErrInvalidData)
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, bucket_id::text
+		FROM tasks
+		WHERE parent_task_id = $1 AND owner_user_id = $2
+		ORDER BY sort_order, created_at, id
+		FOR UPDATE
+	`, parent.ID, userID)
+	if err != nil {
+		return err
+	}
+	var currentIDs []string
+	childBuckets := make(map[string]string)
+	for rows.Next() {
+		var id, bucketID string
+		if err := rows.Scan(&id, &bucketID); err != nil {
+			rows.Close()
+			return err
+		}
+		currentIDs = append(currentIDs, id)
+		childBuckets[id] = bucketID
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(ids) != len(currentIDs) {
+		return fmt.Errorf("%w: subtask order must include every subtask", ErrInvalidData)
+	}
+	remaining := make(map[string]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		remaining[id] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := remaining[id]; !ok {
+			return fmt.Errorf("%w: subtask order contains an unknown or duplicate task", ErrInvalidData)
+		}
+		delete(remaining, id)
+	}
+	bucketOrders := make(map[string][]string)
+	bucketOrders[parent.BucketID], err = orderedAllTaskIDs(ctx, tx, parent.BucketID)
+	if err != nil {
+		return err
+	}
+	for _, bucketID := range childBuckets {
+		if bucketID == parent.BucketID {
+			continue
+		}
+		if _, ok := bucketOrders[bucketID]; ok {
+			continue
+		}
+		bucketOrders[bucketID], err = orderedAllTaskIDs(ctx, tx, bucketID)
+		if err != nil {
+			return err
+		}
+	}
+	destinationOrder := removeTaskIDs(bucketOrders[parent.BucketID], currentIDs)
+	insertAt := -1
+	for index, id := range destinationOrder {
+		if id == parent.ID {
+			insertAt = index + 1
+			break
+		}
+	}
+	if insertAt < 0 {
+		return ErrNotFound
+	}
+	repairedOrder := make([]string, 0, len(destinationOrder)+len(ids))
+	repairedOrder = append(repairedOrder, destinationOrder[:insertAt]...)
+	repairedOrder = append(repairedOrder, ids...)
+	repairedOrder = append(repairedOrder, destinationOrder[insertAt:]...)
+	bucketOrders[parent.BucketID] = repairedOrder
+	if _, err := tx.Exec(ctx, `
+		UPDATE tasks
+		SET bucket_id = $1, updated_at = now()
+		WHERE parent_task_id = $2 AND owner_user_id = $3 AND bucket_id <> $1
+	`, parent.BucketID, parent.ID, userID); err != nil {
+		return err
+	}
+	for bucketID, order := range bucketOrders {
+		if bucketID != parent.BucketID {
+			order = removeTaskIDs(order, currentIDs)
+		}
+		if err := writeTaskOrder(ctx, tx, order); err != nil {
+			return err
 		}
 	}
 	return tx.Commit(ctx)

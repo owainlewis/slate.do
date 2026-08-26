@@ -265,9 +265,15 @@ a.bg-primary { color: var(--primary-foreground); }
 .subtask-list { overflow: hidden; border: 1px solid var(--border); border-radius: .9rem; background: color-mix(in srgb, var(--card) 82%, var(--background)); }
 .entry-list { display: grid; gap: .5rem; }
 .entry-row { border: 1px solid var(--border); border-radius: .78rem; background: color-mix(in srgb, var(--card) 78%, var(--background)); padding: .76rem .85rem; }
-.subtask-row { display: grid; min-height: 3.15rem; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: .65rem; align-items: center; padding: .55rem .75rem; transition: background .15s ease; }
+.subtask-row { display: grid; min-height: 3.15rem; grid-template-columns: auto auto auto minmax(0, 1fr) auto; gap: .5rem; align-items: center; padding: .55rem .75rem .55rem .45rem; transition: background .15s ease; }
 .subtask-row + .subtask-row, .subtask-row + .subtask-composer, .subtask-empty + .subtask-composer { border-top: 1px solid var(--border); }
 .subtask-row:hover { background: color-mix(in srgb, var(--muted) 55%, transparent); }
+.subtask-reorder { display: grid; width: 1.35rem; height: 1.8rem; place-items: center; border-radius: .35rem; color: color-mix(in srgb, var(--muted-foreground) 62%, transparent); cursor: grab; }
+.subtask-reorder:hover { background: var(--muted); color: var(--foreground); }
+.subtask-reorder:active { cursor: grabbing; }
+.subtask-reorder:disabled { opacity: .45; cursor: wait; }
+.subtask-reorder:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.subtask-reorder svg { width: .85rem; height: .85rem; }
 .subtask-status { display: grid; width: 1.3rem; height: 1.3rem; place-items: center; border: 1.5px solid color-mix(in srgb, var(--muted-foreground) 72%, transparent); border-radius: 50%; background: var(--card); color: var(--primary); transition: border-color .15s ease, background .15s ease, transform .12s ease; cursor: pointer; }
 .subtask-status:hover { border-color: var(--primary); transform: scale(1.06); }
 .subtask-status:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
