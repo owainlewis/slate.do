@@ -14,7 +14,7 @@ import { listColors, ListColorDot, type ListColor } from "@/components/list-colo
 import { useApp } from "@/app-context"
 import { api } from "@/lib/api"
 import { assigneeForTask } from "@/lib/assignees"
-import { workspaceSummaryQueryKey, workspaceSummaryQueryKeyFor, type Task, type TaskStatus, type WorkspaceSummary } from "@/lib/types"
+import { taskListName, workspaceSummaryQueryKey, workspaceSummaryQueryKeyFor, type Task, type TaskStatus, type WorkspaceSummary } from "@/lib/types"
 
 const columns: Array<{ value: TaskStatus; label: string; statuses: TaskStatus[]; className: string }> = [
   { value: "new", label: "Todo", statuses: ["new", "queued"], className: "" },
@@ -29,13 +29,13 @@ type TasksPage = { tasks: Task[]; nextCursor?: string }
 type DeleteTarget = { task: Task; returnFocus: HTMLButtonElement | null }
 
 function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () => void; onMove: (status: TaskStatus) => void; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
-  const { assignees } = useApp()
+  const { assignees, lists } = useApp()
   const assignee = assigneeForTask(task, assignees)
   const actionsTrigger = React.useRef<HTMLButtonElement>(null)
   return (
     <div className="task-card group" draggable data-task={task.id} onDragStart={event => { event.dataTransfer.setData("text/task-id", task.id); event.dataTransfer.effectAllowed = "move" }} onDoubleClick={onOpen}>
       <button type="button" className="w-full text-left" data-open-task={task.id} aria-label={`Open task: ${task.title}`} onClick={onOpen}>
-        <span className="task-card-kicker"><PriorityBadge priority={task.priority} compact /><span>{task.listName || task.bucketName || "Inbox"}</span></span>
+        <span className="task-card-kicker"><PriorityBadge priority={task.priority} compact /><span>{taskListName(task, lists)}</span></span>
         <span className="task-title">{task.title}</span>
         {task.description && <span className="task-description">{task.description}</span>}
         <span className="task-meta">
@@ -231,5 +231,5 @@ export function WorkspacePage() {
 function TaskTableRow({ task, lists, onOpen, onDelete }: { task: Task; lists: ReturnType<typeof useApp>["lists"]; onOpen: () => void; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
   const { assignees } = useApp()
   const assignee = assigneeForTask(task, assignees)
-  return <tr data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={onOpen}>{task.title}</button></td><td>{statusName(task.status)}</td><td><AssigneeLabel assignee={assignee} compact /></td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td><td><TaskTableActions task={task} onDelete={onDelete} /></td></tr>
+  return <tr data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={onOpen}>{task.title}</button></td><td>{statusName(task.status)}</td><td><AssigneeLabel assignee={assignee} compact /></td><td>{taskListName(task, lists)}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td><td><TaskTableActions task={task} onDelete={onDelete} /></td></tr>
 }

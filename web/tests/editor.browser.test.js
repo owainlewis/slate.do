@@ -1254,6 +1254,37 @@ test("lists keep their chosen color and sidebar order", async t => {
   assert.ok(state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length > taskRequestsBeforeReorder);
 });
 
+test("renaming a list updates labels on cached tasks", async t => {
+  const { page, state, origin } = await startApp(t);
+  await page.goto(`${origin}/app/lists/list-product`);
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).waitFor();
+  const taskRequestsBeforeRename = state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length;
+  const listName = page.getByLabel("List name");
+  await listName.fill("Roadmap");
+  await listName.press("Tab");
+  await page.locator('[data-list-id="list-product"]').getByText("Roadmap", { exact: true }).waitFor();
+  assert.equal(state.requests.filter(request => request.startsWith("GET /api/v1/tasks?")).length, taskRequestsBeforeRename);
+
+  const boardTask = page.locator('.task-card[data-task="task-parent"]');
+  await boardTask.getByText("Roadmap", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+  const tableTask = page.locator('tr[data-task="task-parent"]');
+  await tableTask.getByText("Roadmap", { exact: true }).waitFor();
+  await tableTask.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.locator(".detail-breadcrumb").getByText("Roadmap", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close task" }).click();
+
+  await page.getByRole("button", { name: /Search/ }).click();
+  const searchResult = page.getByRole("button", { name: /Publish task-first agents video/ });
+  await searchResult.getByText(/Roadmap · @/).waitFor();
+  await page.getByLabel("Search task titles").press("Escape");
+
+  await page.goto(`${origin}/app/agents/agent-research`);
+  await page.locator('[data-open-agent-task="task-parent"]').getByText(/Roadmap · working/).waitFor();
+  await page.goto(`${origin}/app/runs`);
+  await page.locator(".operation-row").filter({ hasText: "Publish task-first agents video" }).getByText(/Research agent · Roadmap/).waitFor();
+});
+
 test("hosted control plane exposes search, runs, runners, and human review", async t => {
   const { page, state, origin } = await startApp(t);
   await page.getByRole("button", { name: /Search/ }).click();
