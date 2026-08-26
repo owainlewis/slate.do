@@ -439,7 +439,9 @@ test("table layout filters tasks and survives layout changes", async t => {
   const table = page.getByRole("table");
   await table.waitFor();
   for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned", "Actions"]) await table.getByRole("columnheader", { name: heading }).waitFor();
+  const priorityTasks = page.waitForResponse(value => value.request().method() === "GET" && new URL(value.url()).searchParams.get("sort") === "priority");
   await page.getByRole("button", { name: "Priority order" }).click();
+  await priorityTasks;
   await page.waitForFunction(() => document.querySelectorAll(".workspace-table tbody tr[data-task]").length === 3);
   assert.deepEqual(await table.locator("tbody tr[data-task]").evaluateAll(rows => rows.map(row => row.dataset.task)), ["task-parent", "task-inbox", "task-writing"]);
   await page.getByRole("button", { name: "Group by list" }).click();
@@ -948,6 +950,7 @@ test("templates can be created and edited without leaking across accounts", asyn
   await runDialog.getByLabel("List").selectOption("list-product");
   await runDialog.getByRole("button", { name: "Create task" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll(".subtask-title").length === 3);
   const parent = state.tasks.find(task => task.title === "Run: Episode 12");
   assert.ok(parent);
   const generated = state.subtasks.filter(task => task.parentTaskId === parent.id);
