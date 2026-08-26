@@ -1124,11 +1124,12 @@ test("saving an unrelated task edit preserves a newer agent assignment", async t
   await page.getByLabel("Title", { exact: true }).fill("Keep the newer assignment");
   state.tasks[0].assigneeAgentId = "agent-editor";
   state.tasks[0].assigneeAgentName = "Editor";
+  const updateResponse = page.waitForResponse(value => value.request().method() === "PATCH" && value.url().endsWith("/api/v1/tasks/task-parent"));
   await page.getByRole("button", { name: "Save changes" }).click();
+  await updateResponse;
   assert.equal(state.tasks[0].title, "Keep the newer assignment");
   assert.equal(state.tasks[0].assigneeAgentId, "agent-editor");
   assert.equal(state.tasks[0].status, "working");
-  assert.equal(state.requests.at(-1), "PATCH /api/v1/tasks/task-parent");
 });
 
 test("a delayed priority update stays with its original task", async t => {
