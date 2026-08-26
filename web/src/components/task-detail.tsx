@@ -7,9 +7,11 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Input, Label, Select, Textarea } from "@/components/ui/field"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { PriorityMark, PriorityPicker, type Priority } from "@/components/priority"
+import { AssigneeLabel, AssigneePicker } from "@/components/assignee-picker"
 import { TaskDeleteDialog } from "@/components/task-delete-dialog"
-import { useApp, initials } from "@/app-context"
+import { useApp } from "@/app-context"
 import { api } from "@/lib/api"
+import { agentIDForAssignee, assigneeForTask, assigneeKeyForAgent } from "@/lib/assignees"
 import { workspaceSummaryQueryKey, type Entry, type Task, type TaskStatus } from "@/lib/types"
 
 const statuses: Array<{ value: TaskStatus; label: string }> = [
@@ -29,7 +31,7 @@ function isPastDate(value: string) {
 }
 
 export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel = "Back to all tasks" }: { taskId: string; onClose: () => void; onOpenTask?: (id: string) => void; backLabel?: string }) {
-  const { lists, agents } = useApp()
+  const { lists, assignees } = useApp()
   const queryClient = useQueryClient()
   const [draft, setDraft] = React.useState<Partial<Task>>({})
   const [subtaskTitle, setSubtaskTitle] = React.useState("")
@@ -97,6 +99,10 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   })
 
   const draftPayload = () => taskPayload(draft)
+  const dirtyPayload = () => {
+    const payload = draftPayload()
+    return Object.fromEntries(Object.entries(payload).filter(([key]) => dirtyFields.current.has(key as keyof Task)))
+  }
 
   // A review decision carries the edits the user made in the open panel, but
   // nothing else. Sending the whole snapshot would revert any field another
@@ -114,7 +120,12 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   }
 
   const save = useMutation({
-    mutationFn: () => api.patch<Task>(`/api/v1/tasks/${encodeURIComponent(taskId)}/status`, draftPayload()),
+    mutationFn: () => {
+      const payload = dirtyPayload()
+      if (!Object.keys(payload).length) return Promise.resolve(taskQuery.data!)
+      const endpoint = Object.hasOwn(payload, "status") ? `/api/v1/tasks/${encodeURIComponent(taskId)}/status` : `/api/v1/tasks/${encodeURIComponent(taskId)}`
+      return api.patch<Task>(endpoint, payload)
+    },
     onSuccess: async task => { queryClient.setQueryData(["task", taskId], task); await invalidateTaskSurfaces(); onClose() },
     onError: value => setError(value instanceof Error ? value.message : "Could not save task"),
   })
@@ -212,6 +223,14 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
     setDraft(current => ({ ...current, [key]: value }))
   }
   const list = lists.find(item => item.id === task.bucketId)
+  const taskAssignee = assigneeForTask(task, assignees)
+  const changeAssignee = (key: ReturnType<typeof assigneeKeyForAgent>) => {
+    const nextAgentID = agentIDForAssignee(key)
+    const changedAgent = nextAgentID !== (task.assigneeAgentId || "")
+    set("assigneeAgentId", nextAgentID)
+    if (nextAgentID && (task.status === "new" || task.status === "working" || (task.status === "needs_review" && changedAgent))) set("status", "queued")
+    if (!nextAgentID && task.status === "queued") set("status", "new")
+  }
   const backLabel = task.parentTaskId ? "Back to parent task" : returnLabel
   const subtasks = [...(subtasksQuery.data?.tasks || [])].sort((left, right) => {
     const leftHasSortOrder = typeof left.sortOrder === "number"
@@ -283,7 +302,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
                       <PriorityMark priority={subtask.priority} />
                       <button type="button" className="subtask-status" aria-label={subtask.status === "done" ? `Reopen ${subtask.title}` : `Complete ${subtask.title}`} disabled={toggleSubtask.isPending} onClick={() => toggleSubtask.mutate({ id: subtask.id, status: subtask.status === "done" ? "new" : "done" })}>{subtask.status === "done" ? <Check aria-hidden="true" /> : <span />}</button>
                       <button type="button" className="subtask-open" data-open-task={subtask.id} onClick={() => onOpenTask?.(subtask.id)}><span className="subtask-title">{subtask.title}</span></button>
-                      <div className="subtask-meta">{subtask.scheduledDate && <span className={isPastDate(subtask.scheduledDate) && subtask.status !== "done" ? "is-overdue" : ""}><CalendarDays aria-hidden="true" />{shortDate(subtask.scheduledDate)}</span>}{subtask.assigneeAgentName && <span className="mini-avatar" aria-label={`Assigned to ${subtask.assigneeAgentName}`}>{initials(subtask.assigneeAgentName)}</span>}</div>
+                      <div className="subtask-meta">{subtask.scheduledDate && <span className={isPastDate(subtask.scheduledDate) && subtask.status !== "done" ? "is-overdue" : ""}><CalendarDays aria-hidden="true" />{shortDate(subtask.scheduledDate)}</span>}<AssigneeLabel assignee={assigneeForTask(subtask, assignees)} compact /></div>
                     </article>)}
                     {!subtasks.length && !showSubtaskComposer && <button type="button" className="subtask-empty" onClick={() => setShowSubtaskComposer(true)}><Plus aria-hidden="true" />Break this task into smaller steps</button>}
                     {showSubtaskComposer && <div id="add-subtask" className="subtask-composer"><Input name="title" aria-label="New subtask title" value={subtaskTitle} autoFocus onChange={event => setSubtaskTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); if (subtaskTitle.trim()) createSubtask.mutate() } }} placeholder="Add a subtask…" /><Button type="button" size="sm" onClick={() => createSubtask.mutate()} disabled={!subtaskTitle.trim() || createSubtask.isPending}>{createSubtask.isPending ? "Adding…" : "Add"}</Button></div>}
@@ -296,11 +315,11 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
                 <aside className="detail-properties" aria-label="Task properties">
                   <h2>Properties</h2>
                   <div className="property-row"><Label htmlFor="workspace-detail-status">Status</Label><Select id="workspace-detail-status" name="status" value={task.status || "new"} onChange={event => set("status", event.target.value as TaskStatus)}>{statuses.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></div>
-                  <div className="property-row"><Label htmlFor="workspace-detail-owner">Agent</Label><Select id="workspace-detail-owner" name="assigneeAgentId" aria-label="Assigned agent" value={task.assigneeAgentId || ""} disabled={!agents.length} onChange={event => set("assigneeAgentId", event.target.value)}><option value="">{agents.length ? "No agent" : "None connected"}</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select></div>
+                  <div className="property-row"><Label>Assign to</Label><AssigneePicker value={assigneeKeyForAgent(task.assigneeAgentId)} assignees={assignees} onChange={changeAssignee} /></div>
                   <div className="property-row"><Label htmlFor="workspace-detail-list">List</Label><Select id="workspace-detail-list" name="bucketId" value={task.bucketId || ""} disabled={Boolean(task.parentTaskId)} onChange={event => set("bucketId", event.target.value)}>{lists.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></div>
                   <div className="property-row"><Label>Priority</Label><PriorityPicker value={(task.priority || "p1") as Priority} onChange={priority => updatePriority.mutate({ targetTaskID: taskId, priority })} allowNone={false} disabled={updatePriority.isPending} /></div>
                   <div className="property-row"><Label htmlFor="workspace-detail-date">Plan for</Label><Input id="workspace-detail-date" name="scheduledDate" type="date" value={task.scheduledDate || ""} onChange={event => set("scheduledDate", event.target.value)} /></div>
-                  <div className="properties-note"><strong>{task.status === "needs_review" ? "Human approval" : "Task details"}</strong><p>{task.status === "needs_review" ? "Agent work is paused in Review. Approve the result or send it back for another pass." : task.assigneeAgentId ? "Assigned work is queued for a connected runner. Agent outputs return here for review." : "Assign an agent when this task is ready to run."}</p></div>
+                  <div className="properties-note"><strong>{task.status === "needs_review" ? "Human approval" : `Assigned to @${taskAssignee.handle}`}</strong><p>{task.status === "needs_review" ? "Agent work is paused in Review. Approve the result or send it back for another pass." : task.assigneeAgentId ? "Agent work is queued for a connected runner. Outputs return here for review." : "This is your task. Assign an agent when it is ready to run."}</p></div>
                 </aside>
               </div>
               <footer className="detail-footer"><div className="detail-footer-actions">{task.status === "needs_review" && <><Button id="send-back-task" type="button" variant="secondary" onClick={() => review.mutate("working")} disabled={review.isPending}><RotateCcw className="size-4" />Send back</Button><Button id="approve-task" type="button" onClick={() => review.mutate("done")} disabled={review.isPending}><CheckCircle2 className="size-4" />{review.isPending ? "Updating…" : "Approve"}</Button></>}<Button type="submit" variant={task.status === "needs_review" ? "secondary" : "default"} disabled={save.isPending || review.isPending}>{save.isPending ? "Saving…" : "Save changes"}</Button></div></footer>

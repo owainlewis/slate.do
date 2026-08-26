@@ -184,6 +184,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       if (replay) return json(response, replay, 200);
       const parent = state.tasks.find(item => item.id === subtaskMatch[1]);
       const task = { id: `subtask-${state.subtasks.length + 1}`, parentTaskId: parent.id, parentTaskTitle: parent.title, bucketId: parent.bucketId, bucketName: parent.bucketName, status: "new", priority: "", scheduledDate: "", assigneeAgentId: "", sortOrder: state.subtasks.length, createdAt: new Date(Date.UTC(2026, 7, 23, 9, 0, state.subtasks.length)).toISOString(), ...input };
+      if (task.assigneeAgentId && task.status === "new") task.status = "queued";
       state.subtasks.push(task);
       if (idempotencyKey) state.idempotency.set(idempotencyKey, task);
       if (state.loseSubtaskResponseFor === task.title) {
@@ -443,7 +444,7 @@ test("table layout filters tasks and survives layout changes", async t => {
   await page.getByRole("button", { name: "Table", exact: true }).click();
   const table = page.getByRole("table");
   await table.waitFor();
-  for (const heading of ["Task", "Status", "Agent", "List", "Priority", "Planned", "Actions"]) await table.getByRole("columnheader", { name: heading }).waitFor();
+  for (const heading of ["Task", "Status", "Assignee", "List", "Priority", "Planned", "Actions"]) await table.getByRole("columnheader", { name: heading }).waitFor();
   const priorityTasks = page.waitForResponse(value => value.request().method() === "GET" && new URL(value.url()).searchParams.get("sort") === "priority");
   await page.getByRole("button", { name: "Priority order" }).click();
   await priorityTasks;
@@ -505,7 +506,7 @@ test("task creation respects every column and queues every agent assignment", as
       await page.goto(`${origin}/app/tasks`);
       await page.getByRole("button", { name: `Add task to ${column.label}` }).click();
       const dialog = page.getByRole("dialog", { name: "New task" });
-      const title = `${assigned ? "Assigned" : "Unassigned"} ${column.label}`;
+      const title = `${assigned ? "Agent" : "Human"} ${column.label}`;
       await dialog.getByRole("textbox", { name: "Task title" }).fill(title);
       await dialog.getByRole("textbox", { name: "Task brief" }).fill(`Created from ${column.label}.`);
       if (!assigned && column.status === "new") {
@@ -514,7 +515,12 @@ test("task creation respects every column and queues every agent assignment", as
         await dialog.getByText("Priority", { exact: true }).click();
         assert.equal(await highPriority.getAttribute("aria-pressed"), "true");
       }
-      if (assigned) await dialog.getByLabel("Assigned agent").selectOption("agent-research");
+      if (assigned) {
+        await dialog.getByRole("button", { name: "Assign to" }).click();
+        await page.getByRole("menuitemradio", { name: /@research_agent/i }).click();
+      } else {
+        assert.match(await dialog.getByRole("button", { name: "Assign to" }).textContent(), /@owain/i);
+      }
       if (!assigned && column.status === "working") {
         await dialog.getByRole("button", { name: "Normal priority" }).click();
       }
@@ -569,7 +575,7 @@ test("task creation keeps every exit and field disabled while pending", async t 
     dialog.getByRole("textbox", { name: "Task title" }),
     dialog.getByRole("textbox", { name: "Task brief" }),
     dialog.getByLabel("Task list"),
-    dialog.getByLabel("Assigned agent"),
+    dialog.getByRole("button", { name: "Assign to" }),
     dialog.getByLabel("Plan for"),
     dialog.getByRole("button", { name: "High priority" }),
   ]) assert.equal(await control.isDisabled(), true);
@@ -651,6 +657,41 @@ test("template limits prevent hidden or permanently partial workflow tasks", asy
   await longRow.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("dialog", { name: "Edit template" }).getByRole("alert").getByText("Subtask instructions are too long to create a task.").waitFor();
   await page.getByRole("dialog", { name: "Edit template" }).getByRole("button", { name: "Cancel" }).click();
+
+  const storedPrefix = "Phase: Plan\nAssigned to: human\n\n";
+  const exactStoredLimit = { ...oversized, id: "exact-stored-limit", name: "Exact stored limit", steps: [{ id: "step", phaseId: "phase", title: "Draft", executor: "human", instruction: "x".repeat(16 * 1024 - Buffer.byteLength(storedPrefix)) }] };
+  await page.evaluate(template => localStorage.setItem("slate:process-templates:owner", JSON.stringify([template])), exactStoredLimit);
+  await page.reload();
+  const exactRow = page.locator(".template-list-row").filter({ hasText: "Exact stored limit" });
+  await exactRow.getByRole("button", { name: "Use template" }).click();
+  const exactDialog = page.getByRole("dialog", { name: "Start process" });
+  await exactDialog.getByRole("alert").getByText("Subtask instructions are too long to create a task.").waitFor();
+  assert.equal(await exactDialog.getByRole("button", { name: "Create task" }).isDisabled(), true);
+  assert.equal(state.tasks.some(task => task.title.includes("Exact stored limit")), false);
+  await exactDialog.getByRole("button", { name: "Cancel" }).click();
+
+  const renderedAgentPrefix = "Phase: Plan\nAssigned to: @research_agent\n\n";
+  const validRestoredAttempt = {
+    id: "short-agent-handle",
+    createdAt: Date.now(),
+    parentTaskId: "",
+    nextStepIndex: 0,
+    template: { ...oversized, id: "short-agent-handle", name: "Short agent handle", steps: [{ id: "step", phaseId: "phase", title: "Draft", executor: "agent:agent-research", instruction: "x".repeat(16 * 1024 - Buffer.byteLength(renderedAgentPrefix)) }] },
+    taskTitle: "Restored short handle",
+    plannedDate: "",
+    brief: "",
+    listId: "list-product",
+  };
+  await page.evaluate(attempt => localStorage.setItem("slate:process-attempt:owner:short-agent-handle", JSON.stringify(attempt)), validRestoredAttempt);
+  await page.reload();
+  const restoredDialog = page.getByRole("dialog", { name: "Start process" });
+  await restoredDialog.waitFor();
+  assert.equal(await restoredDialog.getByLabel("Task name").inputValue(), "Restored short handle");
+  assert.equal(await restoredDialog.getByText("Subtask instructions are too long to create a task.").count(), 0);
+  assert.equal(await restoredDialog.getByRole("button", { name: "Resume creation" }).isEnabled(), true);
+  page.once("dialog", confirmation => confirmation.accept());
+  await restoredDialog.getByRole("button", { name: "Discard attempt" }).click();
+  await restoredDialog.waitFor({ state: "detached" });
 
   const limitsRow = await createTemplate(page, "Limits process", ["Draft the release"]);
   await limitsRow.getByRole("button", { name: "Use template" }).click();
@@ -938,6 +979,8 @@ test("templates can be created and edited without leaking across accounts", asyn
   await editor.getByLabel("Phase 1 subtask 1").fill("Record the episode");
   await editor.getByRole("button", { name: "Add subtask" }).click();
   await editor.getByLabel("Phase 1 subtask 2").fill("Edit the episode");
+  await editor.getByRole("button", { name: "Edit the episode assign to" }).click();
+  await page.getByRole("menuitemradio", { name: /@research_agent/i }).click();
   await editor.getByRole("button", { name: "Add phase" }).click();
   await editor.getByLabel("Phase 2 name").fill("Publish");
   await editor.getByLabel("Publish subtask 1").fill("Write the show notes");
@@ -960,6 +1003,8 @@ test("templates can be created and edited without leaking across accounts", asyn
   assert.ok(parent);
   const generated = state.subtasks.filter(task => task.parentTaskId === parent.id);
   assert.deepEqual(generated.map(task => task.title), ["Write the show notes", "Record the episode", "Edit the episode"]);
+  assert.equal(generated.find(task => task.title === "Edit the episode").assigneeAgentId, "agent-research");
+  assert.equal(generated.find(task => task.title === "Edit the episode").status, "queued");
   assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Write the show notes", "Record the episode", "Edit the episode"]);
 
   await page.goto(`${origin}/app/templates`);
@@ -969,6 +1014,16 @@ test("templates can be created and edited without leaking across accounts", asyn
   await editDialog.getByRole("button", { name: "Save template" }).click();
   await page.reload();
   await page.getByRole("heading", { name: "Publish a podcast episode", exact: true }).first().waitFor();
+
+  state.agents = [];
+  await page.reload();
+  await page.getByText("@unavailable_agent", { exact: true }).waitFor();
+  const unavailableRow = page.locator(".template-list-row").filter({ hasText: "Publish a podcast episode" });
+  await unavailableRow.getByRole("button", { name: "Use template" }).click();
+  const unavailableDialog = page.getByRole("dialog", { name: "Start process" });
+  await unavailableDialog.getByText("This template references an unavailable agent. Edit the template and reassign that step.").waitFor();
+  assert.equal(await unavailableDialog.getByRole("button", { name: "Create task" }).isDisabled(), true);
+  await unavailableDialog.getByRole("button", { name: "Cancel" }).click();
 
   state.user = { ...state.user, id: "another-owner", email: "another@example.com" };
   await page.reload();
@@ -1029,10 +1084,42 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   await page.getByLabel("Entry").fill("The interface is ready for review.");
   await page.getByRole("button", { name: "Add comment" }).click();
   await page.getByText("The interface is ready for review.", { exact: true }).waitFor();
+  assert.match(await page.getByRole("button", { name: "Assign to" }).textContent(), /@research_agent/i);
+  await page.getByRole("button", { name: "Assign to" }).click();
+  await page.getByRole("menuitemradio", { name: /@owain/i }).click();
+  assert.match(await page.getByRole("button", { name: "Assign to" }).textContent(), /@owain/i);
   await page.getByRole("button", { name: "Save changes" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor({ state: "detached" });
   assert.equal(state.tasks[0].title, "Publish the React migration story");
+  assert.equal(state.tasks[0].assigneeAgentId, "");
   assert.equal(state.subtasks.find(task => task.title === "Record the final walkthrough").status, "done");
+});
+
+test("reassigning reviewed work to another agent queues a fresh run", async t => {
+  const { page, state } = await startApp(t);
+  state.agents.push({ id: "agent-editor", displayName: "Editor", purpose: "Polish approved work", workCounts: {} });
+  state.tasks[0].status = "needs_review";
+  await page.reload();
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByRole("button", { name: "Assign to" }).click();
+  await page.getByRole("menuitemradio", { name: /@editor/i }).click();
+  assert.equal(await page.getByLabel("Status").inputValue(), "queued");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  assert.equal(state.tasks[0].assigneeAgentId, "agent-editor");
+  assert.equal(state.tasks[0].status, "queued");
+});
+
+test("saving an unrelated task edit preserves a newer agent assignment", async t => {
+  const { page, state } = await startApp(t);
+  await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Keep the newer assignment");
+  state.tasks[0].assigneeAgentId = "agent-editor";
+  state.tasks[0].assigneeAgentName = "Editor";
+  await page.getByRole("button", { name: "Save changes" }).click();
+  assert.equal(state.tasks[0].title, "Keep the newer assignment");
+  assert.equal(state.tasks[0].assigneeAgentId, "agent-editor");
+  assert.equal(state.tasks[0].status, "working");
+  assert.equal(state.requests.at(-1), "PATCH /api/v1/tasks/task-parent");
 });
 
 test("a delayed priority update stays with its original task", async t => {
@@ -1120,6 +1207,11 @@ test("lists, inbox, agents, and settings are complete React routes", async t => 
   await page.getByText("I have drafted the spec. Can you take a look?").waitFor();
   await page.goto(`${origin}/app/agents`);
   await page.getByText("Research agent", { exact: true }).waitFor();
+  await page.goto(`${origin}/app/agents/new`);
+  await page.getByLabel("Name").fill("Owain");
+  await page.getByText("Mentioned as @owain_2.", { exact: false }).waitFor();
+  await page.getByRole("button", { name: "Create agent" }).click();
+  await page.getByText("Agent created · @owain_2", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Account menu" }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
@@ -1215,6 +1307,11 @@ test("mobile navigation and task detail fit a narrow viewport", async t => {
 
   await page.goto(`${origin}/app/templates`);
   const mobileRow = await createTemplate(page, "Mobile process", ["Capture input", "Generate output"]);
+  await mobileRow.getByRole("button", { name: "Edit" }).click();
+  const mobileEditor = page.getByRole("dialog", { name: "Edit template" });
+  const assigneeBounds = await mobileEditor.getByRole("button", { name: "Capture input assign to" }).boundingBox();
+  assert.ok(assigneeBounds.width > 150);
+  await mobileEditor.getByRole("button", { name: "Cancel" }).click();
   state.loseSubtaskResponseFor = "Generate output";
   await mobileRow.getByRole("button", { name: "Use template" }).click();
   const processDialog = page.getByRole("dialog", { name: "Start process" });

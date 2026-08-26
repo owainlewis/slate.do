@@ -1344,6 +1344,13 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			return Task{}, err
 		}
 	}
+	assignmentChanged := current.AssigneeAgentID != original.AssigneeAgentID
+	if assignmentChanged && current.AssigneeAgentID != "" && (current.Status == StatusWorking || current.Status == StatusNeedsReview) {
+		current.Status = StatusQueued
+	}
+	if assignmentChanged && current.AssigneeAgentID == "" && current.Status == StatusQueued {
+		current.Status = StatusNew
+	}
 	if current.AssigneeAgentID != "" && current.Status == StatusNew {
 		current.Status = StatusQueued
 	}
@@ -1377,6 +1384,10 @@ func (s *Store) updateTask(ctx context.Context, userID string, requiredAgentID s
 			scheduled_date = NULLIF($6, '')::date, kind = $7,
 			status = $8, priority = $9, sort_order = $10,
 			assignee_agent_id = NULLIF($11, '')::uuid,
+			execution_run_id = CASE
+				WHEN $8 = 'queued' OR NULLIF($11, '')::uuid IS DISTINCT FROM t.assignee_agent_id THEN NULL
+				ELSE t.execution_run_id
+			END,
 			review_reason = CASE
 				WHEN $8 <> 'needs_review' THEN ''
 				WHEN t.status <> 'needs_review' THEN ''

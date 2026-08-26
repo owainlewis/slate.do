@@ -8,10 +8,12 @@ import { Input } from "@/components/ui/field"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { TaskDetail } from "@/components/task-detail"
 import { TaskDeleteDialog } from "@/components/task-delete-dialog"
+import { AssigneeLabel } from "@/components/assignee-picker"
 import { PriorityBadge, PriorityFilter, priorityLabel } from "@/components/priority"
 import { listColors, ListColorDot, type ListColor } from "@/components/list-color"
-import { useApp, initials } from "@/app-context"
+import { useApp } from "@/app-context"
 import { api } from "@/lib/api"
+import { assigneeForTask } from "@/lib/assignees"
 import { workspaceSummaryQueryKey, workspaceSummaryQueryKeyFor, type Task, type TaskStatus, type WorkspaceSummary } from "@/lib/types"
 
 const columns: Array<{ value: TaskStatus; label: string; statuses: TaskStatus[]; className: string }> = [
@@ -27,6 +29,8 @@ type TasksPage = { tasks: Task[]; nextCursor?: string }
 type DeleteTarget = { task: Task; returnFocus: HTMLButtonElement | null }
 
 function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () => void; onMove: (status: TaskStatus) => void; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
+  const { assignees } = useApp()
+  const assignee = assigneeForTask(task, assignees)
   const actionsTrigger = React.useRef<HTMLButtonElement>(null)
   return (
     <div className="task-card group" draggable data-task={task.id} onDragStart={event => { event.dataTransfer.setData("text/task-id", task.id); event.dataTransfer.effectAllowed = "move" }} onDoubleClick={onOpen}>
@@ -36,7 +40,7 @@ function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () =
         {task.description && <span className="task-description">{task.description}</span>}
         <span className="task-meta">
           {task.scheduledDate && <span className="pill"><CalendarDays className="size-3" />{new Date(`${task.scheduledDate}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
-          {task.assigneeAgentName && <span className="task-agent"><span className="mini-avatar">{initials(task.assigneeAgentName)}</span>{task.assigneeAgentName}</span>}
+          <span className="task-agent"><AssigneeLabel assignee={assignee} compact /></span>
         </span>
       </button>
       <DropdownMenu>
@@ -214,7 +218,7 @@ export function WorkspacePage() {
           </div>
         </div>
       ) : (
-        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Agent</th><th>List</th><th>Priority</th><th>Planned</th><th>Actions</th></tr></thead><tbody>{groupByList ? taskGroups.map(group => <React.Fragment key={group.list?.id || "unknown"}><tr className="table-group-row"><th colSpan={7}><ListColorDot color={group.list?.color} />{group.list?.name || "Other"}<span>{group.tasks.length}</span></th></tr>{group.tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</React.Fragment>) : tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</tbody></table></div>
+        <div className="data-table-wrap"><table className="data-table workspace-table"><thead><tr><th>Task</th><th>Status</th><th>Assignee</th><th>List</th><th>Priority</th><th>Planned</th><th>Actions</th></tr></thead><tbody>{groupByList ? taskGroups.map(group => <React.Fragment key={group.list?.id || "unknown"}><tr className="table-group-row"><th colSpan={7}><ListColorDot color={group.list?.color} />{group.list?.name || "Other"}<span>{group.tasks.length}</span></th></tr>{group.tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</React.Fragment>) : tasks.map(task => <TaskTableRow key={task.id} task={task} lists={lists} onOpen={() => openTask(task.id)} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}</tbody></table></div>
       )}
       {tasksQuery.isFetchNextPageError && <div className="table-loading table-loading-error mt-4" role="alert"><span>Could not load more tasks.</span><button type="button" onClick={() => tasksQuery.fetchNextPage()}>Retry</button></div>}
       {tasksQuery.hasNextPage && !tasksQuery.isFetchNextPageError && <div className="mt-4 text-center"><Button variant="secondary" onClick={() => tasksQuery.fetchNextPage()} disabled={tasksQuery.isFetchingNextPage}>{tasksQuery.isFetchingNextPage ? "Loading…" : "Load more tasks"}</Button></div>}
@@ -225,5 +229,7 @@ export function WorkspacePage() {
 }
 
 function TaskTableRow({ task, lists, onOpen, onDelete }: { task: Task; lists: ReturnType<typeof useApp>["lists"]; onOpen: () => void; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
-  return <tr data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={onOpen}>{task.title}</button></td><td>{statusName(task.status)}</td><td>{task.assigneeAgentName || "—"}</td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td><td><TaskTableActions task={task} onDelete={onDelete} /></td></tr>
+  const { assignees } = useApp()
+  const assignee = assigneeForTask(task, assignees)
+  return <tr data-task={task.id}><td><button type="button" className="font-semibold" aria-label={`Open task: ${task.title}`} onClick={onOpen}>{task.title}</button></td><td>{statusName(task.status)}</td><td><AssigneeLabel assignee={assignee} compact /></td><td>{task.listName || task.bucketName || lists.find(list => list.id === task.bucketId)?.name}</td><td>{task.priority ? <PriorityBadge priority={task.priority} compact /> : priorityLabel()}</td><td>{task.scheduledDate || "—"}</td><td><TaskTableActions task={task} onDelete={onDelete} /></td></tr>
 }
