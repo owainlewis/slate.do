@@ -638,15 +638,24 @@ test("rapid template activations create only one workflow", async t => {
   let releaseTaskCreate;
   state.taskCreateDelay = new Promise(resolve => { releaseTaskCreate = resolve; });
   const createButton = template.getByRole("button", { name: "Create From Template" });
+  const createButtonElement = await createButton.elementHandle();
+  assert.ok(createButtonElement);
   const parentRequest = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/api/v1/lists/list-product/tasks"));
-  await createButton.evaluate(button => {
+  await createButtonElement.evaluate(button => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
   await parentRequest;
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(state.requests.filter(request => request === "POST /api/v1/lists/list-product/tasks").length, 1);
+  const gates = { lists: requestGate() };
+  state.accountGates = gates;
   releaseTaskCreate();
+  await waitForRequest(gates.lists);
+  await createButtonElement.evaluate(button => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/lists/list-product/tasks").length, 1);
+  gates.lists.release();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   assert.equal(state.tasks.filter(task => task.title === "One release").length, 1);
   assert.deepEqual(pageErrors, []);

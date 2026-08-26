@@ -440,7 +440,6 @@ export function TemplatesPage() {
     onMutate: attempt => setCreatingStep(Math.min(orderedTemplateSteps(attempt.template).length, attempt.nextStepIndex + 1)),
     onSuccess: async (task, attempt) => {
       try { localStorage.removeItem(`${attemptStoragePrefix}${attempt.id}`) } catch { /* A retained successful attempt remains safe to replay. */ }
-      creationAttemptLock.current = false
       setCreationAttempt(null)
       setAttemptStorageError(false)
       setAttemptDiscardError(false)
