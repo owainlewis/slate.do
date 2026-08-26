@@ -631,6 +631,27 @@ test("a custom template creates one parent task with an ordered workflow", async
   assert.deepEqual(pageErrors, []);
 });
 
+test("rapid template activations create only one workflow", async t => {
+  const { page, state, origin, pageErrors } = await startApp(t);
+  await page.goto(`${origin}/app/templates`);
+  const template = await createTemplate(page, "Single launch", ["Draft the release"], { taskTitle: "One release" });
+  let releaseTaskCreate;
+  state.taskCreateDelay = new Promise(resolve => { releaseTaskCreate = resolve; });
+  const createButton = template.getByRole("button", { name: "Create From Template" });
+  const parentRequest = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/api/v1/lists/list-product/tasks"));
+  await createButton.evaluate(button => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await parentRequest;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/lists/list-product/tasks").length, 1);
+  releaseTaskCreate();
+  await page.getByRole("region", { name: "Task detail" }).waitFor();
+  assert.equal(state.tasks.filter(task => task.title === "One release").length, 1);
+  assert.deepEqual(pageErrors, []);
+});
+
 test("new accounts start without shared default templates", async t => {
   const { page, origin, pageErrors } = await startApp(t);
   await page.goto(`${origin}/app/templates`);

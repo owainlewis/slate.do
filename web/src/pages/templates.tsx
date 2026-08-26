@@ -253,6 +253,7 @@ export function TemplatesPage() {
   const [attemptStorageError, setAttemptStorageError] = React.useState(false)
   const [attemptDiscardError, setAttemptDiscardError] = React.useState(false)
   const [attemptExpiryReached, setAttemptExpiryReached] = React.useState(false)
+  const creationAttemptLock = React.useRef(Boolean(initialAttempt))
   const templateSelectRefs = React.useRef(new Map<string, HTMLButtonElement>())
   const focusAfterDeleteId = React.useRef("")
   const deleteTriggerRef = React.useRef<HTMLButtonElement | null>(null)
@@ -284,6 +285,7 @@ export function TemplatesPage() {
     if (activeAttemptStoragePrefix.current === attemptStoragePrefix) return
     activeAttemptStoragePrefix.current = attemptStoragePrefix
     const restored = loadCreationAttempts(attemptStoragePrefix)[0] || null
+    creationAttemptLock.current = Boolean(restored)
     setCreationAttempt(restored)
     setDialogOpen(Boolean(restored))
     setAttemptStorageError(false)
@@ -308,7 +310,7 @@ export function TemplatesPage() {
   }, [])
 
   const openTemplate = (template: ProcessTemplate) => {
-    if (creationAttempt) {
+    if (creationAttemptLock.current) {
       setDialogOpen(true)
       return
     }
@@ -329,9 +331,11 @@ export function TemplatesPage() {
       listId: template.listId || defaultList?.id || "",
     }
     if (!attempt.parentTitle || creationLimitError(template, attempt.parentTitle, attempt.brief)) return
+    creationAttemptLock.current = true
     try {
       localStorage.setItem(`${attemptStoragePrefix}${attempt.id}`, JSON.stringify(attempt))
     } catch {
+      creationAttemptLock.current = false
       setAttemptStorageError(true)
       return
     }
@@ -436,6 +440,7 @@ export function TemplatesPage() {
     onMutate: attempt => setCreatingStep(Math.min(orderedTemplateSteps(attempt.template).length, attempt.nextStepIndex + 1)),
     onSuccess: async (task, attempt) => {
       try { localStorage.removeItem(`${attemptStoragePrefix}${attempt.id}`) } catch { /* A retained successful attempt remains safe to replay. */ }
+      creationAttemptLock.current = false
       setCreationAttempt(null)
       setAttemptStorageError(false)
       setAttemptDiscardError(false)
@@ -474,6 +479,7 @@ export function TemplatesPage() {
     }
     const nextAttempt = loadCreationAttempts(attemptStoragePrefix)[0] || null
     createFromTemplate.reset()
+    creationAttemptLock.current = Boolean(nextAttempt)
     setCreationAttempt(nextAttempt)
     setAttemptStorageError(false)
     setAttemptDiscardError(false)
