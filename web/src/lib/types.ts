@@ -79,5 +79,9 @@ export interface WorkspaceSummary {
   runs24h: number
 }
 
+export function taskListName(task: Pick<Task, "bucketId" | "listName" | "bucketName">, lists: ReadonlyArray<Pick<List, "id" | "name">>) {
+  return lists.find(list => list.id === task.bucketId)?.name || task.listName || task.bucketName || "Inbox"
+}
+
 export const workspaceSummaryQueryKey = ["workspace-summary"] as const
 export const workspaceSummaryQueryKeyFor = (accountID: ID) => [...workspaceSummaryQueryKey, accountID] as const

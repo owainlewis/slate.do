@@ -12,7 +12,7 @@ import { TaskDeleteDialog } from "@/components/task-delete-dialog"
 import { useApp } from "@/app-context"
 import { api } from "@/lib/api"
 import { agentIDForAssignee, assigneeForTask, assigneeKeyForAgent } from "@/lib/assignees"
-import { workspaceSummaryQueryKey, type Entry, type Task, type TaskStatus } from "@/lib/types"
+import { taskListName, workspaceSummaryQueryKey, type Entry, type Task, type TaskStatus } from "@/lib/types"
 
 const statuses: Array<{ value: TaskStatus; label: string }> = [
   { value: "new", label: "Todo" },
@@ -222,7 +222,6 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
     dirtyFields.current.add(key)
     setDraft(current => ({ ...current, [key]: value }))
   }
-  const list = lists.find(item => item.id === task.bucketId)
   const taskAssignee = assigneeForTask(task, assignees)
   const changeAssignee = (key: ReturnType<typeof assigneeKeyForAgent>) => {
     const nextAgentID = agentIDForAssignee(key)
@@ -258,7 +257,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
         <DialogTitle className="sr-only">Task detail</DialogTitle>
         <section aria-label="Task detail" data-detail-surface tabIndex={-1}>
           <header className="detail-head">
-            <div className="detail-breadcrumb"><Button variant="ghost" size="sm" type="button" data-close-detail onClick={() => task.parentTaskId && onOpenTask ? onOpenTask(task.parentTaskId) : onClose()}><ArrowLeft className="size-4" />{backLabel}</Button><span>{list?.name || task.bucketName || "Inbox"}</span><span aria-hidden="true">/</span><strong>{task.parentTaskId ? "Subtask" : "Task"}</strong></div>
+            <div className="detail-breadcrumb"><Button variant="ghost" size="sm" type="button" data-close-detail onClick={() => task.parentTaskId && onOpenTask ? onOpenTask(task.parentTaskId) : onClose()}><ArrowLeft className="size-4" />{backLabel}</Button><span>{taskListName(task, lists)}</span><span aria-hidden="true">/</span><strong>{task.parentTaskId ? "Subtask" : "Task"}</strong></div>
             <div className="detail-head-actions"><DropdownMenu><DropdownMenuTrigger asChild><Button ref={actionsTrigger} variant="ghost" size="icon" type="button" aria-label="Task actions"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>Task options</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem id="delete-task" className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={remove.isPending || !taskQuery.data} onSelect={() => { if (taskQuery.data) { remove.reset(); setError(""); setDeleteOpen(true) } }}><Trash2 className="size-4" />Delete task</DropdownMenuItem></DropdownMenuContent></DropdownMenu><Button variant="ghost" size="icon" type="button" onClick={onClose} aria-label="Close task"><span className="text-xl leading-none">×</span></Button></div>
           </header>
           {taskQuery.isPending ? <div className="loading-page"><div className="spinner" /></div> : taskQuery.isError ? <div className="detail-main"><p className="status-message error" role="alert">{taskQuery.error.message}</p></div> : (

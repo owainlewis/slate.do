@@ -12,7 +12,7 @@ import { ListColorDot, ListColorPicker, type ListColor } from "@/components/list
 import { useApp, initials } from "@/app-context"
 import { api } from "@/lib/api"
 import { agentIDForAssignee, assigneeForTask, type AssigneeKey } from "@/lib/assignees"
-import { workspaceSummaryQueryKey, type List, type Task, type TaskStatus } from "@/lib/types"
+import { taskListName, workspaceSummaryQueryKey, type List, type Task, type TaskStatus } from "@/lib/types"
 
 export function Brand({ onClick }: { onClick?: () => void }) {
   return <button type="button" className="brand-mark" onClick={onClick} aria-label="Slate home"><span className="brand-word">slate<span className="brand-suffix">.do</span></span></button>
@@ -274,7 +274,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <DialogContent className="task-search-dialog" showClose={false} aria-describedby={undefined}>
           <DialogTitle className="sr-only">Search tasks</DialogTitle>
           <div className="task-search-head"><Search /><Input aria-label="Search task titles" value={searchText} onChange={event => setSearchText(event.target.value)} placeholder="Search task titles…" autoFocus /><kbd>Esc</kbd></div>
-          <div className="task-search-results"><div className="task-search-label">{normalizedSearch ? `${searchResults.length} result${searchResults.length === 1 ? "" : "s"}` : "Recently updated"}</div>{searchQuery.isPending ? <div className="task-search-empty">Loading tasks…</div> : searchQuery.isError ? <div className="task-search-empty text-destructive">{searchQuery.error.message}</div> : searchResults.length ? searchResults.map(task => { const assignee = assigneeForTask(task, assignees); return <button type="button" className="task-search-row" key={task.id} onClick={() => { setSearchDialog(false); setSearchText(""); navigate(`/app/tasks/${encodeURIComponent(task.id)}`) }}><span><strong>{task.title}</strong><small>{task.bucketName || task.listName || "Inbox"} · @{assignee.handle}</small></span><span className={`search-status status-${task.status}`}>{task.status === "needs_review" ? "Review" : task.status === "working" ? "In progress" : task.status === "queued" ? "Queued" : task.status === "done" ? "Done" : "Todo"}</span></button> }) : <div className="task-search-empty">No task titles match “{searchText.trim()}”.</div>}</div>
+          <div className="task-search-results"><div className="task-search-label">{normalizedSearch ? `${searchResults.length} result${searchResults.length === 1 ? "" : "s"}` : "Recently updated"}</div>{searchQuery.isPending ? <div className="task-search-empty">Loading tasks…</div> : searchQuery.isError ? <div className="task-search-empty text-destructive">{searchQuery.error.message}</div> : searchResults.length ? searchResults.map(task => { const assignee = assigneeForTask(task, assignees); return <button type="button" className="task-search-row" key={task.id} onClick={() => { setSearchDialog(false); setSearchText(""); navigate(`/app/tasks/${encodeURIComponent(task.id)}`) }}><span><strong>{task.title}</strong><small>{taskListName(task, lists)} · @{assignee.handle}</small></span><span className={`search-status status-${task.status}`}>{task.status === "needs_review" ? "Review" : task.status === "working" ? "In progress" : task.status === "queued" ? "Queued" : task.status === "done" ? "Done" : "Todo"}</span></button> }) : <div className="task-search-empty">No task titles match “{searchText.trim()}”.</div>}</div>
         </DialogContent>
       </Dialog>
     </div>
