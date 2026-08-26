@@ -175,13 +175,13 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
   })
 
   const reorderSubtasks = useMutation({
-    mutationFn: (ids: string[]) => api.post(`/api/v1/tasks/${encodeURIComponent(taskId)}/reorder-subtasks`, { ids }),
-    onMutate: async ids => {
+    mutationFn: ({ parentTaskID, ids }: { parentTaskID: string; ids: string[] }) => api.post(`/api/v1/tasks/${encodeURIComponent(parentTaskID)}/reorder-subtasks`, { ids }),
+    onMutate: async ({ parentTaskID, ids }) => {
       setError("")
-      await queryClient.cancelQueries({ queryKey: ["subtasks", taskId] })
-      const previous = queryClient.getQueryData<{ tasks: Task[] }>(["subtasks", taskId])
+      await queryClient.cancelQueries({ queryKey: ["subtasks", parentTaskID] })
+      const previous = queryClient.getQueryData<{ tasks: Task[] }>(["subtasks", parentTaskID])
       const tasksByID = new Map((previous?.tasks || []).map(subtask => [subtask.id, subtask]))
-      queryClient.setQueryData(["subtasks", taskId], {
+      queryClient.setQueryData(["subtasks", parentTaskID], {
         tasks: ids.flatMap((id, sortOrder) => {
           const subtask = tasksByID.get(id)
           return subtask ? [{ ...subtask, sortOrder }] : []
@@ -189,11 +189,11 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
       })
       return { previous }
     },
-    onError: (value, _ids, context) => {
-      if (context?.previous) queryClient.setQueryData(["subtasks", taskId], context.previous)
-      setError(value instanceof Error ? value.message : "Could not reorder subtasks")
+    onError: (value, { parentTaskID }, context) => {
+      if (context?.previous) queryClient.setQueryData(["subtasks", parentTaskID], context.previous)
+      if (parentTaskID === activeTaskID.current) setError(value instanceof Error ? value.message : "Could not reorder subtasks")
     },
-    onSettled: async () => { await queryClient.invalidateQueries({ queryKey: ["subtasks", taskId] }) },
+    onSettled: async (_data, _error, { parentTaskID }) => { await queryClient.invalidateQueries({ queryKey: ["subtasks", parentTaskID] }) },
   })
 
   const createEntry = useMutation({
@@ -230,7 +230,7 @@ export function TaskDetail({ taskId, onClose, onOpenTask, backLabel: returnLabel
     const ordered = [...subtasks]
     const [moved] = ordered.splice(currentIndex, 1)
     ordered.splice(nextIndex, 0, moved)
-    reorderSubtasks.mutate(ordered.map(subtask => subtask.id))
+    reorderSubtasks.mutate({ parentTaskID: taskId, ids: ordered.map(subtask => subtask.id) })
   }
 
   return (

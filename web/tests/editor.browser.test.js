@@ -33,6 +33,7 @@ function fixture(options = {}) {
     tokens: [],
     requests: [],
     reorderSubtasksDelay: null,
+    reorderSubtasksFailure: false,
     paginate: false,
     pageTwoFailure: false,
     idempotency: new Map(),
@@ -198,6 +199,10 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       if (state.reorderSubtasksDelay) {
         await state.reorderSubtasksDelay;
         state.reorderSubtasksDelay = null;
+      }
+      if (state.reorderSubtasksFailure) {
+        state.reorderSubtasksFailure = false;
+        return json(response, { error: "Could not reorder subtasks" }, 500);
       }
       const siblings = state.subtasks.filter(item => item.parentTaskId === reorderSubtasksMatch[1]);
       const tasksByID = new Map(siblings.map(item => [item.id, item]));
@@ -1076,9 +1081,19 @@ test("subtasks start in creation order and mouse or keyboard reordering persists
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   assert.deepEqual(await page.locator(".subtask-title").allTextContents(), ["Research examples", "Draft outline"]);
 
+  state.reorderSubtasksFailure = true;
+  state.reorderSubtasksDelay = new Promise(resolve => { releaseReorder = resolve; });
+  const failedReorder = page.waitForResponse(value => value.request().method() === "POST" && value.url().endsWith("/api/v1/tasks/task-parent/reorder-subtasks"));
+  await page.getByRole("button", { name: "Reorder Draft outline" }).press("ArrowUp");
+  await page.waitForFunction(() => document.querySelector(".subtask-title")?.textContent === "Draft outline");
   await page.locator(".subtask-open").filter({ hasText: "Research examples" }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Title"]')?.value === "Research examples");
-  await page.waitForLoadState("networkidle");
+  releaseReorder();
+  await failedReorder;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await page.getByText("Could not reorder subtasks", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "Back to parent task" }).click();
+  await page.waitForFunction(() => Array.from(document.querySelectorAll(".subtask-title")).map(element => element.textContent).join(",") === "Research examples,Draft outline");
   assert.equal(state.requests.includes("GET /api/v1/tasks/task-child/subtasks"), false);
 });
 
