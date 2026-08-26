@@ -160,8 +160,8 @@ export function LoginPage() {
   const [password, setPassword] = React.useState("")
   const login = useMutation({
     mutationFn: () => api.post("/api/v1/auth/login", { email, password }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["me"] })
+    onSuccess: () => {
+      queryClient.clear()
       navigate(safeNext(params.get("next")), { replace: true })
     },
   })
@@ -190,7 +190,7 @@ export function EarlyAccessPage() {
   const [form, setForm] = React.useState({ email: "", password: "", displayName: "", inviteCode: "" })
   const register = useMutation({
     mutationFn: () => api.post<{ user?: User }>("/api/v1/auth/register", form),
-    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["me"] }); navigate("/app/tasks", { replace: true }) },
+    onSuccess: () => { queryClient.clear(); navigate("/app/tasks", { replace: true }) },
   })
   const field = (name: keyof typeof form) => ({ value: form[name], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm(value => ({ ...value, [name]: event.target.value })) })
   return <AuthLayout quote="Build a plan you can trust. Then let agents help you run it."><div className="auth-form-wrap"><h1>Join Slate.</h1><p>Create your account with an invitation code.</p><form className="form-stack" id="early-access-form" onSubmit={event => { event.preventDefault(); register.mutate() }}><div><Label htmlFor="register-name">Display name</Label><Input id="register-name" {...field("displayName")} required /></div><div><Label htmlFor="register-email">Email</Label><Input id="register-email" type="email" {...field("email")} required /></div><div><Label htmlFor="register-password">Password</Label><Input id="register-password" type="password" minLength={8} maxLength={72} {...field("password")} required /></div><div><Label htmlFor="register-code">Invitation code</Label><Input id="register-code" type="password" {...field("inviteCode")} required /></div>{register.isError && <p className="status-message error" role="alert">{register.error.message}</p>}<Button type="submit" disabled={register.isPending}>{register.isPending ? "Creating account…" : "Create account"}</Button></form><div className="auth-links"><Link to="/login">Already have an account?</Link></div></div></AuthLayout>
