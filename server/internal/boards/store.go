@@ -2138,7 +2138,7 @@ func (s *Store) ListTaskPage(ctx context.Context, userID string, filter TaskFilt
 	} else if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	const agentQueuePrioritySQL = "CASE t.priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 ELSE 3 END"
+	const agentQueuePrioritySQL = "CASE t.priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 WHEN 'p3' THEN 3 ELSE 4 END"
 	orderSQL := "t.created_at DESC, t.id DESC"
 	if filter.AgentQueue {
 		orderSQL = agentQueuePrioritySQL + ", t.created_at, t.id"
@@ -2502,6 +2502,11 @@ func taskCursorScope(userID string, filter TaskFilter) string {
 	if filter.Sort != "" {
 		parts = append(parts, "sort="+filter.Sort)
 	}
+	if filter.AgentQueue || filter.Sort == "priority" || filter.Sort == "list_priority" {
+		// P3 changed the numeric rank used in these cursors. Keep pre-P3 cursors
+		// from being interpreted against the new ordering.
+		parts = append(parts, "priority-rank=v2")
+	}
 	// done=true is the released spelling of status=done and must share its
 	// existing cursor scope. The open-only alias does not issue history cursors.
 	if filter.Done != nil && !(*filter.Done && filter.Status == StatusDone) {
@@ -2567,14 +2572,14 @@ func decodeWorkspaceTaskCursor(raw string, scope string, sort string) (workspace
 	}
 	switch sort {
 	case "priority":
-		if cursor.PriorityRank < 0 || cursor.PriorityRank > 3 {
+		if cursor.PriorityRank < 0 || cursor.PriorityRank > 4 {
 			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
 		}
 	case "list", "list_priority":
 		if cursor.BucketSortOrder < minPostgresInteger || cursor.BucketSortOrder > maxPostgresInteger || cursor.BucketCreatedAt.IsZero() || !validUUIDText(cursor.BucketID) {
 			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
 		}
-		if sort == "list_priority" && (cursor.PriorityRank < 0 || cursor.PriorityRank > 3) {
+		if sort == "list_priority" && (cursor.PriorityRank < 0 || cursor.PriorityRank > 4) {
 			return workspaceTaskCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
 		}
 	default:
@@ -2589,7 +2594,7 @@ func decodeAgentQueueCursor(raw string, scope string) (agentQueueCursor, error) 
 		return agentQueueCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
 	}
 	var cursor agentQueueCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || !validUUID(cursor.ID) || cursor.Scope != scope || cursor.PriorityRank < 0 || cursor.PriorityRank > 3 {
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.CreatedAt.IsZero() || !validUUID(cursor.ID) || cursor.Scope != scope || cursor.PriorityRank < 0 || cursor.PriorityRank > 4 {
 		return agentQueueCursor{}, fmt.Errorf("%w: invalid cursor", ErrInvalidData)
 	}
 	return cursor, nil
@@ -2603,8 +2608,10 @@ func agentQueuePriorityRank(priority string) int {
 		return 1
 	case PriorityP2:
 		return 2
-	default:
+	case PriorityP3:
 		return 3
+	default:
+		return 4
 	}
 }
 
@@ -2702,7 +2709,7 @@ func validKind(kind string) bool {
 
 func validPriority(priority string) bool {
 	switch priority {
-	case PriorityNone, PriorityP0, PriorityP1, PriorityP2:
+	case PriorityNone, PriorityP0, PriorityP1, PriorityP2, PriorityP3:
 		return true
 	}
 	return false

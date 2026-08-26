@@ -77,12 +77,12 @@ func TestPrepareTaskCreateRejectsMalformedParentID(t *testing.T) {
 }
 
 func TestValidPriority(t *testing.T) {
-	for _, priority := range []string{PriorityNone, PriorityP0, PriorityP1, PriorityP2} {
+	for _, priority := range []string{PriorityNone, PriorityP0, PriorityP1, PriorityP2, PriorityP3} {
 		if !validPriority(priority) {
 			t.Fatalf("%q should be valid", priority)
 		}
 	}
-	if validPriority("p3") || validPriority("P0") || validPriority("urgent") {
+	if validPriority("p4") || validPriority("P0") || validPriority("urgent") {
 		t.Fatal("unexpected valid priority")
 	}
 }

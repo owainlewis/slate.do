@@ -202,11 +202,11 @@ items in the list. Use "tasks list --status done" to page older completed work.
 "buckets" is accepted as an alias for "lists".
 `,
 	"tasks": `Usage:
-  slate tasks list [--list <list-id>] [--status <status>] [--priority <p0|p1|p2>] [--limit <n>] [--cursor <cursor>]
+  slate tasks list [--list <list-id>] [--status <status>] [--priority <p0|p1|p2|p3>] [--limit <n>] [--cursor <cursor>]
   slate tasks get <task-id>
-  slate tasks pull [--list <list-id>] [--priority <p0|p1|p2>] [--limit <n>]
+  slate tasks pull [--list <list-id>] [--priority <p0|p1|p2|p3>] [--limit <n>]
   slate tasks create --title <title> [--list <list-id> | --parent <task-id>] [--description <text>] [--date <YYYY-MM-DD>] [--idempotency-key <key>]
-  slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>] [--priority <p0|p1|p2>]
+  slate tasks update <task-id> [--title <title>] [--description <text>] [--date <YYYY-MM-DD>] [--list <list-id>] [--priority <p0|p1|p2|p3>]
   slate tasks delete <task-id>
   slate tasks reorder --list <list-id> <task-id>...
   slate tasks claim <task-id>
@@ -323,7 +323,7 @@ func tasksCmd(c client, args []string) error {
 		fs := newFlagSet("tasks " + command)
 		listID := fs.String("list", "", "list id")
 		limit := fs.Int("limit", 0, "maximum tasks")
-		priority := fs.String("priority", "", "priority filter: p0, p1, or p2")
+		priority := fs.String("priority", "", "priority filter: p0, p1, p2, or p3")
 		var status, cursor *string
 		if command == "list" {
 			status = fs.String("status", "", "status filter")
@@ -336,7 +336,7 @@ func tasksCmd(c client, args []string) error {
 			return errors.New("unexpected arguments")
 		}
 		if !validPriority(*priority) {
-			return fmt.Errorf("invalid priority %q; choose p0, p1, or p2", *priority)
+			return fmt.Errorf("invalid priority %q; choose p0, p1, p2, or p3", *priority)
 		}
 		q := url.Values{}
 		setQuery(q, "bucketId", *listID)
@@ -398,7 +398,7 @@ func tasksCmd(c client, args []string) error {
 		date := fs.String("date", "", "planned date")
 		listID := fs.String("list", "", "list id")
 		bucketID := fs.String("bucket", "", "deprecated alias for --list")
-		priority := fs.String("priority", "", "priority: p0, p1, p2, or empty to clear")
+		priority := fs.String("priority", "", "priority: p0, p1, p2, p3, or empty to clear")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
@@ -406,7 +406,7 @@ func tasksCmd(c client, args []string) error {
 			return errors.New("unexpected arguments")
 		}
 		if !validPriority(*priority) {
-			return fmt.Errorf("invalid priority %q; choose p0, p1, p2, or an empty value to clear", *priority)
+			return fmt.Errorf("invalid priority %q; choose p0, p1, p2, p3, or an empty value to clear", *priority)
 		}
 		body := map[string]any{}
 		fs.Visit(func(item *flag.Flag) {
@@ -782,7 +782,7 @@ func validStatus(status string) bool {
 
 func validPriority(priority string) bool {
 	switch priority {
-	case "", "p0", "p1", "p2":
+	case "", "p0", "p1", "p2", "p3":
 		return true
 	default:
 		return false

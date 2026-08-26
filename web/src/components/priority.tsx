@@ -5,9 +5,10 @@ import type { Task } from "@/lib/types"
 export type Priority = NonNullable<Task["priority"]>
 
 export const priorities: Array<{ value: Priority; label: string; shortLabel: string }> = [
-  { value: "p0", label: "Urgent", shortLabel: "Urgent" },
-  { value: "p1", label: "High", shortLabel: "High" },
-  { value: "p2", label: "Normal", shortLabel: "Normal" },
+  { value: "p0", label: "P0", shortLabel: "P0" },
+  { value: "p1", label: "P1", shortLabel: "P1" },
+  { value: "p2", label: "P2", shortLabel: "P2" },
+  { value: "p3", label: "P3", shortLabel: "P3" },
 ]
 
 export function priorityLabel(value?: string) {

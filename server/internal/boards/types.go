@@ -18,6 +18,7 @@ const (
 	PriorityP0   = "p0"
 	PriorityP1   = "p1"
 	PriorityP2   = "p2"
+	PriorityP3   = "p3"
 
 	ListColorSlate  = "slate"
 	ListColorRed    = "red"

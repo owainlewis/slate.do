@@ -27,6 +27,19 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestValidPriorityIncludesP3(t *testing.T) {
+	for _, priority := range []string{"", "p0", "p1", "p2", "p3"} {
+		if !validPriority(priority) {
+			t.Fatalf("validPriority(%q) = false", priority)
+		}
+	}
+	for _, priority := range []string{"p4", "P0", "urgent"} {
+		if validPriority(priority) {
+			t.Fatalf("validPriority(%q) = true", priority)
+		}
+	}
+}
+
 func TestEnvFallback(t *testing.T) {
 	t.Setenv("SLATE_BASE_URL", "")
 	if got := env("SLATE_BASE_URL", defaultBaseURL); got != "https://slate.do" {

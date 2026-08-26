@@ -261,6 +261,7 @@ func TestAgentQueueOrdersPriorityThenOldest(t *testing.T) {
 		{title: "No priority", priority: PriorityNone, age: 6 * time.Hour},
 		{title: "P0 old", priority: PriorityP0, age: 5 * time.Hour},
 		{title: "P2", priority: PriorityP2, age: 3 * time.Hour},
+		{title: "P3", priority: PriorityP3, age: 2 * time.Hour},
 	}
 	for _, input := range inputs {
 		task, err := store.CreateTask(ctx, ownerID, bucket.ID, CreateTaskInput{Title: input.title, AssigneeAgentID: agentID})
@@ -275,7 +276,7 @@ func TestAgentQueueOrdersPriorityThenOldest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"P0 old", "P0 new", "P1", "P2", "No priority"}
+	want := []string{"P0 old", "P0 new", "P1", "P2", "P3", "No priority"}
 	if len(page.Tasks) != len(want) {
 		t.Fatalf("queue length = %d, want %d", len(page.Tasks), len(want))
 	}

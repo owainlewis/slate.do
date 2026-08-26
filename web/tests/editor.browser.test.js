@@ -300,13 +300,19 @@ test("React workspace renders the full task board accessibly", async t => {
   assert.equal(await page.getByLabel("Filter by agent").count(), 0);
   assert.equal(state.requests.some(request => request.startsWith("GET /api/v1/tasks?") && request.includes("assigneeAgentId=")), false);
   const priorityFilter = page.getByRole("group", { name: "Filter by priority" });
-  const urgentFilter = priorityFilter.getByRole("button", { name: "Urgent priority" });
+  const p0Filter = priorityFilter.getByRole("button", { name: "P0 priority" });
+  const p3Filter = priorityFilter.getByRole("button", { name: "P3 priority" });
   assert.equal(await priorityFilter.getByRole("button", { name: "All priorities" }).getAttribute("aria-pressed"), "true");
-  assert.equal(await urgentFilter.getAttribute("title"), "Urgent");
-  await urgentFilter.press("Enter");
+  assert.equal(await p0Filter.getAttribute("title"), "P0");
+  assert.equal(await p3Filter.getAttribute("title"), "P3");
+  await p0Filter.press("Enter");
   await page.waitForFunction(() => new URL(location.href).searchParams.get("priority") === "p0");
-  await page.waitForFunction(() => document.querySelector('[aria-label="Urgent priority"]')?.getAttribute("aria-pressed") === "true");
-  assert.equal(await urgentFilter.getAttribute("aria-pressed"), "true");
+  await page.waitForFunction(() => document.querySelector('[aria-label="P0 priority"]')?.getAttribute("aria-pressed") === "true");
+  assert.equal(await p0Filter.getAttribute("aria-pressed"), "true");
+  await p3Filter.press("Enter");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("priority") === "p3");
+  await page.waitForFunction(() => document.querySelector('[aria-label="P3 priority"]')?.getAttribute("aria-pressed") === "true");
+  assert.equal(await p3Filter.getAttribute("aria-pressed"), "true");
   await priorityFilter.getByRole("button", { name: "All priorities" }).press("Enter");
   await page.waitForFunction(() => !new URL(location.href).searchParams.has("priority"));
   const columnStyles = await page.locator(".board-column").evaluateAll(columns => columns.map(column => ({
@@ -510,7 +516,7 @@ test("task creation respects every column and queues every agent assignment", as
       await dialog.getByRole("textbox", { name: "Task title" }).fill(title);
       await dialog.getByRole("textbox", { name: "Task brief" }).fill(`Created from ${column.label}.`);
       if (!assigned && column.status === "new") {
-        const highPriority = dialog.getByRole("button", { name: "High priority" });
+        const highPriority = dialog.getByRole("button", { name: "P1 priority" });
         assert.equal(await highPriority.getAttribute("aria-pressed"), "true");
         await dialog.getByText("Priority", { exact: true }).click();
         assert.equal(await highPriority.getAttribute("aria-pressed"), "true");
@@ -522,7 +528,7 @@ test("task creation respects every column and queues every agent assignment", as
         assert.match(await dialog.getByRole("button", { name: "Assign to" }).textContent(), /@owain/i);
       }
       if (!assigned && column.status === "working") {
-        await dialog.getByRole("button", { name: "Normal priority" }).click();
+        await dialog.getByRole("button", { name: "P2 priority" }).click();
       }
       await dialog.getByRole("button", { name: assigned ? "Create & queue" : "Create task" }).click();
       await page.getByRole("dialog", { name: "Task detail" }).waitFor();
@@ -577,7 +583,7 @@ test("task creation keeps every exit and field disabled while pending", async t 
     dialog.getByLabel("Task list"),
     dialog.getByRole("button", { name: "Assign to" }),
     dialog.getByLabel("Plan for"),
-    dialog.getByRole("button", { name: "High priority" }),
+    dialog.getByRole("button", { name: "P1 priority" }),
   ]) assert.equal(await control.isDisabled(), true);
   await page.keyboard.press("c");
   await page.keyboard.press("Control+k");
@@ -1041,13 +1047,13 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   const priority = page.getByRole("group", { name: "Priority" });
   const priorityError = "Could not update priority.";
   state.taskUpdateError = priorityError;
-  await priority.getByRole("button", { name: "Normal priority" }).click();
+  await priority.getByRole("button", { name: "P2 priority" }).click();
   await page.getByRole("alert").getByText(priorityError).waitFor();
-  assert.equal(await priority.getByRole("button", { name: "Urgent priority" }).getAttribute("aria-pressed"), "true");
+  assert.equal(await priority.getByRole("button", { name: "P0 priority" }).getAttribute("aria-pressed"), "true");
   assert.equal(state.tasks[0].priority, "p0");
-  await priority.getByRole("button", { name: "Normal priority" }).click();
+  await priority.getByRole("button", { name: "P2 priority" }).click();
   await page.waitForFunction(() => {
-    const button = document.querySelector('[aria-label="Task properties"] [aria-label="Normal priority"]');
+    const button = document.querySelector('[aria-label="Task properties"] [aria-label="P2 priority"]');
     return button?.getAttribute("aria-pressed") === "true" && !button.disabled;
   });
   assert.equal(state.tasks[0].priority, "p2");
@@ -1056,7 +1062,7 @@ test("task detail edits, subtasks, and conversation entries use the existing API
   await page.getByRole("button", { name: "Close task" }).click();
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
-  assert.equal(await page.getByRole("group", { name: "Priority" }).getByRole("button", { name: "Normal priority" }).getAttribute("aria-pressed"), "true");
+  assert.equal(await page.getByRole("group", { name: "Priority" }).getByRole("button", { name: "P2 priority" }).getAttribute("aria-pressed"), "true");
   await page.getByRole("button", { name: "Close task" }).click();
   state.tasks[0].description = "Fresh server brief";
   const refreshedTask = page.waitForResponse(value => value.request().method() === "GET" && value.url().endsWith("/api/v1/tasks/task-parent"));
@@ -1129,13 +1135,13 @@ test("a delayed priority update stays with its original task", async t => {
   await page.getByRole("button", { name: "Open task: Publish task-first agents video" }).click();
   await page.getByRole("region", { name: "Task detail" }).waitFor();
   const response = page.waitForResponse(value => value.request().method() === "PATCH" && value.url().endsWith("/api/v1/tasks/task-parent"));
-  await page.getByRole("group", { name: "Priority" }).getByRole("button", { name: "High priority" }).click();
+  await page.getByRole("group", { name: "Priority" }).getByRole("button", { name: "P1 priority" }).click();
   await page.locator('[data-open-task="task-child"]').click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Title"]')?.value === "Research examples");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
   releaseTaskUpdate();
   await response;
-  await page.waitForFunction(() => document.querySelector('[aria-label="Task properties"] [aria-label="Normal priority"]')?.getAttribute("aria-pressed") === "true");
+  await page.waitForFunction(() => document.querySelector('[aria-label="Task properties"] [aria-label="P2 priority"]')?.getAttribute("aria-pressed") === "true");
   assert.equal(state.tasks[0].priority, "p1");
   assert.equal(state.subtasks[0].priority, "p2");
   assert.equal(await page.getByLabel("Title", { exact: true }).inputValue(), "Research examples");
