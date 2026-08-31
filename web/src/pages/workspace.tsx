@@ -27,6 +27,36 @@ const statusName = (value: string) => columns.find(column => column.statuses.inc
 type TasksPage = { tasks: Task[]; nextCursor?: string }
 
 type DeleteTarget = { task: Task; returnFocus: HTMLButtonElement | null }
+type TaskDrop = { id: string; status: TaskStatus; referenceTaskId?: string; placement?: "before" | "after"; position?: number; preservePosition?: boolean; append?: boolean }
+
+export function taskDropLocation(tasks: Task[], draggedID: string, targetID?: string, after = false): Pick<TaskDrop, "referenceTaskId" | "placement" | "position" | "append"> | undefined {
+  const dragged = tasks.find(task => task.id === draggedID)
+  const target = tasks.find(task => task.id === targetID)
+  if (dragged && target && target.bucketId === dragged.bucketId && target.id !== dragged.id) return { referenceTaskId: target.id, placement: after ? "after" : "before" }
+  if (targetID) return undefined
+  return { append: true }
+}
+
+export function compareBoardTasks(left: Task, right: Task, listIDs: string[]) {
+  if (left.bucketId !== right.bucketId) return listIDs.indexOf(left.bucketId) - listIDs.indexOf(right.bucketId)
+  return (left.sortOrder ?? 0) - (right.sortOrder ?? 0)
+}
+
+export function orderedTaskSiblings(tasks: Task[], moved: Task) {
+  return tasks.filter(task => task.bucketId === moved.bucketId && task.id !== moved.id).sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0))
+}
+
+export function optimisticTaskMove(tasks: Task[], { id, status, referenceTaskId, placement, position = 0, preservePosition, append }: TaskDrop) {
+  const moved = tasks.find(task => task.id === id)
+  if (!moved) return tasks
+  const siblings = orderedTaskSiblings(tasks, moved)
+  const referenceIndex = referenceTaskId ? siblings.findIndex(task => task.id === referenceTaskId) : -1
+  const currentPosition = siblings.filter(task => (task.sortOrder ?? 0) < (moved.sortOrder ?? 0)).length
+  const nextPosition = preservePosition ? currentPosition : append ? siblings.length : referenceIndex < 0 ? position : referenceIndex + (placement === "after" ? 1 : 0)
+  const ordered = [...siblings.slice(0, nextPosition), { ...moved, status }, ...siblings.slice(nextPosition)]
+  const updates = new Map(ordered.map((task, index) => [task.id, { ...task, sortOrder: index }]))
+  return tasks.map(task => updates.get(task.id) || task)
+}
 
 function TaskCard({ task, onOpen, onMove, onDelete }: { task: Task; onOpen: () => void; onMove: (status: TaskStatus) => void; onDelete: (returnFocus: HTMLButtonElement | null) => void }) {
   const { assignees, lists } = useApp()
@@ -88,6 +118,7 @@ export function WorkspacePage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [dragOver, setDragOver] = React.useState<TaskStatus | "">("")
+  const [draggedTaskID, setDraggedTaskID] = React.useState("")
   const [pageError, setPageError] = React.useState("")
   const [deleteTarget, setDeleteTarget] = React.useState<DeleteTarget | null>(null)
   const [listActionsOpen, setListActionsOpen] = React.useState(false)
@@ -155,6 +186,22 @@ export function WorkspacePage() {
     onSuccess: refresh,
     onError: error => { setPageError(error instanceof Error ? error.message : "Could not update task"); void refresh() },
   })
+  const dropTask = useMutation({
+    mutationFn: async ({ id, status, ...location }: TaskDrop) => {
+      const task = tasks.find(item => item.id === id)
+      if (!task) throw new Error("Task not found")
+      return api.post<Task>(`/api/v1/tasks/${encodeURIComponent(id)}/move`, { bucketId: task.bucketId, status, ...location })
+    },
+    onMutate: input => {
+      queryClient.setQueriesData<InfiniteData<TasksPage, string>>({ queryKey: ["tasks"] }, old => {
+        if (!old) return old
+        const updated = new Map(optimisticTaskMove(old.pages.flatMap(page => page.tasks), input).map(task => [task.id, task]))
+        return { ...old, pages: old.pages.map(page => ({ ...page, tasks: page.tasks.map(task => updated.get(task.id) || task) })) }
+      })
+    },
+    onSuccess: refresh,
+    onError: error => { setPageError(error instanceof Error ? error.message : "Could not move task"); void refresh() },
+  })
   const deleteTask = useMutation({
     mutationFn: (id: string) => api.del(`/api/v1/tasks/${encodeURIComponent(id)}`),
     onSuccess: async () => { await refresh(); setPageError(""); setDeleteTarget(null) },
@@ -212,8 +259,9 @@ export function WorkspacePage() {
         <div className="board-scroll" id="workspace-task-panel">
           <div className="board workspace-flow">
             {columns.map(column => {
-              const items = tasks.filter(task => column.statuses.includes(task.status))
-              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => { event.preventDefault(); setDragOver(""); const id = event.dataTransfer.getData("text/task-id"); if (id) moveTask.mutate({ id, status: column.value }) }}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add task</TooltipContent></Tooltip></header><div className="task-stack">{items.map(task => <TaskCard key={task.id} task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} />)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
+              const items = tasks.filter(task => column.statuses.includes(task.status)).sort((left, right) => compareBoardTasks(left, right, lists.map(list => list.id)))
+              const drop = (event: React.DragEvent, targetID?: string) => { event.preventDefault(); event.stopPropagation(); const id = event.dataTransfer.getData("text/task-id") || draggedTaskID; setDragOver(""); setDraggedTaskID(""); if (!id || targetID === id) return; const target = targetID ? event.currentTarget.getBoundingClientRect() : null; const after = Boolean(target && event.clientY >= target.top + target.height / 2); const dragged = tasks.find(task => task.id === id); const sameColumn = Boolean(dragged && column.statuses.includes(dragged.status)); const status = sameColumn ? dragged!.status : column.value; const location = taskDropLocation(tasks, id, targetID, after); if (location) dropTask.mutate({ id, status, ...(targetID || sameColumn ? location : { preservePosition: true }) }); else if (!sameColumn) dropTask.mutate({ id, status, preservePosition: true }) }
+              return <section key={column.value} className={`board-column workspace-flow-column column-${column.className || "todo"} ${dragOver === column.value ? "drag-over" : ""}`} data-status={column.value} onDragOver={event => { event.preventDefault(); setDragOver(column.value) }} onDragLeave={() => setDragOver("")} onDrop={event => drop(event)}><header className="column-head"><div className="column-title"><span className={`column-dot ${column.className}`} /><span>{column.label}</span><span className="column-count">{items.length}</span></div><Tooltip delayDuration={350}><TooltipTrigger asChild><button type="button" className="column-action" aria-label={`Add task to ${column.label}`} onClick={() => window.dispatchEvent(new CustomEvent("slate:new-task", { detail: { status: column.value } }))}><Plus aria-hidden="true" /></button></TooltipTrigger><TooltipContent>Add task</TooltipContent></Tooltip></header><div className="task-stack">{items.map(task => <div key={task.id} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, task.id)} onDragStart={() => setDraggedTaskID(task.id)}><TaskCard task={task} onOpen={() => openTask(task.id)} onMove={status => moveTask.mutate({ id: task.id, status })} onDelete={returnFocus => { deleteTask.reset(); setPageError(""); setDeleteTarget({ task, returnFocus }) }} /></div>)}{!items.length && <div className="empty-column">No tasks here</div>}</div></section>
             })}
           </div>
         </div>

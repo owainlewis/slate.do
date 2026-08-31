@@ -125,8 +125,13 @@ type UpdateTaskInput struct {
 }
 
 type MoveTaskInput struct {
-	BucketID string `json:"bucketId"`
-	Position *int   `json:"position"`
+	BucketID         string `json:"bucketId"`
+	Position         *int   `json:"position"`
+	ReferenceTaskID  string `json:"referenceTaskId"`
+	Placement        string `json:"placement"`
+	PreservePosition bool   `json:"preservePosition"`
+	Append           bool   `json:"append"`
+	Status           string `json:"status"`
 }
 
 type TaskFilter struct {

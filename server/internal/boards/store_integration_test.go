@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -927,6 +928,71 @@ func TestMoveTaskAcrossBoardsPreservesMetadataAndOrdersBothLists(t *testing.T) {
 	}
 	assertTaskOrder(t, store, ctx, userID, source.ID, []string{before.ID, after.ID})
 	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{first.ID, moving.ID, firstChild.ID, secondChild.ID, last.ID})
+}
+
+func TestMoveTaskUsesRelativePositionAndUpdatesStatusAtomically(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	list, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden, _ := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "Hidden"})
+	target, _ := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "Target"})
+	dragged, _ := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "Dragged"})
+	targetChild, _ := store.CreateSubtask(ctx, userID, target.ID, CreateTaskInput{Title: "Target child"})
+
+	moved, err := store.MoveTask(ctx, userID, dragged.ID, MoveTaskInput{
+		BucketID: list.ID, ReferenceTaskID: target.ID, Placement: "after", Status: StatusWorking,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Status != StatusWorking {
+		t.Fatalf("status = %q, want %q", moved.Status, StatusWorking)
+	}
+	var ordered []string
+	rows, err := db.Query(ctx, "SELECT id::text FROM tasks WHERE bucket_id = $1 ORDER BY sort_order, created_at, id", list.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ordered = append(ordered, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{hidden.ID, target.ID, targetChild.ID, dragged.ID}; !slices.Equal(ordered, want) {
+		t.Fatalf("order = %v, want %v", ordered, want)
+	}
+
+	otherList, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTask, err := store.CreateTask(ctx, userID, otherList.ID, CreateTaskInput{Title: "Other task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MoveTask(ctx, userID, dragged.ID, MoveTaskInput{BucketID: list.ID, ReferenceTaskID: otherTask.ID, Placement: "before", Status: StatusDone}); !errors.Is(err, ErrInvalidData) {
+		t.Fatalf("invalid move error = %v, want ErrInvalidData", err)
+	}
+	unchanged, err := store.GetTask(ctx, userID, dragged.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Status != StatusWorking {
+		t.Fatalf("failed move changed status to %q", unchanged.Status)
+	}
 }
 
 func assertTaskOrder(t *testing.T, store *Store, ctx context.Context, userID string, bucketID string, want []string) {
