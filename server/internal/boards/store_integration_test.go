@@ -944,6 +944,7 @@ func TestMoveTaskUsesRelativePositionAndUpdatesStatusAtomically(t *testing.T) {
 	hidden, _ := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "Hidden"})
 	target, _ := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "Target"})
 	dragged, _ := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "Dragged"})
+	targetChild, _ := store.CreateSubtask(ctx, userID, target.ID, CreateTaskInput{Title: "Target child"})
 
 	moved, err := store.MoveTask(ctx, userID, dragged.ID, MoveTaskInput{
 		BucketID: list.ID, ReferenceTaskID: target.ID, Placement: "after", Status: StatusWorking,
@@ -970,7 +971,7 @@ func TestMoveTaskUsesRelativePositionAndUpdatesStatusAtomically(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{hidden.ID, target.ID, dragged.ID}; !slices.Equal(ordered, want) {
+	if want := []string{hidden.ID, target.ID, targetChild.ID, dragged.ID}; !slices.Equal(ordered, want) {
 		t.Fatalf("order = %v, want %v", ordered, want)
 	}
 
