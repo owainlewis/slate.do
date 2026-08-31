@@ -156,7 +156,7 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       const moving = state.tasks.find(item => item.id === moveTaskMatch[1]);
       const siblings = state.tasks.filter(item => item.bucketId === input.bucketId && item.id !== moveTaskMatch[1]).sort((left, right) => (left.sortOrder || 0) - (right.sortOrder || 0));
       const referenceIndex = input.referenceTaskId ? siblings.findIndex(item => item.id === input.referenceTaskId) : -1;
-      const position = input.preservePosition ? moving.sortOrder : referenceIndex < 0 ? input.position : referenceIndex + (input.placement === "after" ? 1 : 0);
+      const position = input.preservePosition ? moving.sortOrder : input.append ? siblings.length : referenceIndex < 0 ? input.position : referenceIndex + (input.placement === "after" ? 1 : 0);
       siblings.splice(position, 0, moving);
       siblings.forEach((task, index) => { task.sortOrder = index; });
       moving.status = input.status || moving.status;
@@ -1267,9 +1267,18 @@ test("dragging a task within a column persists its new position", async t => {
   assert.equal(state.requests.filter(request => request === "POST /api/v1/tasks/task-inbox/move").length, moveCount);
   assert.equal(first.sortOrder, 1);
 
+  await page.evaluate(() => {
+    const transfer = new DataTransfer();
+    transfer.setData("text/task-id", "task-inbox-second");
+    document.querySelector('[data-status="new"]').dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: transfer }));
+  });
+  await page.waitForFunction(() => document.querySelector('[data-status="new"] [data-task]')?.getAttribute("data-task") === "task-inbox");
+  assert.equal(first.sortOrder, 0);
+  assert.equal(extra.sortOrder, 1);
+
   await page.goto(`${origin}/app/tasks`);
   await page.getByRole("heading", { name: "All tasks" }).waitFor();
-  assert.equal(await page.locator('[data-status="new"] [data-task]').first().getAttribute("data-task"), "task-inbox-second");
+  assert.equal(await page.locator('[data-status="new"] [data-task]').first().getAttribute("data-task"), "task-inbox");
   const crossListMoveCount = state.requests.filter(request => request === "POST /api/v1/tasks/task-inbox-second/move").length;
   await page.locator('[data-task="task-inbox-second"]').dragTo(page.locator('[data-task="task-writing"]'));
   assert.equal(state.requests.filter(request => request === "POST /api/v1/tasks/task-inbox-second/move").length, crossListMoveCount);
@@ -1277,7 +1286,7 @@ test("dragging a task within a column persists its new position", async t => {
   await page.locator('[data-task="task-inbox-second"]').dragTo(page.locator('[data-task="task-parent"]'));
   await page.waitForFunction(() => document.querySelector('[data-status="working"] [data-task="task-inbox-second"]'));
   assert.equal(extra.status, "working");
-  assert.equal(extra.sortOrder, 0);
+  assert.equal(extra.sortOrder, 1);
 });
 
 test("lists, inbox, agents, and settings are complete React routes", async t => {

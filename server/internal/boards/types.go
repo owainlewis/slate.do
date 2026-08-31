@@ -130,6 +130,7 @@ type MoveTaskInput struct {
 	ReferenceTaskID  string `json:"referenceTaskId"`
 	Placement        string `json:"placement"`
 	PreservePosition bool   `json:"preservePosition"`
+	Append           bool   `json:"append"`
 	Status           string `json:"status"`
 }
 

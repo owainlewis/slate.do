@@ -997,14 +997,14 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	input.ReferenceTaskID = clean(input.ReferenceTaskID)
 	input.Placement = clean(input.Placement)
 	input.Status = clean(input.Status)
-	if input.ReferenceTaskID == "" && !input.PreservePosition && (input.Position == nil || *input.Position < 0) {
+	if input.ReferenceTaskID == "" && !input.PreservePosition && !input.Append && (input.Position == nil || *input.Position < 0) {
 		return Task{}, fmt.Errorf("%w: position must be zero or greater", ErrInvalidData)
 	}
 	if input.ReferenceTaskID != "" && input.Placement != "before" && input.Placement != "after" {
 		return Task{}, fmt.Errorf("%w: placement must be before or after", ErrInvalidData)
 	}
-	if input.PreservePosition && (input.ReferenceTaskID != "" || input.Position != nil) {
-		return Task{}, fmt.Errorf("%w: preserved position cannot include another position", ErrInvalidData)
+	if (input.PreservePosition || input.Append) && (input.ReferenceTaskID != "" || input.Position != nil) || input.PreservePosition && input.Append {
+		return Task{}, fmt.Errorf("%w: move must include one position", ErrInvalidData)
 	}
 	if input.Status != "" && !validStatus(input.Status) {
 		return Task{}, fmt.Errorf("%w: invalid status", ErrInvalidData)
@@ -1081,6 +1081,8 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	position := 0
 	if input.PreservePosition {
 		position = current.SortOrder
+	} else if input.Append {
+		position = len(destinationIDs)
 	} else if input.ReferenceTaskID != "" {
 		position = slices.Index(destinationIDs, input.ReferenceTaskID)
 		if position < 0 {
