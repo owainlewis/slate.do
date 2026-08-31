@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -993,8 +994,17 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	if bucketID == "" {
 		return Task{}, fmt.Errorf("%w: destination list is required", ErrInvalidData)
 	}
-	if input.Position == nil || *input.Position < 0 {
+	input.ReferenceTaskID = clean(input.ReferenceTaskID)
+	input.Placement = clean(input.Placement)
+	input.Status = clean(input.Status)
+	if input.ReferenceTaskID == "" && (input.Position == nil || *input.Position < 0) {
 		return Task{}, fmt.Errorf("%w: position must be zero or greater", ErrInvalidData)
+	}
+	if input.ReferenceTaskID != "" && input.Placement != "before" && input.Placement != "after" {
+		return Task{}, fmt.Errorf("%w: placement must be before or after", ErrInvalidData)
+	}
+	if input.Status != "" && !validStatus(input.Status) {
+		return Task{}, fmt.Errorf("%w: invalid status", ErrInvalidData)
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -1018,6 +1028,20 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	if err != nil {
 		return Task{}, err
 	}
+	originalStatus := current.Status
+	if input.Status != "" {
+		if err := applyTaskStatus(&current, input.Status, true); err != nil {
+			return Task{}, err
+		}
+		if current.AssigneeAgentID != "" && current.Status == StatusNew {
+			current.Status = StatusQueued
+		}
+		if current.AssigneeAgentID != "" && (current.Status == StatusQueued || current.Status == StatusWorking) {
+			if _, err := activeAgentAssignment(ctx, tx, userID, current.AssigneeAgentID); err != nil {
+				return Task{}, fmt.Errorf("%w: clear or replace the archived agent before moving this item to New, Ready, or In Progress", ErrInvalidData)
+			}
+		}
+	}
 	if current.ParentTaskID != "" {
 		parent, err := lockedTask(ctx, tx, userID, current.ParentTaskID)
 		if err != nil {
@@ -1030,6 +1054,11 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	destination, err := lockedBucket(ctx, tx, userID, bucketID)
 	if err != nil {
 		return Task{}, err
+	}
+	if originalStatus == StatusDone && current.Status != StatusDone {
+		if err := checkTaskCapacity(ctx, tx, destination, current.ID, false); err != nil {
+			return Task{}, err
+		}
 	}
 	if current.BucketID != destination.ID && current.Kind == KindAction && current.Status != StatusDone {
 		if err := checkTaskCapacity(ctx, tx, destination, current.ID, false); err != nil {
@@ -1046,11 +1075,23 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 		return Task{}, err
 	}
 	destinationIDs = removeTaskIDs(destinationIDs, childIDs)
-	if *input.Position > len(destinationIDs) {
+	position := 0
+	if input.ReferenceTaskID != "" {
+		position = slices.Index(destinationIDs, input.ReferenceTaskID)
+		if position < 0 {
+			return Task{}, fmt.Errorf("%w: reference task is outside the destination list", ErrInvalidData)
+		}
+		if input.Placement == "after" {
+			position++
+		}
+	} else {
+		position = *input.Position
+	}
+	if position > len(destinationIDs) {
 		return Task{}, fmt.Errorf("%w: position is outside the destination list", ErrInvalidData)
 	}
 	taskGroup := append([]string{current.ID}, childIDs...)
-	destinationIDs = insertTaskIDs(destinationIDs, taskGroup, *input.Position)
+	destinationIDs = insertTaskIDs(destinationIDs, taskGroup, position)
 
 	if current.BucketID != destination.ID {
 		sourceIDs, err := orderedTaskIDs(ctx, tx, current.BucketID, current.ID)
@@ -1058,7 +1099,7 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 			return Task{}, err
 		}
 		sourceIDs = removeTaskIDs(sourceIDs, childIDs)
-		if err := updateTaskLocation(ctx, tx, current.ID, destination, *input.Position); err != nil {
+		if err := updateTaskLocation(ctx, tx, current.ID, destination, position); err != nil {
 			return Task{}, err
 		}
 		if err := updateChildTaskLocations(ctx, tx, current.ID, destination); err != nil {
@@ -1072,6 +1113,18 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	}
 	if err := writeTaskOrder(ctx, tx, destinationIDs); err != nil {
 		return Task{}, err
+	}
+	if input.Status != "" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE tasks
+			SET status = $1,
+				execution_run_id = CASE WHEN $1 = 'queued' THEN NULL ELSE execution_run_id END,
+				review_reason = CASE WHEN $1 = 'needs_review' AND status = 'needs_review' THEN review_reason ELSE '' END,
+				updated_at = now()
+			WHERE id = $2
+		`, current.Status, current.ID); err != nil {
+			return Task{}, err
+		}
 	}
 
 	moved, err := taskByID(ctx, tx, current.ID)

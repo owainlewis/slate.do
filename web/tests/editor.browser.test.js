@@ -23,6 +23,7 @@ function fixture(options = {}) {
       { id: "task-parent", bucketId: "list-product", bucketName: "Product", listName: "Product", title: "Publish task-first agents video", description: "Explain one control plane for people and agents.", scheduledDate: "2026-08-20", status: "working", priority: "p0", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
       { id: "task-inbox", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Write the doc my boss asked for", description: "Turn the notes into a decision-ready brief.", scheduledDate: "", status: "new", priority: "p1", assigneeAgentId: "", assigneeAgentName: "" },
       { id: "task-writing", bucketId: "list-writing", bucketName: "Writing", listName: "Writing", title: "Draft the weekly note", description: "Share one useful workflow.", scheduledDate: "", status: "new", priority: "p2", assigneeAgentId: "", assigneeAgentName: "" },
+      ...(options.additionalTasks || []),
     ],
     subtasks: [
       { id: "task-child", parentTaskId: "task-parent", parentTaskTitle: "Publish task-first agents video", bucketId: "list-product", bucketName: "Product", title: "Research examples", description: "", scheduledDate: "", status: "done", priority: "p2", sortOrder: 0, createdAt: "2026-08-18T09:00:00Z", assigneeAgentId: "agent-research", assigneeAgentName: "Research agent" },
@@ -148,6 +149,18 @@ async function startApp(t, viewport = { width: 1440, height: 960 }, options = {}
       if (url.searchParams.get("priority")) tasks = tasks.filter(item => item.priority === url.searchParams.get("priority"));
       if (url.searchParams.get("assigneeAgentId")) tasks = tasks.filter(item => url.searchParams.get("assigneeAgentId") === "unassigned" ? !item.assigneeAgentId : item.assigneeAgentId === url.searchParams.get("assigneeAgentId"));
       return json(response, { tasks });
+    }
+    const moveTaskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/move$/);
+    if (moveTaskMatch && request.method === "POST") {
+      const input = await requestJSON(request);
+      const moving = state.tasks.find(item => item.id === moveTaskMatch[1]);
+      const siblings = state.tasks.filter(item => item.bucketId === input.bucketId && item.id !== moveTaskMatch[1]).sort((left, right) => (left.sortOrder || 0) - (right.sortOrder || 0));
+      const referenceIndex = input.referenceTaskId ? siblings.findIndex(item => item.id === input.referenceTaskId) : -1;
+      const position = referenceIndex < 0 ? input.position : referenceIndex + (input.placement === "after" ? 1 : 0);
+      siblings.splice(position, 0, moving);
+      siblings.forEach((task, index) => { task.sortOrder = index; });
+      moving.status = input.status || moving.status;
+      return json(response, moving);
     }
     const taskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)(?:\/status)?$/);
     if (taskMatch && request.method === "GET") {
@@ -1232,6 +1245,26 @@ test("dragging a task moves it through the workflow", async t => {
   await card.dragTo(page.locator('[data-status="working"]'));
   await page.waitForFunction(() => document.querySelector('[data-status="working"] [data-task="task-inbox"]'));
   assert.equal(state.tasks.find(task => task.id === "task-inbox").status, "working");
+});
+
+test("dragging a task within a column persists its new position", async t => {
+  const extra = { id: "task-inbox-second", bucketId: "list-inbox", bucketName: "Inbox", listName: "Inbox", title: "Second inbox task", description: "", scheduledDate: "", status: "new", priority: "p2", sortOrder: 1, assigneeAgentId: "", assigneeAgentName: "" };
+  const { page, state, origin } = await startApp(t, undefined, { additionalTasks: [extra] });
+  const first = state.tasks.find(task => task.id === "task-inbox");
+  first.sortOrder = 0;
+  await page.goto(`${origin}/app/lists/list-inbox`);
+  await page.getByRole("heading", { name: "Inbox" }).waitFor();
+
+  await page.locator('[data-task="task-inbox-second"]').dragTo(page.locator('[data-task="task-inbox"]'), { targetPosition: { x: 20, y: 2 } });
+  await page.waitForFunction(() => document.querySelector('[data-status="new"] [data-task]')?.getAttribute("data-task") === "task-inbox-second");
+  assert.equal(extra.sortOrder, 0);
+  assert.equal(first.sortOrder, 1);
+  assert.equal(state.requests.includes("POST /api/v1/tasks/task-inbox-second/move"), true);
+
+  const moveCount = state.requests.filter(request => request === "POST /api/v1/tasks/task-inbox/move").length;
+  await page.locator('[data-task="task-inbox"]').dragTo(page.locator('[data-task="task-inbox"]'));
+  assert.equal(state.requests.filter(request => request === "POST /api/v1/tasks/task-inbox/move").length, moveCount);
+  assert.equal(first.sortOrder, 1);
 });
 
 test("lists, inbox, agents, and settings are complete React routes", async t => {
