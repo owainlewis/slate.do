@@ -1032,6 +1032,49 @@ func TestMoveTaskPreservesRankWhenStoredOrderIsSparse(t *testing.T) {
 		t.Fatalf("moved task = status %q, position %d; want status %q, position 1", moved.Status, moved.SortOrder, StatusWorking)
 	}
 	assertTaskOrder(t, store, ctx, userID, list.ID, []string{first.ID, moving.ID, last.ID})
+	if _, err := db.Exec(ctx, "UPDATE tasks SET sort_order = 20, created_at = '2026-01-01T00:00:00Z' WHERE id IN ($1, $2, $3)", first.ID, moving.ID, last.ID); err != nil {
+		t.Fatal(err)
+	}
+	tiedOrder := []string{first.ID, moving.ID, last.ID}
+	slices.Sort(tiedOrder)
+	if _, err := store.MoveTask(ctx, userID, moving.ID, MoveTaskInput{
+		BucketID: list.ID, PreservePosition: true, Status: StatusNeedsReview,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertTaskOrder(t, store, ctx, userID, list.ID, tiedOrder)
+
+	destination, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Destination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationFirst, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Destination first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationSecond, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Destination second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationLast, err := store.CreateTask(ctx, userID, destination.ID, CreateTaskInput{Title: "Destination last"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET sort_order = CASE id WHEN $1 THEN 10 WHEN $2 THEN 20 WHEN $3 THEN 30 END WHERE id IN ($1, $2, $3)", first.ID, moving.ID, last.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, err = store.MoveTask(ctx, userID, moving.ID, MoveTaskInput{
+		BucketID: destination.ID, PreservePosition: true, Status: StatusNeedsReview,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Status != StatusNeedsReview || moved.SortOrder != 1 {
+		t.Fatalf("cross-list moved task = status %q, position %d; want status %q, position 1", moved.Status, moved.SortOrder, StatusNeedsReview)
+	}
+	assertTaskOrder(t, store, ctx, userID, list.ID, []string{first.ID, last.ID})
+	assertTaskOrder(t, store, ctx, userID, destination.ID, []string{destinationFirst.ID, moving.ID, destinationSecond.ID, destinationLast.ID})
 }
 
 func assertTaskOrder(t *testing.T, store *Store, ctx context.Context, userID string, bucketID string, want []string) {
