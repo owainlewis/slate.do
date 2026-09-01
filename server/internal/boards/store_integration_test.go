@@ -995,6 +995,45 @@ func TestMoveTaskUsesRelativePositionAndUpdatesStatusAtomically(t *testing.T) {
 	}
 }
 
+func TestMoveTaskPreservesRankWhenStoredOrderIsSparse(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	store := NewStore(db)
+	userID := createIntegrationUser(t, ctx, db)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	list, err := store.CreateBucket(ctx, userID, CreateBucketInput{Name: "Work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moving, err := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "Moving"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := store.CreateTask(ctx, userID, list.ID, CreateTaskInput{Title: "Last"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE tasks SET sort_order = CASE id WHEN $1 THEN 10 WHEN $2 THEN 20 WHEN $3 THEN 30 END WHERE id IN ($1, $2, $3)", first.ID, moving.ID, last.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, err := store.MoveTask(ctx, userID, moving.ID, MoveTaskInput{
+		BucketID: list.ID, PreservePosition: true, Status: StatusWorking,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Status != StatusWorking || moved.SortOrder != 1 {
+		t.Fatalf("moved task = status %q, position %d; want status %q, position 1", moved.Status, moved.SortOrder, StatusWorking)
+	}
+	assertTaskOrder(t, store, ctx, userID, list.ID, []string{first.ID, moving.ID, last.ID})
+}
+
 func assertTaskOrder(t *testing.T, store *Store, ctx context.Context, userID string, bucketID string, want []string) {
 	t.Helper()
 	bucket, err := store.GetBucket(ctx, userID, bucketID)

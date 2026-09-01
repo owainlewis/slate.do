@@ -1081,6 +1081,19 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	position := 0
 	if input.PreservePosition {
 		position = current.SortOrder
+		if current.BucketID == destination.ID {
+			allDestinationIDs, err := orderedAllTaskIDs(ctx, tx, destination.ID)
+			if err != nil {
+				return Task{}, err
+			}
+			allDestinationIDs = removeTaskIDs(allDestinationIDs, childIDs)
+			if currentPosition := slices.Index(allDestinationIDs, current.ID); currentPosition >= 0 {
+				position = currentPosition
+			}
+		}
+		if position > len(destinationIDs) {
+			position = len(destinationIDs)
+		}
 	} else if input.Append {
 		position = len(destinationIDs)
 	} else if input.ReferenceTaskID != "" {
