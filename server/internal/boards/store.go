@@ -1081,6 +1081,17 @@ func (s *Store) MoveTask(ctx context.Context, userID string, id string, input Mo
 	position := 0
 	if input.PreservePosition {
 		position = current.SortOrder
+		sourceOrder, err := orderedAllTaskIDs(ctx, tx, current.BucketID)
+		if err != nil {
+			return Task{}, err
+		}
+		sourceOrder = removeTaskIDs(sourceOrder, childIDs)
+		if currentPosition := slices.Index(sourceOrder, current.ID); currentPosition >= 0 {
+			position = currentPosition
+		}
+		if position > len(destinationIDs) {
+			position = len(destinationIDs)
+		}
 	} else if input.Append {
 		position = len(destinationIDs)
 	} else if input.ReferenceTaskID != "" {
@@ -1158,7 +1169,7 @@ func orderedTaskIDs(ctx context.Context, tx pgx.Tx, bucketID string, exceptID st
 		SELECT id::text
 		FROM tasks
 		WHERE bucket_id = $1 AND id <> $2
-		ORDER BY sort_order, created_at
+		ORDER BY sort_order, created_at, id
 		FOR UPDATE
 	`, bucketID, exceptID)
 	if err != nil {
@@ -1204,7 +1215,7 @@ func orderedChildTaskIDs(ctx context.Context, tx pgx.Tx, parentTaskID string) ([
 		SELECT id::text
 		FROM tasks
 		WHERE parent_task_id = $1
-		ORDER BY sort_order, created_at
+		ORDER BY sort_order, created_at, id
 		FOR UPDATE
 	`, parentTaskID)
 	if err != nil {
